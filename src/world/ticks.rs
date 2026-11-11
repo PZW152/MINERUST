@@ -104,7 +104,10 @@ impl ServerWorld {
                 }
             }
             block::CACTUS | block::REEDS => {
-                if id == block::REEDS && self.block(x, y - 1, z) != block::REEDS && !self.can_block_stay(id, x, y, z) {
+                if id == block::REEDS
+                    && self.block(x, y - 1, z) != block::REEDS
+                    && !self.can_block_stay(id, x, y, z)
+                {
                     self.set_air(x, y, z);
                     return;
                 }
@@ -177,12 +180,21 @@ impl ServerWorld {
         const R: i32 = 4;
         const N: usize = 32;
         const H: i32 = 16;
-        let at = |dx: i32, dy: i32, dz: i32| ((dx + H) as usize) * N * N + ((dy + H) as usize) * N + (dz + H) as usize;
+        let at = |dx: i32, dy: i32, dz: i32| {
+            ((dx + H) as usize) * N * N + ((dy + H) as usize) * N + (dz + H) as usize
+        };
         // Vanilla keeps this array between calls; when the neighbourhood is
         // not loaded the stale centre value decides. A fresh array (centre 0)
         // means "keep", which is also what a stale log-reachable result gives.
         let mut s = vec![0i32; N * N * N];
-        if self.check_chunks_exist(x - R - 1, y - R - 1, z - R - 1, x + R + 1, y + R + 1, z + R + 1) {
+        if self.check_chunks_exist(
+            x - R - 1,
+            y - R - 1,
+            z - R - 1,
+            x + R + 1,
+            y + R + 1,
+            z + R + 1,
+        ) {
             for dx in -R..=R {
                 for dy in -R..=R {
                     for dz in -R..=R {
@@ -202,7 +214,14 @@ impl ServerWorld {
                     for dy in -R..=R {
                         for dz in -R..=R {
                             if s[at(dx, dy, dz)] == step - 1 {
-                                for (ox, oy, oz) in [(-1, 0, 0), (1, 0, 0), (0, -1, 0), (0, 1, 0), (0, 0, -1), (0, 0, 1)] {
+                                for (ox, oy, oz) in [
+                                    (-1, 0, 0),
+                                    (1, 0, 0),
+                                    (0, -1, 0),
+                                    (0, 1, 0),
+                                    (0, 0, -1),
+                                    (0, 0, 1),
+                                ] {
                                     let i = at(dx + ox, dy + oy, dz + oz);
                                     if s[i] == -2 {
                                         s[i] = step;
@@ -271,12 +290,34 @@ impl ServerWorld {
                 let rr = (d + 3) & 3;
                 if meta & (1 << l) != 0 && self.vine_can_attach(nx + DIR_X[l], y, nz + DIR_Z[l]) {
                     self.set_block(nx, y, nz, block::VINE, 1 << l, 2);
-                } else if meta & (1 << rr) != 0 && self.vine_can_attach(nx + DIR_X[rr], y, nz + DIR_Z[rr]) {
+                } else if meta & (1 << rr) != 0
+                    && self.vine_can_attach(nx + DIR_X[rr], y, nz + DIR_Z[rr])
+                {
                     self.set_block(nx, y, nz, block::VINE, 1 << rr, 2);
-                } else if meta & (1 << l) != 0 && self.is_air(nx + DIR_X[l], y, nz + DIR_Z[l]) && self.vine_can_attach(x + DIR_X[l], y, z + DIR_Z[l]) {
-                    self.set_block(nx + DIR_X[l], y, nz + DIR_Z[l], block::VINE, 1 << ((d + 2) & 3), 2);
-                } else if meta & (1 << rr) != 0 && self.is_air(nx + DIR_X[rr], y, nz + DIR_Z[rr]) && self.vine_can_attach(x + DIR_X[rr], y, z + DIR_Z[rr]) {
-                    self.set_block(nx + DIR_X[rr], y, nz + DIR_Z[rr], block::VINE, 1 << ((d + 2) & 3), 2);
+                } else if meta & (1 << l) != 0
+                    && self.is_air(nx + DIR_X[l], y, nz + DIR_Z[l])
+                    && self.vine_can_attach(x + DIR_X[l], y, z + DIR_Z[l])
+                {
+                    self.set_block(
+                        nx + DIR_X[l],
+                        y,
+                        nz + DIR_Z[l],
+                        block::VINE,
+                        1 << ((d + 2) & 3),
+                        2,
+                    );
+                } else if meta & (1 << rr) != 0
+                    && self.is_air(nx + DIR_X[rr], y, nz + DIR_Z[rr])
+                    && self.vine_can_attach(x + DIR_X[rr], y, z + DIR_Z[rr])
+                {
+                    self.set_block(
+                        nx + DIR_X[rr],
+                        y,
+                        nz + DIR_Z[rr],
+                        block::VINE,
+                        1 << ((d + 2) & 3),
+                        2,
+                    );
                 } else if self.vine_can_attach(nx, y + 1, nz) {
                     self.set_block(nx, y, nz, block::VINE, 0, 2);
                 }
@@ -318,7 +359,15 @@ mod tests {
                         blocks[(c << 8) | y] = if y == 63 { block::DIRT } else { block::STONE };
                     }
                 }
-                w.insert_raw(ChunkData { cx, cz, blocks, meta: boxed(), biomes: [1; 256], sky: boxed(), blk: boxed() });
+                w.insert_raw(ChunkData {
+                    cx,
+                    cz,
+                    blocks,
+                    meta: boxed(),
+                    biomes: [1; 256],
+                    sky: boxed(),
+                    blk: boxed(),
+                });
             }
         }
         w
@@ -338,7 +387,10 @@ mod tests {
                 }
             }
         }
-        let grown = (-2..=2).flat_map(|x| (-2..=2).map(move |z| (x, z))).filter(|&(x, z)| w.block(x, 63, z) == block::GRASS).count();
+        let grown = (-2..=2)
+            .flat_map(|x| (-2..=2).map(move |z| (x, z)))
+            .filter(|&(x, z)| w.block(x, 63, z) == block::GRASS)
+            .count();
         assert!(grown > 10, "grass did not spread: {grown}");
         // Covered by an opaque block it turns back into dirt.
         w.set_block(0, 64, 0, block::STONE, 0, 3);

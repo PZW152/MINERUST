@@ -46,7 +46,10 @@ pub enum Terrain {
     Taiga(u8),
     Swamp,
     SavannaMutated,
-    Mesa { bryce: bool, forest: bool },
+    Mesa {
+        bryce: bool,
+        forest: bool,
+    },
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -177,7 +180,14 @@ impl Biome {
     }
 
     /// `getBiomeGrassColor(x, y, z)`; `grass_map` is `colormap/grass.png` as 256x256 RGB.
-    pub fn grass_color(&self, noise: &BiomeNoise, grass_map: &[u32], x: i32, y: i32, z: i32) -> u32 {
+    pub fn grass_color(
+        &self,
+        noise: &BiomeNoise,
+        grass_map: &[u32],
+        x: i32,
+        y: i32,
+        z: i32,
+    ) -> u32 {
         let z = if self.color_zy_quirk { y } else { z };
         match self.grass_kind {
             GrassKind::Mesa => 9470285,
@@ -190,12 +200,19 @@ impl Biome {
                 }
             }
             GrassKind::Default | GrassKind::Roofed => {
-                let t = math::clamp_float(float_temperature(self.color_temperature, noise, x, y, z), 0.0, 1.0) as f64;
+                let t = math::clamp_float(
+                    float_temperature(self.color_temperature, noise, x, y, z),
+                    0.0,
+                    1.0,
+                ) as f64;
                 let mut r = math::clamp_float(self.rainfall, 0.0, 1.0) as f64;
                 r *= t;
                 let i = ((1.0 - t) * 255.0) as i32;
                 let j = ((1.0 - r) * 255.0) as i32;
-                let c = grass_map.get(((j << 8) | i) as usize).copied().unwrap_or(0x7FB238);
+                let c = grass_map
+                    .get(((j << 8) | i) as usize)
+                    .copied()
+                    .unwrap_or(0x7FB238);
                 if self.grass_kind == GrassKind::Roofed {
                     ((c & 16711422) + 2634762) >> 1
                 } else {
@@ -208,18 +225,32 @@ impl Biome {
 
 impl Biome {
     /// `getBiomeFoliageColor(x, y, z)`; `foliage_map` is `colormap/foliage.png`.
-    pub fn foliage_color(&self, noise: &BiomeNoise, foliage_map: &[u32], x: i32, y: i32, z: i32) -> u32 {
+    pub fn foliage_color(
+        &self,
+        noise: &BiomeNoise,
+        foliage_map: &[u32],
+        x: i32,
+        y: i32,
+        z: i32,
+    ) -> u32 {
         let z = if self.color_zy_quirk { y } else { z };
         match self.grass_kind {
             GrassKind::Mesa => 10387789,
             GrassKind::Swamp => 6975545,
             GrassKind::Default | GrassKind::Roofed => {
-                let t = math::clamp_float(float_temperature(self.color_temperature, noise, x, y, z), 0.0, 1.0) as f64;
+                let t = math::clamp_float(
+                    float_temperature(self.color_temperature, noise, x, y, z),
+                    0.0,
+                    1.0,
+                ) as f64;
                 let mut r = math::clamp_float(self.rainfall, 0.0, 1.0) as f64;
                 r *= t;
                 let i = ((1.0 - t) * 255.0) as i32;
                 let j = ((1.0 - r) * 255.0) as i32;
-                foliage_map.get(((j << 8) | i) as usize).copied().unwrap_or(0x48B518)
+                foliage_map
+                    .get(((j << 8) | i) as usize)
+                    .copied()
+                    .unwrap_or(0x48B518)
             }
         }
     }
@@ -227,7 +258,10 @@ impl Biome {
 
 fn float_temperature(temperature: f32, noise: &BiomeNoise, x: i32, y: i32, z: i32) -> f32 {
     if y > 64 {
-        let n = noise.temperature.get_value(x as f64 * 1.0 / 8.0, z as f64 * 1.0 / 8.0) as f32 * 4.0f32;
+        let n = noise
+            .temperature
+            .get_value(x as f64 * 1.0 / 8.0, z as f64 * 1.0 / 8.0) as f32
+            * 4.0f32;
         temperature - (n + y as f32 - 64.0f32) * 0.05f32 / 30.0f32
     } else {
         temperature
@@ -247,7 +281,10 @@ fn generic_mutation(base: &Biome) -> Biome {
 
 fn build_table() -> Vec<Option<Biome>> {
     use Class as C;
-    let mesa_t = |forest| Terrain::Mesa { bryce: false, forest };
+    let mesa_t = |forest| Terrain::Mesa {
+        bryce: false,
+        forest,
+    };
     let mesa = |id, name: &str, forest| {
         Biome::new(id, name, C::Mesa)
             .no_rain()
@@ -258,7 +295,10 @@ fn build_table() -> Vec<Option<Biome>> {
     };
     let plains = |id, name: &str| Biome::new(id, name, C::Plains).tr(0.8, 0.4).h(H_LOW_PLAINS);
     let desert = |id, name: &str| {
-        Biome::new(id, name, C::Desert).blocks(block::SAND, 0, block::SAND).no_rain().tr(2.0, 0.0)
+        Biome::new(id, name, C::Desert)
+            .blocks(block::SAND, 0, block::SAND)
+            .no_rain()
+            .tr(2.0, 0.0)
     };
     let forest = |id, name: &str, ty: u8| {
         let b = Biome::new(id, name, C::Forest).tr(0.7, 0.8);
@@ -269,11 +309,18 @@ fn build_table() -> Vec<Option<Biome>> {
         }
     };
     let taiga = |id, name: &str, ty: u8| Biome::new(id, name, C::Taiga).terrain(Terrain::Taiga(ty));
-    let hills = |id, name: &str, mode: u8| Biome::new(id, name, C::Hills).terrain(Terrain::Hills(mode)).tr(0.2, 0.3);
+    let hills = |id, name: &str, mode: u8| {
+        Biome::new(id, name, C::Hills)
+            .terrain(Terrain::Hills(mode))
+            .tr(0.2, 0.3)
+    };
     let jungle = |id, name: &str| Biome::new(id, name, C::Jungle);
     let beach = |id, name: &str| Biome::new(id, name, C::Beach).blocks(block::SAND, 0, block::SAND);
-    let mushroom =
-        |id, name: &str| Biome::new(id, name, C::Mushroom).blocks(block::MYCELIUM, 0, block::DIRT).tr(0.9, 1.0);
+    let mushroom = |id, name: &str| {
+        Biome::new(id, name, C::Mushroom)
+            .blocks(block::MYCELIUM, 0, block::DIRT)
+            .tr(0.9, 1.0)
+    };
     let savanna = |id, name: &str| Biome::new(id, name, C::Savanna).no_rain();
 
     let attenuated = (H_MID_HILLS.0 * 0.8f32, H_MID_HILLS.1 * 0.6f32);
@@ -293,10 +340,22 @@ fn build_table() -> Vec<Option<Biome>> {
         Biome::new(7, "River", C::River).h(H_SHALLOW_WATERS),
         Biome::new(8, "Hell", C::Hell).no_rain().tr(2.0, 0.0),
         Biome::new(9, "Sky", C::End).no_rain(),
-        Biome::new(10, "FrozenOcean", C::Ocean).snow().h(H_OCEANS).tr(0.0, 0.5),
-        Biome::new(11, "FrozenRiver", C::River).snow().h(H_SHALLOW_WATERS).tr(0.0, 0.5),
-        Biome::new(12, "Ice Plains", C::Snow).snow().tr(0.0, 0.5).h(H_LOW_PLAINS),
-        Biome::new(13, "Ice Mountains", C::Snow).snow().h(H_LOW_HILLS).tr(0.0, 0.5),
+        Biome::new(10, "FrozenOcean", C::Ocean)
+            .snow()
+            .h(H_OCEANS)
+            .tr(0.0, 0.5),
+        Biome::new(11, "FrozenRiver", C::River)
+            .snow()
+            .h(H_SHALLOW_WATERS)
+            .tr(0.0, 0.5),
+        Biome::new(12, "Ice Plains", C::Snow)
+            .snow()
+            .tr(0.0, 0.5)
+            .h(H_LOW_PLAINS),
+        Biome::new(13, "Ice Mountains", C::Snow)
+            .snow()
+            .h(H_LOW_HILLS)
+            .tr(0.0, 0.5),
         mushroom(14, "MushroomIsland").h(H_LOW_ISLANDS),
         mushroom(15, "MushroomIslandShore").h(H_SHORES),
         beach(16, "Beach").tr(0.8, 0.4).h(H_SHORES),
@@ -316,13 +375,21 @@ fn build_table() -> Vec<Option<Biome>> {
         forest(27, "Birch Forest", 2),
         forest(28, "Birch Forest Hills", 2).h(H_LOW_HILLS),
         forest(29, "Roofed Forest", 3),
-        taiga(30, "Cold Taiga", 0).snow().tr(-0.5, 0.4).h(H_MID_PLAINS),
-        taiga(31, "Cold Taiga Hills", 0).snow().tr(-0.5, 0.4).h(H_LOW_HILLS),
+        taiga(30, "Cold Taiga", 0)
+            .snow()
+            .tr(-0.5, 0.4)
+            .h(H_MID_PLAINS),
+        taiga(31, "Cold Taiga Hills", 0)
+            .snow()
+            .tr(-0.5, 0.4)
+            .h(H_LOW_HILLS),
         taiga(32, "Mega Taiga", 1).tr(0.3, 0.8).h(H_MID_PLAINS),
         taiga(33, "Mega Taiga Hills", 1).tr(0.3, 0.8).h(H_LOW_HILLS),
         hills(34, "Extreme Hills+", 1).h(H_MID_HILLS),
         savanna(35, "Savanna").tr(1.2, 0.0).h(H_LOW_PLAINS),
-        savanna(36, "Savanna Plateau").tr(1.0, 0.0).h(H_HIGH_PLATEAUS),
+        savanna(36, "Savanna Plateau")
+            .tr(1.0, 0.0)
+            .h(H_HIGH_PLATEAUS),
         mesa(37, "Mesa", false),
         mesa(38, "Mesa Plateau F", true).h(H_HIGH_PLATEAUS),
         mesa(39, "Mesa Plateau", false).h(H_HIGH_PLATEAUS),
@@ -335,7 +402,9 @@ fn build_table() -> Vec<Option<Biome>> {
     }
 
     // createMutation() calls, in the order of the static initialiser.
-    for id in [1usize, 2, 4, 5, 6, 12, 21, 23, 30, 35, 36, 37, 38, 39, 27, 28, 29, 32, 3, 34] {
+    for id in [
+        1usize, 2, 4, 5, 6, 12, 21, 23, 30, 35, 36, 37, 38, 39, 27, 28, 29, 32, 3, 34,
+    ] {
         let base = table[id].clone().unwrap();
         let mid = (id + 128) as u8;
         let m = match id {
@@ -368,7 +437,10 @@ fn build_table() -> Vec<Option<Biome>> {
                 let is_mesa = id == 37;
                 let forest_flag = matches!(base.terrain, Terrain::Mesa { forest: true, .. });
                 let mut b = mesa(mid, "", forest_flag).finish();
-                b.terrain = Terrain::Mesa { bryce: is_mesa, forest: forest_flag };
+                b.terrain = Terrain::Mesa {
+                    bryce: is_mesa,
+                    forest: forest_flag,
+                };
                 if !is_mesa {
                     b.root_height = H_LOW_HILLS.0;
                     b.height_variation = H_LOW_HILLS.1;
@@ -457,18 +529,19 @@ impl MesaState {
             }
             i += 1;
         }
-        let mut stripes = |r: &mut JavaRandom, count_bound: i32, count_add: i32, len_add: i32, colour: u8| {
-            let n = r.next_int_n(count_bound) + count_add;
-            for _ in 0..n {
-                let len = r.next_int_n(3) + len_add;
-                let s = r.next_int_n(64);
-                let mut j = 0;
-                while s + j < 64 && j < len {
-                    bands[(s + j) as usize] = colour;
-                    j += 1;
+        let mut stripes =
+            |r: &mut JavaRandom, count_bound: i32, count_add: i32, len_add: i32, colour: u8| {
+                let n = r.next_int_n(count_bound) + count_add;
+                for _ in 0..n {
+                    let len = r.next_int_n(3) + len_add;
+                    let s = r.next_int_n(64);
+                    let mut j = 0;
+                    while s + j < 64 && j < len {
+                        bands[(s + j) as usize] = colour;
+                        j += 1;
+                    }
                 }
-            }
-        };
+            };
         stripes(&mut r, 4, 2, 1, 4);
         stripes(&mut r, 4, 2, 2, 12);
         stripes(&mut r, 4, 2, 1, 14);
@@ -490,11 +563,19 @@ impl MesaState {
         let mut pr = JavaRandom::new(0);
         let pillar_noise = NoiseGeneratorPerlin::new(&mut pr, 4);
         let pillar_roof_noise = NoiseGeneratorPerlin::new(&mut pr, 1);
-        MesaState { bands, offset_noise, pillar_noise, pillar_roof_noise }
+        MesaState {
+            bands,
+            offset_noise,
+            pillar_noise,
+            pillar_roof_noise,
+        }
     }
 
     fn clay_layer(&self, x: i32, y: i32, _z: i32) -> u8 {
-        let v = self.offset_noise.get_value(x as f64 * 1.0 / 512.0, x as f64 * 1.0 / 512.0) * 2.0;
+        let v = self
+            .offset_noise
+            .get_value(x as f64 * 1.0 / 512.0, x as f64 * 1.0 / 512.0)
+            * 2.0;
         let o = math::java_round(v) as i32;
         self.bands[(y + o + 64).rem_euclid(64) as usize]
     }
@@ -508,7 +589,10 @@ pub struct TerrainState {
 
 impl TerrainState {
     pub fn new(seed: i64) -> Self {
-        TerrainState { noise: BiomeNoise::new(), mesa: MesaState::new(seed) }
+        TerrainState {
+            noise: BiomeNoise::new(),
+            mesa: MesaState::new(seed),
+        }
     }
 }
 
@@ -524,7 +608,8 @@ impl Biome {
         z: i32,
         noise: f64,
     ) -> u8 {
-        let (mut top, mut top_meta, mut filler) = (self.top_block, self.top_meta, self.filler_block);
+        let (mut top, mut top_meta, mut filler) =
+            (self.top_block, self.top_meta, self.filler_block);
         match self.terrain {
             Terrain::Default => {}
             Terrain::Hills(mode) => {
@@ -672,10 +757,15 @@ impl Biome {
         if bryce {
             let a = (x & -16) + (z & 15);
             let b = (z & -16) + (x & 15);
-            let m = noise.abs().min(ms.pillar_noise.get_value(a as f64 * 0.25, b as f64 * 0.25));
+            let m = noise
+                .abs()
+                .min(ms.pillar_noise.get_value(a as f64 * 0.25, b as f64 * 0.25));
             if m > 0.0 {
                 let s = 0.001953125f64;
-                let r = ms.pillar_roof_noise.get_value(a as f64 * s, b as f64 * s).abs();
+                let r = ms
+                    .pillar_roof_noise
+                    .get_value(a as f64 * s, b as f64 * s)
+                    .abs();
                 pillar = m * m * 2.5;
                 let cap = (r * 50.0).ceil() + 14.0;
                 if pillar > cap {

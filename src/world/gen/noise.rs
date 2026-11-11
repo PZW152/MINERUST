@@ -3,9 +3,15 @@
 use crate::java::JavaRandom;
 use crate::util::math::floor_double_long;
 
-const GRAD_X: [f64; 16] = [1.0, -1.0, 1.0, -1.0, 1.0, -1.0, 1.0, -1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, -1.0, 0.0];
-const GRAD_Y: [f64; 16] = [1.0, 1.0, -1.0, -1.0, 0.0, 0.0, 0.0, 0.0, 1.0, -1.0, 1.0, -1.0, 1.0, -1.0, 1.0, -1.0];
-const GRAD_Z: [f64; 16] = [0.0, 0.0, 0.0, 0.0, 1.0, 1.0, -1.0, -1.0, 1.0, 1.0, -1.0, -1.0, 0.0, 1.0, 0.0, -1.0];
+const GRAD_X: [f64; 16] = [
+    1.0, -1.0, 1.0, -1.0, 1.0, -1.0, 1.0, -1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, -1.0, 0.0,
+];
+const GRAD_Y: [f64; 16] = [
+    1.0, 1.0, -1.0, -1.0, 0.0, 0.0, 0.0, 0.0, 1.0, -1.0, 1.0, -1.0, 1.0, -1.0, 1.0, -1.0,
+];
+const GRAD_Z: [f64; 16] = [
+    0.0, 0.0, 0.0, 0.0, 1.0, 1.0, -1.0, -1.0, 1.0, 1.0, -1.0, -1.0, 0.0, 1.0, 0.0, -1.0,
+];
 
 pub struct NoiseGeneratorImproved {
     p: [i32; 512],
@@ -50,7 +56,12 @@ fn init_perm(rand: &mut JavaRandom) -> (f64, f64, f64, [i32; 512]) {
 impl NoiseGeneratorImproved {
     pub fn new(rand: &mut JavaRandom) -> Self {
         let (x, y, z, p) = init_perm(rand);
-        NoiseGeneratorImproved { p, x_coord: x, y_coord: y, z_coord: z }
+        NoiseGeneratorImproved {
+            p,
+            x_coord: x,
+            y_coord: y,
+            z_coord: z,
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -95,7 +106,11 @@ impl NoiseGeneratorImproved {
                     let b = p[xb + 1];
                     let ba = (p[b as usize] + zb) as usize;
                     let l1 = lerp(fx, grad2(p[aa], x, z), grad(p[ba], x - 1.0, 0.0, z));
-                    let l2 = lerp(fx, grad(p[aa + 1], x, 0.0, z - 1.0), grad(p[ba + 1], x - 1.0, 0.0, z - 1.0));
+                    let l2 = lerp(
+                        fx,
+                        grad(p[aa + 1], x, 0.0, z - 1.0),
+                        grad(p[ba + 1], x - 1.0, 0.0, z - 1.0),
+                    );
                     let v = lerp(fz, l1, l2);
                     arr[idx] += v * inv;
                     idx += 1;
@@ -142,9 +157,21 @@ impl NoiseGeneratorImproved {
                             let ba = (p[b] + zb) as usize;
                             let bb = (p[b + 1] + zb) as usize;
                             l1 = lerp(fx, grad(p[aa], x, y, z), grad(p[ba], x - 1.0, y, z));
-                            l2 = lerp(fx, grad(p[ab], x, y - 1.0, z), grad(p[bb], x - 1.0, y - 1.0, z));
-                            l3 = lerp(fx, grad(p[aa + 1], x, y, z - 1.0), grad(p[ba + 1], x - 1.0, y, z - 1.0));
-                            l4 = lerp(fx, grad(p[ab + 1], x, y - 1.0, z - 1.0), grad(p[bb + 1], x - 1.0, y - 1.0, z - 1.0));
+                            l2 = lerp(
+                                fx,
+                                grad(p[ab], x, y - 1.0, z),
+                                grad(p[bb], x - 1.0, y - 1.0, z),
+                            );
+                            l3 = lerp(
+                                fx,
+                                grad(p[aa + 1], x, y, z - 1.0),
+                                grad(p[ba + 1], x - 1.0, y, z - 1.0),
+                            );
+                            l4 = lerp(
+                                fx,
+                                grad(p[ab + 1], x, y - 1.0, z - 1.0),
+                                grad(p[bb + 1], x - 1.0, y - 1.0, z - 1.0),
+                            );
                         }
                         let m1 = lerp(fy, l1, l2);
                         let m2 = lerp(fy, l3, l4);
@@ -164,12 +191,28 @@ pub struct NoiseGeneratorOctaves {
 
 impl NoiseGeneratorOctaves {
     pub fn new(rand: &mut JavaRandom, octaves: usize) -> Self {
-        NoiseGeneratorOctaves { gens: (0..octaves).map(|_| NoiseGeneratorImproved::new(rand)).collect() }
+        NoiseGeneratorOctaves {
+            gens: (0..octaves)
+                .map(|_| NoiseGeneratorImproved::new(rand))
+                .collect(),
+        }
     }
 
     /// 3D form. `arr` is zeroed and must be `xs*ys*zs` long.
     #[allow(clippy::too_many_arguments)]
-    pub fn generate(&self, arr: &mut [f64], x: i32, y: i32, z: i32, xs: i32, ys: i32, zs: i32, sx: f64, sy: f64, sz: f64) {
+    pub fn generate(
+        &self,
+        arr: &mut [f64],
+        x: i32,
+        y: i32,
+        z: i32,
+        xs: i32,
+        ys: i32,
+        zs: i32,
+        sx: f64,
+        sy: f64,
+        sz: f64,
+    ) {
         for v in arr.iter_mut() {
             *v = 0.0;
         }
@@ -186,14 +229,36 @@ impl NoiseGeneratorOctaves {
             lz %= 16777216;
             dx += lx as f64;
             dz += lz as f64;
-            g.populate_noise_array(arr, dx, dy, dz, xs, ys, zs, sx * scale, sy * scale, sz * scale, scale);
+            g.populate_noise_array(
+                arr,
+                dx,
+                dy,
+                dz,
+                xs,
+                ys,
+                zs,
+                sx * scale,
+                sy * scale,
+                sz * scale,
+                scale,
+            );
             scale /= 2.0;
         }
     }
 
     /// 2D overload.
     #[allow(clippy::too_many_arguments)]
-    pub fn generate_2d(&self, arr: &mut [f64], x: i32, z: i32, xs: i32, zs: i32, sx: f64, sz: f64, _unused: f64) {
+    pub fn generate_2d(
+        &self,
+        arr: &mut [f64],
+        x: i32,
+        z: i32,
+        xs: i32,
+        zs: i32,
+        sx: f64,
+        sz: f64,
+        _unused: f64,
+    ) {
         self.generate(arr, x, 10, z, xs, 1, zs, sx, 1.0, sz);
     }
 }
@@ -222,7 +287,11 @@ pub struct NoiseGeneratorSimplex {
 
 #[inline]
 fn fast_floor(d: f64) -> i32 {
-    if d > 0.0 { d as i32 } else { (d as i32).wrapping_sub(1) }
+    if d > 0.0 {
+        d as i32
+    } else {
+        (d as i32).wrapping_sub(1)
+    }
 }
 
 #[inline]
@@ -233,7 +302,12 @@ fn dot(g: &[i32; 3], x: f64, y: f64) -> f64 {
 impl NoiseGeneratorSimplex {
     pub fn new(rand: &mut JavaRandom) -> Self {
         let (x, y, z, p) = init_perm(rand);
-        NoiseGeneratorSimplex { p, xo: x, yo: y, zo: z }
+        NoiseGeneratorSimplex {
+            p,
+            xo: x,
+            yo: y,
+            zo: z,
+        }
     }
 
     #[inline]
@@ -289,7 +363,17 @@ impl NoiseGeneratorSimplex {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub fn add(&self, arr: &mut [f64], x: f64, z: f64, xs: i32, zs: i32, sx: f64, sz: f64, amp: f64) {
+    pub fn add(
+        &self,
+        arr: &mut [f64],
+        x: f64,
+        z: f64,
+        xs: i32,
+        zs: i32,
+        sx: f64,
+        sz: f64,
+        amp: f64,
+    ) {
         let sqrt3 = 3.0f64.sqrt();
         let f2 = 0.5 * (sqrt3 - 1.0);
         let g2 = (3.0 - sqrt3) / 6.0;
@@ -311,7 +395,11 @@ pub struct NoiseGeneratorPerlin {
 
 impl NoiseGeneratorPerlin {
     pub fn new(rand: &mut JavaRandom, levels: usize) -> Self {
-        NoiseGeneratorPerlin { levels: (0..levels).map(|_| NoiseGeneratorSimplex::new(rand)).collect() }
+        NoiseGeneratorPerlin {
+            levels: (0..levels)
+                .map(|_| NoiseGeneratorSimplex::new(rand))
+                .collect(),
+        }
     }
 
     pub fn get_value(&self, x: f64, z: f64) -> f64 {
@@ -326,7 +414,17 @@ impl NoiseGeneratorPerlin {
 
     /// `getRegion(arr, x, z, xs, zs, sx, sz, lacunarity)` with persistence 0.5.
     #[allow(clippy::too_many_arguments)]
-    pub fn get_region(&self, arr: &mut [f64], x: f64, z: f64, xs: i32, zs: i32, sx: f64, sz: f64, lacunarity: f64) {
+    pub fn get_region(
+        &self,
+        arr: &mut [f64],
+        x: f64,
+        z: f64,
+        xs: i32,
+        zs: i32,
+        sx: f64,
+        sz: f64,
+        lacunarity: f64,
+    ) {
         for v in arr.iter_mut() {
             *v = 0.0;
         }

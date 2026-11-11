@@ -24,24 +24,47 @@ struct Deco {
     big_mushrooms: i32,
 }
 
-const DEFAULT: Deco = Deco { waterlily: 0, trees: 0, flowers: 2, grass: 1, dead_bush: 0, mushrooms: 0, reeds: 0, cacti: 0, sand: 1, sand2: 3, clay: 1, big_mushrooms: 0 };
+const DEFAULT: Deco = Deco {
+    waterlily: 0,
+    trees: 0,
+    flowers: 2,
+    grass: 1,
+    dead_bush: 0,
+    mushrooms: 0,
+    reeds: 0,
+    cacti: 0,
+    sand: 1,
+    sand2: 3,
+    clay: 1,
+    big_mushrooms: 0,
+};
 
 /// Java class of a biome object, as far as decoration is concerned.
 #[derive(Clone, Copy, PartialEq)]
 enum Kind {
     Base,
-    Plains { sunflowers: bool },
+    Plains {
+        sunflowers: bool,
+    },
     Desert,
-    Hills { more_trees: bool },
+    Hills {
+        more_trees: bool,
+    },
     Forest(u8),
     Taiga(u8),
     Swamp,
-    Jungle { edge: bool },
+    Jungle {
+        edge: bool,
+    },
     Mushroom,
     Beach,
-    Snow { icy: bool },
+    Snow {
+        icy: bool,
+    },
     Savanna,
-    Mesa { forest: bool },
+    Mesa {
+        forest: bool,
+    },
     /// `BiomeGenMutated` wrapping biome `id - 128`.
     Mutated,
     /// `BiomeGenForest$1`
@@ -174,13 +197,22 @@ fn deco(id: u8) -> Deco {
                 d.trees = 5;
             }
         }
-        Kind::Base | Kind::Snow { .. } | Kind::Mutated | Kind::BirchMutated | Kind::RoofedMutated => {}
+        Kind::Base
+        | Kind::Snow { .. }
+        | Kind::Mutated
+        | Kind::BirchMutated
+        | Kind::RoofedMutated => {}
     }
     d
 }
 
 enum Tree {
-    Trees { min: i32, wood: i32, leaf: i32, vines: bool },
+    Trees {
+        min: i32,
+        wood: i32,
+        leaf: i32,
+        vines: bool,
+    },
     Big(u8),
     Swamp,
     Birch(bool),
@@ -193,11 +225,22 @@ enum Tree {
     Savanna,
 }
 
-const OAK: Tree = Tree::Trees { min: 4, wood: 0, leaf: 0, vines: false };
+const OAK: Tree = Tree::Trees {
+    min: 4,
+    wood: 0,
+    leaf: 0,
+    vines: false,
+};
 
 /// `BiomeGenBase.func_150567_a` for the biome object `id`.
 fn pick_tree(id: u8, r: &mut JavaRandom) -> Tree {
-    let default = |id: u8, r: &mut JavaRandom| if r.next_int_n(10) == 0 { Tree::Big(id) } else { OAK };
+    let default = |id: u8, r: &mut JavaRandom| {
+        if r.next_int_n(10) == 0 {
+            Tree::Big(id)
+        } else {
+            OAK
+        }
+    };
     match kind(id) {
         Kind::Hills { .. } => {
             if r.next_int_n(3) > 0 {
@@ -237,7 +280,12 @@ fn pick_tree(id: u8, r: &mut JavaRandom) -> Tree {
             } else if !edge && r.next_int_n(3) == 0 {
                 Tree::MegaJungle
             } else {
-                Tree::Trees { min: 4 + r.next_int_n(7), wood: 3, leaf: 3, vines: true }
+                Tree::Trees {
+                    min: 4 + r.next_int_n(7),
+                    wood: 3,
+                    leaf: 3,
+                    vines: true,
+                }
             }
         }
         Kind::Snow { .. } => Tree::Spruce,
@@ -263,7 +311,12 @@ fn pick_tree(id: u8, r: &mut JavaRandom) -> Tree {
 
 fn grow_tree(w: &mut ServerWorld, r: &mut JavaRandom, t: Tree, x: i32, y: i32, z: i32) {
     match t {
-        Tree::Trees { min, wood, leaf, vines } => {
+        Tree::Trees {
+            min,
+            wood,
+            leaf,
+            vines,
+        } => {
             trees::trees(w, r, x, y, z, min, wood, leaf, vines);
         }
         Tree::Big(owner) => {
@@ -308,7 +361,8 @@ fn pick_flower(w: &ServerWorld, id: u8, r: &mut JavaRandom, x: i32, z: i32) -> (
     let plant = &w.provider.terrain.noise.plant;
     match kind(id) {
         Kind::Forest(1) => {
-            let d = ((1.0 + plant.get_value(x as f64 / 48.0, z as f64 / 48.0)) / 2.0).clamp(0.0, 0.9999);
+            let d = ((1.0 + plant.get_value(x as f64 / 48.0, z as f64 / 48.0)) / 2.0)
+                .clamp(0.0, 0.9999);
             let mut i = (d * 9.0) as i32;
             if i == 1 {
                 i = 0;
@@ -363,7 +417,17 @@ fn pick_grass(id: u8, r: &mut JavaRandom) -> i32 {
     }
 }
 
-fn ore1(w: &mut ServerWorld, r: &mut JavaRandom, cx: i32, cz: i32, n: i32, id: u8, size: i32, lo: i32, hi: i32) {
+fn ore1(
+    w: &mut ServerWorld,
+    r: &mut JavaRandom,
+    cx: i32,
+    cz: i32,
+    n: i32,
+    id: u8,
+    size: i32,
+    lo: i32,
+    hi: i32,
+) {
     for _ in 0..n {
         let x = cx + r.next_int_n(16);
         let y = r.next_int_n(hi - lo) + lo;
@@ -563,7 +627,12 @@ fn decorate(w: &mut ServerWorld, r: &mut JavaRandom, id: u8, cx: i32, cz: i32) {
             }
         }
         Kind::Plains { sunflowers } => {
-            let v = w.provider.terrain.noise.plant.get_value((cx + 8) as f64 / 200.0, (cz + 8) as f64 / 200.0);
+            let v = w
+                .provider
+                .terrain
+                .noise
+                .plant
+                .get_value((cx + 8) as f64 / 200.0, (cz + 8) as f64 / 200.0);
             if v < -0.8 {
                 d.flowers = 15;
                 d.grass = 5;
@@ -668,15 +737,21 @@ pub fn populate(w: &mut ServerWorld, cx: i32, cz: i32) {
     let mut r = JavaRandom::new(seed);
     let a = r.next_long() / 2 * 2 + 1;
     let b = r.next_long() / 2 * 2 + 1;
-    r.set_seed((cx as i64).wrapping_mul(a).wrapping_add((cz as i64).wrapping_mul(b)) ^ seed);
+    r.set_seed(
+        (cx as i64)
+            .wrapping_mul(a)
+            .wrapping_add((cz as i64).wrapping_mul(b))
+            ^ seed,
+    );
 
-    if biome.id != 2 && biome.id != 17 && r.next_int_n(4) == 0 {
+    let village = w.map_features && super::structure::generate_in_chunk(w, &mut r, cx, cz);
+    if biome.id != 2 && biome.id != 17 && !village && r.next_int_n(4) == 0 {
         let x = bx + r.next_int_n(16) + 8;
         let y = r.next_int_n(256);
         let z = bz + r.next_int_n(16) + 8;
         misc::lake(w, &mut r, x, y, z, block::WATER);
     }
-    if r.next_int_n(8) == 0 {
+    if !village && r.next_int_n(8) == 0 {
         let x = bx + r.next_int_n(16) + 8;
         let inner = r.next_int_n(248) + 8;
         let y = r.next_int_n(inner);

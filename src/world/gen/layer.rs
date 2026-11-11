@@ -11,7 +11,8 @@ const A: i64 = 1442695040888963407;
 
 #[inline]
 fn step(v: i64, add: i64) -> i64 {
-    v.wrapping_mul(v.wrapping_mul(M).wrapping_add(A)).wrapping_add(add)
+    v.wrapping_mul(v.wrapping_mul(M).wrapping_add(A))
+        .wrapping_add(add)
 }
 
 struct Rng {
@@ -42,7 +43,11 @@ impl Rng {
         r
     }
     fn pick2(&mut self, a: i32, b: i32) -> i32 {
-        if self.next(2) == 0 { a } else { b }
+        if self.next(2) == 0 {
+            a
+        } else {
+            b
+        }
     }
     fn pick4(&mut self, a: i32, b: i32, c: i32, d: i32) -> i32 {
         [a, b, c, d][self.next(4) as usize]
@@ -166,7 +171,12 @@ impl GenLayer {
         for _ in 0..3 {
             wgs = step(wgs, base);
         }
-        Arc::new(GenLayer { kind, wgs, parent, parent2 })
+        Arc::new(GenLayer {
+            kind,
+            wgs,
+            parent,
+            parent2,
+        })
     }
 
     /// `GenLayer.initializeAllBiomeGenerators(seed, WorldType.DEFAULT)`:
@@ -209,7 +219,12 @@ impl GenLayer {
         // world seed and run with worldGenSeed == 0.
         let mut hills_river = river_init.clone();
         for _ in 0..2 {
-            hills_river = Arc::new(GenLayer { kind: Kind::Zoom, wgs: 0, parent: Some(hills_river), parent2: None });
+            hills_river = Arc::new(GenLayer {
+                kind: Kind::Zoom,
+                wgs: 0,
+                parent: Some(hills_river),
+                parent2: None,
+            });
         }
         biomes = GenLayer::make(Kind::Hills, 1000, seed, Some(biomes), Some(hills_river));
         let mut river = magnify(1000, river_init, 2);
@@ -238,7 +253,10 @@ impl GenLayer {
 
     /// `getInts(x, z, w, h)`
     pub fn get_ints(&self, x: i32, z: i32, w: i32, h: i32) -> Vec<i32> {
-        let mut rng = Rng { wgs: self.wgs, cs: 0 };
+        let mut rng = Rng {
+            wgs: self.wgs,
+            cs: 0,
+        };
         let (wu, hu) = (w as usize, h as usize);
         match self.kind {
             Kind::Island => {
@@ -287,7 +305,11 @@ impl GenLayer {
                                     v
                                 } else if v == 1 {
                                     if sp > 0 {
-                                        if rng.next(3) == 0 { 39 } else { 38 }
+                                        if rng.next(3) == 0 {
+                                            39
+                                        } else {
+                                            38
+                                        }
                                     } else {
                                         [2, 2, 2, 35, 35, 1][rng.next(6) as usize]
                                     }
@@ -345,7 +367,10 @@ impl GenLayer {
         let s = (w + 2) as usize;
         let p = self.p().get_ints(x - 1, z - 1, w + 2, h + 2);
         let r = if self.kind == Kind::Hills {
-            self.parent2.as_ref().unwrap().get_ints(x - 1, z - 1, w + 2, h + 2)
+            self.parent2
+                .as_ref()
+                .unwrap()
+                .get_ints(x - 1, z - 1, w + 2, h + 2)
         } else {
             Vec::new()
         };
@@ -371,7 +396,11 @@ impl GenLayer {
                         if c != 0 || (nw == 0 && ne == 0 && sw == 0 && se == 0) {
                             if c > 0 && (nw == 0 || ne == 0 || sw == 0 || se == 0) {
                                 if rng.next(5) == 0 {
-                                    if c == 4 { 4 } else { 0 }
+                                    if c == 4 {
+                                        4
+                                    } else {
+                                        0
+                                    }
                                 } else {
                                     c
                                 }
@@ -401,7 +430,8 @@ impl GenLayer {
                     }
                     Kind::AddMushroomIsland => {
                         rng.init(i + x, j + z);
-                        if c == 0 && nw == 0 && ne == 0 && sw == 0 && se == 0 && rng.next(100) == 0 {
+                        if c == 0 && nw == 0 && ne == 0 && sw == 0 && se == 0 && rng.next(100) == 0
+                        {
                             14
                         } else {
                             c
@@ -424,21 +454,41 @@ impl GenLayer {
                     }
                     Kind::RemoveTooMuchOcean => {
                         rng.init(i + x, j + z);
-                        if c == 0 && all(&|v| v == 0) && rng.next(2) == 0 { 1 } else { c }
+                        if c == 0 && all(&|v| v == 0) && rng.next(2) == 0 {
+                            1
+                        } else {
+                            c
+                        }
                     }
                     Kind::DeepOcean => {
-                        if c == 0 && all(&|v| v == 0) { 24 } else { c }
+                        if c == 0 && all(&|v| v == 0) {
+                            24
+                        } else {
+                            c
+                        }
                     }
                     Kind::EdgeCoolWarm => {
-                        if c == 1 && any(&|v| v == 3 || v == 4) { 2 } else { c }
+                        if c == 1 && any(&|v| v == 3 || v == 4) {
+                            2
+                        } else {
+                            c
+                        }
                     }
                     Kind::EdgeHeatIce => {
-                        if c == 4 && any(&|v| v == 1 || v == 2) { 3 } else { c }
+                        if c == 4 && any(&|v| v == 1 || v == 2) {
+                            3
+                        } else {
+                            c
+                        }
                     }
                     Kind::RareBiome => {
                         rng.init(i + x, j + z);
                         if rng.next(57) == 0 {
-                            if c == 1 { 129 } else { c }
+                            if c == 1 {
+                                129
+                            } else {
+                                c
+                            }
                         } else {
                             c
                         }
@@ -446,7 +496,11 @@ impl GenLayer {
                     Kind::River => {
                         let f = |v: i32| if v >= 2 { 2 + (v & 1) } else { v };
                         let fc = f(c);
-                        if fc == f(wv) && fc == f(n) && fc == f(e) && fc == f(so) { -1 } else { 7 }
+                        if fc == f(wv) && fc == f(n) && fc == f(e) && fc == f(so) {
+                            -1
+                        } else {
+                            7
+                        }
                     }
                     Kind::Smooth => {
                         let mut c = c;
@@ -465,13 +519,29 @@ impl GenLayer {
                     }
                     Kind::BiomeEdge => {
                         if same_biome(c, 3) {
-                            if all(&|v| can_be_neighbors(v, 3)) { c } else { 20 }
+                            if all(&|v| can_be_neighbors(v, 3)) {
+                                c
+                            } else {
+                                20
+                            }
                         } else if c == 38 || c == 39 {
-                            if all(&|v| same_biome(v, c)) { c } else { 37 }
+                            if all(&|v| same_biome(v, c)) {
+                                c
+                            } else {
+                                37
+                            }
                         } else if c == 32 {
-                            if all(&|v| same_biome(v, 32)) { c } else { 5 }
+                            if all(&|v| same_biome(v, 32)) {
+                                c
+                            } else {
+                                5
+                            }
                         } else if c == 2 {
-                            if any(&|v| v == 12) { 34 } else { c }
+                            if any(&|v| v == 12) {
+                                34
+                            } else {
+                                c
+                            }
                         } else if c == 6 {
                             if any(&|v| v == 2 || v == 30 || v == 12) {
                                 1
@@ -487,11 +557,19 @@ impl GenLayer {
                     Kind::Shore => {
                         let ocean_nbr = any(&is_oceanic);
                         let replace_if_ocean = |repl: i32| {
-                            if is_oceanic(c) || !ocean_nbr { c } else { repl }
+                            if is_oceanic(c) || !ocean_nbr {
+                                c
+                            } else {
+                                repl
+                            }
                         };
                         let b = biome::get(c);
                         if c == 14 {
-                            if any(&|v| v == 0) { 15 } else { c }
+                            if any(&|v| v == 0) {
+                                15
+                            } else {
+                                c
+                            }
                         } else if is_jungle(c) {
                             if any(&|v| !is_jungle_compatible(v)) {
                                 23
@@ -513,7 +591,11 @@ impl GenLayer {
                                 2
                             }
                         } else if c != 0 && c != 24 && c != 7 && c != 6 {
-                            if !ocean_nbr { c } else { 16 }
+                            if !ocean_nbr {
+                                c
+                            } else {
+                                16
+                            }
                         } else {
                             c
                         }
@@ -523,7 +605,11 @@ impl GenLayer {
                         let rv = r[iu + 1 + (ju + 1) * s];
                         let flag = (rv - 2) % 29 == 0;
                         if c != 0 && rv >= 2 && (rv - 2) % 29 == 1 && c < 128 {
-                            if biome::get(c + 128).is_some() { c + 128 } else { c }
+                            if biome::get(c + 128).is_some() {
+                                c + 128
+                            } else {
+                                c
+                            }
                         } else if rng.next(3) != 0 && !flag {
                             c
                         } else {
@@ -560,13 +646,21 @@ impl GenLayer {
                                 v = if rng.next(2) == 0 { 1 } else { 4 };
                             }
                             if flag && v != c {
-                                v = if biome::get(v + 128).is_some() { v + 128 } else { c };
+                                v = if biome::get(v + 128).is_some() {
+                                    v + 128
+                                } else {
+                                    c
+                                };
                             }
                             if v == c {
                                 c
                             } else {
                                 let cnt = nbrs.iter().filter(|&&nb| same_biome(nb, c)).count();
-                                if cnt >= 3 { v } else { c }
+                                if cnt >= 3 {
+                                    v
+                                } else {
+                                    c
+                                }
                             }
                         }
                     }
@@ -603,7 +697,11 @@ impl GenLayer {
                 tmp[idx + tw] = rng.pick2(a, b);
                 idx += 1;
                 tmp[idx] = rng.pick2(a, c);
-                tmp[idx + tw] = if fuzzy { rng.pick4(a, c, b, d) } else { rng.mode_or_random(a, c, b, d) };
+                tmp[idx + tw] = if fuzzy {
+                    rng.pick4(a, c, b, d)
+                } else {
+                    rng.mode_or_random(a, c, b, d)
+                };
                 idx += 1;
                 a = c;
                 b = d;

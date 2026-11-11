@@ -20,36 +20,78 @@ pub struct Ui<'a> {
 }
 
 fn rgba(c: u32, a: f32) -> [u8; 4] {
-    [(c >> 16 & 255) as u8, (c >> 8 & 255) as u8, (c & 255) as u8, (a * 255.0) as u8]
+    [
+        (c >> 16 & 255) as u8,
+        (c >> 8 & 255) as u8,
+        (c & 255) as u8,
+        (a * 255.0) as u8,
+    ]
 }
 
 impl<'a> Ui<'a> {
     pub fn new(atlas: &'a Atlas, w: f32, h: f32) -> Ui<'a> {
-        Ui { v: Vec::new(), atlas, w, h }
+        Ui {
+            v: Vec::new(),
+            atlas,
+            w,
+            h,
+        }
     }
 
     fn quad(&mut self, p: [[f32; 2]; 4], uv: [[f32; 2]; 4], color: [u8; 4], sel: u8) {
-        let vert = |i: usize| Vertex { pos: [p[i][0], p[i][1], 0.0], uv: uv[i], color, light: [sel, 0, 0, 0] };
-        self.v.extend_from_slice(&[vert(0), vert(1), vert(2), vert(0), vert(2), vert(3)]);
+        let vert = |i: usize| Vertex {
+            pos: [p[i][0], p[i][1], 0.0],
+            uv: uv[i],
+            color,
+            light: [sel, 0, 0, 0],
+        };
+        self.v
+            .extend_from_slice(&[vert(0), vert(1), vert(2), vert(0), vert(2), vert(3)]);
     }
 
     /// `Gui.drawRect`
     pub fn rect(&mut self, x: f32, y: f32, w: f32, h: f32, color: u32, alpha: f32) {
-        self.quad([[x, y], [x, y + h], [x + w, y + h], [x + w, y]], [[0.0; 2]; 4], rgba(color, alpha), PLAIN);
+        self.quad(
+            [[x, y], [x, y + h], [x + w, y + h], [x + w, y]],
+            [[0.0; 2]; 4],
+            rgba(color, alpha),
+            PLAIN,
+        );
     }
 
     /// `drawTexturedModalRect` from the GUI sheet; `(u, v)` in sheet pixels.
     pub fn sheet(&mut self, x: f32, y: f32, u: f32, v: f32, w: f32, h: f32) {
         let s = UI_SIZE as f32;
         let (u0, v0, u1, v1) = (u / s, v / s, (u + w) / s, (v + h) / s);
-        self.quad([[x, y], [x, y + h], [x + w, y + h], [x + w, y]], [[u0, v0], [u0, v1], [u1, v1], [u1, v0]], [255; 4], SHEET);
+        self.quad(
+            [[x, y], [x, y + h], [x + w, y + h], [x + w, y]],
+            [[u0, v0], [u0, v1], [u1, v1], [u1, v0]],
+            [255; 4],
+            SHEET,
+        );
     }
 
     /// Sheet region scaled to `w` x `h`, tinted.
-    pub fn sheet_tinted(&mut self, x: f32, y: f32, u: f32, v: f32, w: f32, h: f32, uw: f32, vh: f32, tint: u32) {
+    pub fn sheet_tinted(
+        &mut self,
+        x: f32,
+        y: f32,
+        u: f32,
+        v: f32,
+        w: f32,
+        h: f32,
+        uw: f32,
+        vh: f32,
+        tint: u32,
+    ) {
         let s = UI_SIZE as f32;
         let (u0, v0, u1, v1) = (u / s, v / s, (u + uw) / s, (v + vh) / s);
-        self.quad([[x, y], [x, y + h], [x + w, y + h], [x + w, y]], [[u0, v0], [u0, v1], [u1, v1], [u1, v0]], rgba(tint, 1.0), SHEET);
+        self.quad(
+            [[x, y], [x, y + h], [x + w, y + h], [x + w, y]],
+            [[u0, v0], [u0, v1], [u1, v1], [u1, v0]],
+            rgba(tint, 1.0),
+            SHEET,
+        );
     }
 
     /// Text drawn at an integer scale (`glScalef` around the origin).
@@ -65,15 +107,26 @@ impl<'a> Ui<'a> {
     /// Any stack: block icons in 3D, items as flat sprites.
     pub fn stack_icon(&mut self, s: &crate::item::Stack, x: f32, y: f32) {
         if let Some(b) = s.block() {
-            if crate::block::info(b).shape != crate::block::Shape::None || b == crate::block::FLOWING_WATER {
+            if crate::block::info(b).shape != crate::block::Shape::None
+                || b == crate::block::FLOWING_WATER
+            {
                 self.block_icon(b, s.meta, x, y);
                 return;
             }
         }
-        let meta = if crate::item::tool(s.id).is_some() { 0 } else { s.meta };
+        let meta = if crate::item::tool(s.id).is_some() {
+            0
+        } else {
+            s.meta
+        };
         if let Some(&t) = self.atlas.items.get(&(s.id, meta)) {
             let t = self.atlas.rects[t as usize];
-            self.quad([[x, y], [x, y + 16.0], [x + 16.0, y + 16.0], [x + 16.0, y]], [[t[0], t[1]], [t[0], t[3]], [t[2], t[3]], [t[2], t[1]]], [255; 4], BLOCKS);
+            self.quad(
+                [[x, y], [x, y + 16.0], [x + 16.0, y + 16.0], [x + 16.0, y]],
+                [[t[0], t[1]], [t[0], t[3]], [t[2], t[3]], [t[2], t[1]]],
+                [255; 4],
+                BLOCKS,
+            );
         }
     }
 
@@ -113,7 +166,12 @@ impl<'a> Ui<'a> {
                 let (cu, cv) = ((i % 16 * 8) as f32, (i / 16 * 8) as f32 + 256.0);
                 let gw = w - 1.01;
                 let (u0, v0, u1, v1) = (cu / sz, cv / sz, (cu + gw) / sz, (cv + 7.99) / sz);
-                self.quad([[x, y], [x, y + 7.99], [x + gw, y + 7.99], [x + gw, y]], [[u0, v0], [u0, v1], [u1, v1], [u1, v0]], color, SHEET);
+                self.quad(
+                    [[x, y], [x, y + 7.99], [x + gw, y + 7.99], [x + gw, y]],
+                    [[u0, v0], [u0, v1], [u1, v1], [u1, v0]],
+                    color,
+                    SHEET,
+                );
             }
             x += w;
         }
@@ -130,13 +188,26 @@ impl<'a> Ui<'a> {
     /// `RenderItem.renderItemIntoGUI` for a block item in a 16x16 slot.
     pub fn block_icon(&mut self, id: u8, meta: i32, x: f32, y: f32) {
         let info = block::info(id);
-        let cube = matches!(info.shape, Shape::Cube | Shape::Cactus | Shape::Chest | Shape::Slab);
+        let cube = matches!(
+            info.shape,
+            Shape::Cube | Shape::Cactus | Shape::Chest | Shape::Slab
+        );
         if !cube {
             // Flat sprite (`renderIcon`).
             let face = if id == block::DOUBLE_PLANT { 1 } else { 0 };
             if let Some(t) = self.atlas.tile(id, meta as u8, face) {
-                let tint = if id == block::TALLGRASS || id == block::VINE || id == block::WATERLILY { 0x48B518 } else { 0xFFFFFF };
-                self.quad([[x, y], [x, y + 16.0], [x + 16.0, y + 16.0], [x + 16.0, y]], [[t[0], t[1]], [t[0], t[3]], [t[2], t[3]], [t[2], t[1]]], rgba(tint, 1.0), BLOCKS);
+                let tint = if id == block::TALLGRASS || id == block::VINE || id == block::WATERLILY
+                {
+                    0x48B518
+                } else {
+                    0xFFFFFF
+                };
+                self.quad(
+                    [[x, y], [x, y + 16.0], [x + 16.0, y + 16.0], [x + 16.0, y]],
+                    [[t[0], t[1]], [t[0], t[3]], [t[2], t[3]], [t[2], t[1]]],
+                    rgba(tint, 1.0),
+                    BLOCKS,
+                );
             }
             return;
         }
@@ -156,12 +227,66 @@ impl<'a> Ui<'a> {
         };
         // Corners per face (same order as the world mesher) with tile UVs.
         const FACES: [(usize, [[f32; 3]; 4], [[f32; 2]; 4]); 6] = [
-            (0, [[0.0, 0.0, 1.0], [0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 0.0, 1.0]], [[0.0, 1.0], [0.0, 0.0], [1.0, 0.0], [1.0, 1.0]]),
-            (1, [[1.0, 1.0, 1.0], [1.0, 1.0, 0.0], [0.0, 1.0, 0.0], [0.0, 1.0, 1.0]], [[1.0, 1.0], [1.0, 0.0], [0.0, 0.0], [0.0, 1.0]]),
-            (2, [[0.0, 1.0, 0.0], [1.0, 1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 0.0]], [[1.0, 0.0], [0.0, 0.0], [0.0, 1.0], [1.0, 1.0]]),
-            (3, [[0.0, 1.0, 1.0], [0.0, 0.0, 1.0], [1.0, 0.0, 1.0], [1.0, 1.0, 1.0]], [[0.0, 0.0], [0.0, 1.0], [1.0, 1.0], [1.0, 0.0]]),
-            (4, [[0.0, 1.0, 1.0], [0.0, 1.0, 0.0], [0.0, 0.0, 0.0], [0.0, 0.0, 1.0]], [[1.0, 0.0], [0.0, 0.0], [0.0, 1.0], [1.0, 1.0]]),
-            (5, [[1.0, 0.0, 1.0], [1.0, 0.0, 0.0], [1.0, 1.0, 0.0], [1.0, 1.0, 1.0]], [[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]]),
+            (
+                0,
+                [
+                    [0.0, 0.0, 1.0],
+                    [0.0, 0.0, 0.0],
+                    [1.0, 0.0, 0.0],
+                    [1.0, 0.0, 1.0],
+                ],
+                [[0.0, 1.0], [0.0, 0.0], [1.0, 0.0], [1.0, 1.0]],
+            ),
+            (
+                1,
+                [
+                    [1.0, 1.0, 1.0],
+                    [1.0, 1.0, 0.0],
+                    [0.0, 1.0, 0.0],
+                    [0.0, 1.0, 1.0],
+                ],
+                [[1.0, 1.0], [1.0, 0.0], [0.0, 0.0], [0.0, 1.0]],
+            ),
+            (
+                2,
+                [
+                    [0.0, 1.0, 0.0],
+                    [1.0, 1.0, 0.0],
+                    [1.0, 0.0, 0.0],
+                    [0.0, 0.0, 0.0],
+                ],
+                [[1.0, 0.0], [0.0, 0.0], [0.0, 1.0], [1.0, 1.0]],
+            ),
+            (
+                3,
+                [
+                    [0.0, 1.0, 1.0],
+                    [0.0, 0.0, 1.0],
+                    [1.0, 0.0, 1.0],
+                    [1.0, 1.0, 1.0],
+                ],
+                [[0.0, 0.0], [0.0, 1.0], [1.0, 1.0], [1.0, 0.0]],
+            ),
+            (
+                4,
+                [
+                    [0.0, 1.0, 1.0],
+                    [0.0, 1.0, 0.0],
+                    [0.0, 0.0, 0.0],
+                    [0.0, 0.0, 1.0],
+                ],
+                [[1.0, 0.0], [0.0, 0.0], [0.0, 1.0], [1.0, 1.0]],
+            ),
+            (
+                5,
+                [
+                    [1.0, 0.0, 1.0],
+                    [1.0, 0.0, 0.0],
+                    [1.0, 1.0, 0.0],
+                    [1.0, 1.0, 1.0],
+                ],
+                [[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]],
+            ),
         ];
         // The three faces nearest to the viewer.
         let mut order: Vec<(f32, usize)> = FACES
@@ -177,7 +302,9 @@ impl<'a> Ui<'a> {
         let nearest: Vec<usize> = order.iter().take(3).map(|o| o.1).collect();
         for &fi in nearest.iter().rev() {
             let (face, corners, uvs) = &FACES[fi];
-            let Some(t) = self.atlas.tile(id, meta as u8, *face) else { continue };
+            let Some(t) = self.atlas.tile(id, meta as u8, *face) else {
+                continue;
+            };
             let p: Vec<[f32; 3]> = corners.iter().map(|&c| project(c)).collect();
             let cx: f32 = p.iter().map(|q| q[0]).sum::<f32>() / 4.0;
             let shade = if *face == 1 {
@@ -193,9 +320,37 @@ impl<'a> Ui<'a> {
                 _ => 0xFFFFFF,
             };
             let c = rgba(tint, 1.0);
-            let color = [(c[0] as f32 * shade) as u8, (c[1] as f32 * shade) as u8, (c[2] as f32 * shade) as u8, 255];
-            let uv: Vec<[f32; 2]> = uvs.iter().map(|u| [t[0] + (t[2] - t[0]) * u[0], t[1] + (t[3] - t[1]) * (if info.shape == Shape::Slab && *face >= 2 { 0.5 + u[1] * 0.5 } else { u[1] })]).collect();
-            self.quad([[p[0][0], p[0][1]], [p[1][0], p[1][1]], [p[2][0], p[2][1]], [p[3][0], p[3][1]]], [uv[0], uv[1], uv[2], uv[3]], color, BLOCKS);
+            let color = [
+                (c[0] as f32 * shade) as u8,
+                (c[1] as f32 * shade) as u8,
+                (c[2] as f32 * shade) as u8,
+                255,
+            ];
+            let uv: Vec<[f32; 2]> = uvs
+                .iter()
+                .map(|u| {
+                    [
+                        t[0] + (t[2] - t[0]) * u[0],
+                        t[1] + (t[3] - t[1])
+                            * (if info.shape == Shape::Slab && *face >= 2 {
+                                0.5 + u[1] * 0.5
+                            } else {
+                                u[1]
+                            }),
+                    ]
+                })
+                .collect();
+            self.quad(
+                [
+                    [p[0][0], p[0][1]],
+                    [p[1][0], p[1][1]],
+                    [p[2][0], p[2][1]],
+                    [p[3][0], p[3][1]],
+                ],
+                [uv[0], uv[1], uv[2], uv[3]],
+                color,
+                BLOCKS,
+            );
         }
     }
 }
@@ -215,7 +370,14 @@ pub type Stack = (u8, i32, u32);
 pub fn hotbar(ui: &mut Ui, slots: &[Option<Stack>; 9], selected: usize, show_counts: bool) {
     let (w, h) = (ui.w, ui.h);
     ui.widget(w / 2.0 - 91.0, h - 22.0, 0.0, 0.0, 182.0, 22.0);
-    ui.widget(w / 2.0 - 91.0 - 1.0 + selected as f32 * 20.0, h - 22.0 - 1.0, 0.0, 22.0, 24.0, 22.0);
+    ui.widget(
+        w / 2.0 - 91.0 - 1.0 + selected as f32 * 20.0,
+        h - 22.0 - 1.0,
+        0.0,
+        22.0,
+        24.0,
+        22.0,
+    );
     for (i, s) in slots.iter().enumerate() {
         if let Some((id, meta, count)) = *s {
             let (x, y) = (w / 2.0 - 90.0 + i as f32 * 20.0 + 2.0, h - 16.0 - 3.0);

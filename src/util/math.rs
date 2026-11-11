@@ -39,19 +39,31 @@ pub fn sqrt_double(d: f64) -> f32 {
 #[inline]
 pub fn floor_float(f: f32) -> i32 {
     let i = f as i32;
-    if f < i as f32 { i - 1 } else { i }
+    if f < i as f32 {
+        i - 1
+    } else {
+        i
+    }
 }
 
 #[inline]
 pub fn floor_double(d: f64) -> i32 {
     let i = d as i32;
-    if d < i as f64 { i - 1 } else { i }
+    if d < i as f64 {
+        i - 1
+    } else {
+        i
+    }
 }
 
 #[inline]
 pub fn floor_double_long(d: f64) -> i64 {
     let i = d as i64;
-    if d < i as f64 { i - 1 } else { i }
+    if d < i as f64 {
+        i - 1
+    } else {
+        i
+    }
 }
 
 #[inline]
@@ -67,12 +79,24 @@ pub fn denormalize_clamp(a: f64, b: f64, t: f64) -> f64 {
 
 #[inline]
 pub fn clamp_int(v: i32, lo: i32, hi: i32) -> i32 {
-    if v < lo { lo } else if v > hi { hi } else { v }
+    if v < lo {
+        lo
+    } else if v > hi {
+        hi
+    } else {
+        v
+    }
 }
 
 #[inline]
 pub fn clamp_float(v: f32, lo: f32, hi: f32) -> f32 {
-    if v < lo { lo } else if v > hi { hi } else { v }
+    if v < lo {
+        lo
+    } else if v > hi {
+        hi
+    } else {
+        v
+    }
 }
 
 /// `MathHelper.wrapAngleTo180_float`

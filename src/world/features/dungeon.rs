@@ -1,30 +1,9 @@
-//! `WorldGenDungeons`. Chest contents and the spawner mob are not stored yet,
-//! but the random numbers they consume are drawn exactly as in vanilla so the
-//! rest of the chunk's decoration stays in sync.
+//! `WorldGenDungeons`, and the enchanted-book roll shared by every loot chest.
 
 use crate::block;
 use crate::java::JavaRandom;
-use crate::world::server::ServerWorld;
-
-/// `(weight, min, max)` of `field_111189_a` followed by the enchanted book.
-const LOOT: [(i32, i32, i32); 16] = [
-    (10, 1, 1),
-    (10, 1, 4),
-    (10, 1, 1),
-    (10, 1, 4),
-    (10, 1, 4),
-    (10, 1, 4),
-    (10, 1, 1),
-    (1, 1, 1),
-    (10, 1, 4),
-    (10, 1, 1),
-    (10, 1, 1),
-    (10, 1, 1),
-    (2, 1, 1),
-    (5, 1, 1),
-    (1, 1, 1),
-    (1, 1, 1),
-];
+use crate::world::loot;
+use crate::world::server::{GenTile, ServerWorld};
 
 #[derive(Clone, Copy, PartialEq)]
 enum Ench {
@@ -137,9 +116,9 @@ fn compatible(a: (i32, Ench), b: (i32, Ench)) -> bool {
     }
 }
 
-/// `Items.enchanted_book.func_92114_b(rand)`: only the RNG side effects of
-/// `EnchantmentHelper.buildEnchantmentList(rand, book, 30)`.
-fn roll_enchanted_book(r: &mut JavaRandom) {
+/// `EnchantmentHelper.buildEnchantmentList(rand, book, 30)`: the
+/// `(id, level)` list a random enchanted book receives.
+pub fn roll_enchanted_book(r: &mut JavaRandom) -> Vec<(i32, i32)> {
     // Book enchantability 1: `1 + nextInt(1) + nextInt(1)`.
     let k = 1 + r.next_int_n(1) + r.next_int_n(1);
     let level = k + 30;
@@ -150,20 +129,22 @@ fn roll_enchanted_book(r: &mut JavaRandom) {
     }
     // mapEnchantmentData: one entry per enchantment (highest matching level).
     let mut map: Vec<(i32, i32, Ench)> = Vec::new();
+    let mut levels: Vec<(i32, i32)> = Vec::new();
     for &(id, weight, e) in ENCHANTMENTS.iter() {
-        let mut found = false;
+        let mut found = 0;
         for l in 1..=max_level(e) {
             let (lo, hi) = range(e, l);
             if power >= lo && power <= hi {
-                found = true;
+                found = l;
             }
         }
-        if found {
+        if found > 0 {
             map.push((id, weight, e));
+            levels.push((id, found));
         }
     }
     if map.is_empty() {
-        return;
+        return Vec::new();
     }
     // java.util.HashMap iteration order for Integer keys: by bucket, then by
     // insertion; the table never shrinks when entries are removed.
@@ -186,7 +167,9 @@ fn roll_enchanted_book(r: &mut JavaRandom) {
         }
         None
     };
-    let Some(first) = pick(r, &map) else { return };
+    let Some(first) = pick(r, &map) else {
+        return Vec::new();
+    };
     let mut chosen = vec![first];
     let mut i = power;
     while r.next_int_n(50) <= i {
@@ -198,25 +181,10 @@ fn roll_enchanted_book(r: &mut JavaRandom) {
         }
         i >>= 1;
     }
-}
-
-/// `WeightedRandomChestContent.generateChestContents(rand, loot, chest, 8)`
-fn roll_chest(r: &mut JavaRandom) {
-    let total: i32 = LOOT.iter().map(|e| e.0).sum();
-    for _ in 0..8 {
-        let mut n = r.next_int_n(total);
-        let mut entry = LOOT[0];
-        for e in LOOT.iter() {
-            n -= e.0;
-            if n < 0 {
-                entry = *e;
-                break;
-            }
-        }
-        let _count = entry.1 + r.next_int_n(entry.2 - entry.1 + 1);
-        // Every entry fits in one stack: one slot draw (27 slots).
-        let _slot = r.next_int_n(27);
-    }
+    chosen
+        .iter()
+        .map(|c| (c.0, levels.iter().find(|l| l.0 == c.0).map_or(1, |l| l.1)))
+        .collect()
 }
 
 pub fn dungeon(w: &mut ServerWorld, r: &mut JavaRandom, x: i32, y: i32, z: i32) -> bool {
@@ -234,7 +202,11 @@ pub fn dungeon(w: &mut ServerWorld, r: &mut JavaRandom, x: i32, y: i32, z: i32) 
                 if by == y + h + 1 && !solid {
                     return false;
                 }
-                if (bx == x - rx - 1 || bx == x + rx + 1 || bz == z - rz - 1 || bz == z + rz + 1) && by == y && w.is_air(bx, by, bz) && w.is_air(bx, by + 1, bz) {
+                if (bx == x - rx - 1 || bx == x + rx + 1 || bz == z - rz - 1 || bz == z + rz + 1)
+                    && by == y
+                    && w.is_air(bx, by, bz)
+                    && w.is_air(bx, by + 1, bz)
+                {
                     openings += 1;
                 }
             }
@@ -247,7 +219,13 @@ pub fn dungeon(w: &mut ServerWorld, r: &mut JavaRandom, x: i32, y: i32, z: i32) 
         let mut by = y + h;
         while by >= y - 1 {
             for bz in (z - rz - 1)..=(z + rz + 1) {
-                if bx != x - rx - 1 && by != y - 1 && bz != z - rz - 1 && bx != x + rx + 1 && by != y + h + 1 && bz != z + rz + 1 {
+                if bx != x - rx - 1
+                    && by != y - 1
+                    && bz != z - rz - 1
+                    && bx != x + rx + 1
+                    && by != y + h + 1
+                    && bz != z + rz + 1
+                {
                     w.set_air(bx, by, bz);
                 } else if by >= 0 && !w.material(bx, by - 1, bz).is_solid() {
                     w.set_air(bx, by, bz);
@@ -275,15 +253,24 @@ pub fn dungeon(w: &mut ServerWorld, r: &mut JavaRandom, x: i32, y: i32, z: i32) 
                 }
                 if walls == 1 {
                     w.set_block(cx, y, cz, block::CHEST, 0, 2);
-                    roll_enchanted_book(r);
-                    roll_chest(r);
+                    let book = loot::enchanted_book(r, 1, 1, 1);
+                    let mut slots = vec![None; 27];
+                    loot::fill(r, &[loot::DUNGEON, &[book]].concat(), &mut slots, 8);
+                    w.gen_tiles.push(GenTile::Chest {
+                        pos: [cx, y, cz],
+                        slots,
+                    });
                     break;
                 }
             }
         }
     }
     w.set_block(x, y, z, block::MOB_SPAWNER, 0, 2);
-    // func_76543_b: Skeleton / Zombie / Zombie / Spider
-    let _mob = r.next_int_n(4);
+    // func_76543_b
+    let mob = ["Skeleton", "Zombie", "Zombie", "Spider"][r.next_int_n(4) as usize];
+    w.gen_tiles.push(GenTile::Spawner {
+        pos: [x, y, z],
+        mob,
+    });
     true
 }

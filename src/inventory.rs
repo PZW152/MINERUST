@@ -31,7 +31,13 @@ pub struct Inventory {
 
 impl Default for Inventory {
     fn default() -> Self {
-        Inventory { main: [None; MAIN], grid: [None; 9], cursor: None, selected: 0, grid_size: 2 }
+        Inventory {
+            main: [None; MAIN],
+            grid: [None; 9],
+            cursor: None,
+            selected: 0,
+            grid_size: 2,
+        }
     }
 }
 
@@ -95,7 +101,8 @@ impl Inventory {
     /// The current crafting result.
     pub fn result(&self) -> Option<Stack> {
         let g = &self.grid;
-        let cells: Vec<Option<(ItemId, i32)>> = (0..9).map(|i| g[i].map(|s| (s.id, s.meta))).collect();
+        let cells: Vec<Option<(ItemId, i32)>> =
+            (0..9).map(|i| g[i].map(|s| (s.id, s.meta))).collect();
         find_recipe(&cells, self.grid_size)
     }
 
@@ -120,8 +127,17 @@ impl Inventory {
 
     /// `mergeItemStack`: moves `s` into `range` of the main inventory, filling
     /// matching stacks first. Returns the remainder.
-    fn merge_into(&mut self, mut s: Stack, range: std::ops::Range<usize>, reverse: bool) -> Option<Stack> {
-        let idx: Vec<usize> = if reverse { range.clone().rev().collect() } else { range.clone().collect() };
+    fn merge_into(
+        &mut self,
+        mut s: Stack,
+        range: std::ops::Range<usize>,
+        reverse: bool,
+    ) -> Option<Stack> {
+        let idx: Vec<usize> = if reverse {
+            range.clone().rev().collect()
+        } else {
+            range.clone().collect()
+        };
         for &i in &idx {
             if let Some(t) = &mut self.main[i] {
                 if t.same_item(&s) && t.meta == s.meta && t.count < limit(t) {
@@ -152,7 +168,14 @@ impl Inventory {
                 if let Some(c) = self.cursor {
                     if right {
                         drops.push(Stack { count: 1, ..c });
-                        self.cursor = if c.count > 1 { Some(Stack { count: c.count - 1, ..c }) } else { None };
+                        self.cursor = if c.count > 1 {
+                            Some(Stack {
+                                count: c.count - 1,
+                                ..c
+                            })
+                        } else {
+                            None
+                        };
                     } else {
                         drops.push(c);
                         self.cursor = None;
@@ -176,8 +199,15 @@ impl Inventory {
                             self.cursor = Some(r);
                             self.consume_grid();
                         }
-                        Some(c) if c.same_item(&r) && c.meta == r.meta && c.count + r.count <= limit(&c) => {
-                            self.cursor = Some(Stack { count: c.count + r.count, ..c });
+                        Some(c)
+                            if c.same_item(&r)
+                                && c.meta == r.meta
+                                && c.count + r.count <= limit(&c) =>
+                        {
+                            self.cursor = Some(Stack {
+                                count: c.count + r.count,
+                                ..c
+                            });
                             self.consume_grid();
                         }
                         _ => {}
@@ -187,19 +217,27 @@ impl Inventory {
             Slot::Main(i) if shift => {
                 if let Some(s) = self.main[i].take() {
                     // Hotbar <-> main inventory (ContainerPlayer.transferStackInSlot).
-                    let rest = if i < 9 { self.merge_into(s, 9..MAIN, false) } else { self.merge_into(s, 0..9, false) };
+                    let rest = if i < 9 {
+                        self.merge_into(s, 9..MAIN, false)
+                    } else {
+                        self.merge_into(s, 0..9, false)
+                    };
                     self.main[i] = rest;
                 }
             }
             Slot::Craft(i) if shift => {
                 if let Some(s) = self.grid[i].take() {
-                    let rest = self.merge_into(s, 9..MAIN, false).and_then(|r| self.merge_into(r, 0..9, false));
+                    let rest = self
+                        .merge_into(s, 9..MAIN, false)
+                        .and_then(|r| self.merge_into(r, 0..9, false));
                     self.grid[i] = rest;
                 }
             }
             _ => {
                 let cursor = self.cursor;
-                let Some(target) = self.slot_mut(slot) else { return drops };
+                let Some(target) = self.slot_mut(slot) else {
+                    return drops;
+                };
                 let cur = *target;
                 let (new_slot, new_cursor) = match (cur, cursor) {
                     (None, None) => (None, None),
@@ -207,25 +245,66 @@ impl Inventory {
                         if right {
                             let take = (s.count + 1) / 2;
                             let left = s.count - take;
-                            (if left > 0 { Some(Stack { count: left, ..s }) } else { None }, Some(Stack { count: take, ..s }))
+                            (
+                                if left > 0 {
+                                    Some(Stack { count: left, ..s })
+                                } else {
+                                    None
+                                },
+                                Some(Stack { count: take, ..s }),
+                            )
                         } else {
                             (None, Some(s))
                         }
                     }
                     (None, Some(c)) => {
                         if right {
-                            (Some(Stack { count: 1, ..c }), if c.count > 1 { Some(Stack { count: c.count - 1, ..c }) } else { None })
+                            (
+                                Some(Stack { count: 1, ..c }),
+                                if c.count > 1 {
+                                    Some(Stack {
+                                        count: c.count - 1,
+                                        ..c
+                                    })
+                                } else {
+                                    None
+                                },
+                            )
                         } else {
                             let n = c.count.min(limit(&c));
-                            (Some(Stack { count: n, ..c }), if c.count > n { Some(Stack { count: c.count - n, ..c }) } else { None })
+                            (
+                                Some(Stack { count: n, ..c }),
+                                if c.count > n {
+                                    Some(Stack {
+                                        count: c.count - n,
+                                        ..c
+                                    })
+                                } else {
+                                    None
+                                },
+                            )
                         }
                     }
                     (Some(s), Some(c)) => {
                         if s.same_item(&c) && s.meta == c.meta {
                             let room = limit(&s).saturating_sub(s.count);
-                            let n = if right { 1.min(room).min(c.count) } else { room.min(c.count) };
+                            let n = if right {
+                                1.min(room).min(c.count)
+                            } else {
+                                room.min(c.count)
+                            };
                             let rest = c.count - n;
-                            (Some(Stack { count: s.count + n, ..s }), if rest > 0 { Some(Stack { count: rest, ..c }) } else { None })
+                            (
+                                Some(Stack {
+                                    count: s.count + n,
+                                    ..s
+                                }),
+                                if rest > 0 {
+                                    Some(Stack { count: rest, ..c })
+                                } else {
+                                    None
+                                },
+                            )
                         } else {
                             (Some(c), Some(s))
                         }
@@ -260,7 +339,7 @@ impl Inventory {
         let mut v = vec![format!("sel{}", self.selected)];
         for (i, s) in self.main.iter().enumerate() {
             if let Some(s) = s {
-                v.push(format!("{i}:{}:{}:{}", s.id, s.meta, s.count));
+                v.push(format!("{i}:{}", s.to_code()));
             }
         }
         v.join(";")
@@ -273,19 +352,12 @@ impl Inventory {
                 inv.selected = s.parse::<usize>().ok()?.min(8);
                 continue;
             }
-            let f: Vec<&str> = part.split(':').collect();
-            if f.len() != 4 {
-                return None;
-            }
-            let i: usize = f[0].parse().ok()?;
+            let (slot, rest) = part.split_once(':')?;
+            let i: usize = slot.parse().ok()?;
             if i >= MAIN {
                 return None;
             }
-            let s = Stack::new(f[1].parse().ok()?, f[2].parse().ok()?, f[3].parse().ok()?);
-            if s.count == 0 || s.count > 64 {
-                return None;
-            }
-            inv.main[i] = Some(s);
+            inv.main[i] = Some(Stack::from_code(rest)?);
         }
         Some(inv)
     }
@@ -322,37 +394,122 @@ fn recipes() -> &'static [Shaped] {
         let b = |id: u8| id as ItemId;
         let mut r = Vec::new();
         for m in 0..4 {
-            r.push(shaped(&["#"], &[('#', b(block::LOG), m)], Stack::new(b(block::PLANKS), m, 4)));
+            r.push(shaped(
+                &["#"],
+                &[('#', b(block::LOG), m)],
+                Stack::new(b(block::PLANKS), m, 4),
+            ));
         }
         for m in 0..2 {
-            r.push(shaped(&["#"], &[('#', b(block::LOG2), m)], Stack::new(b(block::PLANKS), 4 + m, 4)));
+            r.push(shaped(
+                &["#"],
+                &[('#', b(block::LOG2), m)],
+                Stack::new(b(block::PLANKS), 4 + m, 4),
+            ));
         }
-        r.push(shaped(&["#", "#"], &[('#', b(block::PLANKS), ANY)], Stack::new(item::STICK, 0, 4)));
-        r.push(shaped(&["##", "##"], &[('#', b(block::PLANKS), ANY)], Stack::new(b(block::CRAFTING_TABLE), 0, 1)));
-        r.push(shaped(&["###", "# #", "###"], &[('#', b(block::PLANKS), ANY)], Stack::new(b(block::CHEST), 0, 1)));
-        r.push(shaped(&["###", "# #", "###"], &[('#', b(block::COBBLESTONE), ANY)], Stack::new(b(block::FURNACE), 0, 1)));
-        r.push(shaped(&["X", "#"], &[('X', item::COAL, ANY), ('#', item::STICK, ANY)], Stack::new(b(block::TORCH), 0, 4)));
-        r.push(shaped(&["##", "##"], &[('#', b(block::SAND), 0)], Stack::new(b(block::SANDSTONE), 0, 1)));
-        r.push(shaped(&["##", "##"], &[('#', item::SNOWBALL, ANY)], Stack::new(b(block::SNOW), 0, 1)));
-        r.push(shaped(&["##", "##"], &[('#', item::CLAY_BALL, ANY)], Stack::new(b(block::CLAY), 0, 1)));
-        r.push(shaped(&["###"], &[('#', b(block::STONE), ANY)], Stack::new(b(block::STONE_SLAB), 0, 6)));
-        r.push(shaped(&["###"], &[('#', b(block::SANDSTONE), ANY)], Stack::new(b(block::STONE_SLAB), 1, 6)));
-        r.push(shaped(&["###"], &[('#', b(block::COBBLESTONE), ANY)], Stack::new(b(block::STONE_SLAB), 3, 6)));
-        r.push(shaped(&["MMM", "MMM", "MMM"], &[('M', item::MELON, ANY)], Stack::new(b(block::MELON_BLOCK), 0, 1)));
+        r.push(shaped(
+            &["#", "#"],
+            &[('#', b(block::PLANKS), ANY)],
+            Stack::new(item::STICK, 0, 4),
+        ));
+        r.push(shaped(
+            &["##", "##"],
+            &[('#', b(block::PLANKS), ANY)],
+            Stack::new(b(block::CRAFTING_TABLE), 0, 1),
+        ));
+        r.push(shaped(
+            &["###", "# #", "###"],
+            &[('#', b(block::PLANKS), ANY)],
+            Stack::new(b(block::CHEST), 0, 1),
+        ));
+        r.push(shaped(
+            &["###", "# #", "###"],
+            &[('#', b(block::COBBLESTONE), ANY)],
+            Stack::new(b(block::FURNACE), 0, 1),
+        ));
+        r.push(shaped(
+            &["X", "#"],
+            &[('X', item::COAL, ANY), ('#', item::STICK, ANY)],
+            Stack::new(b(block::TORCH), 0, 4),
+        ));
+        r.push(shaped(
+            &["##", "##"],
+            &[('#', b(block::SAND), 0)],
+            Stack::new(b(block::SANDSTONE), 0, 1),
+        ));
+        r.push(shaped(
+            &["##", "##"],
+            &[('#', item::SNOWBALL, ANY)],
+            Stack::new(b(block::SNOW), 0, 1),
+        ));
+        r.push(shaped(
+            &["##", "##"],
+            &[('#', item::CLAY_BALL, ANY)],
+            Stack::new(b(block::CLAY), 0, 1),
+        ));
+        r.push(shaped(
+            &["###"],
+            &[('#', b(block::STONE), ANY)],
+            Stack::new(b(block::STONE_SLAB), 0, 6),
+        ));
+        r.push(shaped(
+            &["###"],
+            &[('#', b(block::SANDSTONE), ANY)],
+            Stack::new(b(block::STONE_SLAB), 1, 6),
+        ));
+        r.push(shaped(
+            &["###"],
+            &[('#', b(block::COBBLESTONE), ANY)],
+            Stack::new(b(block::STONE_SLAB), 3, 6),
+        ));
+        r.push(shaped(
+            &["MMM", "MMM", "MMM"],
+            &[('M', item::MELON, ANY)],
+            Stack::new(b(block::MELON_BLOCK), 0, 1),
+        ));
         // RecipesTools / RecipesWeapons
-        let mats: [(ItemId, i32); 5] = [(b(block::PLANKS), ANY), (b(block::COBBLESTONE), ANY), (item::IRON_INGOT, ANY), (item::DIAMOND, ANY), (item::GOLD_INGOT, ANY)];
-        let ids: [[ItemId; 5]; 5] = [[268, 269, 270, 271, 290], [272, 273, 274, 275, 291], [267, 256, 257, 258, 292], [276, 277, 278, 279, 293], [283, 284, 285, 286, 294]];
-        let shapes: [&[&str]; 5] = [&["X", "X", "#"], &["X", "#", "#"], &["XXX", " # ", " # "], &["XX", "X#", " #"], &["XX", " #", " #"]];
+        let mats: [(ItemId, i32); 5] = [
+            (b(block::PLANKS), ANY),
+            (b(block::COBBLESTONE), ANY),
+            (item::IRON_INGOT, ANY),
+            (item::DIAMOND, ANY),
+            (item::GOLD_INGOT, ANY),
+        ];
+        let ids: [[ItemId; 5]; 5] = [
+            [268, 269, 270, 271, 290],
+            [272, 273, 274, 275, 291],
+            [267, 256, 257, 258, 292],
+            [276, 277, 278, 279, 293],
+            [283, 284, 285, 286, 294],
+        ];
+        let shapes: [&[&str]; 5] = [
+            &["X", "X", "#"],
+            &["X", "#", "#"],
+            &["XXX", " # ", " # "],
+            &["XX", "X#", " #"],
+            &["XX", " #", " #"],
+        ];
         for (mi, &(mat, mm)) in mats.iter().enumerate() {
             for (k, sh) in shapes.iter().enumerate() {
-                r.push(shaped(sh, &[('X', mat, mm), ('#', item::STICK, ANY)], Stack::new(ids[mi][k], 0, 1)));
+                r.push(shaped(
+                    sh,
+                    &[('X', mat, mm), ('#', item::STICK, ANY)],
+                    Stack::new(ids[mi][k], 0, 1),
+                ));
             }
         }
         r
     })
 }
 
-fn matches_at(rec: &Shaped, cells: &[Ing], size: usize, ox: usize, oy: usize, mirror: bool) -> bool {
+fn matches_at(
+    rec: &Shaped,
+    cells: &[Ing],
+    size: usize,
+    ox: usize,
+    oy: usize,
+    mirror: bool,
+) -> bool {
     for y in 0..size {
         for x in 0..size {
             let want = if x >= ox && y >= oy && x - ox < rec.w && y - oy < rec.h {
@@ -380,7 +537,10 @@ fn matches_at(rec: &Shaped, cells: &[Ing], size: usize, ox: usize, oy: usize, mi
 /// in the top-left of a 3x3 array.
 pub fn find_recipe(cells: &[Ing], size: usize) -> Option<Stack> {
     // Two of the same damaged tool repair each other (shapeless rule).
-    let filled: Vec<(ItemId, i32)> = (0..size).flat_map(|y| (0..size).map(move |x| y * 3 + x)).filter_map(|i| cells[i]).collect();
+    let filled: Vec<(ItemId, i32)> = (0..size)
+        .flat_map(|y| (0..size).map(move |x| y * 3 + x))
+        .filter_map(|i| cells[i])
+        .collect();
     if filled.len() == 2 && filled[0].0 == filled[1].0 && item::tool(filled[0].0).is_some() {
         let t = item::tool(filled[0].0).unwrap();
         let left = |d: i32| t.max_uses - d;
@@ -394,7 +554,9 @@ pub fn find_recipe(cells: &[Ing], size: usize) -> Option<Stack> {
         }
         for ox in 0..=(size - rec.w) {
             for oy in 0..=(size - rec.h) {
-                if matches_at(rec, cells, size, ox, oy, false) || matches_at(rec, cells, size, ox, oy, true) {
+                if matches_at(rec, cells, size, ox, oy, false)
+                    || matches_at(rec, cells, size, ox, oy, true)
+                {
                     return Some(rec.out);
                 }
             }
@@ -418,13 +580,34 @@ mod tests {
     #[test]
     fn recipes_match_in_any_position_and_mirrored() {
         let p = block::PLANKS as ItemId;
-        assert_eq!(find_recipe(&grid(&[(0, block::LOG as ItemId, 2)]), 2), Some(Stack::new(p, 2, 4)));
-        assert_eq!(find_recipe(&grid(&[(4, block::LOG as ItemId, 2)]), 2), Some(Stack::new(p, 2, 4)));
-        assert_eq!(find_recipe(&grid(&[(1, p, 0), (4, p, 3)]), 2), Some(Stack::new(item::STICK, 0, 4)));
+        assert_eq!(
+            find_recipe(&grid(&[(0, block::LOG as ItemId, 2)]), 2),
+            Some(Stack::new(p, 2, 4))
+        );
+        assert_eq!(
+            find_recipe(&grid(&[(4, block::LOG as ItemId, 2)]), 2),
+            Some(Stack::new(p, 2, 4))
+        );
+        assert_eq!(
+            find_recipe(&grid(&[(1, p, 0), (4, p, 3)]), 2),
+            Some(Stack::new(item::STICK, 0, 4))
+        );
         // Axe and its mirror image.
         let c = block::COBBLESTONE as ItemId;
-        let axe = grid(&[(0, c, 0), (1, c, 0), (3, c, 0), (4, item::STICK, 0), (7, item::STICK, 0)]);
-        let mirrored = grid(&[(1, c, 0), (2, c, 0), (5, c, 0), (4, item::STICK, 0), (7, item::STICK, 0)]);
+        let axe = grid(&[
+            (0, c, 0),
+            (1, c, 0),
+            (3, c, 0),
+            (4, item::STICK, 0),
+            (7, item::STICK, 0),
+        ]);
+        let mirrored = grid(&[
+            (1, c, 0),
+            (2, c, 0),
+            (5, c, 0),
+            (4, item::STICK, 0),
+            (7, item::STICK, 0),
+        ]);
         assert_eq!(find_recipe(&axe, 3).map(|s| s.id), Some(275));
         assert_eq!(find_recipe(&mirrored, 3).map(|s| s.id), Some(275));
         // A 3x3 recipe does not fit the 2x2 grid.
@@ -458,7 +641,15 @@ mod tests {
         inv.grid[3] = Some(Stack::new(block::PLANKS as ItemId, 0, 2));
         inv.click(Slot::Result, false, true);
         assert!(inv.grid[0].is_none());
-        assert_eq!(inv.main.iter().flatten().filter(|s| s.id == item::STICK).map(|s| s.count).sum::<u32>(), 8);
+        assert_eq!(
+            inv.main
+                .iter()
+                .flatten()
+                .filter(|s| s.id == item::STICK)
+                .map(|s| s.count)
+                .sum::<u32>(),
+            8
+        );
     }
 
     #[test]

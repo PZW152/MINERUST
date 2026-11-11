@@ -13,7 +13,14 @@ pub const ROTATE_OPPOSITE: [usize; 4] = [2, 3, 0, 1];
 /// `WorldGenAbstractTree.func_150523_a`
 pub fn can_grow_into(id: u8) -> bool {
     let m = block::material(id);
-    m == Material::Air || m == Material::Leaves || id == block::GRASS || id == block::DIRT || id == block::LOG || id == block::LOG2 || id == 6 || id == block::VINE
+    m == Material::Air
+        || m == Material::Leaves
+        || id == block::GRASS
+        || id == block::DIRT
+        || id == block::LOG
+        || id == block::LOG2
+        || id == 6
+        || id == block::VINE
 }
 
 #[inline]
@@ -29,7 +36,15 @@ fn set(w: &mut ServerWorld, x: i32, y: i32, z: i32, id: u8, meta: i32) {
 
 /// Shared clearance check: radius 0 at the base, 1 along the trunk, `top` for
 /// the upper two layers.
-fn clearance(w: &mut ServerWorld, x: i32, y: i32, z: i32, h: i32, top: i32, test: impl Fn(u8) -> bool) -> bool {
+fn clearance(
+    w: &mut ServerWorld,
+    x: i32,
+    y: i32,
+    z: i32,
+    h: i32,
+    top: i32,
+    test: impl Fn(u8) -> bool,
+) -> bool {
     let mut ok = true;
     for yy in y..=y + 1 + h {
         let mut r = 1;
@@ -72,7 +87,17 @@ fn grow_vines(w: &mut ServerWorld, x: i32, mut y: i32, z: i32, meta: i32) {
 }
 
 /// `WorldGenTrees(false, min_height, wood_meta, leaf_meta, vines)`
-pub fn trees(w: &mut ServerWorld, r: &mut JavaRandom, x: i32, y: i32, z: i32, min_height: i32, wood: i32, leaf: i32, vines: bool) -> bool {
+pub fn trees(
+    w: &mut ServerWorld,
+    r: &mut JavaRandom,
+    x: i32,
+    y: i32,
+    z: i32,
+    min_height: i32,
+    wood: i32,
+    leaf: i32,
+    vines: bool,
+) -> bool {
     let h = r.next_int_n(3) + min_height;
     if !(y >= 1 && y + h + 1 <= 256) {
         return false;
@@ -81,7 +106,9 @@ pub fn trees(w: &mut ServerWorld, r: &mut JavaRandom, x: i32, y: i32, z: i32, mi
         return false;
     }
     let below = w.block(x, y - 1, z);
-    if !((below == block::GRASS || below == block::DIRT || below == block::FARMLAND) && y < 256 - h - 1) {
+    if !((below == block::GRASS || below == block::DIRT || below == block::FARMLAND)
+        && y < 256 - h - 1)
+    {
         return false;
     }
     set(w, x, y - 1, z, block::DIRT, 0);
@@ -148,7 +175,14 @@ pub fn trees(w: &mut ServerWorld, r: &mut JavaRandom, x: i32, y: i32, z: i32, mi
                     if r.next_int_n(4 - i) == 0 {
                         let age = r.next_int_n(3);
                         let o = ROTATE_OPPOSITE[d];
-                        set(w, x + DIR_X[o], y + h - 5 + i, z + DIR_Z[o], block::COCOA, age << 2 | d as i32);
+                        set(
+                            w,
+                            x + DIR_X[o],
+                            y + h - 5 + i,
+                            z + DIR_Z[o],
+                            block::COCOA,
+                            age << 2 | d as i32,
+                        );
                     }
                 }
             }
@@ -170,7 +204,9 @@ pub fn birch(w: &mut ServerWorld, r: &mut JavaRandom, x: i32, y: i32, z: i32, ta
         return false;
     }
     let below = w.block(x, y - 1, z);
-    if !((below == block::GRASS || below == block::DIRT || below == block::FARMLAND) && y < 256 - h - 1) {
+    if !((below == block::GRASS || below == block::DIRT || below == block::FARMLAND)
+        && y < 256 - h - 1)
+    {
         return false;
     }
     set(w, x, y - 1, z, block::DIRT, 0);
@@ -197,7 +233,16 @@ pub fn birch(w: &mut ServerWorld, r: &mut JavaRandom, x: i32, y: i32, z: i32, ta
     true
 }
 
-fn conifer_clearance(w: &mut ServerWorld, x: i32, y: i32, z: i32, h: i32, bare: i32, rad: i32, test: impl Fn(u8) -> bool) -> bool {
+fn conifer_clearance(
+    w: &mut ServerWorld,
+    x: i32,
+    y: i32,
+    z: i32,
+    h: i32,
+    bare: i32,
+    rad: i32,
+    test: impl Fn(u8) -> bool,
+) -> bool {
     let mut ok = true;
     let mut yy = y;
     while yy <= y + 1 + h && ok {
@@ -246,7 +291,9 @@ pub fn taiga1(w: &mut ServerWorld, r: &mut JavaRandom, x: i32, y: i32, z: i32) -
             let dx = xx - x;
             for zz in (z - cur)..=(z + cur) {
                 let dz = zz - z;
-                if (dx.abs() != cur || dz.abs() != cur || cur <= 0) && !block::info(w.block(xx, yy, zz)).full_block {
+                if (dx.abs() != cur || dz.abs() != cur || cur <= 0)
+                    && !block::info(w.block(xx, yy, zz)).full_block
+                {
                     set(w, xx, yy, zz, block::LEAVES, 1);
                 }
             }
@@ -279,7 +326,9 @@ pub fn taiga2(w: &mut ServerWorld, r: &mut JavaRandom, x: i32, y: i32, z: i32) -
         return false;
     }
     let below = w.block(x, y - 1, z);
-    if !((below == block::GRASS || below == block::DIRT || below == block::FARMLAND) && y < 256 - h - 1) {
+    if !((below == block::GRASS || below == block::DIRT || below == block::FARMLAND)
+        && y < 256 - h - 1)
+    {
         return false;
     }
     set(w, x, y - 1, z, block::DIRT, 0);
@@ -292,7 +341,9 @@ pub fn taiga2(w: &mut ServerWorld, r: &mut JavaRandom, x: i32, y: i32, z: i32) -
             let dx = xx - x;
             for zz in (z - cur)..=(z + cur) {
                 let dz = zz - z;
-                if (dx.abs() != cur || dz.abs() != cur || cur <= 0) && !block::info(w.block(xx, yy, zz)).full_block {
+                if (dx.abs() != cur || dz.abs() != cur || cur <= 0)
+                    && !block::info(w.block(xx, yy, zz)).full_block
+                {
                     set(w, xx, yy, zz, block::LEAVES, 1);
                 }
             }
@@ -318,7 +369,15 @@ pub fn taiga2(w: &mut ServerWorld, r: &mut JavaRandom, x: i32, y: i32, z: i32) -
 }
 
 /// `WorldGenShrub(wood_meta, leaf_meta)`
-pub fn shrub(w: &mut ServerWorld, r: &mut JavaRandom, x: i32, mut y: i32, z: i32, wood: i32, leaf: i32) -> bool {
+pub fn shrub(
+    w: &mut ServerWorld,
+    r: &mut JavaRandom,
+    x: i32,
+    mut y: i32,
+    z: i32,
+    wood: i32,
+    leaf: i32,
+) -> bool {
     while air_or_leaves(w.block(x, y, z)) && y > 0 {
         y -= 1;
     }
@@ -333,7 +392,9 @@ pub fn shrub(w: &mut ServerWorld, r: &mut JavaRandom, x: i32, mut y: i32, z: i32
                 let dx = xx - x;
                 for zz in (z - rad)..=(z + rad) {
                     let dz = zz - z;
-                    if (dx.abs() != rad || dz.abs() != rad || r.next_int_n(2) != 0) && !block::info(w.block(xx, yy, zz)).full_block {
+                    if (dx.abs() != rad || dz.abs() != rad || r.next_int_n(2) != 0)
+                        && !block::info(w.block(xx, yy, zz)).full_block
+                    {
                         set(w, xx, yy, zz, block::LEAVES, leaf);
                     }
                 }
@@ -397,7 +458,9 @@ pub fn swamp(w: &mut ServerWorld, r: &mut JavaRandom, x: i32, mut y: i32, z: i32
             let dx = xx - x;
             for zz in (z - rad)..=(z + rad) {
                 let dz = zz - z;
-                if (dx.abs() != rad || dz.abs() != rad || r.next_int_n(2) != 0 && k != 0) && !block::info(w.block(xx, yy, zz)).full_block {
+                if (dx.abs() != rad || dz.abs() != rad || r.next_int_n(2) != 0 && k != 0)
+                    && !block::info(w.block(xx, yy, zz)).full_block
+                {
                     set(w, xx, yy, zz, block::LEAVES, 0);
                 }
             }

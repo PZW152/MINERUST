@@ -13,7 +13,11 @@ pub struct JavaRandom {
 
 impl JavaRandom {
     pub fn new(seed: i64) -> Self {
-        JavaRandom { seed: (seed ^ MULT) & MASK, next_next_gaussian: 0.0, have_next_next_gaussian: false }
+        JavaRandom {
+            seed: (seed ^ MULT) & MASK,
+            next_next_gaussian: 0.0,
+            have_next_next_gaussian: false,
+        }
     }
 
     pub fn set_seed(&mut self, seed: i64) {
@@ -105,7 +109,8 @@ mod tests {
 
 #[cfg(test)]
 mod java_reference_tests {
-    use super::*; use crate::java::string_hash_code;
+    use super::*;
+    use crate::java::string_hash_code;
 
     #[test]
     fn matches_java_util_random() {
@@ -121,7 +126,12 @@ mod java_reference_tests {
 
     #[test]
     fn string_hash_matches_java() {
-        assert_eq!(string_hash_code("Glacier"), "Glacier".chars().fold(0i32, |h, c| h.wrapping_mul(31).wrapping_add(c as i32)));
+        assert_eq!(
+            string_hash_code("Glacier"),
+            "Glacier"
+                .chars()
+                .fold(0i32, |h, c| h.wrapping_mul(31).wrapping_add(c as i32))
+        );
         assert_eq!(string_hash_code("hello"), 99162322);
     }
 }

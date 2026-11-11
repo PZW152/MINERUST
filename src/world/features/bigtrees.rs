@@ -213,7 +213,11 @@ impl BigTree<'_> {
         if below != block::DIRT && below != block::GRASS && below != block::FARMLAND {
             return false;
         }
-        let top = [self.base[0], self.base[1] + self.height_limit - 1, self.base[2]];
+        let top = [
+            self.base[0],
+            self.base[1] + self.height_limit - 1,
+            self.base[2],
+        ];
         let n = self.check_block_line(self.base, top);
         if n == -1 {
             return true;
@@ -228,9 +232,24 @@ impl BigTree<'_> {
 
 /// `WorldGenBigTree.generate` after `setScale(1, 1, 1)`. `height_limit` is the
 /// generator's persistent field (it is never reset between trees in vanilla).
-pub fn big_tree(w: &mut ServerWorld, r: &mut JavaRandom, x: i32, y: i32, z: i32, height_limit: &mut i32) -> bool {
+pub fn big_tree(
+    w: &mut ServerWorld,
+    r: &mut JavaRandom,
+    x: i32,
+    y: i32,
+    z: i32,
+    height_limit: &mut i32,
+) -> bool {
     let seed = r.next_long();
-    let mut t = BigTree { w, rand: JavaRandom::new(seed), base: [x, y, z], height_limit: *height_limit, height: 0, leaf_distance_limit: 5, leaf_nodes: Vec::new() };
+    let mut t = BigTree {
+        w,
+        rand: JavaRandom::new(seed),
+        base: [x, y, z],
+        height_limit: *height_limit,
+        height: 0,
+        leaf_distance_limit: 5,
+        leaf_nodes: Vec::new(),
+    };
     if t.height_limit == 0 {
         t.height_limit = 5 + t.rand.next_int_n(12);
     }
@@ -316,7 +335,11 @@ fn ring_2x2(w: &mut ServerWorld, x: i32, y: i32, z: i32, rad: i32, leaf: i32) {
         for zz in (z - rad)..=(z + rad + 1) {
             let dz = zz - z;
             let (ex, ez) = (dx - 1, dz - 1);
-            if dx * dx + dz * dz <= r2 || ex * ex + ez * ez <= r2 || dx * dx + ez * ez <= r2 || ex * ex + dz * dz <= r2 {
+            if dx * dx + dz * dz <= r2
+                || ex * ex + ez * ez <= r2
+                || dx * dx + ez * ez <= r2
+                || ex * ex + dz * dz <= r2
+            {
                 if air_or_leaves(w.block(xx, y, zz)) {
                     set(w, xx, y, zz, block::LEAVES, leaf);
                 }
@@ -340,7 +363,17 @@ fn ring(w: &mut ServerWorld, x: i32, y: i32, z: i32, rad: i32, leaf: i32) {
 }
 
 /// `WorldGenMegaJungle(false, base, extra, wood, leaf)`
-pub fn mega_jungle(w: &mut ServerWorld, r: &mut JavaRandom, x: i32, y: i32, z: i32, base: i32, extra: i32, wood: i32, leaf: i32) -> bool {
+pub fn mega_jungle(
+    w: &mut ServerWorld,
+    r: &mut JavaRandom,
+    x: i32,
+    y: i32,
+    z: i32,
+    base: i32,
+    extra: i32,
+    wood: i32,
+    leaf: i32,
+) -> bool {
     let h = huge_height(r, base, extra);
     if !huge_can_grow(w, x, y, z, h) {
         return false;
@@ -420,7 +453,14 @@ pub fn mega_jungle(w: &mut ServerWorld, r: &mut JavaRandom, x: i32, y: i32, z: i
 }
 
 /// `WorldGenMegaPineTree(false, use_base_height)`
-pub fn mega_pine(w: &mut ServerWorld, r: &mut JavaRandom, x: i32, y: i32, z: i32, use_base_height: bool) -> bool {
+pub fn mega_pine(
+    w: &mut ServerWorld,
+    r: &mut JavaRandom,
+    x: i32,
+    y: i32,
+    z: i32,
+    use_base_height: bool,
+) -> bool {
     let h = huge_height(r, 13, 15);
     if !huge_can_grow(w, x, y, z, h) {
         return false;
@@ -433,7 +473,18 @@ pub fn mega_pine(w: &mut ServerWorld, r: &mut JavaRandom, x: i32, y: i32, z: i32
     for yy in (top - crown)..=top {
         let k = top - yy;
         let rad = math::floor_float(k as f32 / crown as f32 * 3.5f32);
-        ring_2x2(w, x, yy, z, rad + if k > 0 && rad == prev && (yy & 1) == 0 { 1 } else { 0 }, 1);
+        ring_2x2(
+            w,
+            x,
+            yy,
+            z,
+            rad + if k > 0 && rad == prev && (yy & 1) == 0 {
+                1
+            } else {
+                0
+            },
+            1,
+        );
         prev = rad;
     }
     for i in 0..h {

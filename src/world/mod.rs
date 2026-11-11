@@ -1,10 +1,14 @@
 pub mod biome;
 pub mod features;
 pub mod gen;
+pub mod loot;
 pub mod populate;
+pub mod rail;
 pub mod save;
 pub mod server;
+pub mod structure;
 pub mod ticks;
+pub mod tripwire;
 
 pub use gen::chunk_provider::{ChunkData, ChunkProvider};
 pub use server::ServerWorld;

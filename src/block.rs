@@ -66,6 +66,119 @@ pub const HARDENED_CLAY: u8 = 172;
 pub const PACKED_ICE: u8 = 174;
 pub const DOUBLE_PLANT: u8 = 175;
 
+pub const SAPLING: u8 = 6;
+pub const SPONGE: u8 = 19;
+pub const LAPIS_BLOCK: u8 = 22;
+pub const DISPENSER: u8 = 23;
+pub const NOTEBLOCK: u8 = 25;
+pub const GOLDEN_RAIL: u8 = 27;
+pub const DETECTOR_RAIL: u8 = 28;
+pub const STICKY_PISTON: u8 = 29;
+pub const WEB: u8 = 30;
+pub const PISTON: u8 = 33;
+pub const WOOL: u8 = 35;
+pub const GOLD_BLOCK: u8 = 41;
+pub const IRON_BLOCK: u8 = 42;
+pub const DOUBLE_STONE_SLAB: u8 = 43;
+pub const BRICK_BLOCK: u8 = 45;
+pub const TNT: u8 = 46;
+pub const BOOKSHELF: u8 = 47;
+pub const OAK_STAIRS: u8 = 53;
+pub const REDSTONE_WIRE: u8 = 55;
+pub const DIAMOND_BLOCK: u8 = 57;
+pub const WHEAT: u8 = 59;
+pub const WOODEN_DOOR: u8 = 64;
+pub const LADDER: u8 = 65;
+pub const RAIL: u8 = 66;
+pub const STONE_STAIRS: u8 = 67;
+pub const LEVER: u8 = 69;
+pub const STONE_PRESSURE_PLATE: u8 = 70;
+pub const IRON_DOOR: u8 = 71;
+pub const WOODEN_PRESSURE_PLATE: u8 = 72;
+pub const LIT_REDSTONE_ORE: u8 = 74;
+pub const UNLIT_REDSTONE_TORCH: u8 = 75;
+pub const REDSTONE_TORCH: u8 = 76;
+pub const STONE_BUTTON: u8 = 77;
+pub const JUKEBOX: u8 = 84;
+pub const FENCE: u8 = 85;
+pub const NETHERRACK: u8 = 87;
+pub const SOUL_SAND: u8 = 88;
+pub const GLOWSTONE: u8 = 89;
+pub const LIT_PUMPKIN: u8 = 91;
+pub const UNPOWERED_REPEATER: u8 = 93;
+pub const POWERED_REPEATER: u8 = 94;
+pub const STONEBRICK: u8 = 98;
+pub const IRON_BARS: u8 = 101;
+pub const GLASS_PANE: u8 = 102;
+pub const BRICK_STAIRS: u8 = 108;
+pub const STONE_BRICK_STAIRS: u8 = 109;
+pub const NETHER_BRICK: u8 = 112;
+pub const NETHER_BRICK_STAIRS: u8 = 114;
+pub const CAULDRON: u8 = 118;
+pub const END_PORTAL_FRAME: u8 = 120;
+pub const END_STONE: u8 = 121;
+pub const SANDSTONE_STAIRS: u8 = 128;
+pub const TRIPWIRE_HOOK: u8 = 131;
+pub const TRIPWIRE: u8 = 132;
+pub const EMERALD_BLOCK: u8 = 133;
+pub const SPRUCE_STAIRS: u8 = 134;
+pub const BIRCH_STAIRS: u8 = 135;
+pub const JUNGLE_STAIRS: u8 = 136;
+pub const FLOWER_POT: u8 = 140;
+pub const CARROTS: u8 = 141;
+pub const POTATOES: u8 = 142;
+pub const WOODEN_BUTTON: u8 = 143;
+pub const REDSTONE_BLOCK: u8 = 152;
+pub const QUARTZ_BLOCK: u8 = 155;
+pub const ACACIA_STAIRS: u8 = 163;
+pub const DARK_OAK_STAIRS: u8 = 164;
+pub const HAY_BLOCK: u8 = 170;
+pub const CARPET: u8 = 171;
+pub const COAL_BLOCK: u8 = 173;
+
+/// `BlockStairs` instances.
+#[inline]
+pub fn is_stairs(id: u8) -> bool {
+    matches!(
+        id,
+        OAK_STAIRS
+            | STONE_STAIRS
+            | BRICK_STAIRS
+            | STONE_BRICK_STAIRS
+            | NETHER_BRICK_STAIRS
+            | SANDSTONE_STAIRS
+            | SPRUCE_STAIRS
+            | BIRCH_STAIRS
+            | JUNGLE_STAIRS
+            | ACACIA_STAIRS
+            | DARK_OAK_STAIRS
+    )
+}
+
+/// `BlockRailBase` instances.
+#[inline]
+pub fn is_rail(id: u8) -> bool {
+    matches!(id, RAIL | GOLDEN_RAIL | DETECTOR_RAIL)
+}
+
+/// The block whose textures a stair block borrows (`BlockStairs.field_150149_b`)
+/// with its metadata.
+pub fn stair_model(id: u8) -> (u8, u8) {
+    match id {
+        OAK_STAIRS => (PLANKS, 0),
+        SPRUCE_STAIRS => (PLANKS, 1),
+        BIRCH_STAIRS => (PLANKS, 2),
+        JUNGLE_STAIRS => (PLANKS, 3),
+        ACACIA_STAIRS => (PLANKS, 4),
+        DARK_OAK_STAIRS => (PLANKS, 5),
+        STONE_STAIRS => (COBBLESTONE, 0),
+        BRICK_STAIRS => (BRICK_BLOCK, 0),
+        STONE_BRICK_STAIRS => (STONEBRICK, 0),
+        NETHER_BRICK_STAIRS => (NETHER_BRICK, 0),
+        _ => (SANDSTONE, 0),
+    }
+}
+
 /// How the block is tessellated.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Shape {
@@ -84,6 +197,26 @@ pub enum Shape {
     Chest,
     Cocoa,
     Torch,
+    /// `renderBlockStairs` (render type 10)
+    Stairs,
+    /// `renderBlockFence` (11)
+    Fence,
+    /// `renderBlockPane` (18)
+    Pane,
+    /// `renderBlockDoor` (7)
+    Door,
+    /// `renderBlockLadder` (8)
+    Ladder,
+    /// `renderBlockMinecartTrack` (9)
+    Rail,
+    /// `renderBlockCrops` (6)
+    Crops,
+    /// `renderBlockRedstoneWire` (5)
+    Wire,
+    /// `renderBlockTripWire` (30)
+    Tripwire,
+    /// Blocks drawn as a fixed set of boxes (`shapes::static_boxes`).
+    Boxes,
 }
 
 /// `net.minecraft.block.material.Material`
@@ -111,6 +244,15 @@ pub enum Material {
     Fire,
     /// `Material.circuits`
     Circuits,
+    /// `Material.web`: solid but does not block movement.
+    Web,
+    Cloth,
+    Iron,
+    Tnt,
+    Piston,
+    Carpet,
+    Sponge,
+    Portal,
 }
 
 impl Material {
@@ -121,20 +263,48 @@ impl Material {
     /// `Material.isSolid()`
     #[inline]
     pub fn is_solid(self) -> bool {
-        !matches!(self, Material::Air | Material::Water | Material::Lava | Material::Plants | Material::Vine | Material::Snow | Material::Fire | Material::Circuits)
+        !matches!(
+            self,
+            Material::Air
+                | Material::Water
+                | Material::Lava
+                | Material::Plants
+                | Material::Vine
+                | Material::Snow
+                | Material::Fire
+                | Material::Circuits
+                | Material::Carpet
+                | Material::Portal
+        )
     }
     /// `Material.blocksMovement()`
     #[inline]
     pub fn blocks_movement(self) -> bool {
-        self.is_solid()
+        self.is_solid() && self != Material::Web
     }
     #[inline]
     pub fn replaceable(self) -> bool {
-        matches!(self, Material::Air | Material::Water | Material::Lava | Material::Vine | Material::Snow | Material::Fire)
+        matches!(
+            self,
+            Material::Air
+                | Material::Water
+                | Material::Lava
+                | Material::Vine
+                | Material::Snow
+                | Material::Fire
+        )
     }
     #[inline]
     fn translucent(self) -> bool {
-        matches!(self, Material::Leaves | Material::Glass | Material::Ice | Material::Snow | Material::Cactus)
+        matches!(
+            self,
+            Material::Leaves
+                | Material::Glass
+                | Material::Ice
+                | Material::Snow
+                | Material::Cactus
+                | Material::Tnt
+        )
     }
     /// `Material.isOpaque()`
     #[inline]
@@ -143,12 +313,30 @@ impl Material {
     }
     #[inline]
     pub fn can_burn(self) -> bool {
-        matches!(self, Material::Wood | Material::Leaves | Material::Vine)
+        matches!(
+            self,
+            Material::Wood
+                | Material::Leaves
+                | Material::Vine
+                | Material::Cloth
+                | Material::Tnt
+                | Material::Carpet
+        )
     }
     /// `Material.getCanBlockGrass()`
     #[inline]
     fn can_block_grass(self) -> bool {
-        !matches!(self, Material::Air | Material::Plants | Material::Vine | Material::Snow | Material::Fire | Material::Circuits)
+        !matches!(
+            self,
+            Material::Air
+                | Material::Plants
+                | Material::Vine
+                | Material::Snow
+                | Material::Fire
+                | Material::Circuits
+                | Material::Carpet
+                | Material::Portal
+        )
     }
 }
 
@@ -315,12 +503,135 @@ fn build() -> [BlockInfo; 256] {
     t[STONE_SLAB as usize] = slab;
     t[CHEST as usize] = base(Shape::Chest, M::Wood, false);
 
+    for (id, m) in [
+        (SPONGE, M::Sponge),
+        (LAPIS_BLOCK, M::Iron),
+        (DISPENSER, M::Rock),
+        (NOTEBLOCK, M::Wood),
+        (WOOL, M::Cloth),
+        (GOLD_BLOCK, M::Iron),
+        (IRON_BLOCK, M::Iron),
+        (DOUBLE_STONE_SLAB, M::Rock),
+        (BRICK_BLOCK, M::Rock),
+        (BOOKSHELF, M::Wood),
+        (DIAMOND_BLOCK, M::Iron),
+        (LIT_REDSTONE_ORE, M::Rock),
+        (JUKEBOX, M::Wood),
+        (NETHERRACK, M::Rock),
+        (LIT_PUMPKIN, M::Gourd),
+        (STONEBRICK, M::Rock),
+        (NETHER_BRICK, M::Rock),
+        (END_STONE, M::Rock),
+        (EMERALD_BLOCK, M::Iron),
+        (REDSTONE_BLOCK, M::Iron),
+        (QUARTZ_BLOCK, M::Rock),
+        (HAY_BLOCK, M::Grass),
+        (COAL_BLOCK, M::Rock),
+    ] {
+        t[id as usize] = cube(m);
+    }
+    // BlockPistonBase.isOpaqueCube() is false, so light passes through.
+    for id in [PISTON, STICKY_PISTON] {
+        let mut p = base(Shape::Cube, M::Piston, false);
+        p.solid = true;
+        p.full_block = false;
+        t[id as usize] = p;
+    }
+    // TNT uses Material.tnt, which is translucent: not an opaque cube for
+    // `Material.isOpaque` but still rendered and lit as a full block.
+    t[TNT as usize] = cube(M::Tnt);
+    let mut soul = cube(M::Sand);
+    soul.solid = false;
+    t[SOUL_SAND as usize] = soul;
+    let mut glow = base(Shape::Cube, M::Glass, true);
+    glow.light_value = 15;
+    t[GLOWSTONE as usize] = glow;
+    t[LIT_PUMPKIN as usize].light_value = 15;
+    t[LIT_REDSTONE_ORE as usize].light_value = 9;
+
+    t[SAPLING as usize] = base(Shape::Cross, M::Plants, false);
+    let mut web = base(Shape::Cross, M::Web, false);
+    web.light_opacity = 1;
+    t[WEB as usize] = web;
+
+    for id in [
+        OAK_STAIRS,
+        SPRUCE_STAIRS,
+        BIRCH_STAIRS,
+        JUNGLE_STAIRS,
+        ACACIA_STAIRS,
+        DARK_OAK_STAIRS,
+    ] {
+        t[id as usize] = base(Shape::Stairs, M::Wood, false);
+    }
+    for id in [
+        STONE_STAIRS,
+        BRICK_STAIRS,
+        STONE_BRICK_STAIRS,
+        NETHER_BRICK_STAIRS,
+        SANDSTONE_STAIRS,
+    ] {
+        t[id as usize] = base(Shape::Stairs, M::Rock, false);
+    }
+    for id in 0..256usize {
+        if is_stairs(id as u8) {
+            // BlockStairs: setLightOpacity(255)
+            t[id].light_opacity = 255;
+        }
+    }
+    t[FENCE as usize] = base(Shape::Fence, M::Wood, false);
+    t[GLASS_PANE as usize] = base(Shape::Pane, M::Glass, false);
+    t[IRON_BARS as usize] = base(Shape::Pane, M::Iron, false);
+    t[WOODEN_DOOR as usize] = base(Shape::Door, M::Wood, false);
+    t[IRON_DOOR as usize] = base(Shape::Door, M::Iron, false);
+    t[LADDER as usize] = base(Shape::Ladder, M::Circuits, false);
+    for id in [RAIL, GOLDEN_RAIL, DETECTOR_RAIL] {
+        t[id as usize] = base(Shape::Rail, M::Circuits, false);
+    }
+    for id in [WHEAT, CARROTS, POTATOES] {
+        t[id as usize] = base(Shape::Crops, M::Plants, false);
+    }
+    t[REDSTONE_WIRE as usize] = base(Shape::Wire, M::Circuits, false);
+    t[TRIPWIRE as usize] = base(Shape::Tripwire, M::Circuits, false);
+    let mut farmland = base(Shape::Boxes, M::Ground, false);
+    farmland.light_opacity = 255;
+    t[FARMLAND as usize] = farmland;
+    for (id, m) in [
+        (LEVER, M::Circuits),
+        (STONE_PRESSURE_PLATE, M::Rock),
+        (WOODEN_PRESSURE_PLATE, M::Wood),
+        (STONE_BUTTON, M::Circuits),
+        (WOODEN_BUTTON, M::Circuits),
+        (UNPOWERED_REPEATER, M::Circuits),
+        (POWERED_REPEATER, M::Circuits),
+        (CAULDRON, M::Iron),
+        (END_PORTAL_FRAME, M::Rock),
+        (TRIPWIRE_HOOK, M::Circuits),
+        (FLOWER_POT, M::Circuits),
+        (CARPET, M::Carpet),
+    ] {
+        t[id as usize] = base(Shape::Boxes, m, false);
+    }
+    t[END_PORTAL_FRAME as usize].light_value = 1;
+    t[POWERED_REPEATER as usize].light_value = 9;
+    t[UNLIT_REDSTONE_TORCH as usize] = base(Shape::Torch, M::Circuits, false);
+    t[REDSTONE_TORCH as usize] = base(Shape::Torch, M::Circuits, false);
+    t[REDSTONE_TORCH as usize].light_value = 7;
+    let mut dslab = cube(M::Rock);
+    dslab.light_opacity = 255;
+    t[DOUBLE_STONE_SLAB as usize] = dslab;
+
     // Block.registerBlocks: useNeighborBrightness.
     for (id, b) in t.iter_mut().enumerate() {
         if b.material == M::Air {
             continue;
         }
-        b.use_neighbor_brightness = id == STONE_SLAB as usize || id == FARMLAND as usize || b.can_block_grass || b.light_opacity == 0;
+        b.use_neighbor_brightness = is_stairs(id as u8)
+            || id == STONE_SLAB as usize
+            || id == DOUBLE_STONE_SLAB as usize
+            || id == FARMLAND as usize
+            || b.can_block_grass
+            || b.light_opacity == 0;
     }
     t
 }
@@ -346,6 +657,7 @@ pub fn collision_box(id: u8, meta: u8) -> Option<[f32; 6]> {
     match id {
         CACTUS => Some([0.0625, 0.0, 0.0625, 0.9375, 0.9375, 0.9375]),
         CHEST => Some([0.0625, 0.0, 0.0625, 0.9375, 0.875, 0.9375]),
+        SOUL_SAND => Some([0.0, 0.0, 0.0, 1.0, 0.875, 1.0]),
         STONE_SLAB => {
             if meta & 8 != 0 {
                 Some([0.0, 0.5, 0.0, 1.0, 1.0, 1.0])
@@ -391,9 +703,24 @@ const CLAY_COLORS: [&str; 16] = [
     "hardened_clay_stained_black",
 ];
 
-const LOGS: [(&str, &str); 4] = [("log_oak", "log_oak_top"), ("log_spruce", "log_spruce_top"), ("log_birch", "log_birch_top"), ("log_jungle", "log_jungle_top")];
-const LOGS2: [(&str, &str); 4] = [("log_acacia", "log_acacia_top"), ("log_big_oak", "log_big_oak_top"), ("log_acacia", "log_acacia_top"), ("log_big_oak", "log_big_oak_top")];
-const LEAVES_TEX: [&str; 4] = ["leaves_oak", "leaves_spruce", "leaves_birch", "leaves_jungle"];
+const LOGS: [(&str, &str); 4] = [
+    ("log_oak", "log_oak_top"),
+    ("log_spruce", "log_spruce_top"),
+    ("log_birch", "log_birch_top"),
+    ("log_jungle", "log_jungle_top"),
+];
+const LOGS2: [(&str, &str); 4] = [
+    ("log_acacia", "log_acacia_top"),
+    ("log_big_oak", "log_big_oak_top"),
+    ("log_acacia", "log_acacia_top"),
+    ("log_big_oak", "log_big_oak_top"),
+];
+const LEAVES_TEX: [&str; 4] = [
+    "leaves_oak",
+    "leaves_spruce",
+    "leaves_birch",
+    "leaves_jungle",
+];
 const FLOWERS: [&str; 9] = [
     "flower_rose",
     "flower_blue_orchid",
@@ -406,7 +733,10 @@ const FLOWERS: [&str; 9] = [
     "flower_oxeye_daisy",
 ];
 pub const DOUBLE_PLANTS: [(&str, &str); 6] = [
-    ("double_plant_sunflower_bottom", "double_plant_sunflower_top"),
+    (
+        "double_plant_sunflower_bottom",
+        "double_plant_sunflower_top",
+    ),
     ("double_plant_syringa_bottom", "double_plant_syringa_top"),
     ("double_plant_grass_bottom", "double_plant_grass_top"),
     ("double_plant_fern_bottom", "double_plant_fern_top"),
@@ -456,7 +786,17 @@ pub fn texture_name(id: u8, meta: u8, face: usize) -> Option<&'static str> {
         }
     };
     Some(match id {
-        STONE | MONSTER_EGG => "stone",
+        STONE => "stone",
+        MONSTER_EGG => [
+            "stone",
+            "cobblestone",
+            "stonebrick",
+            "stonebrick_mossy",
+            "stonebrick_cracked",
+            "stonebrick_carved",
+            "stone",
+            "stone",
+        ][(meta & 7) as usize],
         GRASS => match face {
             1 => "grass_top",
             0 => "dirt",
@@ -501,26 +841,46 @@ pub fn texture_name(id: u8, meta: u8, face: usize) -> Option<&'static str> {
         }
         GLASS => "glass",
         LAPIS_ORE => "lapis_ore",
-        SANDSTONE => match face {
-            1 => "sandstone_top",
-            0 => "sandstone_bottom",
-            _ => "sandstone_normal",
-        },
-        STONE_SLAB => {
-            if meta & 7 == 1 {
-                match face {
-                    1 => "sandstone_top",
-                    0 => "sandstone_bottom",
-                    _ => "sandstone_normal",
-                }
-            } else if meta & 7 == 3 {
-                "cobblestone"
-            } else if face < 2 {
-                "stone_slab_top"
+        SANDSTONE => {
+            // BlockSandStone.getIcon
+            if face == 1 || (face == 0 && (meta == 1 || meta == 2)) {
+                "sandstone_top"
+            } else if face == 0 {
+                "sandstone_bottom"
             } else {
-                "stone_slab_side"
+                [
+                    "sandstone_normal",
+                    "sandstone_carved",
+                    "sandstone_smooth",
+                    "sandstone_normal",
+                ][(meta & 3) as usize]
             }
         }
+        STONE_SLAB | DOUBLE_STONE_SLAB => match meta & 7 {
+            // BlockStoneSlab.getIcon
+            1 => match face {
+                1 => "sandstone_top",
+                0 => "sandstone_bottom",
+                _ => "sandstone_normal",
+            },
+            2 => "planks_oak",
+            3 => "cobblestone",
+            4 => "brick",
+            5 => "stonebrick",
+            6 => "nether_brick",
+            7 => match face {
+                1 => "quartz_block_top",
+                0 => "quartz_block_bottom",
+                _ => "quartz_block_side",
+            },
+            _ => {
+                if face < 2 || (id == DOUBLE_STONE_SLAB && meta & 8 != 0) {
+                    "stone_slab_top"
+                } else {
+                    "stone_slab_side"
+                }
+            }
+        },
         TALLGRASS => match meta {
             1 => "tallgrass",
             2 => "fern",
@@ -572,8 +932,25 @@ pub fn texture_name(id: u8, meta: u8, face: usize) -> Option<&'static str> {
             // BlockPumpkin.getIcon
             if face < 2 {
                 "pumpkin_top"
-            } else if (meta == 2 && face == 2) || (meta == 3 && face == 5) || (meta == 0 && face == 3) || (meta == 1 && face == 4) {
+            } else if (meta == 2 && face == 2)
+                || (meta == 3 && face == 5)
+                || (meta == 0 && face == 3)
+                || (meta == 1 && face == 4)
+            {
                 "pumpkin_face_off"
+            } else {
+                "pumpkin_side"
+            }
+        }
+        LIT_PUMPKIN => {
+            if face < 2 {
+                "pumpkin_top"
+            } else if (meta == 2 && face == 2)
+                || (meta == 3 && face == 5)
+                || (meta == 0 && face == 3)
+                || (meta == 1 && face == 4)
+            {
+                "pumpkin_face_on"
             } else {
                 "pumpkin_side"
             }
@@ -611,9 +988,277 @@ pub fn texture_name(id: u8, meta: u8, face: usize) -> Option<&'static str> {
                 bottom
             }
         }
+        SAPLING => [
+            "sapling_oak",
+            "sapling_spruce",
+            "sapling_birch",
+            "sapling_jungle",
+            "sapling_acacia",
+            "sapling_roofed_oak",
+            "sapling_oak",
+            "sapling_oak",
+        ][(meta & 7) as usize],
+        SPONGE => "sponge",
+        LAPIS_BLOCK => "lapis_block",
+        DISPENSER => {
+            // BlockDispenser.getIcon
+            let k = (meta & 7) as usize;
+            let vertical = k == 0 || k == 1;
+            if face == k {
+                if vertical {
+                    "dispenser_front_vertical"
+                } else {
+                    "dispenser_front_horizontal"
+                }
+            } else if vertical || face < 2 {
+                "furnace_top"
+            } else {
+                "furnace_side"
+            }
+        }
+        NOTEBLOCK => "noteblock",
+        RAIL => {
+            if meta >= 6 {
+                "rail_normal_turned"
+            } else {
+                "rail_normal"
+            }
+        }
+        GOLDEN_RAIL => {
+            if meta & 8 != 0 {
+                "rail_golden_powered"
+            } else {
+                "rail_golden"
+            }
+        }
+        DETECTOR_RAIL => {
+            if meta & 8 != 0 {
+                "rail_detector_powered"
+            } else {
+                "rail_detector"
+            }
+        }
+        PISTON | STICKY_PISTON => {
+            // BlockPistonBase.getIcon
+            let k = (meta & 7) as usize;
+            let opposite = [1, 0, 3, 2, 5, 4];
+            if k <= 5 && face == k {
+                if meta & 8 != 0 {
+                    "piston_inner"
+                } else if id == STICKY_PISTON {
+                    "piston_top_sticky"
+                } else {
+                    "piston_top_normal"
+                }
+            } else if k <= 5 && face == opposite[k] {
+                "piston_bottom"
+            } else {
+                "piston_side"
+            }
+        }
+        WEB => "web",
+        WOOL | CARPET => WOOL_COLORS[(meta & 15) as usize],
+        GOLD_BLOCK => "gold_block",
+        IRON_BLOCK => "iron_block",
+        BRICK_BLOCK => "brick",
+        TNT => match face {
+            0 => "tnt_bottom",
+            1 => "tnt_top",
+            _ => "tnt_side",
+        },
+        BOOKSHELF => {
+            if face < 2 {
+                "planks_oak"
+            } else {
+                "bookshelf"
+            }
+        }
+        OAK_STAIRS | SPRUCE_STAIRS | BIRCH_STAIRS | JUNGLE_STAIRS | ACACIA_STAIRS
+        | DARK_OAK_STAIRS | STONE_STAIRS | BRICK_STAIRS | STONE_BRICK_STAIRS
+        | NETHER_BRICK_STAIRS | SANDSTONE_STAIRS => {
+            let (m, mm) = stair_model(id);
+            return texture_name(m, mm, face);
+        }
+        REDSTONE_WIRE => [
+            "redstone_dust_cross",
+            "redstone_dust_line",
+            "redstone_dust_cross_overlay",
+            "redstone_dust_line_overlay",
+            "redstone_dust_cross",
+            "redstone_dust_cross",
+        ][face],
+        DIAMOND_BLOCK => "diamond_block",
+        WHEAT => [
+            "wheat_stage_0",
+            "wheat_stage_1",
+            "wheat_stage_2",
+            "wheat_stage_3",
+            "wheat_stage_4",
+            "wheat_stage_5",
+            "wheat_stage_6",
+            "wheat_stage_7",
+        ][(meta & 7) as usize],
+        CARROTS | POTATOES => {
+            // BlockCarrot / BlockPotato.getIcon
+            let m = (meta & 7) as usize;
+            let stage = if m < 7 {
+                (if m == 6 { 5 } else { m }) >> 1
+            } else {
+                3
+            };
+            if id == CARROTS {
+                [
+                    "carrots_stage_0",
+                    "carrots_stage_1",
+                    "carrots_stage_2",
+                    "carrots_stage_3",
+                ][stage]
+            } else {
+                [
+                    "potatoes_stage_0",
+                    "potatoes_stage_1",
+                    "potatoes_stage_2",
+                    "potatoes_stage_3",
+                ][stage]
+            }
+        }
+        FARMLAND => {
+            if face == 1 {
+                if meta > 0 {
+                    "farmland_wet"
+                } else {
+                    "farmland_dry"
+                }
+            } else {
+                "dirt"
+            }
+        }
+        WOODEN_DOOR => {
+            if meta & 8 != 0 {
+                "door_wood_upper"
+            } else {
+                "door_wood_lower"
+            }
+        }
+        IRON_DOOR => {
+            if meta & 8 != 0 {
+                "door_iron_upper"
+            } else {
+                "door_iron_lower"
+            }
+        }
+        LADDER => "ladder",
+        LEVER => "lever",
+        STONE_PRESSURE_PLATE | STONE_BUTTON => "stone",
+        WOODEN_PRESSURE_PLATE | WOODEN_BUTTON | FENCE => "planks_oak",
+        LIT_REDSTONE_ORE => "redstone_ore",
+        UNLIT_REDSTONE_TORCH => "redstone_torch_off",
+        REDSTONE_TORCH => "redstone_torch_on",
+        JUKEBOX => {
+            if face == 1 {
+                "jukebox_top"
+            } else {
+                "jukebox_side"
+            }
+        }
+        NETHERRACK => "netherrack",
+        SOUL_SAND => "soul_sand",
+        GLOWSTONE => "glowstone",
+        UNPOWERED_REPEATER | POWERED_REPEATER => {
+            if face == 1 {
+                if id == POWERED_REPEATER {
+                    "repeater_on"
+                } else {
+                    "repeater_off"
+                }
+            } else {
+                "stone_slab_top"
+            }
+        }
+        STONEBRICK => [
+            "stonebrick",
+            "stonebrick_mossy",
+            "stonebrick_cracked",
+            "stonebrick_carved",
+        ][(meta & 3) as usize],
+        IRON_BARS => "iron_bars",
+        GLASS_PANE => {
+            if face < 2 {
+                "glass_pane_top"
+            } else {
+                "glass"
+            }
+        }
+        NETHER_BRICK => "nether_brick",
+        CAULDRON => {
+            if meta >= 8 {
+                "cauldron_inner"
+            } else {
+                match face {
+                    0 => "cauldron_bottom",
+                    1 => "cauldron_top",
+                    _ => "cauldron_side",
+                }
+            }
+        }
+        END_PORTAL_FRAME => {
+            if meta >= 8 {
+                "endframe_eye"
+            } else {
+                match face {
+                    0 => "end_stone",
+                    1 => "endframe_top",
+                    _ => "endframe_side",
+                }
+            }
+        }
+        END_STONE => "end_stone",
+        TRIPWIRE_HOOK => "trip_wire_source",
+        TRIPWIRE => "trip_wire",
+        EMERALD_BLOCK => "emerald_block",
+        FLOWER_POT => {
+            if meta >= 15 {
+                "dirt"
+            } else {
+                "flower_pot"
+            }
+        }
+        REDSTONE_BLOCK => "redstone_block",
+        QUARTZ_BLOCK => match face {
+            0 => "quartz_block_bottom",
+            1 => "quartz_block_top",
+            _ => "quartz_block_side",
+        },
+        HAY_BLOCK => {
+            if face < 2 {
+                "hay_block_top"
+            } else {
+                "hay_block_side"
+            }
+        }
+        COAL_BLOCK => "coal_block",
         _ => return None,
     })
 }
+
+pub const WOOL_COLORS: [&str; 16] = [
+    "wool_colored_white",
+    "wool_colored_orange",
+    "wool_colored_magenta",
+    "wool_colored_light_blue",
+    "wool_colored_yellow",
+    "wool_colored_lime",
+    "wool_colored_pink",
+    "wool_colored_gray",
+    "wool_colored_silver",
+    "wool_colored_cyan",
+    "wool_colored_purple",
+    "wool_colored_blue",
+    "wool_colored_brown",
+    "wool_colored_green",
+    "wool_colored_red",
+    "wool_colored_black",
+];
 
 /// Extra textures that are not a direct face of any block.
 pub const EXTRA_TEXTURES: [&str; 3] = ["grass_side_overlay", "water_flow", "lava_flow"];

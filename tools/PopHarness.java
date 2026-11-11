@@ -79,7 +79,9 @@ public class PopHarness {
             }
         }
 
-        ChunkProviderGenerate gen = new ChunkProviderGenerate(w, seed, false);
+        boolean features = System.getenv("NO_FEATURES") == null;
+        set(World.class, w, "mapStorage", new net.minecraft.world.storage.MapStorage(null));
+        ChunkProviderGenerate gen = new ChunkProviderGenerate(w, seed, features);
         ChunkProviderServer server = new ChunkProviderServer(w, null, gen);
         set(World.class, w, "chunkProvider", server);
         set(WorldServer.class, w, "theChunkProviderServer", server);

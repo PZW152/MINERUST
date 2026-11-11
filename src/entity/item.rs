@@ -26,7 +26,14 @@ pub struct ItemEntity {
 
 impl ItemEntity {
     /// `Block.dropBlockAsItem_do`: spawned inside the broken block.
-    pub fn from_block(id: u32, stack: Stack, x: i32, y: i32, z: i32, r: &mut JavaRandom) -> ItemEntity {
+    pub fn from_block(
+        id: u32,
+        stack: Stack,
+        x: i32,
+        y: i32,
+        z: i32,
+        r: &mut JavaRandom,
+    ) -> ItemEntity {
         let f = 0.7f32;
         let dx = (r.next_float() * f) as f64 + (1.0 - f) as f64 * 0.5;
         let dy = (r.next_float() * f) as f64 + (1.0 - f) as f64 * 0.5;
@@ -41,24 +48,45 @@ impl ItemEntity {
         let mx = (r.next_double() * 0.2 - 0.1) as f32 as f64;
         let mz = (r.next_double() * 0.2 - 0.1) as f32 as f64;
         let hover = (r.next_double() * std::f64::consts::PI * 2.0) as f32;
-        ItemEntity { id, stack, pos, prev: pos, motion: [mx, 0.2f32 as f64, mz], on_ground: false, age: 0, pickup_delay: 10, hover }
+        ItemEntity {
+            id,
+            stack,
+            pos,
+            prev: pos,
+            motion: [mx, 0.2f32 as f64, mz],
+            on_ground: false,
+            age: 0,
+            pickup_delay: 10,
+            hover,
+        }
     }
 
     pub fn bb(&self) -> Aabb {
         let h = SIZE / 2.0;
         // yOffset = height / 2: the box is centred on the position.
-        Aabb { min: [self.pos[0] - h, self.pos[1] - h, self.pos[2] - h], max: [self.pos[0] + h, self.pos[1] + h, self.pos[2] + h] }
+        Aabb {
+            min: [self.pos[0] - h, self.pos[1] - h, self.pos[2] - h],
+            max: [self.pos[0] + h, self.pos[1] + h, self.pos[2] + h],
+        }
     }
 
     /// `Entity.func_145771_j`: pushes an item that is inside a solid block
     /// towards the nearest open side.
     fn push_out(&mut self, world: &dyn BlockView) {
-        let (x, y, z) = (math::floor_double(self.pos[0]), math::floor_double(self.pos[1]), math::floor_double(self.pos[2]));
+        let (x, y, z) = (
+            math::floor_double(self.pos[0]),
+            math::floor_double(self.pos[1]),
+            math::floor_double(self.pos[2]),
+        );
         let solid = |x: i32, y: i32, z: i32| block::info(world.peek_block(x, y, z)).normal_cube();
         if !solid(x, y, z) {
             return;
         }
-        let (fx, fy, fz) = (self.pos[0] - x as f64, self.pos[1] - y as f64, self.pos[2] - z as f64);
+        let (fx, fy, fz) = (
+            self.pos[0] - x as f64,
+            self.pos[1] - y as f64,
+            self.pos[2] - z as f64,
+        );
         let options = [
             (!solid(x - 1, y, z), fx, 0usize, -1.0),
             (!solid(x + 1, y, z), 1.0 - fx, 0, 1.0),
@@ -97,7 +125,11 @@ impl ItemEntity {
             dz = b.calc_offset(&bb, 2, dz);
         }
         bb.offset(0.0, 0.0, dz);
-        self.pos = [(bb.min[0] + bb.max[0]) / 2.0, bb.min[1] + SIZE / 2.0, (bb.min[2] + bb.max[2]) / 2.0];
+        self.pos = [
+            (bb.min[0] + bb.max[0]) / 2.0,
+            bb.min[1] + SIZE / 2.0,
+            (bb.min[2] + bb.max[2]) / 2.0,
+        ];
         self.on_ground = oy != dy && oy < 0.0;
         if ox != dx {
             self.motion[0] = 0.0;
@@ -119,7 +151,11 @@ impl ItemEntity {
         self.motion[1] -= 0.04f32 as f64;
         self.push_out(world);
         // Lava makes items jump and fizz.
-        let (bx, by, bz) = (math::floor_double(self.pos[0]), math::floor_double(self.pos[1]), math::floor_double(self.pos[2]));
+        let (bx, by, bz) = (
+            math::floor_double(self.pos[0]),
+            math::floor_double(self.pos[1]),
+            math::floor_double(self.pos[2]),
+        );
         if block::material(world.peek_block(bx, by, bz)) == block::Material::Lava {
             self.motion[1] = 0.2f32 as f64;
             return false;

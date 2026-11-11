@@ -79,7 +79,8 @@ fn mip_chain(mut px: Vec<u8>, size: u32) -> Vec<Vec<u8>> {
 fn parse_mcmeta(text: &str) -> (u32, Option<Vec<usize>>) {
     let number_after = |key: &str| -> Option<u32> {
         let i = text.find(key)? + key.len();
-        let rest = text[i..].trim_start_matches(|c: char| c == ':' || c == '"' || c.is_whitespace());
+        let rest =
+            text[i..].trim_start_matches(|c: char| c == ':' || c == '"' || c.is_whitespace());
         let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
         digits.parse().ok()
     };
@@ -87,7 +88,10 @@ fn parse_mcmeta(text: &str) -> (u32, Option<Vec<usize>>) {
     let frames = text.find("\"frames\"").and_then(|i| {
         let open = text[i..].find('[')? + i + 1;
         let close = text[open..].find(']')? + open;
-        let list: Vec<usize> = text[open..close].split(',').filter_map(|s| s.trim().parse().ok()).collect();
+        let list: Vec<usize> = text[open..close]
+            .split(',')
+            .filter_map(|s| s.trim().parse().ok())
+            .collect();
         if list.is_empty() {
             None
         } else {
@@ -107,12 +111,17 @@ pub type Jar = zip::ZipArchive<std::fs::File>;
 
 pub fn read_png(jar: &mut Jar, path: &str) -> Result<Image, String> {
     let mut data = Vec::new();
-    jar.by_name(path).map_err(|e| format!("{path}: {e}"))?.read_to_end(&mut data).map_err(|e| format!("{path}: {e}"))?;
+    jar.by_name(path)
+        .map_err(|e| format!("{path}: {e}"))?
+        .read_to_end(&mut data)
+        .map_err(|e| format!("{path}: {e}"))?;
     let mut dec = png::Decoder::new(std::io::Cursor::new(data));
     dec.set_transformations(png::Transformations::normalize_to_color8());
     let mut reader = dec.read_info().map_err(|e| format!("{path}: {e}"))?;
     let mut buf = vec![0u8; reader.output_buffer_size()];
-    let info = reader.next_frame(&mut buf).map_err(|e| format!("{path}: {e}"))?;
+    let info = reader
+        .next_frame(&mut buf)
+        .map_err(|e| format!("{path}: {e}"))?;
     let n = (info.width * info.height) as usize;
     let mut rgba = Vec::with_capacity(n * 4);
     match info.color_type {
@@ -134,7 +143,11 @@ pub fn read_png(jar: &mut Jar, path: &str) -> Result<Image, String> {
         }
         png::ColorType::Indexed => return Err(format!("{path}: unexpected indexed output")),
     }
-    Ok(Image { w: info.width, h: info.height, rgba })
+    Ok(Image {
+        w: info.width,
+        h: info.height,
+        rgba,
+    })
 }
 
 fn crop(img: &Image, x: u32, y: u32, s: u32) -> Vec<u8> {
@@ -207,7 +220,8 @@ impl Builder {
         let mut pos = None;
         'search: for cy in (0..GRID).step_by(cells) {
             for cx in (0..GRID).step_by(cells) {
-                let free = (0..cells).all(|a| (0..cells).all(|b| !self.used[(cy + a) * GRID + cx + b]));
+                let free =
+                    (0..cells).all(|a| (0..cells).all(|b| !self.used[(cy + a) * GRID + cx + b]));
                 if free {
                     pos = Some((cx, cy));
                     break 'search;
@@ -229,7 +243,8 @@ impl Builder {
             for r in 0..s {
                 let d = (((oy + r) * aw + ox) * 4) as usize;
                 let sidx = (r * s * 4) as usize;
-                self.mips[level as usize][d..d + (s * 4) as usize].copy_from_slice(&px[sidx..sidx + (s * 4) as usize]);
+                self.mips[level as usize][d..d + (s * 4) as usize]
+                    .copy_from_slice(&px[sidx..sidx + (s * 4) as usize]);
             }
             if s > 1 && level + 1 < MIP_LEVELS {
                 px = downsample(&px, s, transparent);
@@ -238,7 +253,12 @@ impl Builder {
         }
         let a = ATLAS_SIZE as f32;
         let (x0, y0) = (cx as f32 * 16.0, cy as f32 * 16.0);
-        self.rects.push([x0 / a, y0 / a, (x0 + size as f32) / a, (y0 + size as f32) / a]);
+        self.rects.push([
+            x0 / a,
+            y0 / a,
+            (x0 + size as f32) / a,
+            (y0 + size as f32) / a,
+        ]);
         self.origins.push((cx as u32 * 16, cy as u32 * 16));
         (self.rects.len() - 1) as u16
     }
@@ -246,13 +266,19 @@ impl Builder {
 
 fn color_map(jar: &mut Jar, path: &str) -> Result<Vec<u32>, String> {
     let img = read_png(jar, path)?;
-    Ok(img.rgba.chunks(4).map(|p| (p[0] as u32) << 16 | (p[1] as u32) << 8 | p[2] as u32).collect())
+    Ok(img
+        .rgba
+        .chunks(4)
+        .map(|p| (p[0] as u32) << 16 | (p[1] as u32) << 8 | p[2] as u32)
+        .collect())
 }
 
 impl Atlas {
     pub fn load(jar: &mut Jar) -> Result<Atlas, String> {
         let mut b = Builder {
-            mips: (0..MIP_LEVELS).map(|l| vec![0u8; ((ATLAS_SIZE >> l) * (ATLAS_SIZE >> l) * 4) as usize]).collect(),
+            mips: (0..MIP_LEVELS)
+                .map(|l| vec![0u8; ((ATLAS_SIZE >> l) * (ATLAS_SIZE >> l) * 4) as usize])
+                .collect(),
             rects: Vec::new(),
             used: vec![false; GRID * GRID],
             origins: Vec::new(),
@@ -334,24 +360,45 @@ impl Atlas {
             for y in 0..img.h.min(64) {
                 let s = (y * img.w * 4) as usize;
                 let n = (img.w.min(64) * 4) as usize;
-                px[(y * 64 * 4) as usize..(y * 64 * 4) as usize + n].copy_from_slice(&img.rgba[s..s + n]);
+                px[(y * 64 * 4) as usize..(y * 64 * 4) as usize + n]
+                    .copy_from_slice(&img.rgba[s..s + n]);
             }
             b.add(px, 64)
         };
         // Animated sprites: every frame of the strip, in metadata order.
         let mut anims = Vec::new();
-        for (name, tile, size) in [("water_still", names["water_still"], 16u32), ("lava_still", names["lava_still"], 16), ("water_flow", water_flow, 32), ("lava_flow", lava_flow, 32)] {
+        for (name, tile, size) in [
+            ("water_still", names["water_still"], 16u32),
+            ("lava_still", names["lava_still"], 16),
+            ("water_flow", water_flow, 32),
+            ("lava_flow", lava_flow, 32),
+        ] {
             let img = read_png(jar, &format!("assets/minecraft/textures/blocks/{name}.png"))?;
             let count = (img.h / size).max(1) as usize;
             let mut meta = String::new();
-            if let Ok(mut f) = jar.by_name(&format!("assets/minecraft/textures/blocks/{name}.png.mcmeta")) {
+            if let Ok(mut f) = jar.by_name(&format!(
+                "assets/minecraft/textures/blocks/{name}.png.mcmeta"
+            )) {
                 let _ = f.read_to_string(&mut meta);
             }
             let (frametime, order) = parse_mcmeta(&meta);
-            let order: Vec<usize> = order.unwrap_or_else(|| (0..count).collect()).into_iter().filter(|&i| i < count).collect();
-            let frames = (0..count).map(|i| mip_chain(crop(&img, 0, i as u32 * size, size), size)).collect();
+            let order: Vec<usize> = order
+                .unwrap_or_else(|| (0..count).collect())
+                .into_iter()
+                .filter(|&i| i < count)
+                .collect();
+            let frames = (0..count)
+                .map(|i| mip_chain(crop(&img, 0, i as u32 * size, size), size))
+                .collect();
             let (x, y) = b.origins[tile as usize];
-            anims.push(Anim { x, y, size, frametime, order, frames });
+            anims.push(Anim {
+                x,
+                y,
+                size,
+                frametime,
+                order,
+                frames,
+            });
         }
         let clouds = {
             let img = read_png(jar, "assets/minecraft/textures/environment/clouds.png")?;
@@ -370,8 +417,16 @@ impl Atlas {
                 ui[d..d + n].copy_from_slice(&img.rgba[s..s + n]);
             }
         };
-        blit(&read_png(jar, "assets/minecraft/textures/gui/widgets.png")?, 0, 0);
-        blit(&read_png(jar, "assets/minecraft/textures/gui/icons.png")?, 256, 0);
+        blit(
+            &read_png(jar, "assets/minecraft/textures/gui/widgets.png")?,
+            0,
+            0,
+        );
+        blit(
+            &read_png(jar, "assets/minecraft/textures/gui/icons.png")?,
+            256,
+            0,
+        );
         let font = read_png(jar, "assets/minecraft/textures/font/ascii.png")?;
         blit(&font, 0, 256);
         for (path, x, y) in [
@@ -382,7 +437,11 @@ impl Atlas {
             ("gui/options_background.png", 768, 256),
             ("entity/steve.png", 768, 512),
         ] {
-            blit(&read_png(jar, &format!("assets/minecraft/textures/{path}"))?, x, y);
+            blit(
+                &read_png(jar, &format!("assets/minecraft/textures/{path}"))?,
+                x,
+                y,
+            );
         }
         let mut char_width = [0u8; 256];
         let cell = font.w / 16;
@@ -391,7 +450,8 @@ impl Atlas {
             let mut used = cell as i32 - 1;
             while used >= 0 {
                 let x = cx * cell + used as u32;
-                let empty = (0..cell).all(|y| font.rgba[(((cy * cell + y) * font.w + x) * 4 + 3) as usize] == 0);
+                let empty = (0..cell)
+                    .all(|y| font.rgba[(((cy * cell + y) * font.w + x) * 4 + 3) as usize] == 0);
                 if !empty {
                     break;
                 }

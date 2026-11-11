@@ -35,7 +35,14 @@ pub type FastMap<K, V> = HashMap<K, V, BuildHasherDefault<FastHasher>>;
 pub type FastSet<K> = HashSet<K, BuildHasherDefault<FastHasher>>;
 
 /// `Facing.offsets{X,Y,Z}ForSide`
-pub const FACING: [[i32; 3]; 6] = [[0, -1, 0], [0, 1, 0], [0, 0, -1], [0, 0, 1], [-1, 0, 0], [1, 0, 0]];
+pub const FACING: [[i32; 3]; 6] = [
+    [0, -1, 0],
+    [0, 1, 0],
+    [0, 0, -1],
+    [0, 0, 1],
+    [-1, 0, 0],
+    [1, 0, 0],
+];
 
 pub struct Chunk {
     pub data: Arc<ChunkData>,
@@ -125,7 +132,11 @@ impl Chunk {
         self.height_min = i32::MAX;
         // MC-7508: vanilla starts one block too low and never sees a block on
         // the top level of the highest section.
-        let first = if crate::compat::fixed() { (top + 16).min(256) } else { top + 16 - 1 };
+        let first = if crate::compat::fixed() {
+            (top + 16).min(256)
+        } else {
+            top + 16 - 1
+        };
         for x in 0..16 {
             for z in 0..16 {
                 self.precip[(x + (z << 4)) as usize] = -999;
@@ -263,7 +274,12 @@ impl Chunk {
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut out = Vec::with_capacity(16384);
         out.extend_from_slice(&self.sections.to_le_bytes());
-        out.push(self.terrain_populated as u8 | (self.light_populated as u8) << 1 | (self.ticked as u8) << 2 | (self.gap_updated as u8) << 3);
+        out.push(
+            self.terrain_populated as u8
+                | (self.light_populated as u8) << 1
+                | (self.ticked as u8) << 2
+                | (self.gap_updated as u8) << 3,
+        );
         out.extend_from_slice(&self.queued_light_checks.to_le_bytes());
         out.extend_from_slice(&self.height_min.to_le_bytes());
         for h in self.height {
@@ -304,7 +320,15 @@ impl Chunk {
         let mut biomes = [0u8; 256];
         biomes.copy_from_slice(&b[pos..pos + 256]);
         pos += 256;
-        let mut data = ChunkData { cx, cz, blocks: boxed(), meta: boxed(), biomes, sky: boxed(), blk: boxed() };
+        let mut data = ChunkData {
+            cx,
+            cz,
+            blocks: boxed(),
+            meta: boxed(),
+            biomes,
+            sky: boxed(),
+            blk: boxed(),
+        };
         rle_decode(b, &mut pos, &mut data.blocks[..])?;
         rle_decode(b, &mut pos, &mut data.meta[..])?;
         rle_decode(b, &mut pos, &mut data.sky[..])?;
@@ -336,6 +360,55 @@ struct Tick {
     block: u8,
 }
 
+fn trace_pos() -> Option<[i32; 3]> {
+    static T: std::sync::OnceLock<Option<[i32; 3]>> = std::sync::OnceLock::new();
+    *T.get_or_init(|| {
+        let v: Vec<i32> = std::env::var("MINERUST_TRACE_POS")
+            .ok()?
+            .split(',')
+            .filter_map(|s| s.parse().ok())
+            .collect();
+        (v.len() == 3).then(|| [v[0], v[1], v[2]])
+    })
+}
+
+/// Tile entity created by world generation, handed to the game state.
+#[derive(Clone, Debug)]
+pub enum GenTile {
+    Chest {
+        pos: [i32; 3],
+        slots: Vec<Option<crate::item::Stack>>,
+    },
+    Dispenser {
+        pos: [i32; 3],
+        slots: Vec<Option<crate::item::Stack>>,
+    },
+    Spawner {
+        pos: [i32; 3],
+        mob: &'static str,
+    },
+}
+
+/// Entity spawned by world generation (`spawnEntityInWorld` during populate).
+#[derive(Clone, Debug)]
+pub enum GenEntity {
+    Villager {
+        pos: [f64; 3],
+        profession: i32,
+    },
+    Witch {
+        pos: [f64; 3],
+    },
+    MinecartChest {
+        pos: [f64; 3],
+        slots: Vec<Option<crate::item::Stack>>,
+    },
+    Item {
+        pos: [f64; 3],
+        stack: crate::item::Stack,
+    },
+}
+
 pub struct ServerWorld {
     pub provider: Arc<ChunkProvider>,
     pub chunks: FastMap<(i32, i32), Box<Chunk>>,
@@ -364,10 +437,22 @@ pub struct ServerWorld {
     pub save_dir: Option<std::path::PathBuf>,
     /// Number of chunks populated so far (statistics).
     pub populated: u64,
+    /// Tile entities and entities created by generation since last drained.
+    pub gen_tiles: Vec<GenTile>,
+    pub gen_entities: Vec<GenEntity>,
+    /// `MapGenStructure` state (mineshafts, villages, strongholds, temples).
+    pub structures: Option<Box<crate::world::structure::Structures>>,
+    /// Chunks provided while `structures` was taken out.
+    pending_structure_chunks: Vec<(i32, i32)>,
+    /// `mapFeaturesEnabled`
+    pub map_features: bool,
 }
 
 impl ServerWorld {
     pub fn new(provider: Arc<ChunkProvider>) -> ServerWorld {
+        let structures = Some(Box::new(crate::world::structure::Structures::new(
+            &provider,
+        )));
         ServerWorld {
             provider,
             chunks: FastMap::default(),
@@ -388,6 +473,11 @@ impl ServerWorld {
             stash: FastMap::default(),
             save_dir: None,
             populated: 0,
+            gen_tiles: Vec::new(),
+            gen_entities: Vec::new(),
+            structures,
+            pending_structure_chunks: Vec::new(),
+            map_features: true,
         }
     }
 
@@ -422,7 +512,10 @@ impl ServerWorld {
         }
         let stored = match self.stash.remove(&(cx, cz)) {
             Some(b) => Some(b),
-            None => self.save_dir.as_ref().and_then(|d| crate::world::save::read_chunk(d, cx, cz)),
+            None => self
+                .save_dir
+                .as_ref()
+                .and_then(|d| crate::world::save::read_chunk(d, cx, cz)),
         };
         if let Some(bytes) = stored {
             if let Some(c) = Chunk::from_bytes(cx, cz, &bytes) {
@@ -446,8 +539,37 @@ impl ServerWorld {
         c.generate_skylight_map();
         self.chunks.insert((cx, cz), c);
         self.mark_dirty_chunk(cx, cz);
+        self.register_structures(cx, cz);
         self.populate_chunk_checks(cx, cz);
         true
+    }
+
+    /// Registers structure starts for chunks provided while the structure
+    /// state was in use.
+    pub fn flush_structure_registrations(&mut self) {
+        if !self.pending_structure_chunks.is_empty() {
+            if let Some((x, z)) = self.pending_structure_chunks.pop() {
+                self.register_structures(x, z);
+            }
+        }
+    }
+
+    /// `MapGenStructure.func_151539_a` for every structure type, run by
+    /// `provideChunk` and `recreateStructures`.
+    pub fn register_structures(&mut self, cx: i32, cz: i32) {
+        if !self.map_features {
+            return;
+        }
+        match self.structures.take() {
+            Some(mut s) => {
+                s.register(&self.provider, cx, cz, &mut self.rand);
+                while let Some((x, z)) = self.pending_structure_chunks.pop() {
+                    s.register(&self.provider, x, z, &mut self.rand);
+                }
+                self.structures = Some(s);
+            }
+            None => self.pending_structure_chunks.push((cx, cz)),
+        }
     }
 
     /// Adds a chunk without running any population (tests, flat worlds).
@@ -480,7 +602,9 @@ impl ServerWorld {
 
     /// Writes every loaded chunk to disk without unloading it.
     pub fn save_all(&self) -> std::io::Result<usize> {
-        let Some(dir) = &self.save_dir else { return Ok(0) };
+        let Some(dir) = &self.save_dir else {
+            return Ok(0);
+        };
         let mut n = 0;
         let mut keys: Vec<(i32, i32)> = self.chunks.keys().copied().collect();
         keys.sort();
@@ -497,12 +621,18 @@ impl ServerWorld {
 
     /// Whether the chunk can be restored without generating it.
     pub fn is_stored(&self, cx: i32, cz: i32) -> bool {
-        self.stash.contains_key(&(cx, cz)) || self.save_dir.as_ref().map_or(false, |d| crate::world::save::chunk_path(d, cx, cz).is_file())
+        self.stash.contains_key(&(cx, cz))
+            || self.save_dir.as_ref().map_or(false, |d| {
+                crate::world::save::chunk_path(d, cx, cz).is_file()
+            })
     }
 
     /// Pending scheduled updates as `(x, y, z, block, delay)`.
     pub fn pending_tick_list(&self) -> Vec<(i32, i32, i32, u8, i64)> {
-        self.ticks.iter().map(|t| (t.x, t.y, t.z, t.block, t.time - self.total_time)).collect()
+        self.ticks
+            .iter()
+            .map(|t| (t.x, t.y, t.z, t.block, t.time - self.total_time))
+            .collect()
     }
 
     /// Re-inserts a chunk restored from storage (already populated or not).
@@ -510,6 +640,7 @@ impl ServerWorld {
         let (cx, cz) = (c.data.cx, c.data.cz);
         self.chunks.insert((cx, cz), c);
         self.mark_dirty_chunk(cx, cz);
+        self.register_structures(cx, cz);
         self.populate_chunk_checks(cx, cz);
     }
 
@@ -519,17 +650,36 @@ impl ServerWorld {
 
     /// `Chunk.populateChunk`
     fn populate_chunk_checks(&mut self, x: i32, z: i32) {
-        let pop = |w: &ServerWorld, x: i32, z: i32| w.ch(x, z).map_or(false, |c| c.terrain_populated);
-        if !pop(self, x, z) && self.chunk_exists(x + 1, z + 1) && self.chunk_exists(x, z + 1) && self.chunk_exists(x + 1, z) {
+        let pop =
+            |w: &ServerWorld, x: i32, z: i32| w.ch(x, z).map_or(false, |c| c.terrain_populated);
+        if !pop(self, x, z)
+            && self.chunk_exists(x + 1, z + 1)
+            && self.chunk_exists(x, z + 1)
+            && self.chunk_exists(x + 1, z)
+        {
             self.populate(x, z);
         }
-        if self.chunk_exists(x - 1, z) && !pop(self, x - 1, z) && self.chunk_exists(x - 1, z + 1) && self.chunk_exists(x, z + 1) && self.chunk_exists(x - 1, z + 1) {
+        if self.chunk_exists(x - 1, z)
+            && !pop(self, x - 1, z)
+            && self.chunk_exists(x - 1, z + 1)
+            && self.chunk_exists(x, z + 1)
+            && self.chunk_exists(x - 1, z + 1)
+        {
             self.populate(x - 1, z);
         }
-        if self.chunk_exists(x, z - 1) && !pop(self, x, z - 1) && self.chunk_exists(x + 1, z - 1) && self.chunk_exists(x + 1, z - 1) && self.chunk_exists(x + 1, z) {
+        if self.chunk_exists(x, z - 1)
+            && !pop(self, x, z - 1)
+            && self.chunk_exists(x + 1, z - 1)
+            && self.chunk_exists(x + 1, z - 1)
+            && self.chunk_exists(x + 1, z)
+        {
             self.populate(x, z - 1);
         }
-        if self.chunk_exists(x - 1, z - 1) && !pop(self, x - 1, z - 1) && self.chunk_exists(x, z - 1) && self.chunk_exists(x - 1, z) {
+        if self.chunk_exists(x - 1, z - 1)
+            && !pop(self, x - 1, z - 1)
+            && self.chunk_exists(x, z - 1)
+            && self.chunk_exists(x - 1, z)
+        {
             self.populate(x - 1, z - 1);
         }
     }
@@ -559,8 +709,20 @@ impl ServerWorld {
         self.dirty.insert((cx, cz));
         let (lx, lz) = (x & 15, z & 15);
         if lx == 0 || lx == 15 || lz == 0 || lz == 15 {
-            let dx = if lx == 0 { -1 } else if lx == 15 { 1 } else { 0 };
-            let dz = if lz == 0 { -1 } else if lz == 15 { 1 } else { 0 };
+            let dx = if lx == 0 {
+                -1
+            } else if lx == 15 {
+                1
+            } else {
+                0
+            };
+            let dz = if lz == 0 {
+                -1
+            } else if lz == 15 {
+                1
+            } else {
+                0
+            };
             if dx != 0 {
                 self.dirty.insert((cx + dx, cz));
             }
@@ -620,7 +782,8 @@ impl ServerWorld {
         if !(0..256).contains(&y) {
             return block::AIR;
         }
-        self.ch(x >> 4, z >> 4).map_or(block::AIR, |c| c.block(x & 15, y, z & 15))
+        self.ch(x >> 4, z >> 4)
+            .map_or(block::AIR, |c| c.block(x & 15, y, z & 15))
     }
 
     #[inline]
@@ -628,7 +791,8 @@ impl ServerWorld {
         if !(0..256).contains(&y) {
             return 0;
         }
-        self.ch(x >> 4, z >> 4).map_or(0, |c| c.meta(x & 15, y, z & 15))
+        self.ch(x >> 4, z >> 4)
+            .map_or(0, |c| c.meta(x & 15, y, z & 15))
     }
 
     #[inline]
@@ -655,7 +819,9 @@ impl ServerWorld {
     /// `World.getBiomeGenForCoords`
     pub fn biome(&mut self, x: i32, z: i32) -> &'static Biome {
         match self.ch(x >> 4, z >> 4) {
-            Some(c) => biome::get_or_ocean(c.data.biomes[((z & 15) << 4 | (x & 15)) as usize] as i32),
+            Some(c) => {
+                biome::get_or_ocean(c.data.biomes[((z & 15) << 4 | (x & 15)) as usize] as i32)
+            }
             None => biome::get_or_ocean(self.provider.biome_at(x, z)),
         }
     }
@@ -674,7 +840,8 @@ impl ServerWorld {
 
     /// `World.getPrecipitationHeight`
     pub fn precipitation_height(&mut self, x: i32, z: i32) -> i32 {
-        self.chunk(x >> 4, z >> 4).precipitation_height(x & 15, z & 15)
+        self.chunk(x >> 4, z >> 4)
+            .precipitation_height(x & 15, z & 15)
     }
 
     /// `World.getTopSolidOrLiquidBlock`
@@ -719,7 +886,8 @@ impl ServerWorld {
             return 0;
         }
         let y = y.min(255);
-        self.chunk(x >> 4, z >> 4).block_light_value(x & 15, y, z & 15, 0)
+        self.chunk(x >> 4, z >> 4)
+            .block_light_value(x & 15, y, z & 15, 0)
     }
 
     /// `World.getBlockLightValue_do`
@@ -739,7 +907,8 @@ impl ServerWorld {
         }
         let y = y.min(255);
         let sub = self.skylight_subtracted;
-        self.chunk(x >> 4, z >> 4).block_light_value(x & 15, y, z & 15, sub)
+        self.chunk(x >> 4, z >> 4)
+            .block_light_value(x & 15, y, z & 15, sub)
     }
 
     fn set_light(&mut self, sky: bool, x: i32, y: i32, z: i32, v: i32) {
@@ -757,9 +926,22 @@ impl ServerWorld {
             return false;
         }
         self.chunk(x >> 4, z >> 4);
-        let old = if flags & 1 != 0 { self.peek_block(x, y, z) } else { 0 };
+        let old = if flags & 1 != 0 {
+            self.peek_block(x, y, z)
+        } else {
+            0
+        };
+        let before = trace_pos().map(|t| self.saved_light(true, t[0], t[1], t[2]));
         let changed = self.chunk_set_block(x, y, z, id, meta);
+        let mid = trace_pos().map(|t| self.saved_light(true, t[0], t[1], t[2]));
         self.update_all_light(x, y, z);
+        if let Some(t) = trace_pos() {
+            let after = self.saved_light(true, t[0], t[1], t[2]);
+            if Some(after) != before || (x - t[0]).abs() + (y - t[1]).abs() + (z - t[2]).abs() <= 1
+            {
+                eprintln!("set {x},{y},{z} id={id} changed={changed}: target {:?} -> {:?} -> {after} near={}", before, mid, self.chunks_near_exist(x, y, z, 17));
+            }
+        }
         if changed {
             self.mark_dirty(x, z);
             if flags & 1 != 0 {
@@ -860,7 +1042,11 @@ impl ServerWorld {
                 self.relight_block(key, x, y, z);
             }
             let c = self.chunks.get_mut(&key).unwrap();
-            if new_op != old_op && (new_op < old_op || c.saved_light(true, x, y, z) > 0 || c.saved_light(false, x, y, z) > 0) {
+            if new_op != old_op
+                && (new_op < old_op
+                    || c.saved_light(true, x, y, z) > 0
+                    || c.saved_light(false, x, y, z) > 0)
+            {
                 c.update_sky_cols[(x + z * 16) as usize] = true;
                 c.gap_updated = true;
             }
@@ -1040,7 +1226,8 @@ impl ServerWorld {
             }
             if !seen_opaque && op > 0 {
                 seen_opaque = true;
-            } else if seen_opaque && op == 0 && !self.update_all_light(cx * 16 + x, y, cz * 16 + z) {
+            } else if seen_opaque && op == 0 && !self.update_all_light(cx * 16 + x, y, cz * 16 + z)
+            {
                 return false;
             }
             y -= 1;
@@ -1071,7 +1258,9 @@ impl ServerWorld {
                 let c = &self.chunks[&(cx, cz)];
                 let has = c.has_section(y);
                 let edge = i == 0 || i == 15 || lx == 0 || lx == 15 || lz == 0 || lz == 15;
-                if (!has && edge) || (has && block::material(c.data.blocks[bidx(lx, y, lz)]) == Material::Air) {
+                if (!has && edge)
+                    || (has && block::material(c.data.blocks[bidx(lx, y, lz)]) == Material::Air)
+                {
                     for f in FACING {
                         let (nx, ny, nz) = (wx + f[0], y + f[1], wz + f[2]);
                         if block::info(self.block(nx, ny, nz)).light_value > 0 {
@@ -1173,10 +1362,14 @@ impl ServerWorld {
                         if d < 17 {
                             for f in FACING {
                                 let (nx, ny, nz) = (px + f[0], py + f[1], pz + f[2]);
-                                let op = (block::info(self.block(nx, ny, nz)).light_opacity as i32).max(1);
+                                let op = (block::info(self.block(nx, ny, nz)).light_opacity as i32)
+                                    .max(1);
                                 let nl = self.saved_light(sky, nx, ny, nz);
                                 if nl == lvl - op && tail < q.len() {
-                                    q[tail] = (nx - x + 32) | (ny - y + 32) << 6 | (nz - z + 32) << 12 | (lvl - op) << 18;
+                                    q[tail] = (nx - x + 32)
+                                        | (ny - y + 32) << 6
+                                        | (nz - z + 32) << 12
+                                        | (lvl - op) << 18;
                                     tail += 1;
                                 }
                             }
@@ -1199,9 +1392,18 @@ impl ServerWorld {
                 if new > cur {
                     let d = (px - x).abs() + (py - y).abs() + (pz - z).abs();
                     if d < 17 && tail < q.len() - 6 {
-                        for (dx, dy, dz) in [(-1, 0, 0), (1, 0, 0), (0, -1, 0), (0, 1, 0), (0, 0, -1), (0, 0, 1)] {
+                        for (dx, dy, dz) in [
+                            (-1, 0, 0),
+                            (1, 0, 0),
+                            (0, -1, 0),
+                            (0, 1, 0),
+                            (0, 0, -1),
+                            (0, 0, 1),
+                        ] {
                             if self.saved_light(sky, px + dx, py + dy, pz + dz) < new {
-                                q[tail] = (px + dx - x + 32) + ((py + dy - y + 32) << 6) + ((pz + dz - z + 32) << 12);
+                                q[tail] = (px + dx - x + 32)
+                                    + ((py + dy - y + 32) << 6)
+                                    + ((pz + dz - z + 32) << 12);
                                 tail += 1;
                             }
                         }
@@ -1246,9 +1448,21 @@ impl ServerWorld {
         }
         if self.check_chunks_exist(x - r, y - r, z - r, x + r, y + r, z + r) {
             if self.tick_keys.insert((x, y, z, id)) {
-                let time = if block::material(id) != Material::Air { delay as i64 + self.total_time } else { 0 };
+                let time = if block::material(id) != Material::Air {
+                    delay as i64 + self.total_time
+                } else {
+                    0
+                };
                 self.next_tick_id += 1;
-                self.ticks.insert(Tick { time, priority: 0, id: self.next_tick_id, x, y, z, block: id });
+                self.ticks.insert(Tick {
+                    time,
+                    priority: 0,
+                    id: self.next_tick_id,
+                    x,
+                    y,
+                    z,
+                    block: id,
+                });
             }
         }
     }
@@ -1284,7 +1498,15 @@ impl ServerWorld {
     pub fn restore_tick(&mut self, x: i32, y: i32, z: i32, id: u8, delay: i64) {
         if self.tick_keys.insert((x, y, z, id)) {
             self.next_tick_id += 1;
-            self.ticks.insert(Tick { time: self.total_time + delay, priority: 0, id: self.next_tick_id, x, y, z, block: id });
+            self.ticks.insert(Tick {
+                time: self.total_time + delay,
+                priority: 0,
+                id: self.next_tick_id,
+                x,
+                y,
+                z,
+                block: id,
+            });
         }
     }
 
@@ -1331,6 +1553,42 @@ impl ServerWorld {
             }
             block::WATER | block::LAVA => self.check_liquid_collisions(id, x, y, z),
             block::SAND | block::GRAVEL => self.schedule_update(x, y, z, id, 2),
+            block::TORCH | block::REDSTONE_TORCH | block::UNLIT_REDSTONE_TORCH => {
+                self.torch_added(id, x, y, z)
+            }
+            block::RAIL | block::GOLDEN_RAIL | block::DETECTOR_RAIL => {
+                super::rail::refresh_shape(self, x, y, z, true);
+                if id != block::RAIL && self.block(x, y, z) == id {
+                    super::rail::neighbour_changed(self, x, y, z, id);
+                }
+            }
+            block::FURNACE | block::LIT_FURNACE | block::DISPENSER => {
+                // BlockFurnace / BlockDispenser.updateFacing
+                let full = |w: &mut ServerWorld, x: i32, y: i32, z: i32| {
+                    block::info(w.block(x, y, z)).full_block
+                };
+                let (n, s, w, e) = (
+                    full(self, x, y, z - 1),
+                    full(self, x, y, z + 1),
+                    full(self, x - 1, y, z),
+                    full(self, x + 1, y, z),
+                );
+                let mut m = 3;
+                if n && !s {
+                    m = 3;
+                }
+                if s && !n {
+                    m = 2;
+                }
+                if w && !e {
+                    m = 5;
+                }
+                if e && !w {
+                    m = 4;
+                }
+                self.set_meta(x, y, z, m, 2);
+            }
+            block::TRIPWIRE => super::tripwire::wire_added(self, x, y, z),
             block::CHEST => {
                 self.chest_init_meta(x, y, z);
                 for (dx, dz) in [(0, -1), (0, 1), (-1, 0), (1, 0)] {
@@ -1343,15 +1601,104 @@ impl ServerWorld {
         }
     }
 
+    /// `BlockTorch.onBlockAdded` + `dropTorchIfCantStay`
+    fn torch_added(&mut self, id: u8, x: i32, y: i32, z: i32) {
+        let nc = |w: &mut ServerWorld, x: i32, y: i32, z: i32| {
+            block::info(w.block(x, y, z)).normal_cube()
+        };
+        if self.meta(x, y, z) == 0 {
+            let m = if nc(self, x - 1, y, z) {
+                1
+            } else if nc(self, x + 1, y, z) {
+                2
+            } else if nc(self, x, y, z - 1) {
+                3
+            } else if nc(self, x, y, z + 1) {
+                4
+            } else if self.torch_can_stand_on(x, y - 1, z) {
+                5
+            } else {
+                0
+            };
+            if m != 0 {
+                self.set_meta(x, y, z, m, 2);
+            }
+        }
+        let can = nc(self, x - 1, y, z)
+            || nc(self, x + 1, y, z)
+            || nc(self, x, y, z - 1)
+            || nc(self, x, y, z + 1)
+            || self.torch_can_stand_on(x, y - 1, z);
+        if !can && self.block(x, y, z) == id {
+            let drop = if id == block::TORCH {
+                block::TORCH
+            } else {
+                block::REDSTONE_TORCH
+            };
+            self.gen_entities.push(GenEntity::Item {
+                pos: [x as f64 + 0.5, y as f64 + 0.5, z as f64 + 0.5],
+                stack: crate::item::Stack::new(drop as u16, 0, 1),
+            });
+            self.set_block(x, y, z, block::AIR, 0, 3);
+        }
+    }
+
+    /// `BlockDoor.onNeighborBlockChange` (redstone power is not simulated).
+    fn door_neighbour(&mut self, id: u8, x: i32, y: i32, z: i32, src: u8) {
+        let m = self.meta(x, y, z);
+        if m & 8 == 0 {
+            let mut broke = false;
+            if self.block(x, y + 1, z) != id {
+                self.set_block(x, y, z, block::AIR, 0, 3);
+                broke = true;
+            }
+            if !self.solid_top_surface(x, y - 1, z) {
+                self.set_block(x, y, z, block::AIR, 0, 3);
+                broke = true;
+                if self.block(x, y + 1, z) == id {
+                    self.set_block(x, y + 1, z, block::AIR, 0, 3);
+                }
+            }
+            if broke {
+                let item = if id == block::WOODEN_DOOR { 324 } else { 330 };
+                self.gen_entities.push(GenEntity::Item {
+                    pos: [x as f64 + 0.5, y as f64 + 0.5, z as f64 + 0.5],
+                    stack: crate::item::Stack::new(item, 0, 1),
+                });
+            }
+        } else {
+            if self.block(x, y - 1, z) != id {
+                self.set_block(x, y, z, block::AIR, 0, 3);
+            }
+            if src != id {
+                self.door_neighbour(id, x, y - 1, z, src);
+            }
+        }
+    }
+
+    /// `BlockTorch.canPlaceTorchOn`
+    fn torch_can_stand_on(&mut self, x: i32, y: i32, z: i32) -> bool {
+        if self.solid_top_surface(x, y, z) {
+            return true;
+        }
+        matches!(self.block(x, y, z), block::FENCE | block::GLASS)
+    }
+
     /// `BlockChest.func_149954_e`
     fn chest_init_meta(&mut self, x: i32, y: i32, z: i32) {
-        let full = |w: &mut ServerWorld, x: i32, y: i32, z: i32| block::info(w.block(x, y, z)).full_block;
+        let full =
+            |w: &mut ServerWorld, x: i32, y: i32, z: i32| block::info(w.block(x, y, z)).full_block;
         let n = self.block(x, y, z - 1);
         let s = self.block(x, y, z + 1);
         let w = self.block(x - 1, y, z);
         let e = self.block(x + 1, y, z);
         let c = block::CHEST;
-        let (fn_, fs, fw, fe) = (full(self, x, y, z - 1), full(self, x, y, z + 1), full(self, x - 1, y, z), full(self, x + 1, y, z));
+        let (fn_, fs, fw, fe) = (
+            full(self, x, y, z - 1),
+            full(self, x, y, z + 1),
+            full(self, x - 1, y, z),
+            full(self, x + 1, y, z),
+        );
         let mut m;
         if n != c && s != c {
             if w != c && e != c {
@@ -1427,8 +1774,15 @@ impl ServerWorld {
     pub fn can_block_stay(&mut self, id: u8, x: i32, y: i32, z: i32) -> bool {
         let below = self.block(x, y - 1, z);
         match id {
-            block::TALLGRASS | block::YELLOW_FLOWER | block::RED_FLOWER => below == block::GRASS || below == block::DIRT || below == block::FARMLAND,
-            block::DEADBUSH => below == block::SAND || below == block::HARDENED_CLAY || below == block::STAINED_HARDENED_CLAY || below == block::DIRT,
+            block::TALLGRASS | block::YELLOW_FLOWER | block::RED_FLOWER => {
+                below == block::GRASS || below == block::DIRT || below == block::FARMLAND
+            }
+            block::DEADBUSH => {
+                below == block::SAND
+                    || below == block::HARDENED_CLAY
+                    || below == block::STAINED_HARDENED_CLAY
+                    || below == block::DIRT
+            }
             block::BROWN_MUSHROOM | block::RED_MUSHROOM => {
                 if (0..256).contains(&y) {
                     below == block::MYCELIUM
@@ -1447,13 +1801,20 @@ impl ServerWorld {
                 }
                 below == block::CACTUS || below == block::SAND
             }
-            block::WATERLILY => (0..256).contains(&y) && block::material(below) == Material::Water && self.meta(x, y - 1, z) == 0,
+            block::WATERLILY => {
+                (0..256).contains(&y)
+                    && block::material(below) == Material::Water
+                    && self.meta(x, y - 1, z) == 0
+            }
             block::DOUBLE_PLANT => {
                 let m = self.meta(x, y, z);
                 if m & 8 != 0 {
                     below == block::DOUBLE_PLANT
                 } else {
-                    self.block(x, y + 1, z) == block::DOUBLE_PLANT && (below == block::GRASS || below == block::DIRT || below == block::FARMLAND)
+                    self.block(x, y + 1, z) == block::DOUBLE_PLANT
+                        && (below == block::GRASS
+                            || below == block::DIRT
+                            || below == block::FARMLAND)
                 }
             }
             _ => true,
@@ -1482,7 +1843,9 @@ impl ServerWorld {
             block::WATERLILY => replaceable && self.block(x, y - 1, z) == block::WATER,
             block::DOUBLE_PLANT => {
                 let below = self.block(x, y - 1, z);
-                replaceable && (below == block::GRASS || below == block::DIRT || below == block::FARMLAND) && self.is_air(x, y + 1, z)
+                replaceable
+                    && (below == block::GRASS || below == block::DIRT || below == block::FARMLAND)
+                    && self.is_air(x, y + 1, z)
             }
             block::PUMPKIN => replaceable && self.solid_top_surface(x, y - 1, z),
             block::MELON_BLOCK => replaceable,
@@ -1520,6 +1883,7 @@ impl ServerWorld {
         match id {
             block::STONE_SLAB => m & 8 == 8,
             block::SNOW_LAYER => m & 7 == 7,
+            id if block::is_stairs(id) => m & 4 == 4,
             _ => false,
         }
     }
@@ -1531,9 +1895,15 @@ impl ServerWorld {
     }
 
     /// `Block.onNeighborBlockChange`
-    fn on_neighbor_change(&mut self, x: i32, y: i32, z: i32, _src: u8) {
+    fn on_neighbor_change(&mut self, x: i32, y: i32, z: i32, src: u8) {
         let id = self.block(x, y, z);
         match id {
+            block::RAIL | block::GOLDEN_RAIL | block::DETECTOR_RAIL => {
+                super::rail::neighbour_changed(self, x, y, z, src)
+            }
+            block::TRIPWIRE => super::tripwire::wire_neighbour(self, x, y, z),
+            block::WOODEN_DOOR | block::IRON_DOOR => self.door_neighbour(id, x, y, z, src),
+            block::TRIPWIRE_HOOK => super::tripwire::hook_neighbour(self, x, y, z, src),
             block::WATER | block::LAVA => {
                 self.check_liquid_collisions(id, x, y, z);
                 if self.block(x, y, z) == id {
@@ -1545,7 +1915,13 @@ impl ServerWorld {
             }
             block::FLOWING_WATER | block::FLOWING_LAVA => self.check_liquid_collisions(id, x, y, z),
             block::SAND | block::GRAVEL => self.schedule_update(x, y, z, id, 2),
-            block::TALLGRASS | block::DEADBUSH | block::YELLOW_FLOWER | block::RED_FLOWER | block::BROWN_MUSHROOM | block::RED_MUSHROOM | block::WATERLILY => {
+            block::TALLGRASS
+            | block::DEADBUSH
+            | block::YELLOW_FLOWER
+            | block::RED_FLOWER
+            | block::BROWN_MUSHROOM
+            | block::RED_MUSHROOM
+            | block::WATERLILY => {
                 if !self.can_block_stay(id, x, y, z) {
                     self.set_block(x, y, z, block::AIR, 0, 2);
                 }
@@ -1615,6 +1991,7 @@ impl ServerWorld {
         match id {
             block::FLOWING_WATER | block::FLOWING_LAVA => self.liquid_tick(id, x, y, z, rand),
             block::SAND | block::GRAVEL => self.try_fall(id, x, y, z),
+            block::TRIPWIRE_HOOK => super::tripwire::hook_tick(self, x, y, z),
             _ => {}
         }
     }
@@ -1673,10 +2050,22 @@ impl ServerWorld {
         }
     }
 
-    fn distance_to_gap(&mut self, mat: Material, x: i32, y: i32, z: i32, depth: i32, from: i32) -> i32 {
+    fn distance_to_gap(
+        &mut self,
+        mat: Material,
+        x: i32,
+        y: i32,
+        z: i32,
+        depth: i32,
+        from: i32,
+    ) -> i32 {
         let mut best = 1000;
         for d in 0..4 {
-            if (d == 0 && from == 1) || (d == 1 && from == 0) || (d == 2 && from == 3) || (d == 3 && from == 2) {
+            if (d == 0 && from == 1)
+                || (d == 1 && from == 0)
+                || (d == 2 && from == 3)
+                || (d == 3 && from == 2)
+            {
                 continue;
             }
             let (nx, nz) = match d {
@@ -1685,7 +2074,9 @@ impl ServerWorld {
                 2 => (x, z - 1),
                 _ => (x, z + 1),
             };
-            if !self.blocks_spreading(nx, y, nz) && (self.material(nx, y, nz) != mat || self.meta(nx, y, nz) != 0) {
+            if !self.blocks_spreading(nx, y, nz)
+                && (self.material(nx, y, nz) != mat || self.meta(nx, y, nz) != 0)
+            {
                 if !self.blocks_spreading(nx, y - 1, nz) {
                     return depth;
                 }
@@ -1709,7 +2100,9 @@ impl ServerWorld {
                 2 => (x, z - 1),
                 _ => (x, z + 1),
             };
-            if !self.blocks_spreading(nx, y, nz) && (self.material(nx, y, nz) != mat || self.meta(nx, y, nz) != 0) {
+            if !self.blocks_spreading(nx, y, nz)
+                && (self.material(nx, y, nz) != mat || self.meta(nx, y, nz) != 0)
+            {
                 if self.blocks_spreading(nx, y - 1, nz) {
                     dist[d] = self.distance_to_gap(mat, nx, y, nz, 1, d as i32);
                 } else {
@@ -1759,7 +2152,12 @@ impl ServerWorld {
                     new = 0;
                 }
             }
-            if mat == Material::Lava && level < 8 && new < 8 && new > level && rand.next_int_n(4) != 0 {
+            if mat == Material::Lava
+                && level < 8
+                && new < 8
+                && new > level
+                && rand.next_int_n(4) != 0
+            {
                 rate *= 4;
             }
             if new == level {

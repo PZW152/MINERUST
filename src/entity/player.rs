@@ -79,6 +79,8 @@ impl Aabb {
 /// `World.getCollidingBoundingBoxes` (blocks only).
 pub fn colliding_boxes(world: &dyn BlockView, bb: &Aabb) -> Vec<Aabb> {
     let mut out = Vec::new();
+    let get = |x: i32, y: i32, z: i32| (world.peek_block(x, y, z), world.peek_meta(x, y, z));
+    let mut boxes = Vec::new();
     let x0 = math::floor_double(bb.min[0]);
     let x1 = math::floor_double(bb.max[0] + 1.0);
     let y0 = math::floor_double(bb.min[1]);
@@ -92,10 +94,20 @@ pub fn colliding_boxes(world: &dyn BlockView, bb: &Aabb) -> Vec<Aabb> {
                 if id == 0 {
                     continue;
                 }
-                if let Some(c) = block::collision_box(id, world.peek_meta(x, y, z)) {
+                boxes.clear();
+                crate::shapes::collision(&get, id, world.peek_meta(x, y, z), x, y, z, &mut boxes);
+                for c in &boxes {
                     let b = Aabb {
-                        min: [x as f64 + c[0] as f64, y as f64 + c[1] as f64, z as f64 + c[2] as f64],
-                        max: [x as f64 + c[3] as f64, y as f64 + c[4] as f64, z as f64 + c[5] as f64],
+                        min: [
+                            x as f64 + c[0] as f64,
+                            y as f64 + c[1] as f64,
+                            z as f64 + c[2] as f64,
+                        ],
+                        max: [
+                            x as f64 + c[3] as f64,
+                            y as f64 + c[4] as f64,
+                            z as f64 + c[5] as f64,
+                        ],
                     };
                     if b.intersects(bb) {
                         out.push(b);
@@ -150,7 +162,10 @@ const STEP_HEIGHT: f32 = 0.5;
 impl Player {
     pub fn new(x: f64, feet_y: f64, z: f64) -> Player {
         let mut p = Player {
-            bb: Aabb { min: [0.0; 3], max: [0.0; 3] },
+            bb: Aabb {
+                min: [0.0; 3],
+                max: [0.0; 3],
+            },
             prev_pos: [0.0; 3],
             pos: [0.0; 3],
             motion: [0.0; 3],
@@ -188,7 +203,10 @@ impl Player {
 
     pub fn set_position(&mut self, x: f64, feet_y: f64, z: f64) {
         let f = (WIDTH / 2.0f32) as f64;
-        self.bb = Aabb { min: [x - f, feet_y, z - f], max: [x + f, feet_y + HEIGHT as f64, z + f] };
+        self.bb = Aabb {
+            min: [x - f, feet_y, z - f],
+            max: [x + f, feet_y + HEIGHT as f64, z + f],
+        };
         self.pos = [x, feet_y + Y_OFFSET as f64 - self.y_size as f64, z];
     }
 
@@ -205,7 +223,11 @@ impl Player {
         if self.flying {
             f *= 1.1f32;
         }
-        let speed = if self.sprinting { 0.1f64 * (1.0 + 0.30000001192092896) } else { 0.1f32 as f64 };
+        let speed = if self.sprinting {
+            0.1f64 * (1.0 + 0.30000001192092896)
+        } else {
+            0.1f32 as f64
+        };
         (f as f64 * ((speed / 0.1f32 as f64 + 1.0) / 2.0)) as f32
     }
 
@@ -229,7 +251,10 @@ impl Player {
     }
 
     fn expand(bb: &Aabb, x: f64, y: f64, z: f64) -> Aabb {
-        Aabb { min: [bb.min[0] - x, bb.min[1] - y, bb.min[2] - z], max: [bb.max[0] + x, bb.max[1] + y, bb.max[2] + z] }
+        Aabb {
+            min: [bb.min[0] - x, bb.min[1] - y, bb.min[2] - z],
+            max: [bb.max[0] + x, bb.max[1] + y, bb.max[2] + z],
+        }
     }
 
     /// `BlockLiquid.getFlowVector`
@@ -305,7 +330,12 @@ impl Player {
     /// `World.handleMaterialAcceleration`: detects water and applies its current.
     fn handle_water(&mut self, world: &dyn BlockView) {
         let mut push = [0.0f64; 3];
-        let bb = Self::expand(&Self::expand(&self.bb, 0.0, -0.4f32 as f64, 0.0), -0.001, -0.001, -0.001);
+        let bb = Self::expand(
+            &Self::expand(&self.bb, 0.0, -0.4f32 as f64, 0.0),
+            -0.001,
+            -0.001,
+            -0.001,
+        );
         let x0 = math::floor_double(bb.min[0]);
         let x1 = math::floor_double(bb.max[0] + 1.0);
         let y0 = math::floor_double(bb.min[1]);
@@ -343,12 +373,20 @@ impl Player {
     }
 
     fn in_lava(&self, world: &dyn BlockView) -> bool {
-        Self::material_in_bb(world, &Self::expand(&self.bb, -0.1f32 as f64, -0.4f32 as f64, -0.1f32 as f64), Material::Lava)
+        Self::material_in_bb(
+            world,
+            &Self::expand(&self.bb, -0.1f32 as f64, -0.4f32 as f64, -0.1f32 as f64),
+            Material::Lava,
+        )
     }
 
     /// `Entity.isInsideOfMaterial` for the eye position.
     pub fn eye_material(&self, world: &dyn BlockView, eye: [f64; 3]) -> Material {
-        let (x, y, z) = (math::floor_double(eye[0]), math::floor_float(math::floor_double(eye[1]) as f32), math::floor_double(eye[2]));
+        let (x, y, z) = (
+            math::floor_double(eye[0]),
+            math::floor_float(math::floor_double(eye[1]) as f32),
+            math::floor_double(eye[2]),
+        );
         let id = world.peek_block(x, y, z);
         let m = block::info(id).material;
         if m == Material::Water || m == Material::Lava {
@@ -365,7 +403,9 @@ impl Player {
 
     fn is_offset_position_in_liquid(&self, world: &dyn BlockView, x: f64, y: f64, z: f64) -> bool {
         let bb = self.bb.offset_copy(x, y, z);
-        colliding_boxes(world, &bb).is_empty() && !Self::material_in_bb(world, &bb, Material::Water) && !Self::material_in_bb(world, &bb, Material::Lava)
+        colliding_boxes(world, &bb).is_empty()
+            && !Self::material_in_bb(world, &bb, Material::Water)
+            && !Self::material_in_bb(world, &bb, Material::Lava)
     }
 
     fn move_flying(&mut self, mut strafe: f32, mut forward: f32, friction: f32) {
@@ -393,7 +433,9 @@ impl Player {
         let sneak = self.on_ground && self.sneaking;
         if sneak {
             let step = 0.05;
-            while dx != 0.0 && colliding_boxes(world, &self.bb.offset_copy(dx, -1.0, 0.0)).is_empty() {
+            while dx != 0.0
+                && colliding_boxes(world, &self.bb.offset_copy(dx, -1.0, 0.0)).is_empty()
+            {
                 if dx < step && dx >= -step {
                     dx = 0.0;
                 } else if dx > 0.0 {
@@ -403,7 +445,9 @@ impl Player {
                 }
                 ox = dx;
             }
-            while dz != 0.0 && colliding_boxes(world, &self.bb.offset_copy(0.0, -1.0, dz)).is_empty() {
+            while dz != 0.0
+                && colliding_boxes(world, &self.bb.offset_copy(0.0, -1.0, dz)).is_empty()
+            {
                 if dz < step && dz >= -step {
                     dz = 0.0;
                 } else if dz > 0.0 {
@@ -413,7 +457,10 @@ impl Player {
                 }
                 oz = dz;
             }
-            while dx != 0.0 && dz != 0.0 && colliding_boxes(world, &self.bb.offset_copy(dx, -1.0, dz)).is_empty() {
+            while dx != 0.0
+                && dz != 0.0
+                && colliding_boxes(world, &self.bb.offset_copy(dx, -1.0, dz)).is_empty()
+            {
                 if dx < step && dx >= -step {
                     dx = 0.0;
                 } else if dx > 0.0 {
@@ -448,7 +495,8 @@ impl Player {
         }
         self.bb.offset(0.0, 0.0, dz);
 
-        if STEP_HEIGHT > 0.0 && flag1 && (sneak || self.y_size < 0.05f32) && (ox != dx || oz != dz) {
+        if STEP_HEIGHT > 0.0 && flag1 && (sneak || self.y_size < 0.05f32) && (ox != dx || oz != dz)
+        {
             let (sx, sy, sz) = (dx, dy, dz);
             dx = ox;
             dy = STEP_HEIGHT as f64;
@@ -498,7 +546,9 @@ impl Player {
         if !sneak {
             let ddx = self.pos[0] - start[0];
             let ddz = self.pos[2] - start[2];
-            self.distance_walked = (self.distance_walked as f64 + math::sqrt_double(ddx * ddx + ddz * ddz) as f64 * 0.6) as f32;
+            self.distance_walked = (self.distance_walked as f64
+                + math::sqrt_double(ddx * ddx + ddz * ddz) as f64 * 0.6)
+                as f32;
         }
     }
 
@@ -514,7 +564,14 @@ impl Player {
             }
             self.motion[1] -= 0.02;
             let m = self.motion;
-            if self.collided_horizontally && self.is_offset_position_in_liquid(world, m[0], m[1] + 0.6f32 as f64 - self.pos[1] + d0, m[2]) {
+            if self.collided_horizontally
+                && self.is_offset_position_in_liquid(
+                    world,
+                    m[0],
+                    m[1] + 0.6f32 as f64 - self.pos[1] + d0,
+                    m[2],
+                )
+            {
                 self.motion[1] = 0.3f32 as f64;
             }
         } else if in_lava && !self.flying {
@@ -527,12 +584,23 @@ impl Player {
             }
             self.motion[1] -= 0.02;
             let m = self.motion;
-            if self.collided_horizontally && self.is_offset_position_in_liquid(world, m[0], m[1] + 0.6f32 as f64 - self.pos[1] + d0, m[2]) {
+            if self.collided_horizontally
+                && self.is_offset_position_in_liquid(
+                    world,
+                    m[0],
+                    m[1] + 0.6f32 as f64 - self.pos[1] + d0,
+                    m[2],
+                )
+            {
                 self.motion[1] = 0.3f32 as f64;
             }
         } else {
             let ground_slip = |p: &Player| {
-                let id = world.peek_block(math::floor_double(p.pos[0]), math::floor_double(p.bb.min[1]) - 1, math::floor_double(p.pos[2]));
+                let id = world.peek_block(
+                    math::floor_double(p.pos[0]),
+                    math::floor_double(p.bb.min[1]) - 1,
+                    math::floor_double(p.pos[2]),
+                );
                 block::info(id).slipperiness * 0.91f32
             };
             let mut f2 = 0.91f32;
@@ -540,7 +608,11 @@ impl Player {
                 f2 = ground_slip(self);
             }
             let f3 = 0.16277136f32 / (f2 * f2 * f2);
-            let f4 = if self.on_ground { self.ai_move_speed * f3 } else { self.jump_movement_factor };
+            let f4 = if self.on_ground {
+                self.ai_move_speed * f3
+            } else {
+                self.jump_movement_factor
+            };
             self.move_flying(strafe, forward, f4);
             f2 = 0.91f32;
             if self.on_ground {
@@ -677,10 +749,16 @@ impl Player {
         // Rest of EntityPlayer.onLivingUpdate
         self.jump_movement_factor = 0.02;
         if self.sprinting {
-            self.jump_movement_factor = (self.jump_movement_factor as f64 + 0.02f32 as f64 * 0.3) as f32;
+            self.jump_movement_factor =
+                (self.jump_movement_factor as f64 + 0.02f32 as f64 * 0.3) as f32;
         }
-        self.ai_move_speed = if self.sprinting { (0.1f32 as f64 * (1.0 + 0.30000001192092896)) as f32 } else { 0.1 };
-        let mut f = math::sqrt_double(self.motion[0] * self.motion[0] + self.motion[2] * self.motion[2]);
+        self.ai_move_speed = if self.sprinting {
+            (0.1f32 as f64 * (1.0 + 0.30000001192092896)) as f32
+        } else {
+            0.1
+        };
+        let mut f =
+            math::sqrt_double(self.motion[0] * self.motion[0] + self.motion[2] * self.motion[2]);
         let mut f1 = ((-self.motion[1] * 0.2f32 as f64).atan() as f32) * 15.0f32;
         if f > 0.1f32 {
             f = 0.1f32;
@@ -710,14 +788,24 @@ mod tests {
         let mut w = World::new(Arc::new(ChunkProvider::new(0)));
         for cx in -2..=2 {
             for cz in -2..=20 {
-                let mut blocks: Box<[u8; 65536]> = vec![0u8; 65536].into_boxed_slice().try_into().unwrap();
+                let mut blocks: Box<[u8; 65536]> =
+                    vec![0u8; 65536].into_boxed_slice().try_into().unwrap();
                 for c in 0..256 {
                     for y in 0..64 {
                         blocks[(c << 8) | y] = block::STONE;
                     }
                 }
-                let meta: Box<[u8; 65536]> = vec![0u8; 65536].into_boxed_slice().try_into().unwrap();
-                w.insert_raw(ChunkData { cx, cz, blocks, meta, biomes: [1; 256], sky: crate::world::gen::chunk_provider::boxed(), blk: crate::world::gen::chunk_provider::boxed() });
+                let meta: Box<[u8; 65536]> =
+                    vec![0u8; 65536].into_boxed_slice().try_into().unwrap();
+                w.insert_raw(ChunkData {
+                    cx,
+                    cz,
+                    blocks,
+                    meta,
+                    biomes: [1; 256],
+                    sky: crate::world::gen::chunk_provider::boxed(),
+                    blk: crate::world::gen::chunk_provider::boxed(),
+                });
             }
         }
         w
@@ -737,7 +825,10 @@ mod tests {
     fn walking_speed_matches_vanilla() {
         let w = flat_world();
         let mut p = settle(&w);
-        let input = Input { forward: true, ..Default::default() };
+        let input = Input {
+            forward: true,
+            ..Default::default()
+        };
         for _ in 0..100 {
             p.tick(&w, &input);
         }
@@ -750,13 +841,21 @@ mod tests {
     fn sprinting_speed_matches_vanilla() {
         let w = flat_world();
         let mut p = settle(&w);
-        let input = Input { forward: true, sprint: true, ..Default::default() };
+        let input = Input {
+            forward: true,
+            sprint: true,
+            ..Default::default()
+        };
         for _ in 0..100 {
             p.tick(&w, &input);
         }
         let v = p.pos[2] - p.prev_pos[2];
         // 5.612 m/s
-        assert!((v * 20.0 - 5.612).abs() < 0.005, "sprint speed {}", v * 20.0);
+        assert!(
+            (v * 20.0 - 5.612).abs() < 0.005,
+            "sprint speed {}",
+            v * 20.0
+        );
     }
 
     #[test]
@@ -764,7 +863,10 @@ mod tests {
         let w = flat_world();
         let mut p = settle(&w);
         let mut peak = 0.0f64;
-        let input = Input { jump: true, ..Default::default() };
+        let input = Input {
+            jump: true,
+            ..Default::default()
+        };
         p.tick(&w, &input);
         for _ in 0..12 {
             peak = peak.max(p.bb.min[1] - 64.0);
@@ -791,7 +893,11 @@ mod tests {
             p.tick(&w, &Input::default());
         }
         assert!(p.in_water);
-        assert!(p.pos[2] > z0 + 0.5, "not carried by the current: z={}", p.pos[2]);
+        assert!(
+            p.pos[2] > z0 + 0.5,
+            "not carried by the current: z={}",
+            p.pos[2]
+        );
     }
 
     /// MC-455: standing exactly on a block corner must not confuse collision.
@@ -818,11 +924,19 @@ mod tests {
             }
         }
         let mut p = settle(&w);
-        let input = Input { forward: true, sneak: true, ..Default::default() };
+        let input = Input {
+            forward: true,
+            sneak: true,
+            ..Default::default()
+        };
         for _ in 0..200 {
             p.tick(&w, &input);
         }
-        assert!(p.on_ground && p.bb.min[1] == 64.0, "fell off: y={}", p.bb.min[1]);
+        assert!(
+            p.on_ground && p.bb.min[1] == 64.0,
+            "fell off: y={}",
+            p.bb.min[1]
+        );
         assert!(p.pos[2] < 3.31 && p.pos[2] > 2.9, "z={}", p.pos[2]);
     }
 }

@@ -121,7 +121,15 @@ impl Stats {
     ///
     /// `moved_y` is the vertical displacement of this tick, `eye` the
     /// material at eye level, `in_lava` whether the body touches lava.
-    pub fn tick(&mut self, p: &Player, moved: [f64; 3], jumped: bool, eye: Material, in_lava: bool, mode: GameMode) {
+    pub fn tick(
+        &mut self,
+        p: &Player,
+        moved: [f64; 3],
+        jumped: bool,
+        eye: Material,
+        in_lava: bool,
+        mode: GameMode,
+    ) {
         if self.dead {
             self.death_time += 1;
             return;
@@ -187,7 +195,9 @@ impl Stats {
         // Exhaustion from movement (EntityPlayer.addMovementStat) and jumping.
         let horiz = ((moved[0] * moved[0] + moved[2] * moved[2]).sqrt() * 100.0).round() as i32;
         if p.in_water {
-            let total = ((moved[0] * moved[0] + moved[1] * moved[1] + moved[2] * moved[2]).sqrt() * 100.0).round() as i32;
+            let total = ((moved[0] * moved[0] + moved[1] * moved[1] + moved[2] * moved[2]).sqrt()
+                * 100.0)
+                .round() as i32;
             if total > 0 {
                 self.add_exhaustion(0.015f32 * total as f32 * 0.01f32);
             }
@@ -261,10 +271,24 @@ mod tests {
         let mut s = Stats::default();
         let mut p = player();
         for _ in 0..10 {
-            s.tick(&p, [0.0, -1.0, 0.0], false, Material::Air, false, GameMode::Survival);
+            s.tick(
+                &p,
+                [0.0, -1.0, 0.0],
+                false,
+                Material::Air,
+                false,
+                GameMode::Survival,
+            );
         }
         p.on_ground = true;
-        s.tick(&p, [0.0, 0.0, 0.0], false, Material::Air, false, GameMode::Survival);
+        s.tick(
+            &p,
+            [0.0, 0.0, 0.0],
+            false,
+            Material::Air,
+            false,
+            GameMode::Survival,
+        );
         assert_eq!(s.health, 13.0);
         assert_eq!(s.fall_distance, 0.0);
     }
@@ -274,10 +298,24 @@ mod tests {
         let mut s = Stats::default();
         let mut p = player();
         for _ in 0..30 {
-            s.tick(&p, [0.0, -1.0, 0.0], false, Material::Air, false, GameMode::Creative);
+            s.tick(
+                &p,
+                [0.0, -1.0, 0.0],
+                false,
+                Material::Air,
+                false,
+                GameMode::Creative,
+            );
         }
         p.on_ground = true;
-        s.tick(&p, [0.0, 0.0, 0.0], false, Material::Air, false, GameMode::Creative);
+        s.tick(
+            &p,
+            [0.0, 0.0, 0.0],
+            false,
+            Material::Air,
+            false,
+            GameMode::Creative,
+        );
         assert_eq!(s.health, 20.0);
     }
 
@@ -287,10 +325,24 @@ mod tests {
         let mut p = player();
         p.in_water = true;
         for _ in 0..319 {
-            s.tick(&p, [0.0; 3], false, Material::Water, false, GameMode::Survival);
+            s.tick(
+                &p,
+                [0.0; 3],
+                false,
+                Material::Water,
+                false,
+                GameMode::Survival,
+            );
         }
         assert_eq!(s.health, 20.0);
-        s.tick(&p, [0.0; 3], false, Material::Water, false, GameMode::Survival);
+        s.tick(
+            &p,
+            [0.0; 3],
+            false,
+            Material::Water,
+            false,
+            GameMode::Survival,
+        );
         assert_eq!(s.health, 18.0);
     }
 
@@ -308,7 +360,14 @@ mod tests {
         s.health = 10.0;
         let p = Player::new(0.5, 64.0, 0.5);
         for _ in 0..80 {
-            s.tick(&p, [0.0; 3], false, Material::Air, false, GameMode::Survival);
+            s.tick(
+                &p,
+                [0.0; 3],
+                false,
+                Material::Air,
+                false,
+                GameMode::Survival,
+            );
         }
         assert_eq!(s.health, 11.0);
     }

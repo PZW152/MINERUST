@@ -3,19 +3,19 @@
 
 use crate::block::{self, Material};
 use crate::entity::player::{Input, Player};
-use crate::java::JavaRandom;
-use crate::render::atlas::Atlas;
-use crate::render::mesher::{self, ChunkMesh, MeshChunk};
-use crate::render::vk::{Frame, Globals, Renderer};
-use crate::render::{self, Mat4};
-use crate::util::math;
 use crate::entity::survival::{GameMode, Stats};
 use crate::inventory::Slot;
 use crate::item::Stack;
+use crate::java::JavaRandom;
 use crate::play::{InvView, ItemView, Open};
+use crate::render::atlas::Atlas;
 use crate::render::entities;
+use crate::render::mesher::{self, ChunkMesh, MeshChunk};
+use crate::render::vk::{Frame, Globals, Renderer};
+use crate::render::{self, Mat4};
 use crate::screens::{self, MenuAction};
 use crate::sim::{self, Command, Event, Sim, SimConfig, SimHandle};
+use crate::util::math;
 use crate::world::biome::{self, Biome, BiomeNoise};
 use crate::world::BlockView;
 use std::collections::{HashMap, HashSet};
@@ -44,7 +44,9 @@ impl ClientWorld {
     /// `World.getSavedLightValue`
     pub fn light(&self, sky: bool, x: i32, y: i32, z: i32) -> i32 {
         let y = y.clamp(0, 255);
-        let Some(c) = self.chunks.get(&(x >> 4, z >> 4)) else { return if sky { 15 } else { 0 } };
+        let Some(c) = self.chunks.get(&(x >> 4, z >> 4)) else {
+            return if sky { 15 } else { 0 };
+        };
         if c.mc.sections & (1 << (y >> 4)) == 0 {
             let h = c.mc.height[(((z & 15) << 4) | (x & 15)) as usize];
             return if sky && y >= h { 15 } else { 0 };
@@ -59,7 +61,9 @@ impl ClientWorld {
 
     pub fn biome(&self, x: i32, z: i32) -> &'static Biome {
         match self.chunks.get(&(x >> 4, z >> 4)) {
-            Some(c) => biome::get_or_ocean(c.mc.data.biomes[(((z & 15) << 4) | (x & 15)) as usize] as i32),
+            Some(c) => {
+                biome::get_or_ocean(c.mc.data.biomes[(((z & 15) << 4) | (x & 15)) as usize] as i32)
+            }
             None => biome::get_or_ocean(1),
         }
     }
@@ -70,13 +74,17 @@ impl BlockView for ClientWorld {
         if !(0..256).contains(&y) {
             return block::AIR;
         }
-        self.chunks.get(&(x >> 4, z >> 4)).map_or(block::AIR, |c| c.mc.data.blocks[Self::index(x, y, z)])
+        self.chunks
+            .get(&(x >> 4, z >> 4))
+            .map_or(block::AIR, |c| c.mc.data.blocks[Self::index(x, y, z)])
     }
     fn peek_meta(&self, x: i32, y: i32, z: i32) -> u8 {
         if !(0..256).contains(&y) {
             return 0;
         }
-        self.chunks.get(&(x >> 4, z >> 4)).map_or(0, |c| c.mc.data.meta[Self::index(x, y, z)])
+        self.chunks
+            .get(&(x >> 4, z >> 4))
+            .map_or(0, |c| c.mc.data.meta[Self::index(x, y, z)])
     }
     fn loaded(&self, x: i32, z: i32) -> bool {
         self.chunks.contains_key(&(x >> 4, z >> 4))
@@ -195,7 +203,10 @@ pub struct Game {
 }
 
 fn encode_stats(s: &Stats) -> String {
-    format!("{},{},{},{},{},{}", s.health, s.food, s.saturation, s.exhaustion, s.air, s.fire)
+    format!(
+        "{},{},{},{},{},{}",
+        s.health, s.food, s.saturation, s.exhaustion, s.air, s.fire
+    )
 }
 
 fn decode_stats(t: &str) -> Option<Stats> {
@@ -238,9 +249,20 @@ fn hsb_to_rgb(hue: f32, s: f32, b: f32) -> [f32; 3] {
 impl Game {
     pub fn new(renderer: Renderer, atlas: Arc<Atlas>, cfg: &Config) -> Game {
         // The integrated server: world generation, population, block updates.
-        let (server, start) = Sim::new(&SimConfig { seed: cfg.seed, view: cfg.render_distance, save_dir: cfg.save_dir.clone(), start_time: cfg.start_time, freeze_time: cfg.freeze_time, mode: cfg.mode });
+        let (server, start) = Sim::new(&SimConfig {
+            seed: cfg.seed,
+            view: cfg.render_distance,
+            save_dir: cfg.save_dir.clone(),
+            start_time: cfg.start_time,
+            freeze_time: cfg.freeze_time,
+            mode: cfg.mode,
+        });
         let mode = if start.resumed { start.mode } else { cfg.mode };
-        let stats = start.stats.as_deref().and_then(decode_stats).unwrap_or_default();
+        let stats = start
+            .stats
+            .as_deref()
+            .and_then(decode_stats)
+            .unwrap_or_default();
         let sim = sim::spawn(server);
 
         // Meshing workers.
@@ -248,7 +270,11 @@ impl Game {
         let (done_tx, done) = channel::<ChunkMesh>();
         let job_rx = Arc::new(Mutex::new(job_rx));
         let noise = Arc::new(BiomeNoise::new());
-        let threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).saturating_sub(2).clamp(1, 12);
+        let threads = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(4)
+            .saturating_sub(2)
+            .clamp(1, 12);
         for i in 0..threads {
             let rx = job_rx.clone();
             let tx = done_tx.clone();
@@ -293,13 +319,20 @@ impl Game {
             *v = (1.0f32 - f1) / (f1 * 3.0f32 + 1.0f32);
         }
 
-        let center = (math::floor_double(pos[0]) >> 4, math::floor_double(pos[2]) >> 4);
+        let center = (
+            math::floor_double(pos[0]) >> 4,
+            math::floor_double(pos[2]) >> 4,
+        );
         // `--give id:meta:count,...` (the /give command).
         if let Ok(list) = std::env::var("MINERUST_GIVE") {
             for part in list.split(',') {
                 let f: Vec<u32> = part.split(':').filter_map(|x| x.parse().ok()).collect();
                 if f.len() == 3 {
-                    let _ = sim.commands.send(Command::Give(Stack::new(f[0] as u16, f[1] as i32, f[2])));
+                    let _ = sim.commands.send(Command::Give(Stack::new(
+                        f[0] as u16,
+                        f[1] as i32,
+                        f[2],
+                    )));
                 }
             }
         }
@@ -322,7 +355,11 @@ impl Game {
             dirty: HashSet::new(),
             offsets,
             render_distance: r,
-            world_time: if cfg.start_time != 0 || !start.resumed { cfg.start_time.max(start.world_time) } else { start.world_time },
+            world_time: if cfg.start_time != 0 || !start.resumed {
+                cfg.start_time.max(start.world_time)
+            } else {
+                start.world_time
+            },
             freeze_time: cfg.freeze_time,
             last: Instant::now(),
             tick_acc: 0.0,
@@ -341,7 +378,13 @@ impl Game {
             noise: BiomeNoise::new(),
             anim_state: Vec::new(),
             cloud_cell: None,
-            view: InvView { inv: Default::default(), open: Open::None, result: None, tile_slots: Vec::new(), furnace: None },
+            view: InvView {
+                inv: Default::default(),
+                open: Open::None,
+                result: None,
+                tile_slots: Vec::new(),
+                furnace: None,
+            },
             items: Vec::new(),
             stats,
             mode,
@@ -361,14 +404,18 @@ impl Game {
             equipped: None,
             death_sent: false,
             jitter: JavaRandom::new(312871),
-            prev_feet: [0.0; 3],            show_debug: std::env::var_os("MINERUST_F3").is_some(),
+            prev_feet: [0.0; 3],
+            show_debug: std::env::var_os("MINERUST_F3").is_some(),
             fps: 0,
             fps_frames: 0,
             fps_since: Instant::now(),
         }
     }
     pub fn spawn_info(&self) -> String {
-        format!("{:.1} {:.1} {:.1}", self.player.pos[0], self.player.bb.min[1], self.player.pos[2])
+        format!(
+            "{:.1} {:.1} {:.1}",
+            self.player.pos[0], self.player.bb.min[1], self.player.pos[2]
+        )
     }
 
     pub fn loaded_meshes(&self) -> usize {
@@ -395,7 +442,10 @@ impl Game {
                 }
                 _ => {}
             }
-            self.mouse_px = (self.renderer.extent.width as f32 / 2.0 + 40.0, self.renderer.extent.height as f32 / 2.0 - 10.0);
+            self.mouse_px = (
+                self.renderer.extent.width as f32 / 2.0 + 40.0,
+                self.renderer.extent.height as f32 / 2.0 - 10.0,
+            );
         }
     }
 
@@ -405,7 +455,10 @@ impl Game {
     }
 
     fn player_chunk(&self) -> (i32, i32) {
-        (math::floor_double(self.player.pos[0]) >> 4, math::floor_double(self.player.pos[2]) >> 4)
+        (
+            math::floor_double(self.player.pos[0]) >> 4,
+            math::floor_double(self.player.pos[2]) >> 4,
+        )
     }
 
     fn mesh_input(&self, cx: i32, cz: i32) -> Option<Box<[MeshChunk; 9]>> {
@@ -434,7 +487,9 @@ impl Game {
         while let Ok(e) = self.sim.events.try_recv() {
             match e {
                 Event::Chunk { key, chunk, ready } => {
-                    self.world.chunks.insert(key, ClientChunk { mc: chunk, ready });
+                    self.world
+                        .chunks
+                        .insert(key, ClientChunk { mc: chunk, ready });
                     // Faces and light on the border depend on the neighbours.
                     for dx in -1..=1 {
                         for dz in -1..=1 {
@@ -495,7 +550,8 @@ impl Game {
             }
         }
         // Chunks outside the view never get meshed; forget their dirty marks.
-        self.dirty.retain(|k| (k.0 - pcx).abs() <= r && (k.1 - pcz).abs() <= r);
+        self.dirty
+            .retain(|k| (k.0 - pcx).abs() <= r && (k.1 - pcz).abs() <= r);
     }
 
     fn unload_far(&mut self) {
@@ -513,7 +569,11 @@ impl Game {
     /// Saves the world and stops the server thread.
     pub fn shutdown(&mut self) {
         let p = &self.player;
-        let _ = self.sim.commands.send(Command::Player([p.pos[0], p.bb.min[1], p.pos[2]], [p.yaw, p.pitch], p.flying));
+        let _ = self.sim.commands.send(Command::Player(
+            [p.pos[0], p.bb.min[1], p.pos[2]],
+            [p.yaw, p.pitch],
+            p.flying,
+        ));
         self.sim.shutdown();
     }
     fn celestial_angle(&self, partial: f32) -> f32 {
@@ -532,7 +592,13 @@ impl Game {
                 st.0 = 0;
                 st.1 = (st.1 + 1) % a.order.len();
                 let frame = a.order[st.1];
-                self.renderer.queue_tile_update(crate::render::vk::TileUpdate { x: a.x, y: a.y, size: a.size, mips: a.frames[frame].clone() });
+                self.renderer
+                    .queue_tile_update(crate::render::vk::TileUpdate {
+                        x: a.x,
+                        y: a.y,
+                        size: a.size,
+                        mips: a.frames[frame].clone(),
+                    });
             }
         }
     }
@@ -541,12 +607,19 @@ impl Game {
     /// opaque texel of `clouds.png`, only the faces on the outside.
     fn build_clouds(&self, bx: i32, bz: i32) -> Vec<crate::render::mesher::Vertex> {
         use crate::render::mesher::Vertex;
-        let opaque = |i: i32, j: i32| self.atlas.clouds[((((bz + j) & 255) as usize) << 8) | ((bx + i) & 255) as usize];
+        let opaque = |i: i32, j: i32| {
+            self.atlas.clouds[((((bz + j) & 255) as usize) << 8) | ((bx + i) & 255) as usize]
+        };
         let mut v: Vec<Vertex> = Vec::new();
         let mut quad = |p: [[f32; 3]; 4], shade: f32| {
             let c = (shade * 255.0) as u8;
             for pos in p {
-                v.push(Vertex { pos, uv: [0.0; 2], color: [c, c, c, 255], light: [0; 4] });
+                v.push(Vertex {
+                    pos,
+                    uv: [0.0; 2],
+                    color: [c, c, c, 255],
+                    light: [0; 4],
+                });
             }
         };
         for i in -24..40i32 {
@@ -556,19 +629,37 @@ impl Game {
                 }
                 let (x0, x1) = (i as f32 * 12.0, (i + 1) as f32 * 12.0);
                 let (z0, z1) = (j as f32 * 12.0, (j + 1) as f32 * 12.0);
-                quad([[x0, 0.0, z1], [x1, 0.0, z1], [x1, 0.0, z0], [x0, 0.0, z0]], 0.7);
-                quad([[x0, 4.0, z1], [x1, 4.0, z1], [x1, 4.0, z0], [x0, 4.0, z0]], 1.0);
+                quad(
+                    [[x0, 0.0, z1], [x1, 0.0, z1], [x1, 0.0, z0], [x0, 0.0, z0]],
+                    0.7,
+                );
+                quad(
+                    [[x0, 4.0, z1], [x1, 4.0, z1], [x1, 4.0, z0], [x0, 4.0, z0]],
+                    1.0,
+                );
                 if !opaque(i - 1, j) {
-                    quad([[x0, 0.0, z1], [x0, 4.0, z1], [x0, 4.0, z0], [x0, 0.0, z0]], 0.9);
+                    quad(
+                        [[x0, 0.0, z1], [x0, 4.0, z1], [x0, 4.0, z0], [x0, 0.0, z0]],
+                        0.9,
+                    );
                 }
                 if !opaque(i + 1, j) {
-                    quad([[x1, 0.0, z1], [x1, 4.0, z1], [x1, 4.0, z0], [x1, 0.0, z0]], 0.9);
+                    quad(
+                        [[x1, 0.0, z1], [x1, 4.0, z1], [x1, 4.0, z0], [x1, 0.0, z0]],
+                        0.9,
+                    );
                 }
                 if !opaque(i, j - 1) {
-                    quad([[x0, 4.0, z0], [x1, 4.0, z0], [x1, 0.0, z0], [x0, 0.0, z0]], 0.8);
+                    quad(
+                        [[x0, 4.0, z0], [x1, 4.0, z0], [x1, 0.0, z0], [x0, 0.0, z0]],
+                        0.8,
+                    );
                 }
                 if !opaque(i, j + 1) {
-                    quad([[x0, 4.0, z1], [x1, 4.0, z1], [x1, 0.0, z1], [x0, 0.0, z1]], 0.8);
+                    quad(
+                        [[x0, 4.0, z1], [x1, 4.0, z1], [x1, 0.0, z1], [x0, 0.0, z1]],
+                        0.8,
+                    );
                 }
             }
         }
@@ -592,34 +683,65 @@ impl Game {
         self.torch_x += (self.torch_dx - self.torch_x) * 1.0f32;
         self.fog_color2 = self.fog_color1;
         let p = self.player.pos;
-        let (bx, by, bz) = (math::floor_double(p[0]), math::floor_double(p[1]), math::floor_double(p[2]));
+        let (bx, by, bz) = (
+            math::floor_double(p[0]),
+            math::floor_double(p[1]),
+            math::floor_double(p[2]),
+        );
         let sub = sim::skylight_subtracted(self.world_time);
-        let level = (self.world.light(true, bx, by, bz) - sub).max(self.world.light(false, bx, by, bz)).clamp(0, 15);
+        let level = (self.world.light(true, bx, by, bz) - sub)
+            .max(self.world.light(false, bx, by, bz))
+            .clamp(0, 15);
         let f1 = self.light_table[level as usize];
         let f2 = self.render_distance as f32 / 16.0f32;
         // MC-31681: vanilla dims the fog (and the sky behind it) with the
         // light level at the player, so it darkens under trees and indoors.
-        let f3 = if crate::compat::fixed() { 1.0 } else { f1 * (1.0f32 - f2) + f2 };
+        let f3 = if crate::compat::fixed() {
+            1.0
+        } else {
+            f1 * (1.0f32 - f2) + f2
+        };
         self.fog_color1 += (f3 - self.fog_color1) * 0.1f32;
 
         let (pcx, pcz) = self.player_chunk();
         if self.ticks % 20 == 0 {
             let p = &self.player;
-            let _ = self.sim.commands.send(Command::Player([p.pos[0], p.bb.min[1], p.pos[2]], [p.yaw, p.pitch], p.flying));
+            let _ = self.sim.commands.send(Command::Player(
+                [p.pos[0], p.bb.min[1], p.pos[2]],
+                [p.yaw, p.pitch],
+                p.flying,
+            ));
         }
-        let before = [self.player.pos[0], self.player.bb.min[1], self.player.pos[2]];
+        let before = [
+            self.player.pos[0],
+            self.player.bb.min[1],
+            self.player.pos[2],
+        ];
         if self.world.loaded(pcx << 4, pcz << 4) && !self.stats.dead {
-            let input = if self.screen == Screen::Playing { self.input } else { Input::default() };
+            let input = if self.screen == Screen::Playing {
+                self.input
+            } else {
+                Input::default()
+            };
             self.player.tick(&self.world, &input);
         } else {
             self.player.prev_pos = self.player.pos;
         }
-        let after = [self.player.pos[0], self.player.bb.min[1], self.player.pos[2]];
-        let moved = [after[0] - before[0], after[1] - before[1], after[2] - before[2]];
+        let after = [
+            self.player.pos[0],
+            self.player.bb.min[1],
+            self.player.pos[2],
+        ];
+        let moved = [
+            after[0] - before[0],
+            after[1] - before[1],
+            after[2] - before[2],
+        ];
         let eye_mat = self.player.eye_material(&self.world, self.player.pos);
         let lava = self.player.in_lava_now;
         let jumped = self.player.jumped;
-        self.stats.tick(&self.player, moved, jumped, eye_mat, lava, self.mode);
+        self.stats
+            .tick(&self.player, moved, jumped, eye_mat, lava, self.mode);
         if self.stats.dead && !self.death_sent {
             self.death_sent = true;
             let _ = self.sim.commands.send(Command::Died);
@@ -629,17 +751,27 @@ impl Game {
         }
         {
             let p = &self.player;
-            let _ = self.sim.commands.send(Command::Player(after, [p.yaw, p.pitch], p.flying));
+            let _ = self
+                .sim
+                .commands
+                .send(Command::Player(after, [p.yaw, p.pitch], p.flying));
         }
         if self.ticks % 100 == 0 {
-            let _ = self.sim.commands.send(Command::Stats(encode_stats(&self.stats)));
+            let _ = self
+                .sim
+                .commands
+                .send(Command::Stats(encode_stats(&self.stats)));
         }
         // Digging, right-click repeat, arm swing, equip animation.
         self.tick_digging();
         if self.right_delay > 0 {
             self.right_delay -= 1;
         }
-        if self.right_down && self.right_delay == 0 && self.screen == Screen::Playing && !self.stats.dead {
+        if self.right_down
+            && self.right_delay == 0
+            && self.screen == Screen::Playing
+            && !self.stats.dead
+        {
             self.use_item();
         }
         self.prev_swing_f = self.swing_f;
@@ -649,7 +781,11 @@ impl Game {
                 self.swing = -1;
             }
         }
-        self.swing_f = if self.swing >= 0 { self.swing as f32 / 6.0 } else { 0.0 };
+        self.swing_f = if self.swing >= 0 {
+            self.swing as f32 / 6.0
+        } else {
+            0.0
+        };
         if self.prev_swing_f > self.swing_f && self.swing < 0 {
             self.prev_swing_f = 0.0;
         }
@@ -673,7 +809,11 @@ impl Game {
     fn eye(&self, partial: f32) -> [f64; 3] {
         let (a, b) = (self.player.prev_pos, self.player.pos);
         let t = partial as f64;
-        [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t]
+        [
+            a[0] + (b[0] - a[0]) * t,
+            a[1] + (b[1] - a[1]) * t,
+            a[2] + (b[2] - a[2]) * t,
+        ]
     }
 
     /// `Entity.getLook`
@@ -690,7 +830,11 @@ impl Game {
     fn pick(&self, eye: [f64; 3]) -> Option<([i32; 3], [i32; 3])> {
         let d = self.look();
         let reach = 4.5f64;
-        let mut cell = [math::floor_double(eye[0]), math::floor_double(eye[1]), math::floor_double(eye[2])];
+        let mut cell = [
+            math::floor_double(eye[0]),
+            math::floor_double(eye[1]),
+            math::floor_double(eye[2]),
+        ];
         let mut t_max = [0f64; 3];
         let mut t_delta = [0f64; 3];
         let mut step = [0i32; 3];
@@ -736,12 +880,18 @@ impl Game {
     }
 
     fn gui_mouse(&self) -> (f32, f32) {
-        (self.mouse_px.0 / self.gui_scale, self.mouse_px.1 / self.gui_scale)
+        (
+            self.mouse_px.0 / self.gui_scale,
+            self.mouse_px.1 / self.gui_scale,
+        )
     }
 
     fn gui_size(&self) -> (f32, f32) {
         let e = self.renderer.extent;
-        (e.width as f32 / self.gui_scale, e.height as f32 / self.gui_scale)
+        (
+            e.width as f32 / self.gui_scale,
+            e.height as f32 / self.gui_scale,
+        )
     }
 
     /// `EntityLivingBase.swingItem`
@@ -777,7 +927,8 @@ impl Game {
         }
         let id = self.world.peek_block(pos[0], pos[1], pos[2]);
         let in_water = self.player.eye_material(&self.world, self.eye(0.0)) == Material::Water;
-        let step = crate::item::break_progress(self.view.inv.held(), id, in_water, self.player.on_ground);
+        let step =
+            crate::item::break_progress(self.view.inv.held(), id, in_water, self.player.on_ground);
         match self.dig {
             Some(d) if d.pos == pos => {
                 let damage = d.damage + step;
@@ -805,7 +956,11 @@ impl Game {
     fn use_item(&mut self) {
         if let Some((b, n)) = self.selected {
             if n != [0, 0, 0] {
-                let _ = self.sim.commands.send(Command::Use { target: b, face: n, sneaking: self.input.sneak });
+                let _ = self.sim.commands.send(Command::Use {
+                    target: b,
+                    face: n,
+                    sneaking: self.input.sneak,
+                });
                 self.swing_item();
             }
         }
@@ -817,7 +972,12 @@ impl Game {
         let (left, top, xs, ys, slots) = screens::layout(&self.view, w, h);
         let (mx, my) = self.gui_mouse();
         let inside = mx >= left && my >= top && mx < left + xs && my < top + ys;
-        let hit = slots.into_iter().find(|s| mx >= left + s.x - 1.0 && mx < left + s.x + 17.0 && my >= top + s.y - 1.0 && my < top + s.y + 17.0);
+        let hit = slots.into_iter().find(|s| {
+            mx >= left + s.x - 1.0
+                && mx < left + s.x + 17.0
+                && my >= top + s.y - 1.0
+                && my < top + s.y + 17.0
+        });
         (inside, hit)
     }
 
@@ -870,10 +1030,20 @@ impl Game {
                 if button <= 1 {
                     match hit {
                         Some(s) => {
-                            let _ = self.sim.commands.send(Command::Click { slot: s.slot, tile: s.tile, right: button == 1, shift });
+                            let _ = self.sim.commands.send(Command::Click {
+                                slot: s.slot,
+                                tile: s.tile,
+                                right: button == 1,
+                                shift,
+                            });
                         }
                         None if !inside => {
-                            let _ = self.sim.commands.send(Command::Click { slot: Slot::Outside, tile: None, right: button == 1, shift: false });
+                            let _ = self.sim.commands.send(Command::Click {
+                                slot: Slot::Outside,
+                                tile: None,
+                                right: button == 1,
+                                shift: false,
+                            });
                         }
                         None => {}
                     }
@@ -927,7 +1097,17 @@ impl Game {
                 Request::None
             }
             (Screen::Playing, _) => {
-                let digits = [K::Digit1, K::Digit2, K::Digit3, K::Digit4, K::Digit5, K::Digit6, K::Digit7, K::Digit8, K::Digit9];
+                let digits = [
+                    K::Digit1,
+                    K::Digit2,
+                    K::Digit3,
+                    K::Digit4,
+                    K::Digit5,
+                    K::Digit6,
+                    K::Digit7,
+                    K::Digit8,
+                    K::Digit9,
+                ];
                 if let Some(i) = digits.iter().position(|d| *d == code) {
                     let _ = self.sim.commands.send(Command::Select(i));
                     self.view.inv.selected = i;
@@ -1016,16 +1196,28 @@ impl Game {
         let rd = self.render_distance as f32;
         let angle = self.celestial_angle(partial);
         let day = (math::cos(angle * math::PI * 2.0f32) * 2.0f32 + 0.5f32).clamp(0.0, 1.0);
-        let (ex, ey, ez) = (math::floor_double(eye[0]), math::floor_double(eye[1]), math::floor_double(eye[2]));
+        let (ex, ey, ez) = (
+            math::floor_double(eye[0]),
+            math::floor_double(eye[1]),
+            math::floor_double(eye[2]),
+        );
         let b = self.world.biome(ex, ez);
         let temp = b.float_temperature(&self.noise, ex, ey, ez);
         let t = (temp / 3.0f32).clamp(-1.0, 1.0);
         let sky_rgb = hsb_to_rgb(0.62222224f32 - t * 0.05f32, 0.5f32 + t * 0.1f32, 1.0);
         let sky = [sky_rgb[0] * day, sky_rgb[1] * day, sky_rgb[2] * day];
-        let mut fog = [0.7529412f32 * (day * 0.94f32 + 0.06f32), 0.84705883f32 * (day * 0.94f32 + 0.06f32), 1.0f32 * (day * 0.91f32 + 0.09f32)];
+        let mut fog = [
+            0.7529412f32 * (day * 0.94f32 + 0.06f32),
+            0.84705883f32 * (day * 0.94f32 + 0.06f32),
+            1.0f32 * (day * 0.91f32 + 0.09f32),
+        ];
         let look = self.look();
         if self.render_distance >= 4 {
-            let sun_side = if math::sin(angle * math::PI * 2.0f32) > 0.0 { -1.0 } else { 1.0 };
+            let sun_side = if math::sin(angle * math::PI * 2.0f32) > 0.0 {
+                -1.0
+            } else {
+                1.0
+            };
             let mut f5 = (look[0] * sun_side) as f32;
             if f5 < 0.0 {
                 f5 = 0.0;
@@ -1069,7 +1261,12 @@ impl Game {
 
         // --- Fog range (EntityRenderer.setupFog) ---
         let mut far = rd * 16.0f32;
-        let sky_light = self.world.light(true, ex, math::floor_double(self.player.bb.min[1] + 1.8f32 as f64 * 0.66), ez);
+        let sky_light = self.world.light(
+            true,
+            ex,
+            math::floor_double(self.player.bb.min[1] + 1.8f32 as f64 * 0.66),
+            ez,
+        );
         let dv = sky_light as f64 / 16.0 + (eye[1] + 4.0) / 32.0;
         if dv < 1.0 {
             let d = dv.max(0.0);
@@ -1088,7 +1285,8 @@ impl Game {
         };
 
         // --- Camera (EntityRenderer.setupCameraTransform) ---
-        let mut fov = 70.0f32 * (self.fov_hand_prev + (self.fov_hand - self.fov_hand_prev) * partial);
+        let mut fov =
+            70.0f32 * (self.fov_hand_prev + (self.fov_hand - self.fov_hand_prev) * partial);
         if eye_mat == Material::Water {
             fov = fov * 60.0f32 / 70.0f32;
         }
@@ -1111,9 +1309,16 @@ impl Game {
             let f = math::sin(f * f * f * f * math::PI);
             hurt = render::mul(&hurt, &render::rot_z(-f * 14.0f32));
         }
-        let mut bob: Mat4 = render::translate(math::sin(b1 * math::PI) * b2 * 0.5f32, -(math::cos(b1 * math::PI) * b2).abs(), 0.0);
+        let mut bob: Mat4 = render::translate(
+            math::sin(b1 * math::PI) * b2 * 0.5f32,
+            -(math::cos(b1 * math::PI) * b2).abs(),
+            0.0,
+        );
         bob = render::mul(&bob, &render::rot_z(math::sin(b1 * math::PI) * b2 * 3.0f32));
-        bob = render::mul(&bob, &render::rot_x((math::cos(b1 * math::PI - 0.2f32) * b2).abs() * 5.0f32));
+        bob = render::mul(
+            &bob,
+            &render::rot_x((math::cos(b1 * math::PI - 0.2f32) * b2).abs() * 5.0f32),
+        );
         let shake = render::mul(&hurt, &bob);
         let mut view: Mat4 = shake;
         view = render::mul(&view, &render::rot_x(b3));
@@ -1128,7 +1333,8 @@ impl Game {
         let moon_phase = ((self.world_time / 24000) % 8) as usize;
         // --- Sky extras (RenderGlobal.renderSky / renderCloudsFancy) ---
         let star = {
-            let f = (1.0f32 - (math::cos(angle * math::PI * 2.0f32) * 2.0f32 + 0.25f32)).clamp(0.0, 1.0);
+            let f = (1.0f32 - (math::cos(angle * math::PI * 2.0f32) * 2.0f32 + 0.25f32))
+                .clamp(0.0, 1.0);
             f * f * 0.5f32
         };
         let sunrise = {
@@ -1137,7 +1343,10 @@ impl Game {
                 let c = f3 / 0.4f32 * 0.5f32 + 0.5f32;
                 let mut a = 1.0f32 - (1.0f32 - math::sin(c * math::PI)) * 0.99f32;
                 a *= a;
-                Some(([c * 0.3f32 + 0.7f32, c * c * 0.7f32 + 0.2f32, 0.2f32, a], math::sin(angle * math::PI * 2.0f32) < 0.0))
+                Some((
+                    [c * 0.3f32 + 0.7f32, c * c * 0.7f32 + 0.2f32, 0.2f32, a],
+                    math::sin(angle * math::PI * 2.0f32) < 0.0,
+                ))
             } else {
                 None
             }
@@ -1155,13 +1364,28 @@ impl Game {
                 self.cloud_cell = Some((bx, bz));
             }
             let y = 128.0f32 - eye[1] as f32 + 0.33f32;
-            let color = [day * 0.9f32 + 0.1f32, day * 0.9f32 + 0.1f32, day * 0.85f32 + 0.15f32];
-            crate::render::vk::CloudDraw { offset: [-((cx - bx as f64) * 12.0) as f32, y, -((cz - bz as f64) * 12.0) as f32], color, before_terrain: eye[1] < 128.0 }
+            let color = [
+                day * 0.9f32 + 0.1f32,
+                day * 0.9f32 + 0.1f32,
+                day * 0.85f32 + 0.15f32,
+            ];
+            crate::render::vk::CloudDraw {
+                offset: [
+                    -((cx - bx as f64) * 12.0) as f32,
+                    y,
+                    -((cz - bz as f64) * 12.0) as f32,
+                ],
+                color,
+                before_terrain: eye[1] < 128.0,
+            }
         };
         let mut g = Globals {
             view_proj,
             sky_rot: render::mul(&render::rot_y(-90.0), &render::rot_x(angle * 360.0)),
-            hand_proj: render::mul(&render::perspective(70.0, aspect, 0.05, rd * 16.0 * 2.0), &shake),
+            hand_proj: render::mul(
+                &render::perspective(70.0, aspect, 0.05, rd * 16.0 * 2.0),
+                &shake,
+            ),
             cam_right: row(0, tan * aspect),
             cam_up: row(1, tan),
             cam_fwd: row(2, -1.0),
@@ -1172,7 +1396,12 @@ impl Game {
             sky_params: [far * 0.8f32, 1.0, 0.0, 0.0],
             sun_rect: self.atlas.rects[self.atlas.sun as usize],
             moon_rect: self.atlas.rects[self.atlas.moon[moon_phase] as usize],
-            void_color: [sky[0] * 0.2f32 + 0.04f32, sky[1] * 0.2f32 + 0.04f32, sky[2] * 0.6f32 + 0.1f32, 1.0],
+            void_color: [
+                sky[0] * 0.2f32 + 0.04f32,
+                sky[1] * 0.2f32 + 0.04f32,
+                sky[2] * 0.6f32 + 0.1f32,
+                1.0,
+            ],
             lightmap: [[0.0; 4]; 256],
         };
         self.lightmap(&mut g.lightmap);
@@ -1195,35 +1424,83 @@ impl Game {
         let mut dynamic: Vec<crate::render::mesher::Vertex> = Vec::new();
         for it in &self.items {
             let t = partial as f64;
-            let p = [it.prev[0] + (it.pos[0] - it.prev[0]) * t, it.prev[1] + (it.pos[1] - it.prev[1]) * t, it.prev[2] + (it.pos[2] - it.prev[2]) * t];
-            let rel = [(p[0] - eye[0]) as f32, (p[1] - eye[1]) as f32, (p[2] - eye[2]) as f32];
+            let p = [
+                it.prev[0] + (it.pos[0] - it.prev[0]) * t,
+                it.prev[1] + (it.pos[1] - it.prev[1]) * t,
+                it.prev[2] + (it.pos[2] - it.prev[2]) * t,
+            ];
+            let rel = [
+                (p[0] - eye[0]) as f32,
+                (p[1] - eye[1]) as f32,
+                (p[2] - eye[2]) as f32,
+            ];
             if rel[0] * rel[0] + rel[2] * rel[2] > (rd * 16.0) * (rd * 16.0) {
                 continue;
             }
-            let (lx, ly, lz) = (math::floor_double(p[0]), math::floor_double(p[1]), math::floor_double(p[2]));
-            let light = (self.world.light(true, lx, ly, lz), self.world.light(false, lx, ly, lz));
-            entities::item_entity(&mut dynamic, &self.atlas, &it.stack, [rel[0], rel[1] - 0.125, rel[2]], it.age as f32 + partial, it.hover, self.player.yaw, light);
+            let (lx, ly, lz) = (
+                math::floor_double(p[0]),
+                math::floor_double(p[1]),
+                math::floor_double(p[2]),
+            );
+            let light = (
+                self.world.light(true, lx, ly, lz),
+                self.world.light(false, lx, ly, lz),
+            );
+            entities::item_entity(
+                &mut dynamic,
+                &self.atlas,
+                &it.stack,
+                [rel[0], rel[1] - 0.125, rel[2]],
+                it.age as f32 + partial,
+                it.hover,
+                self.player.yaw,
+                light,
+            );
         }
         let mut crack: Vec<crate::render::mesher::Vertex> = Vec::new();
         if let Some(d) = self.dig {
             let stage = (d.damage * 10.0) as i32 - 1;
             if stage >= 0 {
                 let id = self.world.peek_block(d.pos[0], d.pos[1], d.pos[2]);
-                let b = block::collision_box(id, self.world.peek_meta(d.pos[0], d.pos[1], d.pos[2])).unwrap_or([0.0, 0.0, 0.0, 1.0, 1.0, 1.0]);
-                let rel = [(d.pos[0] as f64 - eye[0]) as f32, (d.pos[1] as f64 - eye[1]) as f32, (d.pos[2] as f64 - eye[2]) as f32];
+                let w = &self.world;
+                let get = |x: i32, y: i32, z: i32| (w.peek_block(x, y, z), w.peek_meta(x, y, z));
+                let b = crate::shapes::selection(
+                    &get,
+                    id,
+                    w.peek_meta(d.pos[0], d.pos[1], d.pos[2]),
+                    d.pos[0],
+                    d.pos[1],
+                    d.pos[2],
+                );
+                let rel = [
+                    (d.pos[0] as f64 - eye[0]) as f32,
+                    (d.pos[1] as f64 - eye[1]) as f32,
+                    (d.pos[2] as f64 - eye[2]) as f32,
+                ];
                 entities::crack(&mut crack, &self.atlas, stage as usize, rel, b);
             }
         }
         let mut hand: Vec<crate::render::mesher::Vertex> = Vec::new();
         if !self.stats.dead {
-            let (lx, ly, lz) = (math::floor_double(eye[0]), math::floor_double(eye[1]), math::floor_double(eye[2]));
-            let light = (self.world.light(true, lx, ly, lz), self.world.light(false, lx, ly, lz));
+            let (lx, ly, lz) = (
+                math::floor_double(eye[0]),
+                math::floor_double(eye[1]),
+                math::floor_double(eye[2]),
+            );
+            let light = (
+                self.world.light(true, lx, ly, lz),
+                self.world.light(false, lx, ly, lz),
+            );
             let equip = self.prev_equip + (self.equip - self.prev_equip) * partial;
             let swing = self.prev_swing_f + (self.swing_f - self.prev_swing_f) * partial;
             entities::hand(&mut hand, &self.atlas, self.equipped, equip, swing, light);
         }
 
-        let mut ui = crate::gui::Ui::new(&self.atlas, window_size.0 as f32 / scale as f32, window_size.1 as f32 / scale as f32);
+        let mut ui = crate::gui::Ui::new(
+            &self.atlas,
+            window_size.0 as f32 / scale as f32,
+            window_size.1 as f32 / scale as f32,
+        );
         screens::hotbar(&mut ui, &self.view.inv);
         if self.mode == GameMode::Survival {
             let under = eye_mat == Material::Water;
@@ -1234,23 +1511,70 @@ impl Game {
         }
         if self.show_debug {
             let p = &self.player;
-            let (fx, fy, fz) = (math::floor_double(p.pos[0]), math::floor_double(p.bb.min[1]), math::floor_double(p.pos[2]));
-            let facing = (math::floor_double((p.yaw * 4.0f32 / 360.0f32) as f64 + 0.5) & 3) as usize;
+            let (fx, fy, fz) = (
+                math::floor_double(p.pos[0]),
+                math::floor_double(p.bb.min[1]),
+                math::floor_double(p.pos[2]),
+            );
+            let facing =
+                (math::floor_double((p.yaw * 4.0f32 / 360.0f32) as f64 + 0.5) & 3) as usize;
             let left = vec![
-                format!("Minecraft 1.7.10 ({} fps, {} chunk updates)", self.fps, self.in_flight),
-                format!("C: {}/{}. F: 0, O: 0, E: 0", self.renderer.mesh_count(), self.world.chunks.len()),
+                format!(
+                    "Minecraft 1.7.10 ({} fps, {} chunk updates)",
+                    self.fps, self.in_flight
+                ),
+                format!(
+                    "C: {}/{}. F: 0, O: 0, E: 0",
+                    self.renderer.mesh_count(),
+                    self.world.chunks.len()
+                ),
                 String::new(),
-                format!("x: {:.5} ({}) // c: {} ({})", p.pos[0], fx, fx >> 4, fx & 15),
+                format!(
+                    "x: {:.5} ({}) // c: {} ({})",
+                    p.pos[0],
+                    fx,
+                    fx >> 4,
+                    fx & 15
+                ),
                 format!("y: {:.3} (feet pos, {:.3} eyes pos)", p.bb.min[1], p.pos[1]),
-                format!("z: {:.5} ({}) // c: {} ({})", p.pos[2], fz, fz >> 4, fz & 15),
-                format!("f: {} ({}) / {:.5}", facing, ["SOUTH", "WEST", "NORTH", "EAST"][facing], math::wrap_angle_180(p.yaw)),
-                format!("lc: {} b: {} bl: {} sl: {} rl: {}", 0, self.world.biome(fx, fz).name, self.world.light(false, fx, fy, fz), self.world.light(true, fx, fy, fz), self.world.light(true, fx, fy, fz).max(self.world.light(false, fx, fy, fz))),
-                format!("ws: {:.3}, fs: {:.3}, g: {}, fl: {}", 0.1, 0.05, p.on_ground, 0),
+                format!(
+                    "z: {:.5} ({}) // c: {} ({})",
+                    p.pos[2],
+                    fz,
+                    fz >> 4,
+                    fz & 15
+                ),
+                format!(
+                    "f: {} ({}) / {:.5}",
+                    facing,
+                    ["SOUTH", "WEST", "NORTH", "EAST"][facing],
+                    math::wrap_angle_180(p.yaw)
+                ),
+                format!(
+                    "lc: {} b: {} bl: {} sl: {} rl: {}",
+                    0,
+                    self.world.biome(fx, fz).name,
+                    self.world.light(false, fx, fy, fz),
+                    self.world.light(true, fx, fy, fz),
+                    self.world
+                        .light(true, fx, fy, fz)
+                        .max(self.world.light(false, fx, fy, fz))
+                ),
+                format!(
+                    "ws: {:.3}, fs: {:.3}, g: {}, fl: {}",
+                    0.1, 0.05, p.on_ground, 0
+                ),
             ];
-            let right = vec![format!("Seed: {}", self.seed), format!("Time: {}", self.world_time)];
+            let right = vec![
+                format!("Seed: {}", self.seed),
+                format!("Time: {}", self.world_time),
+            ];
             crate::gui::debug_overlay(&mut ui, &left, &right);
         }
-        let m = (self.mouse_px.0 / scale as f32, self.mouse_px.1 / scale as f32);
+        let m = (
+            self.mouse_px.0 / scale as f32,
+            self.mouse_px.1 / scale as f32,
+        );
         match self.screen {
             Screen::Window => {
                 screens::container(&mut ui, &self.view, m);
@@ -1264,8 +1588,26 @@ impl Game {
             Screen::Playing => {}
         }
         let ui_verts = ui.v;
-        let outline = if self.screen == Screen::Playing { self.selected.map(|s| s.0) } else { None };
-        let frame = Frame { crosshair: self.screen == Screen::Playing, dynamic: &dynamic, crack: &crack, hand: &hand, ui: &ui_verts, globals: &g, cam: eye, outline, gui_scale: scale as f32, screenshot: self.screenshot.take(), star_brightness: star, sunrise, clouds: Some(clouds) };
+        let outline = if self.screen == Screen::Playing {
+            self.selected.map(|s| s.0)
+        } else {
+            None
+        };
+        let frame = Frame {
+            crosshair: self.screen == Screen::Playing,
+            dynamic: &dynamic,
+            crack: &crack,
+            hand: &hand,
+            ui: &ui_verts,
+            globals: &g,
+            cam: eye,
+            outline,
+            gui_scale: scale as f32,
+            screenshot: self.screenshot.take(),
+            star_brightness: star,
+            sunrise,
+            clouds: Some(clouds),
+        };
         self.renderer.render(&frame, window_size);
     }
 }

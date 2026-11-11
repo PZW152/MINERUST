@@ -10,6 +10,7 @@
 use crate::block::{self, Material};
 use crate::entity::survival::GameMode;
 use crate::inventory::{Inventory, Slot};
+use crate::java::JavaRandom;
 use crate::play::{InvView, ItemView, Open, Play};
 use crate::render::mesher::MeshChunk;
 use crate::world::save::{self, Level};
@@ -29,18 +30,33 @@ pub enum Command {
     /// The player's chunk; loading is centred on it.
     Center(i32, i32),
     Break([i32; 3]),
-    Place { pos: [i32; 3], id: u8, meta: i32 },
+    Place {
+        pos: [i32; 3],
+        id: u8,
+        meta: i32,
+    },
     /// Position, rotation and flying state, kept for the save file.
     Player([f64; 3], [f32; 2], bool),
     /// Survival digging finished (or a creative click) at the block.
     Dig([i32; 3]),
     /// Right click on a block face.
-    Use { target: [i32; 3], face: [i32; 3], sneaking: bool },
+    Use {
+        target: [i32; 3],
+        face: [i32; 3],
+        sneaking: bool,
+    },
     Select(usize),
-    Click { slot: Slot, tile: Option<usize>, right: bool, shift: bool },
+    Click {
+        slot: Slot,
+        tile: Option<usize>,
+        right: bool,
+        shift: bool,
+    },
     OpenInventory,
     CloseWindow,
-    DropHeld { all: bool },
+    DropHeld {
+        all: bool,
+    },
     PickBlock(u8, i32),
     SetMode(GameMode),
     /// Health, food and the like, encoded by the client for the save file.
@@ -56,7 +72,11 @@ pub enum Command {
 pub enum Event {
     /// A chunk appeared or changed. `ready` means nothing unpopulated can
     /// still write into it, so it may be meshed.
-    Chunk { key: (i32, i32), chunk: MeshChunk, ready: bool },
+    Chunk {
+        key: (i32, i32),
+        chunk: MeshChunk,
+        ready: bool,
+    },
     /// The chunk left the client's range.
     Unload((i32, i32)),
     Inventory(Box<InvView>),
@@ -132,6 +152,16 @@ impl Sim {
         let provider = Arc::new(ChunkProvider::new(seed));
         let mut world = ServerWorld::new(provider);
         world.save_dir = cfg.save_dir.clone();
+        if let Some(d) = &cfg.save_dir {
+            // data/structures.txt: the MapGenStructureData of vanilla.
+            if let Ok(text) = std::fs::read_to_string(d.join("data").join("structures.txt")) {
+                if let Some(st) = world.structures.as_mut() {
+                    if st.load(text.trim()).is_none() {
+                        eprintln!("structure data is damaged; structures will be re-derived");
+                    }
+                }
+            }
+        }
         let mut sim = Sim {
             world,
             centre: (0, 0),
@@ -155,7 +185,12 @@ impl Sim {
                 for t in &l.ticks {
                     sim.world.restore_tick(t.0, t.1, t.2, t.3, t.4);
                 }
-                sim.unknown_level_keys = l.unknown.iter().filter(|(k, _)| !PLAY_KEYS.contains(&k.as_str())).cloned().collect();
+                sim.unknown_level_keys = l
+                    .unknown
+                    .iter()
+                    .filter(|(k, _)| !PLAY_KEYS.contains(&k.as_str()))
+                    .cloned()
+                    .collect();
                 let mut spawn = None;
                 for (k, v) in &l.unknown {
                     match k.as_str() {
@@ -164,7 +199,13 @@ impl Sim {
                                 sim.play.inv = inv;
                             }
                         }
-                        "mode" => sim.play.mode = if v == "creative" { GameMode::Creative } else { GameMode::Survival },
+                        "mode" => {
+                            sim.play.mode = if v == "creative" {
+                                GameMode::Creative
+                            } else {
+                                GameMode::Survival
+                            }
+                        }
                         "tile" => {
                             let _ = sim.play.decode_tile(v);
                         }
@@ -184,16 +225,37 @@ impl Sim {
                     None => sim.find_spawn(),
                 };
                 let (pos, rot, flying) = l.player.unwrap_or((sim.spawn, [0.0, 0.0], false));
-                Start { pos, rot, flying, world_time: l.world_time, seed, resumed: true, mode: sim.play.mode, stats: sim.stats.clone() }
+                Start {
+                    pos,
+                    rot,
+                    flying,
+                    world_time: l.world_time,
+                    seed,
+                    resumed: true,
+                    mode: sim.play.mode,
+                    stats: sim.stats.clone(),
+                }
             }
             None => {
                 let pos = sim.find_spawn();
                 sim.spawn = pos;
-                Start { pos, rot: [0.0, 0.0], flying: false, world_time: cfg.start_time, seed, resumed: false, mode: sim.play.mode, stats: None }
+                Start {
+                    pos,
+                    rot: [0.0, 0.0],
+                    flying: false,
+                    world_time: cfg.start_time,
+                    seed,
+                    resumed: false,
+                    mode: sim.play.mode,
+                    stats: None,
+                }
             }
         };
         sim.play.player = (start.pos, start.rot[0]);
-        sim.centre = ((start.pos[0].floor() as i32) >> 4, (start.pos[2].floor() as i32) >> 4);
+        sim.centre = (
+            (start.pos[0].floor() as i32) >> 4,
+            (start.pos[2].floor() as i32) >> 4,
+        );
         (sim, start)
     }
 
@@ -236,8 +298,13 @@ impl Sim {
         let (px, pz) = (sx as f64 + 0.5, sz as f64 + 0.5);
         // Move up while the bounding box is obstructed.
         loop {
-            let bb = crate::entity::player::Aabb { min: [px - 0.3, y as f64, pz - 0.3], max: [px + 0.3, y as f64 + 1.8, pz + 0.3] };
-            if crate::entity::player::colliding_boxes(&*world as &dyn BlockView, &bb).is_empty() || y >= 255 {
+            let bb = crate::entity::player::Aabb {
+                min: [px - 0.3, y as f64, pz - 0.3],
+                max: [px + 0.3, y as f64 + 1.8, pz + 0.3],
+            };
+            if crate::entity::player::colliding_boxes(&*world as &dyn BlockView, &bb).is_empty()
+                || y >= 255
+            {
                 break;
             }
             y += 1;
@@ -259,7 +326,11 @@ impl Sim {
 
     fn snapshot(&self, key: (i32, i32)) -> Option<MeshChunk> {
         let c = self.world.chunks.get(&key)?;
-        Some(MeshChunk { data: c.data.clone(), sections: c.sections, height: Box::new(c.height) })
+        Some(MeshChunk {
+            data: c.data.clone(),
+            sections: c.sections,
+            height: Box::new(c.height),
+        })
     }
 
     /// Applies one player command with server-side validation.
@@ -290,8 +361,15 @@ impl Sim {
                 if !w.can_place_block_at(id, p[0], p[1], p[2]) {
                     return;
                 }
-                let needs_support = matches!(block::info(id).material, Material::Plants | Material::Vine | Material::Cactus);
-                if needs_support && id != block::DOUBLE_PLANT && id != block::VINE && !w.can_block_stay(id, p[0], p[1], p[2]) {
+                let needs_support = matches!(
+                    block::info(id).material,
+                    Material::Plants | Material::Vine | Material::Cactus
+                );
+                if needs_support
+                    && id != block::DOUBLE_PLANT
+                    && id != block::VINE
+                    && !w.can_block_stay(id, p[0], p[1], p[2])
+                {
                     return;
                 }
                 if id == block::DOUBLE_PLANT {
@@ -306,7 +384,11 @@ impl Sim {
                 play.dig(&mut self.world, p);
                 self.play = play;
             }
-            Command::Use { target, face, sneaking } => {
+            Command::Use {
+                target,
+                face,
+                sneaking,
+            } => {
                 let mut play = std::mem::replace(&mut self.play, Play::new(GameMode::Survival));
                 play.use_block(&mut self.world, target, face, sneaking);
                 self.play = play;
@@ -317,7 +399,12 @@ impl Sim {
                     self.play.inv_dirty = true;
                 }
             }
-            Command::Click { slot, tile, right, shift } => {
+            Command::Click {
+                slot,
+                tile,
+                right,
+                shift,
+            } => {
                 if self.play.open != Open::None {
                     let mut play = std::mem::replace(&mut self.play, Play::new(GameMode::Survival));
                     play.click(&mut self.world, slot, tile, right, shift);
@@ -348,7 +435,8 @@ impl Sim {
             Command::Died => {
                 let mut play = std::mem::replace(&mut self.play, Play::new(GameMode::Survival));
                 if play.mode == GameMode::Survival {
-                    let mut rnd = std::mem::replace(&mut self.world.rand, crate::java::JavaRandom::new(0));
+                    let mut rnd =
+                        std::mem::replace(&mut self.world.rand, crate::java::JavaRandom::new(0));
                     play.close(&mut self.world);
                     for i in 0..crate::inventory::MAIN {
                         if let Some(st) = play.inv.main[i].take() {
@@ -389,10 +477,23 @@ impl Sim {
         // Generate the new ones in parallel; the terrain of a chunk depends
         // only on the seed and its coordinates.
         let provider = self.world.provider.clone();
-        let fresh: Vec<(i32, i32)> = wanted.iter().copied().filter(|k| !self.world.is_stored(k.0, k.1)).collect();
+        let fresh: Vec<(i32, i32)> = wanted
+            .iter()
+            .copied()
+            .filter(|k| !self.world.is_stored(k.0, k.1))
+            .collect();
         let generated: Vec<ChunkData> = std::thread::scope(|s| {
-            let handles: Vec<_> = fresh.iter().map(|&(cx, cz)| { let p = provider.clone(); s.spawn(move || p.provide_chunk(cx, cz)) }).collect();
-            handles.into_iter().map(|h| h.join().expect("chunk generation panicked")).collect()
+            let handles: Vec<_> = fresh
+                .iter()
+                .map(|&(cx, cz)| {
+                    let p = provider.clone();
+                    s.spawn(move || p.provide_chunk(cx, cz))
+                })
+                .collect();
+            handles
+                .into_iter()
+                .map(|h| h.join().expect("chunk generation panicked"))
+                .collect()
         });
         let mut generated = generated.into_iter();
         // Insert strictly in the order they were requested.
@@ -415,7 +516,13 @@ impl Sim {
 
     fn unload_far(&mut self) {
         let r = self.view + 4;
-        let mut far: Vec<(i32, i32)> = self.world.chunks.keys().copied().filter(|&(x, z)| (x - self.centre.0).abs() > r || (z - self.centre.1).abs() > r).collect();
+        let mut far: Vec<(i32, i32)> = self
+            .world
+            .chunks
+            .keys()
+            .copied()
+            .filter(|&(x, z)| (x - self.centre.0).abs() > r || (z - self.centre.1).abs() > r)
+            .collect();
         far.sort();
         for key in far {
             self.world.unload_chunk(key.0, key.1);
@@ -437,8 +544,10 @@ impl Sim {
         let radius = self.view.min(7);
         for dx in -radius..=radius {
             for dz in -radius..=radius {
-                self.world.tick_chunk(self.centre.0 + dx, self.centre.1 + dz);
-                self.world.update_blocks(self.centre.0 + dx, self.centre.1 + dz);
+                self.world
+                    .tick_chunk(self.centre.0 + dx, self.centre.1 + dz);
+                self.world
+                    .update_blocks(self.centre.0 + dx, self.centre.1 + dz);
             }
         }
         if self.world.total_time % 40 == 0 {
@@ -446,6 +555,14 @@ impl Sim {
         }
         let mut play = std::mem::replace(&mut self.play, Play::new(GameMode::Survival));
         play.tick(&mut self.world);
+        for t in std::mem::take(&mut self.world.gen_tiles) {
+            play.add_gen_tile(t);
+        }
+        let mut rnd = std::mem::replace(&mut self.world.rand, JavaRandom::new(0));
+        for e in std::mem::take(&mut self.world.gen_entities) {
+            play.add_gen_entity(e, &mut rnd);
+        }
+        self.world.rand = rnd;
         self.play = play;
         if self.play.inv_dirty {
             self.play.inv_dirty = false;
@@ -454,7 +571,10 @@ impl Sim {
         events.push(Event::Items(self.play.item_views()));
         if self.respawn_pending {
             self.respawn_pending = false;
-            self.centre = ((self.spawn[0].floor() as i32) >> 4, (self.spawn[2].floor() as i32) >> 4);
+            self.centre = (
+                (self.spawn[0].floor() as i32) >> 4,
+                (self.spawn[2].floor() as i32) >> 4,
+            );
             events.push(Event::Respawn(self.spawn));
         }
 
@@ -465,8 +585,14 @@ impl Sim {
             self.unsaved.insert(*key);
         }
         let range = self.view + 2;
-        let in_range = |c: (i32, i32), k: (i32, i32)| (k.0 - c.0).abs() <= range && (k.1 - c.1).abs() <= range;
-        let gone: Vec<(i32, i32)> = self.sent.keys().copied().filter(|&k| !in_range(self.centre, k) || !self.world.chunk_exists(k.0, k.1)).collect();
+        let in_range =
+            |c: (i32, i32), k: (i32, i32)| (k.0 - c.0).abs() <= range && (k.1 - c.1).abs() <= range;
+        let gone: Vec<(i32, i32)> = self
+            .sent
+            .keys()
+            .copied()
+            .filter(|&k| !in_range(self.centre, k) || !self.world.chunk_exists(k.0, k.1))
+            .collect();
         for key in gone {
             self.sent.remove(&key);
             events.push(Event::Unload(key));
@@ -475,7 +601,11 @@ impl Sim {
             if in_range(self.centre, key) && self.world.chunk_exists(key.0, key.1) {
                 let ready = self.ready(key.0, key.1);
                 self.sent.insert(key, ready);
-                events.push(Event::Chunk { key, chunk: self.snapshot(key).unwrap(), ready });
+                events.push(Event::Chunk {
+                    key,
+                    chunk: self.snapshot(key).unwrap(),
+                    ready,
+                });
             }
         }
         // Chunks that entered the range or became ready without changing.
@@ -487,7 +617,11 @@ impl Sim {
             let ready = self.ready(key.0, key.1);
             if self.sent.get(&key) != Some(&ready) {
                 self.sent.insert(key, ready);
-                events.push(Event::Chunk { key, chunk: self.snapshot(key).unwrap(), ready });
+                events.push(Event::Chunk {
+                    key,
+                    chunk: self.snapshot(key).unwrap(),
+                    ready,
+                });
             }
         }
         if self.world.save_dir.is_some() && self.world.total_time % AUTOSAVE_TICKS == 0 {
@@ -499,7 +633,9 @@ impl Sim {
 
     /// Writes the level file and every chunk changed since the last save.
     pub fn save(&mut self) -> std::io::Result<()> {
-        let Some(dir) = self.world.save_dir.clone() else { return Ok(()) };
+        let Some(dir) = self.world.save_dir.clone() else {
+            return Ok(());
+        };
         for key in std::mem::take(&mut self.unsaved) {
             if let Some(c) = self.world.chunks.get(&key) {
                 save::write_chunk(&dir, key.0, key.1, &c.to_bytes())?;
@@ -515,8 +651,22 @@ impl Sim {
             unknown: {
                 let mut u = self.unknown_level_keys.clone();
                 u.push(("inventory".into(), self.play.inv.encode()));
-                u.push(("mode".into(), if self.play.mode == GameMode::Creative { "creative" } else { "survival" }.into()));
-                u.push(("spawn".into(), format!("{:?},{:?},{:?}", self.spawn[0], self.spawn[1], self.spawn[2])));
+                u.push((
+                    "mode".into(),
+                    if self.play.mode == GameMode::Creative {
+                        "creative"
+                    } else {
+                        "survival"
+                    }
+                    .into(),
+                ));
+                u.push((
+                    "spawn".into(),
+                    format!(
+                        "{:?},{:?},{:?}",
+                        self.spawn[0], self.spawn[1], self.spawn[2]
+                    ),
+                ));
                 if let Some(st) = &self.stats {
                     u.push(("stats".into(), st.clone()));
                 }
@@ -526,6 +676,11 @@ impl Sim {
                 u
             },
         };
+        if let Some(st) = &self.world.structures {
+            let data = dir.join("data");
+            std::fs::create_dir_all(&data)?;
+            save::write_atomic(&data.join("structures.txt"), st.save().as_bytes())?;
+        }
         save::write_level(&dir, &level)
     }
 
@@ -567,7 +722,8 @@ impl Sim {
 /// `World.calculateSkylightSubtracted(1.0)` for a world time.
 pub fn skylight_subtracted(world_time: i64) -> i32 {
     let f = celestial_angle(world_time, 1.0);
-    let mut f1 = 1.0f32 - (crate::util::math::cos(f * crate::util::math::PI * 2.0f32) * 2.0f32 + 0.5f32);
+    let mut f1 =
+        1.0f32 - (crate::util::math::cos(f * crate::util::math::PI * 2.0f32) * 2.0f32 + 0.5f32);
     f1 = f1.clamp(0.0, 1.0);
     f1 = 1.0 - f1;
     f1 = 1.0 - f1;
@@ -663,7 +819,11 @@ pub fn spawn(mut sim: Sim) -> SimHandle {
             }
         })
         .expect("failed to start the server thread");
-    SimHandle { commands: cmd_tx, events: ev_rx, thread: Some(thread) }
+    SimHandle {
+        commands: cmd_tx,
+        events: ev_rx,
+        thread: Some(thread),
+    }
 }
 
 #[cfg(test)]
@@ -671,10 +831,24 @@ mod tests {
     use super::*;
 
     fn run(seed: i64, ticks: usize) -> (u64, usize) {
-        let cfg = SimConfig { seed, view: 2, save_dir: None, start_time: 0, freeze_time: false, mode: GameMode::Creative };
+        let cfg = SimConfig {
+            seed,
+            view: 2,
+            save_dir: None,
+            start_time: 0,
+            freeze_time: false,
+            mode: GameMode::Creative,
+        };
         let (mut sim, start) = Sim::new(&cfg);
-        let (cx, cz) = ((start.pos[0].floor() as i32) >> 4, (start.pos[2].floor() as i32) >> 4);
-        let (bx, by, bz) = (start.pos[0].floor() as i32, start.pos[1] as i32, start.pos[2].floor() as i32);
+        let (cx, cz) = (
+            (start.pos[0].floor() as i32) >> 4,
+            (start.pos[2].floor() as i32) >> 4,
+        );
+        let (bx, by, bz) = (
+            start.pos[0].floor() as i32,
+            start.pos[1] as i32,
+            start.pos[2].floor() as i32,
+        );
         let mut events = Vec::new();
         let mut count = 0;
         for t in 0..ticks {
@@ -684,11 +858,23 @@ mod tests {
                 cmds.push(Command::Break([bx, by - 1 - (t as i32 - 10), bz]));
             }
             if t == 30 {
-                cmds.push(Command::Place { pos: [bx + 1, by + 3, bz], id: block::STONE, meta: 0 });
-                cmds.push(Command::Place { pos: [bx + 1, by + 4, bz], id: block::FLOWING_WATER, meta: 0 });
+                cmds.push(Command::Place {
+                    pos: [bx + 1, by + 3, bz],
+                    id: block::STONE,
+                    meta: 0,
+                });
+                cmds.push(Command::Place {
+                    pos: [bx + 1, by + 4, bz],
+                    id: block::FLOWING_WATER,
+                    meta: 0,
+                });
             }
             if t == 35 {
-                cmds.push(Command::Place { pos: [bx - 2, by + 6, bz], id: block::SAND, meta: 0 });
+                cmds.push(Command::Place {
+                    pos: [bx - 2, by + 6, bz],
+                    id: block::SAND,
+                    meta: 0,
+                });
                 cmds.push(Command::Break([bx + 1, by + 3, bz]));
             }
             sim.step(&cmds, &mut events);
@@ -715,13 +901,35 @@ mod tests {
     fn save_and_reload_round_trips() {
         let dir = std::env::temp_dir().join(format!("minerust-sim-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        let cfg = SimConfig { seed: 77, view: 2, save_dir: Some(dir.clone()), start_time: 0, freeze_time: false, mode: GameMode::Creative };
+        let cfg = SimConfig {
+            seed: 77,
+            view: 2,
+            save_dir: Some(dir.clone()),
+            start_time: 0,
+            freeze_time: false,
+            mode: GameMode::Creative,
+        };
         let mut events = Vec::new();
         let (hash_before, pos) = {
             let (mut sim, start) = Sim::new(&cfg);
-            let (bx, by, bz) = (start.pos[0].floor() as i32, start.pos[1] as i32, start.pos[2].floor() as i32);
+            let (bx, by, bz) = (
+                start.pos[0].floor() as i32,
+                start.pos[1] as i32,
+                start.pos[2].floor() as i32,
+            );
             for t in 0..60 {
-                let cmds = if t == 20 { vec![Command::Break([bx, by - 1, bz]), Command::Place { pos: [bx, by + 2, bz], id: block::COBBLESTONE, meta: 0 }] } else { vec![] };
+                let cmds = if t == 20 {
+                    vec![
+                        Command::Break([bx, by - 1, bz]),
+                        Command::Place {
+                            pos: [bx, by + 2, bz],
+                            id: block::COBBLESTONE,
+                            meta: 0,
+                        },
+                    ]
+                } else {
+                    vec![]
+                };
                 sim.step(&cmds, &mut events);
                 events.clear();
             }
@@ -734,7 +942,10 @@ mod tests {
         // Bring the same chunks back and compare block for block.
         sim.step(&[], &mut events);
         assert_eq!(sim.world.block(pos[0], pos[1] - 1, pos[2]), block::AIR);
-        assert_eq!(sim.world.block(pos[0], pos[1] + 2, pos[2]), block::COBBLESTONE);
+        assert_eq!(
+            sim.world.block(pos[0], pos[1] + 2, pos[2]),
+            block::COBBLESTONE
+        );
         let _ = hash_before;
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -743,25 +954,58 @@ mod tests {
     /// consumes it, and the crafting grid works through the server.
     #[test]
     fn survival_dig_pickup_place_and_craft() {
-        let cfg = SimConfig { seed: 2026, view: 2, save_dir: None, start_time: 0, freeze_time: true, mode: GameMode::Survival };
+        let cfg = SimConfig {
+            seed: 2026,
+            view: 2,
+            save_dir: None,
+            start_time: 0,
+            freeze_time: true,
+            mode: GameMode::Survival,
+        };
         let (mut sim, start) = Sim::new(&cfg);
         let mut ev = Vec::new();
         for _ in 0..3 {
             sim.step(&[], &mut ev);
         }
-        let (bx, by, bz) = (start.pos[0].floor() as i32, start.pos[1] as i32, start.pos[2].floor() as i32);
+        let (bx, by, bz) = (
+            start.pos[0].floor() as i32,
+            start.pos[1] as i32,
+            start.pos[2].floor() as i32,
+        );
         let below = [bx, by - 1, bz];
         // Make sure there is stone to dig right under the player.
-        sim.world.set_block(below[0], below[1], below[2], block::STONE, 0, 3);
+        sim.world
+            .set_block(below[0], below[1], below[2], block::STONE, 0, 3);
         let feet = [start.pos[0], start.pos[1], start.pos[2]];
         let pick = crate::item::Stack::new(270, 0, 1);
-        sim.step(&[Command::Player(feet, [0.0, 0.0], false), Command::Give(pick), Command::Select(0), Command::Dig(below)], &mut ev);
+        sim.step(
+            &[
+                Command::Player(feet, [0.0, 0.0], false),
+                Command::Give(pick),
+                Command::Select(0),
+                Command::Dig(below),
+            ],
+            &mut ev,
+        );
         assert_eq!(sim.world.block(below[0], below[1], below[2]), block::AIR);
-        assert_eq!(sim.play.inv.main[0].map(|s| s.meta), Some(1), "pickaxe loses durability");
+        assert_eq!(
+            sim.play.inv.main[0].map(|s| s.meta),
+            Some(1),
+            "pickaxe loses durability"
+        );
         let mut picked = false;
+        // The player drops into the hole it dug.
+        let in_hole = [feet[0], feet[1] - 1.0, feet[2]];
         for _ in 0..60 {
-            sim.step(&[Command::Player(feet, [0.0, 0.0], false)], &mut ev);
-            if sim.play.inv.main.iter().flatten().any(|s| s.id == block::COBBLESTONE as u16) {
+            sim.step(&[Command::Player(in_hole, [0.0, 0.0], false)], &mut ev);
+            if sim
+                .play
+                .inv
+                .main
+                .iter()
+                .flatten()
+                .any(|s| s.id == block::COBBLESTONE as u16)
+            {
                 picked = true;
                 break;
             }
@@ -770,21 +1014,83 @@ mod tests {
         assert!(sim.play.items.is_empty());
         // Digging stone by hand yields nothing.
         let side = [bx + 2, by - 1, bz];
-        sim.world.set_block(side[0], side[1], side[2], block::STONE, 0, 3);
+        sim.world
+            .set_block(side[0], side[1], side[2], block::STONE, 0, 3);
         sim.step(&[Command::Select(8), Command::Dig(side)], &mut ev);
         assert_eq!(sim.world.block(side[0], side[1], side[2]), block::AIR);
         assert!(sim.play.items.is_empty(), "stone dug by hand must not drop");
         // Place the cobblestone back: the stack shrinks.
-        let slot = sim.play.inv.main.iter().position(|s| matches!(s, Some(s) if s.id == block::COBBLESTONE as u16)).unwrap();
+        let slot = sim
+            .play
+            .inv
+            .main
+            .iter()
+            .position(|s| matches!(s, Some(s) if s.id == block::COBBLESTONE as u16))
+            .unwrap();
         sim.world.set_block(bx + 3, by - 1, bz, block::STONE, 0, 3);
         sim.world.set_block(bx + 3, by, bz, block::AIR, 0, 3);
-        sim.step(&[Command::Select(slot), Command::Use { target: [bx + 3, by - 1, bz], face: [0, 1, 0], sneaking: false }], &mut ev);
+        sim.step(
+            &[
+                Command::Select(slot),
+                Command::Use {
+                    target: [bx + 3, by - 1, bz],
+                    face: [0, 1, 0],
+                    sneaking: false,
+                },
+            ],
+            &mut ev,
+        );
         assert_eq!(sim.world.block(bx + 3, by, bz), block::COBBLESTONE);
         assert!(sim.play.inv.main[slot].is_none());
         // Craft planks from a log in the 2x2 grid.
-        sim.step(&[Command::Give(crate::item::Stack::new(block::LOG as u16, 0, 1)), Command::OpenInventory], &mut ev);
-        let log_slot = sim.play.inv.main.iter().position(|s| matches!(s, Some(s) if s.id == block::LOG as u16)).unwrap();
-        sim.step(&[Command::Click { slot: Slot::Main(log_slot), tile: None, right: false, shift: false }, Command::Click { slot: Slot::Craft(0), tile: None, right: false, shift: false }, Command::Click { slot: Slot::Result, tile: None, right: false, shift: true }, Command::CloseWindow], &mut ev);
-        assert_eq!(sim.play.inv.main.iter().flatten().filter(|s| s.id == block::PLANKS as u16).map(|s| s.count).sum::<u32>(), 4);
+        sim.step(
+            &[
+                Command::Give(crate::item::Stack::new(block::LOG as u16, 0, 1)),
+                Command::OpenInventory,
+            ],
+            &mut ev,
+        );
+        let log_slot = sim
+            .play
+            .inv
+            .main
+            .iter()
+            .position(|s| matches!(s, Some(s) if s.id == block::LOG as u16))
+            .unwrap();
+        sim.step(
+            &[
+                Command::Click {
+                    slot: Slot::Main(log_slot),
+                    tile: None,
+                    right: false,
+                    shift: false,
+                },
+                Command::Click {
+                    slot: Slot::Craft(0),
+                    tile: None,
+                    right: false,
+                    shift: false,
+                },
+                Command::Click {
+                    slot: Slot::Result,
+                    tile: None,
+                    right: false,
+                    shift: true,
+                },
+                Command::CloseWindow,
+            ],
+            &mut ev,
+        );
+        assert_eq!(
+            sim.play
+                .inv
+                .main
+                .iter()
+                .flatten()
+                .filter(|s| s.id == block::PLANKS as u16)
+                .map(|s| s.count)
+                .sum::<u32>(),
+            4
+        );
     }
 }

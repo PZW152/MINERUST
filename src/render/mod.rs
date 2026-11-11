@@ -6,7 +6,9 @@ pub mod vk;
 /// Column-major 4x4 matrix (OpenGL convention).
 pub type Mat4 = [f32; 16];
 
-pub const IDENTITY: Mat4 = [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0];
+pub const IDENTITY: Mat4 = [
+    1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+];
 
 /// `a * b`
 pub fn mul(a: &Mat4, b: &Mat4) -> Mat4 {

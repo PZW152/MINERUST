@@ -26,7 +26,15 @@ pub struct ChunkData {
 
 impl Clone for ChunkData {
     fn clone(&self) -> Self {
-        ChunkData { cx: self.cx, cz: self.cz, blocks: self.blocks.clone(), meta: self.meta.clone(), biomes: self.biomes, sky: self.sky.clone(), blk: self.blk.clone() }
+        ChunkData {
+            cx: self.cx,
+            cz: self.cz,
+            blocks: self.blocks.clone(),
+            meta: self.meta.clone(),
+            biomes: self.biomes,
+            sky: self.sky.clone(),
+            blk: self.blk.clone(),
+        }
     }
 }
 
@@ -72,11 +80,23 @@ impl ChunkProvider {
         let mut parabolic = [0f32; 25];
         for i in -2i32..=2 {
             for j in -2i32..=2 {
-                parabolic[(i + 2 + (j + 2) * 5) as usize] = 10.0f32 / math::sqrt_float((i * i + j * j) as f32 + 0.2f32);
+                parabolic[(i + 2 + (j + 2) * 5) as usize] =
+                    10.0f32 / math::sqrt_float((i * i + j * j) as f32 + 0.2f32);
             }
         }
         let (gen_biomes, biome_index) = GenLayer::build(seed);
-        ChunkProvider { seed, min_limit, max_limit, main, surface, depth, parabolic, gen_biomes, biome_index, terrain: TerrainState::new(seed) }
+        ChunkProvider {
+            seed,
+            min_limit,
+            max_limit,
+            main,
+            surface,
+            depth,
+            parabolic,
+            gen_biomes,
+            biome_index,
+            terrain: TerrainState::new(seed),
+        }
     }
 
     /// `WorldChunkManager.getBiomeGenAt(x, z)` id.
@@ -90,10 +110,24 @@ impl ChunkProvider {
         let mut main = vec![0f64; 825];
         let mut lower = vec![0f64; 825];
         let mut upper = vec![0f64; 825];
-        self.depth.generate_2d(&mut depth, x, z, 5, 5, 200.0, 200.0, 0.5);
-        self.main.generate(&mut main, x, 0, z, 5, 33, 5, 8.555150000000001, 4.277575000000001, 8.555150000000001);
-        self.min_limit.generate(&mut lower, x, 0, z, 5, 33, 5, 684.412, 684.412, 684.412);
-        self.max_limit.generate(&mut upper, x, 0, z, 5, 33, 5, 684.412, 684.412, 684.412);
+        self.depth
+            .generate_2d(&mut depth, x, z, 5, 5, 200.0, 200.0, 0.5);
+        self.main.generate(
+            &mut main,
+            x,
+            0,
+            z,
+            5,
+            33,
+            5,
+            8.555150000000001,
+            4.277575000000001,
+            8.555150000000001,
+        );
+        self.min_limit
+            .generate(&mut lower, x, 0, z, 5, 33, 5, 684.412, 684.412, 684.412);
+        self.max_limit
+            .generate(&mut upper, x, 0, z, 5, 33, 5, 684.412, 684.412, 684.412);
         let mut hm = vec![0f64; 825];
         let mut idx3 = 0usize;
         let mut idx2 = 0usize;
@@ -108,7 +142,8 @@ impl ChunkProvider {
                         let b = biomes[(i as i32 + di + 2 + (j as i32 + dj + 2) * 10) as usize];
                         let root = b.root_height;
                         let variation = b.height_variation;
-                        let mut w = self.parabolic[(di + 2 + (dj + 2) * 5) as usize] / (root + 2.0f32);
+                        let mut w =
+                            self.parabolic[(di + 2 + (dj + 2) * 5) as usize] / (root + 2.0f32);
                         if b.root_height > centre.root_height {
                             w /= 2.0f32;
                         }
@@ -169,13 +204,18 @@ impl ChunkProvider {
     /// `provideChunk(cx, cz)` (terrain, surface, caves, ravines; no structures).
     pub fn provide_chunk(&self, cx: i32, cz: i32) -> ChunkData {
         let mut rand = JavaRandom::new(0);
-        rand.set_seed((cx as i64).wrapping_mul(341873128712).wrapping_add((cz as i64).wrapping_mul(132897987541)));
+        rand.set_seed(
+            (cx as i64)
+                .wrapping_mul(341873128712)
+                .wrapping_add((cz as i64).wrapping_mul(132897987541)),
+        );
         let mut blocks = boxed();
         let mut meta = boxed();
 
         // func_147424_a
         let gen_ids = self.gen_biomes.get_ints(cx * 4 - 2, cz * 4 - 2, 10, 10);
-        let gen_biomes: Vec<&'static Biome> = gen_ids.iter().map(|&i| biome::get_or_ocean(i)).collect();
+        let gen_biomes: Vec<&'static Biome> =
+            gen_ids.iter().map(|&i| biome::get_or_ocean(i)).collect();
         let hm = self.height_field(cx, cz, &gen_biomes);
         for xi in 0..4usize {
             for zi in 0..4usize {
@@ -229,7 +269,16 @@ impl ChunkProvider {
         // replaceBlocksForBiome
         let ids = self.biome_index.get_ints(cx * 16, cz * 16, 16, 16);
         let mut stone_noise = vec![0f64; 256];
-        self.surface.get_region(&mut stone_noise, (cx * 16) as f64, (cz * 16) as f64, 16, 16, 0.0625, 0.0625, 1.0);
+        self.surface.get_region(
+            &mut stone_noise,
+            (cx * 16) as f64,
+            (cz * 16) as f64,
+            16,
+            16,
+            0.0625,
+            0.0625,
+            1.0,
+        );
         let mut tops = [0u8; 256];
         for (i, t) in tops.iter_mut().enumerate() {
             *t = biome::get(i as i32).map_or(block::GRASS, |b| b.top_block);
@@ -262,7 +311,12 @@ impl ChunkProvider {
             }
         }
         {
-            let mut c = Carver { blocks: &mut blocks[..], tops: &col_tops, cx, cz };
+            let mut c = Carver {
+                blocks: &mut blocks[..],
+                tops: &col_tops,
+                cx,
+                cz,
+            };
             caves::generate_caves(self.seed, &mut c);
             caves::generate_ravines(self.seed, &mut c);
         }
@@ -281,7 +335,15 @@ impl ChunkProvider {
             // slot 161 (Redwood Taiga Hills M) is 160.
             biomes[i] = biome::get_or_ocean(ids[i]).id;
         }
-        ChunkData { cx, cz, blocks, meta, biomes, sky: boxed(), blk: boxed() }
+        ChunkData {
+            cx,
+            cz,
+            blocks,
+            meta,
+            biomes,
+            sky: boxed(),
+            blk: boxed(),
+        }
     }
 
     /// `WorldChunkManager.findBiomePosition` + the search loop of

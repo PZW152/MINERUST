@@ -13,7 +13,14 @@ fn air_or_leaves(id: u8) -> bool {
 }
 
 /// `WorldGenLakes(block)`
-pub fn lake(w: &mut ServerWorld, r: &mut JavaRandom, mut x: i32, mut y: i32, mut z: i32, liquid: u8) -> bool {
+pub fn lake(
+    w: &mut ServerWorld,
+    r: &mut JavaRandom,
+    mut x: i32,
+    mut y: i32,
+    mut z: i32,
+    liquid: u8,
+) -> bool {
     x -= 8;
     z -= 8;
     while y > 5 && w.is_air(x, y, z) {
@@ -74,7 +81,14 @@ pub fn lake(w: &mut ServerWorld, r: &mut JavaRandom, mut x: i32, mut y: i32, mut
         for j in 0..16usize {
             for k in 0..8usize {
                 if m[(i * 16 + j) * 8 + k] {
-                    w.set_block(x + i as i32, y + k as i32, z + j as i32, if k >= 4 { block::AIR } else { liquid }, 0, 2);
+                    w.set_block(
+                        x + i as i32,
+                        y + k as i32,
+                        z + j as i32,
+                        if k >= 4 { block::AIR } else { liquid },
+                        0,
+                        2,
+                    );
                 }
             }
         }
@@ -83,7 +97,10 @@ pub fn lake(w: &mut ServerWorld, r: &mut JavaRandom, mut x: i32, mut y: i32, mut
         for j in 0..16usize {
             for k in 4..8usize {
                 let (bx, by, bz) = (x + i as i32, y + k as i32, z + j as i32);
-                if m[(i * 16 + j) * 8 + k] && w.block(bx, by - 1, bz) == block::DIRT && w.saved_light(true, bx, by, bz) > 0 {
+                if m[(i * 16 + j) * 8 + k]
+                    && w.block(bx, by - 1, bz) == block::DIRT
+                    && w.saved_light(true, bx, by, bz) > 0
+                {
                     if w.biome(bx, bz).top_block == block::MYCELIUM {
                         w.set_block(bx, by - 1, bz, block::MYCELIUM, 0, 2);
                     } else {
@@ -98,7 +115,10 @@ pub fn lake(w: &mut ServerWorld, r: &mut JavaRandom, mut x: i32, mut y: i32, mut
             for j in 0..16usize {
                 for k in 0..8usize {
                     let (bx, by, bz) = (x + i as i32, y + k as i32, z + j as i32);
-                    if edge(&m, i, j, k) && (k < 4 || r.next_int_n(2) != 0) && w.material(bx, by, bz).is_solid() {
+                    if edge(&m, i, j, k)
+                        && (k < 4 || r.next_int_n(2) != 0)
+                        && w.material(bx, by, bz).is_solid()
+                    {
                         w.set_block(bx, by, bz, block::STONE, 0, 2);
                     }
                 }
@@ -118,7 +138,16 @@ pub fn lake(w: &mut ServerWorld, r: &mut JavaRandom, mut x: i32, mut y: i32, mut
 }
 
 /// `WorldGenMinable(block, count, replace)`
-pub fn minable(w: &mut ServerWorld, r: &mut JavaRandom, x: i32, y: i32, z: i32, id: u8, count: i32, replace: u8) -> bool {
+pub fn minable(
+    w: &mut ServerWorld,
+    r: &mut JavaRandom,
+    x: i32,
+    y: i32,
+    z: i32,
+    id: u8,
+    count: i32,
+    replace: u8,
+) -> bool {
     let n = count as f32;
     let f = r.next_float() * math::PI;
     let x0 = ((x + 8) as f32 + math::sin(f) * n / 8.0f32) as f64;
@@ -161,7 +190,15 @@ pub fn minable(w: &mut ServerWorld, r: &mut JavaRandom, x: i32, y: i32, z: i32, 
 }
 
 /// `WorldGenSand(block, radius)` (also gravel) and `WorldGenClay(count)`.
-pub fn disk(w: &mut ServerWorld, r: &mut JavaRandom, x: i32, y: i32, z: i32, id: u8, radius: i32) -> bool {
+pub fn disk(
+    w: &mut ServerWorld,
+    r: &mut JavaRandom,
+    x: i32,
+    y: i32,
+    z: i32,
+    id: u8,
+    radius: i32,
+) -> bool {
     if w.material(x, y, z) != Material::Water {
         return false;
     }
@@ -174,7 +211,11 @@ pub fn disk(w: &mut ServerWorld, r: &mut JavaRandom, x: i32, y: i32, z: i32, id:
             if dx * dx + dz * dz <= rad * rad {
                 for by in (y - depth)..=(y + depth) {
                     let b = w.block(bx, by, bz);
-                    let ok = if clay { b == block::DIRT || b == block::CLAY } else { b == block::DIRT || b == block::GRASS };
+                    let ok = if clay {
+                        b == block::DIRT || b == block::CLAY
+                    } else {
+                        b == block::DIRT || b == block::GRASS
+                    };
                     if ok {
                         w.set_block(bx, by, bz, id, 0, 2);
                     }
@@ -218,7 +259,15 @@ pub fn spring(w: &mut ServerWorld, r: &mut JavaRandom, x: i32, y: i32, z: i32, i
 }
 
 /// `WorldGenFlowers`: 64 scattered attempts.
-pub fn flowers(w: &mut ServerWorld, r: &mut JavaRandom, x: i32, y: i32, z: i32, id: u8, meta: i32) -> bool {
+pub fn flowers(
+    w: &mut ServerWorld,
+    r: &mut JavaRandom,
+    x: i32,
+    y: i32,
+    z: i32,
+    id: u8,
+    meta: i32,
+) -> bool {
     for _ in 0..64 {
         let bx = x + r.next_int_n(8) - r.next_int_n(8);
         let by = y + r.next_int_n(4) - r.next_int_n(4);
@@ -231,7 +280,14 @@ pub fn flowers(w: &mut ServerWorld, r: &mut JavaRandom, x: i32, y: i32, z: i32, 
 }
 
 /// `WorldGenTallGrass(tallgrass, meta)`
-pub fn tall_grass(w: &mut ServerWorld, r: &mut JavaRandom, x: i32, mut y: i32, z: i32, meta: i32) -> bool {
+pub fn tall_grass(
+    w: &mut ServerWorld,
+    r: &mut JavaRandom,
+    x: i32,
+    mut y: i32,
+    z: i32,
+    meta: i32,
+) -> bool {
     while air_or_leaves(w.block(x, y, z)) && y > 0 {
         y -= 1;
     }
@@ -263,7 +319,14 @@ pub fn dead_bush(w: &mut ServerWorld, r: &mut JavaRandom, x: i32, mut y: i32, z:
 }
 
 /// `WorldGenDoublePlant` with `func_150548_a(variant)`.
-pub fn double_plant(w: &mut ServerWorld, r: &mut JavaRandom, x: i32, y: i32, z: i32, variant: i32) -> bool {
+pub fn double_plant(
+    w: &mut ServerWorld,
+    r: &mut JavaRandom,
+    x: i32,
+    y: i32,
+    z: i32,
+    variant: i32,
+) -> bool {
     let mut any = false;
     for _ in 0..64 {
         let bx = x + r.next_int_n(8) - r.next_int_n(8);
@@ -340,7 +403,10 @@ pub fn pumpkin(w: &mut ServerWorld, r: &mut JavaRandom, x: i32, y: i32, z: i32) 
         let bx = x + r.next_int_n(8) - r.next_int_n(8);
         let by = y + r.next_int_n(4) - r.next_int_n(4);
         let bz = z + r.next_int_n(8) - r.next_int_n(8);
-        if w.is_air(bx, by, bz) && w.block(bx, by - 1, bz) == block::GRASS && w.can_place_block_at(block::PUMPKIN, bx, by, bz) {
+        if w.is_air(bx, by, bz)
+            && w.block(bx, by - 1, bz) == block::GRASS
+            && w.can_place_block_at(block::PUMPKIN, bx, by, bz)
+        {
             let m = r.next_int_n(4);
             w.set_block(bx, by, bz, block::PUMPKIN, m, 2);
         }
@@ -354,7 +420,9 @@ pub fn melon(w: &mut ServerWorld, r: &mut JavaRandom, x: i32, y: i32, z: i32) ->
         let bx = x + r.next_int_n(8) - r.next_int_n(8);
         let by = y + r.next_int_n(4) - r.next_int_n(4);
         let bz = z + r.next_int_n(8) - r.next_int_n(8);
-        if w.can_place_block_at(block::MELON_BLOCK, bx, by, bz) && w.block(bx, by - 1, bz) == block::GRASS {
+        if w.can_place_block_at(block::MELON_BLOCK, bx, by, bz)
+            && w.block(bx, by - 1, bz) == block::GRASS
+        {
             w.set_block(bx, by, bz, block::MELON_BLOCK, 0, 2);
         }
     }
@@ -482,7 +550,12 @@ pub fn canopy(w: &mut ServerWorld, r: &mut JavaRandom, x: i32, y: i32, z: i32) -
     }
     for i in -3..=4i32 {
         for j in -3..=4i32 {
-            if (i != -3 || j != -3) && (i != -3 || j != 4) && (i != 4 || j != -3) && (i != 4 || j != 4) && (i.abs() < 3 || j.abs() < 3) {
+            if (i != -3 || j != -3)
+                && (i != -3 || j != 4)
+                && (i != 4 || j != -3)
+                && (i != 4 || j != 4)
+                && (i.abs() < 3 || j.abs() < 3)
+            {
                 dark_leaf(w, tx + i, top, tz + j);
             }
         }
@@ -492,7 +565,9 @@ pub fn canopy(w: &mut ServerWorld, r: &mut JavaRandom, x: i32, y: i32, z: i32) -
             if (i < 0 || i > 1 || j < 0 || j > 1) && r.next_int_n(3) <= 0 {
                 let n = r.next_int_n(3) + 2;
                 for k in 0..n {
-                    if crate::compat::vanilla_parity() || can_grow_into(w.block(x + i, top - k - 1, z + j)) {
+                    if crate::compat::vanilla_parity()
+                        || can_grow_into(w.block(x + i, top - k - 1, z + j))
+                    {
                         w.set_block(x + i, top - k - 1, z + j, block::LOG2, 1, 2);
                     }
                 }
@@ -515,7 +590,14 @@ pub fn canopy(w: &mut ServerWorld, r: &mut JavaRandom, x: i32, y: i32, z: i32) -
 }
 
 /// `WorldGenBigMushroom(type)`; `kind < 0` picks randomly.
-pub fn big_mushroom(w: &mut ServerWorld, r: &mut JavaRandom, x: i32, y: i32, z: i32, kind: i32) -> bool {
+pub fn big_mushroom(
+    w: &mut ServerWorld,
+    r: &mut JavaRandom,
+    x: i32,
+    y: i32,
+    z: i32,
+    kind: i32,
+) -> bool {
     let mut ty = r.next_int_n(2);
     if kind >= 0 {
         ty = kind;
@@ -625,7 +707,15 @@ pub fn big_mushroom(w: &mut ServerWorld, r: &mut JavaRandom, x: i32, y: i32, z: 
 }
 
 /// `WorldGenBlockBlob(block, radius)`
-pub fn block_blob(w: &mut ServerWorld, r: &mut JavaRandom, mut x: i32, mut y: i32, mut z: i32, id: u8, radius: i32) -> bool {
+pub fn block_blob(
+    w: &mut ServerWorld,
+    r: &mut JavaRandom,
+    mut x: i32,
+    mut y: i32,
+    mut z: i32,
+    id: u8,
+    radius: i32,
+) -> bool {
     while y > 3 {
         if !w.is_air(x, y - 1, z) {
             let b = w.block(x, y - 1, z);
@@ -716,7 +806,14 @@ pub fn desert_well(w: &mut ServerWorld, _r: &mut JavaRandom, x: i32, mut y: i32,
 }
 
 /// `WorldGenIcePath(width)`
-pub fn ice_path(w: &mut ServerWorld, r: &mut JavaRandom, x: i32, mut y: i32, z: i32, width: i32) -> bool {
+pub fn ice_path(
+    w: &mut ServerWorld,
+    r: &mut JavaRandom,
+    x: i32,
+    mut y: i32,
+    z: i32,
+    width: i32,
+) -> bool {
     while w.is_air(x, y, z) && y > 2 {
         y -= 1;
     }
@@ -754,7 +851,12 @@ pub fn ice_spike(w: &mut ServerWorld, r: &mut JavaRandom, x: i32, mut y: i32, z:
     if rad > 1 && r.next_int_n(60) == 0 {
         y += 10 + r.next_int_n(30);
     }
-    let replace = |b: u8| block::material(b) == Material::Air || b == block::DIRT || b == block::SNOW || b == block::ICE;
+    let replace = |b: u8| {
+        block::material(b) == Material::Air
+            || b == block::DIRT
+            || b == block::SNOW
+            || b == block::ICE
+    };
     for i in 0..h {
         let f = (1.0f32 - i as f32 / h as f32) * rad as f32;
         let c = f.ceil() as i32;
@@ -762,7 +864,9 @@ pub fn ice_spike(w: &mut ServerWorld, r: &mut JavaRandom, x: i32, mut y: i32, z:
             let fx = dx.abs() as f32 - 0.25f32;
             for dz in -c..=c {
                 let fz = dz.abs() as f32 - 0.25f32;
-                if (dx == 0 && dz == 0 || !(fx * fx + fz * fz > f * f)) && (dx != -c && dx != c && dz != -c && dz != c || !(r.next_float() > 0.75f32)) {
+                if (dx == 0 && dz == 0 || !(fx * fx + fz * fz > f * f))
+                    && (dx != -c && dx != c && dz != -c && dz != c || !(r.next_float() > 0.75f32))
+                {
                     if replace(w.block(x + dx, y + i, z + dz)) {
                         w.set_block(x + dx, y + i, z + dz, block::PACKED_ICE, 0, 2);
                     }
@@ -783,7 +887,12 @@ pub fn ice_spike(w: &mut ServerWorld, r: &mut JavaRandom, x: i32, mut y: i32, z:
             }
             while yy > 50 {
                 let b = w.block(x + dx, yy, z + dz);
-                if block::material(b) != Material::Air && b != block::DIRT && b != block::SNOW && b != block::ICE && b != block::PACKED_ICE {
+                if block::material(b) != Material::Air
+                    && b != block::DIRT
+                    && b != block::SNOW
+                    && b != block::ICE
+                    && b != block::PACKED_ICE
+                {
                     break;
                 }
                 w.set_block(x + dx, yy, z + dz, block::PACKED_ICE, 0, 2);

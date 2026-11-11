@@ -7,12 +7,14 @@ mod compat;
 mod entity;
 mod game;
 mod gui;
-mod item;
 mod inventory;
-mod play;
-mod screens;
+mod item;
+mod item_table;
 mod java;
+mod play;
 mod render;
+mod screens;
+mod shapes;
 mod sim;
 mod util;
 mod world;
@@ -55,7 +57,13 @@ fn compare(args: &[String]) {
     for (i, (ca, cb)) in a.chunks(N).zip(b.chunks(N)).enumerate() {
         let i = i as i32;
         let (cx, cz) = (((i * 37 % 101) - 50) * 3, ((i * 53 % 103) - 51) * 3);
-        let cnt = |r: std::ops::Range<usize>| ca[r.clone()].iter().zip(&cb[r]).filter(|(x, y)| x != y).count();
+        let cnt = |r: std::ops::Range<usize>| {
+            ca[r.clone()]
+                .iter()
+                .zip(&cb[r])
+                .filter(|(x, y)| x != y)
+                .count()
+        };
         let (db, dm, dbi) = (cnt(0..65536), cnt(65536..131072), cnt(131072..N));
         total += 1;
         if db + dm + dbi > 0 {
@@ -75,15 +83,36 @@ fn compare(args: &[String]) {
                 for j in 0..131072 {
                     if ca[j] != cb[j] && shown < 6 {
                         let k = j % 65536;
-                        println!("   {} x={} z={} y={}: {} vs {}", if j < 65536 { "block" } else { "meta" }, k >> 12, (k >> 8) & 15, k & 255, ca[j], cb[j]);
+                        println!(
+                            "   {} x={} z={} y={}: {} vs {}",
+                            if j < 65536 { "block" } else { "meta" },
+                            k >> 12,
+                            (k >> 8) & 15,
+                            k & 255,
+                            ca[j],
+                            cb[j]
+                        );
                         shown += 1;
                         if shown == 1 {
                             let base = k & !255;
                             let y = k & 255;
                             let r = y.saturating_sub(4)..(y + 4).min(256);
-                            let col = |d: &[u8], o: usize| r.clone().map(|yy| d[o + base + yy]).collect::<Vec<u8>>();
-                            println!("     y {:?}: rust blocks {:?} meta {:?}", r, col(ca, 0), col(ca, 65536));
-                            println!("     java blocks {:?} meta {:?}; biome r/j {} {}", col(cb, 0), col(cb, 65536), ca[131072 + ((k >> 8) & 15) * 16 + (k >> 12)], cb[131072 + ((k >> 8) & 15) * 16 + (k >> 12)]);
+                            let col = |d: &[u8], o: usize| {
+                                r.clone().map(|yy| d[o + base + yy]).collect::<Vec<u8>>()
+                            };
+                            println!(
+                                "     y {:?}: rust blocks {:?} meta {:?}",
+                                r,
+                                col(ca, 0),
+                                col(ca, 65536)
+                            );
+                            println!(
+                                "     java blocks {:?} meta {:?}; biome r/j {} {}",
+                                col(cb, 0),
+                                col(cb, 65536),
+                                ca[131072 + ((k >> 8) & 15) * 16 + (k >> 12)],
+                                cb[131072 + ((k >> 8) & 15) * 16 + (k >> 12)]
+                            );
                         }
                     }
                 }
@@ -99,8 +128,13 @@ fn compare(args: &[String]) {
 fn dump_pop(args: &[String]) {
     use std::io::Write;
     let seed: i64 = args[0].parse().unwrap();
-    let (ox, oz, r): (i32, i32, i32) = (args[1].parse().unwrap(), args[2].parse().unwrap(), args[3].parse().unwrap());
+    let (ox, oz, r): (i32, i32, i32) = (
+        args[1].parse().unwrap(),
+        args[2].parse().unwrap(),
+        args[3].parse().unwrap(),
+    );
     let mut w = world::server::ServerWorld::new(Arc::new(world::ChunkProvider::new(seed)));
+    w.map_features = std::env::var_os("NO_FEATURES").is_none();
     for cx in -r..=r {
         for cz in -r..=r {
             if std::env::var_os("TRACE_PRECHECK").is_some() && cx == r && cz == r {
@@ -130,7 +164,14 @@ fn dump_pop(args: &[String]) {
                             }
                         }
                     }
-                    println!("step {},{} mask={} sum5={} pop={}", ox + cx, oz + cz, c.sections, sum, c.terrain_populated);
+                    println!(
+                        "step {},{} mask={} sum5={} pop={}",
+                        ox + cx,
+                        oz + cz,
+                        c.sections,
+                        sum,
+                        c.terrain_populated
+                    );
                 }
             }
         }
@@ -168,7 +209,11 @@ fn dump_pop(args: &[String]) {
 fn compare_pop(args: &[String]) {
     let a = std::fs::read(&args[0]).unwrap();
     let b = std::fs::read(&args[1]).unwrap();
-    let (ox, oz, r): (i32, i32, i32) = (args[2].parse().unwrap(), args[3].parse().unwrap(), args[4].parse().unwrap());
+    let (ox, oz, r): (i32, i32, i32) = (
+        args[2].parse().unwrap(),
+        args[3].parse().unwrap(),
+        args[4].parse().unwrap(),
+    );
     const N: usize = 65536 * 4 + 2 + 512;
     println!("sizes: {} / {} ({} chunks)", a.len(), b.len(), a.len() / N);
     let names = ["block", "meta", "sky", "blocklight"];
@@ -176,7 +221,15 @@ fn compare_pop(args: &[String]) {
     let mut pairs = std::collections::BTreeMap::new();
     for (i, (ca, cb)) in a.chunks(N).zip(b.chunks(N)).enumerate() {
         let (cx, cz) = (ox - r + (i as i32) / (2 * r), oz - r + (i as i32) % (2 * r));
-        let cnt: Vec<usize> = (0..4).map(|k| ca[k * 65536..(k + 1) * 65536].iter().zip(&cb[k * 65536..(k + 1) * 65536]).filter(|(x, y)| x != y).count()).collect();
+        let cnt: Vec<usize> = (0..4)
+            .map(|k| {
+                ca[k * 65536..(k + 1) * 65536]
+                    .iter()
+                    .zip(&cb[k * 65536..(k + 1) * 65536])
+                    .filter(|(x, y)| x != y)
+                    .count()
+            })
+            .collect();
         total += 1;
         for j in 0..65536 {
             if ca[j] != cb[j] {
@@ -185,17 +238,38 @@ fn compare_pop(args: &[String]) {
         }
         let extra = ca[262144..] != cb[262144..];
         if extra {
-            println!("chunk ({cx},{cz}): sections rust {:#06x} java {:#06x}, height diffs {}", u16::from_be_bytes([ca[262144], ca[262145]]), u16::from_be_bytes([cb[262144], cb[262145]]), ca[262146..].chunks(2).zip(cb[262146..].chunks(2)).filter(|(a, b)| a != b).count());
+            println!(
+                "chunk ({cx},{cz}): sections rust {:#06x} java {:#06x}, height diffs {}",
+                u16::from_be_bytes([ca[262144], ca[262145]]),
+                u16::from_be_bytes([cb[262144], cb[262145]]),
+                ca[262146..]
+                    .chunks(2)
+                    .zip(cb[262146..].chunks(2))
+                    .filter(|(a, b)| a != b)
+                    .count()
+            );
         }
         if cnt.iter().sum::<usize>() > 0 || extra {
             bad += 1;
             if bad <= 10 {
-                println!("chunk ({cx},{cz}): blocks {}, meta {}, sky {}, blocklight {}", cnt[0], cnt[1], cnt[2], cnt[3]);
+                println!(
+                    "chunk ({cx},{cz}): blocks {}, meta {}, sky {}, blocklight {}",
+                    cnt[0], cnt[1], cnt[2], cnt[3]
+                );
                 let mut shown = 0;
                 for j in 0..262144 {
                     if ca[j] != cb[j] && shown < 5 {
                         let k = j % 65536;
-                        println!("   {} x={} y={} z={}: {} vs {}", names[j / 65536], cx * 16 + (k >> 12) as i32, k & 255, cz * 16 + ((k >> 8) & 15) as i32, ca[j], cb[j]);
+                        println!(
+                            "   {} x={} y={} z={}: {} vs {} (block {})",
+                            names[j / 65536],
+                            cx * 16 + (k >> 12) as i32,
+                            k & 255,
+                            cz * 16 + ((k >> 8) & 15) as i32,
+                            ca[j],
+                            cb[j],
+                            ca[k]
+                        );
                         shown += 1;
                     }
                 }
@@ -209,6 +283,44 @@ fn compare_pop(args: &[String]) {
 }
 
 /// `--find-biomes <seed>`: one chunk position per biome id found near the origin.
+/// `--locate <seed> <radius>`: structure starts within `radius` chunks of the
+/// origin, as `type chunkX chunkZ blockX blockY blockZ pieces`.
+fn locate(args: &[String]) {
+    let seed: i64 = args[0].parse().unwrap();
+    let r: i32 = args[1].parse().unwrap();
+    let provider = world::ChunkProvider::new(seed);
+    let mut s = world::structure::Structures::new(&provider);
+    let mut rand = java::JavaRandom::new(0);
+    let mut x = -r;
+    while x <= r {
+        let mut z = -r;
+        while z <= r {
+            s.register(&provider, x, z, &mut rand);
+            z += 17;
+        }
+        x += 17;
+    }
+    for g in &s.gens {
+        for st in g.map.starts() {
+            if !st.sizeable {
+                continue;
+            }
+            let p = &st.pieces[0];
+            println!(
+                "{:?} {} {} {} {} {} {}",
+                g.ty,
+                st.cx,
+                st.cz,
+                p.bb.cx(),
+                p.bb.y0,
+                p.bb.cz(),
+                st.pieces.len()
+            );
+        }
+    }
+    println!("strongholds: {:?}", s.stronghold_coords);
+}
+
 fn find_biomes(args: &[String]) {
     let seed: i64 = args[0].parse().unwrap();
     let p = world::ChunkProvider::new(seed);
@@ -224,7 +336,16 @@ fn find_biomes(args: &[String]) {
                 step += 1;
                 let id = p.biome_at(x, z);
                 // Require a patch large enough that the populated area is inside it.
-                if !found.contains_key(&id) && [0, 2, 6, 8].iter().all(|&i| p.biome_index.get_ints(x + (i as i32 % 3 - 1) * 40, z + (i as i32 / 3 - 1) * 40, 1, 1)[0] == id) {
+                if !found.contains_key(&id)
+                    && [0, 2, 6, 8].iter().all(|&i| {
+                        p.biome_index.get_ints(
+                            x + (i as i32 % 3 - 1) * 40,
+                            z + (i as i32 / 3 - 1) * 40,
+                            1,
+                            1,
+                        )[0] == id
+                    })
+                {
                     found.insert(id, (x >> 4, z >> 4));
                 }
                 if step > 40000 {
@@ -260,10 +381,23 @@ fn find_jar(explicit: &Option<PathBuf>) -> Result<PathBuf, String> {
     }
     candidates.push("1.7.10.jar".into());
     if let Ok(appdata) = std::env::var("APPDATA") {
-        candidates.push(PathBuf::from(appdata).join(".minecraft").join("versions").join("1.7.10").join("1.7.10.jar"));
+        candidates.push(
+            PathBuf::from(appdata)
+                .join(".minecraft")
+                .join("versions")
+                .join("1.7.10")
+                .join("1.7.10.jar"),
+        );
     }
     if let Ok(home) = std::env::var("USERPROFILE") {
-        candidates.push(PathBuf::from(home).join("Downloads").join("Sapling Data").join("versions").join("1.7.10").join("1.7.10.jar"));
+        candidates.push(
+            PathBuf::from(home)
+                .join("Downloads")
+                .join("Sapling Data")
+                .join("versions")
+                .join("1.7.10")
+                .join("1.7.10.jar"),
+        );
     }
     candidates
         .iter()
@@ -279,7 +413,10 @@ fn parse_args() -> Options {
             mode: entity::survival::GameMode::Survival,
             save_dir: None,
             // A new vanilla world without a typed seed uses `new Random().nextLong()`.
-            seed: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos() as i64).unwrap_or(0),
+            seed: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos() as i64)
+                .unwrap_or(0),
             render_distance: 12,
             start_time: 0,
             pos: None,
@@ -339,7 +476,10 @@ fn parse_args() -> Options {
                 i += 1;
             }
             "--size" if i + 2 < args.len() => {
-                o.size = ((num(&args[i + 1]) as u32).max(64), (num(&args[i + 2]) as u32).max(64));
+                o.size = (
+                    (num(&args[i + 1]) as u32).max(64),
+                    (num(&args[i + 2]) as u32).max(64),
+                );
                 i += 2;
             }
             "--pos" if i + 3 < args.len() => {
@@ -415,7 +555,12 @@ impl ApplicationHandler for App {
         if self.window.is_some() {
             return;
         }
-        let attrs = Window::default_attributes().with_title("Minecraft 1.7.10").with_inner_size(winit::dpi::PhysicalSize::new(self.opts.size.0, self.opts.size.1));
+        let attrs = Window::default_attributes()
+            .with_title("Minecraft 1.7.10")
+            .with_inner_size(winit::dpi::PhysicalSize::new(
+                self.opts.size.0,
+                self.opts.size.1,
+            ));
         let window = match el.create_window(attrs) {
             Ok(w) => Arc::new(w),
             Err(e) => {
@@ -426,19 +571,31 @@ impl ApplicationHandler for App {
         };
         let result = (|| -> Result<Game, String> {
             let jar_path = find_jar(&self.opts.jar)?;
-            let file = std::fs::File::open(&jar_path).map_err(|e| format!("{}: {e}", jar_path.display()))?;
-            let mut jar = zip::ZipArchive::new(file).map_err(|e| format!("{}: {e}", jar_path.display()))?;
+            let file = std::fs::File::open(&jar_path)
+                .map_err(|e| format!("{}: {e}", jar_path.display()))?;
+            let mut jar =
+                zip::ZipArchive::new(file).map_err(|e| format!("{}: {e}", jar_path.display()))?;
             let atlas = Arc::new(render::atlas::Atlas::load(&mut jar)?);
             let renderer = render::vk::Renderer::new(&window, &atlas)?;
             println!("Vulkan device: {}", renderer.device_name);
             // Worlds live in `saves/<name>`; automated captures never save.
             if !self.opts.no_save && self.opts.auto_shot.is_none() {
-                let dir = self.opts.save_dir.clone().unwrap_or_else(|| PathBuf::from("saves").join(if self.opts.seed_given { format!("seed_{}", self.opts.cfg.seed) } else { "world".to_string() }));
+                let dir = self.opts.save_dir.clone().unwrap_or_else(|| {
+                    PathBuf::from("saves").join(if self.opts.seed_given {
+                        format!("seed_{}", self.opts.cfg.seed)
+                    } else {
+                        "world".to_string()
+                    })
+                });
                 self.opts.cfg.save_dir = Some(dir);
             }
             let mut game = Game::new(renderer, atlas, &self.opts.cfg);
             game.apply_start_screen();
-            println!("Seed: {}{}", game.seed, if game.resumed { " (resumed)" } else { "" });
+            println!(
+                "Seed: {}{}",
+                game.seed,
+                if game.resumed { " (resumed)" } else { "" }
+            );
             if let Some(d) = &self.opts.cfg.save_dir {
                 println!("World: {}", d.display());
             }
@@ -515,7 +672,9 @@ impl ApplicationHandler for App {
             }
             WindowEvent::KeyboardInput { event, .. } => {
                 let pressed = event.state == ElementState::Pressed;
-                let PhysicalKey::Code(code) = event.physical_key else { return };
+                let PhysicalKey::Code(code) = event.physical_key else {
+                    return;
+                };
                 match code {
                     KeyCode::ShiftLeft | KeyCode::ShiftRight => self.shift = pressed,
                     KeyCode::ControlLeft | KeyCode::ControlRight => self.ctrl = pressed,
@@ -524,7 +683,10 @@ impl ApplicationHandler for App {
                 let Some(g) = &mut self.game else { return };
                 if code == KeyCode::F2 && pressed && !event.repeat {
                     let _ = std::fs::create_dir_all("screenshots");
-                    let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+                    let t = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_secs())
+                        .unwrap_or(0);
                     g.screenshot = Some(PathBuf::from(format!("screenshots/{t}.png")));
                     return;
                 }
@@ -554,13 +716,17 @@ impl ApplicationHandler for App {
                     KeyCode::ControlLeft => g.input.sprint = pressed,
                     _ => {}
                 }
-            }            WindowEvent::RedrawRequested => {
+            }
+            WindowEvent::RedrawRequested => {
                 let Some(w) = self.window.clone() else { return };
                 let size = w.inner_size();
                 if let Some(g) = &mut self.game {
                     if let Some((path, wait)) = &self.opts.auto_shot {
                         let elapsed = self.started.elapsed().as_secs_f64();
-                        if self.shot_taken.is_none() && elapsed >= *wait && (g.idle() || elapsed >= *wait + 60.0) {
+                        if self.shot_taken.is_none()
+                            && elapsed >= *wait
+                            && (g.idle() || elapsed >= *wait + 60.0)
+                        {
                             println!("Meshes: {}", g.loaded_meshes());
                             g.screenshot = Some(path.clone());
                             self.shot_taken = Some(Instant::now());
@@ -608,6 +774,10 @@ fn main() {
         dump(&args[2..]);
         return;
     }
+    if args.len() >= 4 && args[1] == "--locate" {
+        locate(&args[2..]);
+        return;
+    }
     if args.len() >= 3 && args[1] == "--find-biomes" {
         find_biomes(&args[2..]);
         return;
@@ -627,13 +797,27 @@ fn main() {
     let opts = parse_args();
     let el = EventLoop::new().expect("event loop");
     el.set_control_flow(ControlFlow::Poll);
-    let mut app = App { opts, game: None, window: None, grabbed: false, focused: true, started: Instant::now(), shift: false, ctrl: false, shot_taken: None, error: None };
+    let mut app = App {
+        opts,
+        game: None,
+        window: None,
+        grabbed: false,
+        focused: true,
+        started: Instant::now(),
+        shift: false,
+        ctrl: false,
+        shot_taken: None,
+        error: None,
+    };
     let _ = el.run_app(&mut app);
     // The renderer must go before the window it presents to.
     app.game = None;
     app.window = None;
     if std::env::var_os("MINERUST_VALIDATE").is_some() {
-        println!("Vulkan validation messages: {}", render::vk::VALIDATION_MESSAGES.load(std::sync::atomic::Ordering::Relaxed));
+        println!(
+            "Vulkan validation messages: {}",
+            render::vk::VALIDATION_MESSAGES.load(std::sync::atomic::Ordering::Relaxed)
+        );
     }
     if let Some(e) = app.error {
         eprintln!("錯誤: {e}");

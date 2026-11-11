@@ -150,12 +150,29 @@ fn bounds(c: &Carver, x: f64, y: f64, z: f64, rad: f64, rad_y: f64) -> Option<Bo
     if water {
         None
     } else {
-        Some(Bounds { x0, x1, y0, y1, z0, z1 })
+        Some(Bounds {
+            x0,
+            x1,
+            y0,
+            y1,
+            z0,
+            z1,
+        })
     }
 }
 
 /// Shared carving loop; `inside(nx2+nz2, ny, yy)` decides whether a cell is carved.
-fn carve(c: &mut Carver, b: &Bounds, x: f64, y: f64, z: f64, rad: f64, rad_y: f64, lava: u8, inside: &dyn Fn(f64, f64, i32) -> bool) {
+fn carve(
+    c: &mut Carver,
+    b: &Bounds,
+    x: f64,
+    y: f64,
+    z: f64,
+    rad: f64,
+    rad_y: f64,
+    lava: u8,
+    inside: &dyn Fn(f64, f64, i32) -> bool,
+) {
     for xx in b.x0..b.x1 {
         let nx = ((xx + c.cx * 16) as f64 + 0.5 - x) / rad;
         for zz in b.z0..b.z1 {
@@ -242,10 +259,34 @@ fn cave_branch(
         if !room && step == branch_at && width > 1.0f32 && total > 0 {
             let s1 = r.next_long();
             let w1 = r.next_float() * 0.5f32 + 0.5f32;
-            cave_branch(s1, c, x, y, z, w1, yaw - PI / 2.0f32, pitch / 3.0f32, step, total, 1.0);
+            cave_branch(
+                s1,
+                c,
+                x,
+                y,
+                z,
+                w1,
+                yaw - PI / 2.0f32,
+                pitch / 3.0f32,
+                step,
+                total,
+                1.0,
+            );
             let s2 = r.next_long();
             let w2 = r.next_float() * 0.5f32 + 0.5f32;
-            cave_branch(s2, c, x, y, z, w2, yaw + PI / 2.0f32, pitch / 3.0f32, step, total, 1.0);
+            cave_branch(
+                s2,
+                c,
+                x,
+                y,
+                z,
+                w2,
+                yaw + PI / 2.0f32,
+                pitch / 3.0f32,
+                step,
+                total,
+                1.0,
+            );
             return;
         }
         if room || r.next_int_n(4) != 0 {
@@ -256,9 +297,15 @@ fn cave_branch(
             if dx * dx + dz * dz - rem * rem > lim * lim {
                 return;
             }
-            if x >= mx - 16.0 - rad * 2.0 && z >= mz - 16.0 - rad * 2.0 && x <= mx + 16.0 + rad * 2.0 && z <= mz + 16.0 + rad * 2.0 {
+            if x >= mx - 16.0 - rad * 2.0
+                && z >= mz - 16.0 - rad * 2.0
+                && x <= mx + 16.0 + rad * 2.0
+                && z <= mz + 16.0 + rad * 2.0
+            {
                 if let Some(b) = bounds(c, x, y, z, rad, rad_y) {
-                    carve(c, &b, x, y, z, rad, rad_y, block::LAVA, &|h2, ny, _| ny > -0.7 && h2 + ny * ny < 1.0);
+                    carve(c, &b, x, y, z, rad, rad_y, block::LAVA, &|h2, ny, _| {
+                        ny > -0.7 && h2 + ny * ny < 1.0
+                    });
                     if room {
                         break;
                     }
@@ -330,11 +377,23 @@ fn ravine_branch(
             if dx * dx + dz * dz - rem * rem > lim * lim {
                 return;
             }
-            if x >= mx - 16.0 - rad * 2.0 && z >= mz - 16.0 - rad * 2.0 && x <= mx + 16.0 + rad * 2.0 && z <= mz + 16.0 + rad * 2.0 {
+            if x >= mx - 16.0 - rad * 2.0
+                && z >= mz - 16.0 - rad * 2.0
+                && x <= mx + 16.0 + rad * 2.0
+                && z <= mz + 16.0 + rad * 2.0
+            {
                 if let Some(b) = bounds(c, x, y, z, rad, rad_y) {
-                    carve(c, &b, x, y, z, rad, rad_y, block::FLOWING_LAVA, &|h2, ny, yy| {
-                        h2 * rs[yy as usize] as f64 + ny * ny / 6.0 < 1.0
-                    });
+                    carve(
+                        c,
+                        &b,
+                        x,
+                        y,
+                        z,
+                        rad,
+                        rad_y,
+                        block::FLOWING_LAVA,
+                        &|h2, ny, yy| h2 * rs[yy as usize] as f64 + ny * ny / 6.0 < 1.0,
+                    );
                     if room {
                         break;
                     }

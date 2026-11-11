@@ -31,11 +31,64 @@ pub struct Stack {
     pub id: ItemId,
     pub meta: i32,
     pub count: u32,
+    /// Enchantments (`ench` / `StoredEnchantments` NBT), packed as up to
+    /// seven `(id: 6 bits, level: 3 bits)` entries, lowest bits first.
+    pub ench: u64,
 }
 
 impl Stack {
     pub fn new(id: ItemId, meta: i32, count: u32) -> Stack {
-        Stack { id, meta, count }
+        Stack {
+            id,
+            meta,
+            count,
+            ench: 0,
+        }
+    }
+
+    pub fn with_enchantments(mut self, list: &[(i32, i32)]) -> Stack {
+        let mut v = 0u64;
+        for (i, &(id, lvl)) in list.iter().take(7).enumerate() {
+            v |= (((id as u64) & 63) | (((lvl as u64) & 7) << 6)) << (i * 9);
+        }
+        self.ench = v;
+        self
+    }
+
+    /// `(enchantment id, level)` pairs.
+    pub fn enchantments(&self) -> Vec<(i32, i32)> {
+        let mut out = Vec::new();
+        let mut v = self.ench;
+        while v != 0 {
+            let e = v & 511;
+            out.push(((e & 63) as i32, (e >> 6) as i32));
+            v >>= 9;
+        }
+        out
+    }
+
+    /// Save-file form: `id:meta:count[:enchantments]`.
+    pub fn to_code(&self) -> String {
+        if self.ench != 0 {
+            format!("{}:{}:{}:{}", self.id, self.meta, self.count, self.ench)
+        } else {
+            format!("{}:{}:{}", self.id, self.meta, self.count)
+        }
+    }
+
+    pub fn from_code(s: &str) -> Option<Stack> {
+        let f: Vec<&str> = s.split(':').collect();
+        if f.len() != 3 && f.len() != 4 {
+            return None;
+        }
+        let mut st = Stack::new(f[0].parse().ok()?, f[1].parse().ok()?, f[2].parse().ok()?);
+        if f.len() == 4 {
+            st.ench = f[3].parse().ok()?;
+        }
+        if st.count == 0 || st.count > 64 {
+            return None;
+        }
+        Some(st)
     }
     pub fn block(&self) -> Option<u8> {
         if self.id < 256 && block::info(self.id as u8).exists {
@@ -46,7 +99,7 @@ impl Stack {
     }
     /// `ItemStack.areItemStacksEqual` without the count (stackable together).
     pub fn same_item(&self, o: &Stack) -> bool {
-        self.id == o.id && (self.meta == o.meta || tool(self.id).is_some())
+        self.id == o.id && (self.meta == o.meta || max_damage(self.id) > 0) && self.ench == o.ench
     }
 }
 
@@ -68,18 +121,41 @@ pub struct ToolInfo {
     pub efficiency: f32,
 }
 
-const MATERIALS: [(i32, i32, f32, &str); 5] = [(0, 59, 2.0, "wood"), (1, 131, 4.0, "stone"), (2, 250, 6.0, "iron"), (3, 1561, 8.0, "diamond"), (0, 32, 12.0, "gold")];
+const MATERIALS: [(i32, i32, f32, &str); 5] = [
+    (0, 59, 2.0, "wood"),
+    (1, 131, 4.0, "stone"),
+    (2, 250, 6.0, "iron"),
+    (3, 1561, 8.0, "diamond"),
+    (0, 32, 12.0, "gold"),
+];
 
 /// Tool item ids: `[sword, shovel, pickaxe, axe, hoe]` per material.
-const TOOL_IDS: [[ItemId; 5]; 5] = [[268, 269, 270, 271, 290], [272, 273, 274, 275, 291], [267, 256, 257, 258, 292], [276, 277, 278, 279, 293], [283, 284, 285, 286, 294]];
-const KINDS: [(ToolKind, &str); 5] = [(ToolKind::Sword, "sword"), (ToolKind::Shovel, "shovel"), (ToolKind::Pickaxe, "pickaxe"), (ToolKind::Axe, "axe"), (ToolKind::Hoe, "hoe")];
+const TOOL_IDS: [[ItemId; 5]; 5] = [
+    [268, 269, 270, 271, 290],
+    [272, 273, 274, 275, 291],
+    [267, 256, 257, 258, 292],
+    [276, 277, 278, 279, 293],
+    [283, 284, 285, 286, 294],
+];
+const KINDS: [(ToolKind, &str); 5] = [
+    (ToolKind::Sword, "sword"),
+    (ToolKind::Shovel, "shovel"),
+    (ToolKind::Pickaxe, "pickaxe"),
+    (ToolKind::Axe, "axe"),
+    (ToolKind::Hoe, "hoe"),
+];
 
 pub fn tool(id: ItemId) -> Option<ToolInfo> {
     for (m, row) in TOOL_IDS.iter().enumerate() {
         for (k, &tid) in row.iter().enumerate() {
             if tid == id {
                 let (level, max_uses, efficiency, _) = MATERIALS[m];
-                return Some(ToolInfo { kind: KINDS[k].0, level, max_uses, efficiency });
+                return Some(ToolInfo {
+                    kind: KINDS[k].0,
+                    level,
+                    max_uses,
+                    efficiency,
+                });
             }
         }
     }
@@ -88,17 +164,30 @@ pub fn tool(id: ItemId) -> Option<ToolInfo> {
 
 /// `Item.getItemStackLimit`
 pub fn max_stack(id: ItemId) -> u32 {
-    if tool(id).is_some() {
-        1
-    } else if id == SNOWBALL {
-        16
+    if id < 256 {
+        // Block items: doors and beds are items; signs and cakes too.
+        return 64;
+    }
+    crate::item_table::get(id).map_or(64, |d| d.stack)
+}
+
+/// `Item.getMaxDamage`
+pub fn max_damage(id: ItemId) -> i32 {
+    if id < 256 {
+        0
     } else {
-        64
+        crate::item_table::get(id).map_or(0, |d| d.max_damage)
     }
 }
 
 /// Texture file stem under `textures/items/` for non-block items.
 pub fn item_texture(id: ItemId, meta: i32) -> Option<String> {
+    if let Some((icon, _)) = crate::item_table::variant(id, meta) {
+        return Some(icon.to_string());
+    }
+    if let Some(d) = crate::item_table::get(id) {
+        return Some(d.icon.to_string());
+    }
     for (m, row) in TOOL_IDS.iter().enumerate() {
         for (k, &tid) in row.iter().enumerate() {
             if tid == id {
@@ -130,13 +219,11 @@ pub fn item_texture(id: ItemId, meta: i32) -> Option<String> {
             REEDS_ITEM => "reeds",
             MELON => "melon",
             EMERALD => "emerald",
-            DYE => {
-                match meta {
-                    2 => "dye_powder_green",
-                    3 => "dye_powder_brown",
-                    _ => "dye_powder_blue",
-                }
-            }
+            DYE => match meta {
+                2 => "dye_powder_green",
+                3 => "dye_powder_brown",
+                _ => "dye_powder_blue",
+            },
             _ => return None,
         }
         .to_string(),
@@ -154,6 +241,12 @@ pub fn display_name(s: &Stack) -> String {
                 return format!("{mat} {kind}");
             }
         }
+    }
+    if let Some((_, name)) = crate::item_table::variant(s.id, s.meta) {
+        return name.to_string();
+    }
+    if let Some(d) = crate::item_table::get(s.id) {
+        return d.name.to_string();
     }
     let wood = ["Oak", "Spruce", "Birch", "Jungle", "Acacia", "Dark Oak"];
     let m = s.meta.clamp(0, 15) as usize;
@@ -186,7 +279,7 @@ pub fn display_name(s: &Stack) -> String {
             DIRT => if s.meta == 2 { "Podzol" } else { "Dirt" }.into(),
             COBBLESTONE => "Cobblestone".into(),
             PLANKS => format!("{} Wood Planks", wood[m.min(5)]),
-            6 => "Sapling".into(),
+
             BEDROCK => "Bedrock".into(),
             FLOWING_WATER | WATER => "Water".into(),
             FLOWING_LAVA | LAVA => "Lava".into(),
@@ -205,7 +298,18 @@ pub fn display_name(s: &Stack) -> String {
             TALLGRASS => if s.meta == 2 { "Fern" } else { "Grass" }.into(),
             DEADBUSH => "Dead Bush".into(),
             YELLOW_FLOWER => "Dandelion".into(),
-            RED_FLOWER => ["Poppy", "Blue Orchid", "Allium", "Azure Bluet", "Red Tulip", "Orange Tulip", "White Tulip", "Pink Tulip", "Oxeye Daisy"][m.min(8)].into(),
+            RED_FLOWER => [
+                "Poppy",
+                "Blue Orchid",
+                "Allium",
+                "Azure Bluet",
+                "Red Tulip",
+                "Orange Tulip",
+                "White Tulip",
+                "Pink Tulip",
+                "Oxeye Daisy",
+            ][m.min(8)]
+            .into(),
             BROWN_MUSHROOM | RED_MUSHROOM => "Mushroom".into(),
             STONE_SLAB => match s.meta & 7 {
                 1 => "Sandstone Slab",
@@ -239,7 +343,89 @@ pub fn display_name(s: &Stack) -> String {
             STAINED_HARDENED_CLAY => "Stained Clay".into(),
             HARDENED_CLAY => "Hardened Clay".into(),
             PACKED_ICE => "Packed Ice".into(),
-            DOUBLE_PLANT => ["Sunflower", "Lilac", "Double Tallgrass", "Large Fern", "Rose Bush", "Peony"][m.min(5)].into(),
+            DOUBLE_PLANT => [
+                "Sunflower",
+                "Lilac",
+                "Double Tallgrass",
+                "Large Fern",
+                "Rose Bush",
+                "Peony",
+            ][m.min(5)]
+            .into(),
+            SAPLING => format!("{} Sapling", wood[(m & 7).min(5)]),
+            SPONGE => "Sponge".into(),
+            LAPIS_BLOCK => "Lapis Lazuli Block".into(),
+            DISPENSER => "Dispenser".into(),
+            NOTEBLOCK => "Note Block".into(),
+            GOLDEN_RAIL => "Powered Rail".into(),
+            DETECTOR_RAIL => "Detector Rail".into(),
+            STICKY_PISTON => "Sticky Piston".into(),
+            WEB => "Cobweb".into(),
+            PISTON => "Piston".into(),
+            WOOL => format!("{} Wool", COLOR_NAMES[m]),
+            CARPET => format!("{} Carpet", COLOR_NAMES[m]),
+            GOLD_BLOCK => "Block of Gold".into(),
+            IRON_BLOCK => "Block of Iron".into(),
+            DOUBLE_STONE_SLAB => "Stone Slab".into(),
+            BRICK_BLOCK => "Bricks".into(),
+            TNT => "TNT".into(),
+            BOOKSHELF => "Bookshelf".into(),
+            OAK_STAIRS => "Oak Wood Stairs".into(),
+            SPRUCE_STAIRS => "Spruce Wood Stairs".into(),
+            BIRCH_STAIRS => "Birch Wood Stairs".into(),
+            JUNGLE_STAIRS => "Jungle Wood Stairs".into(),
+            ACACIA_STAIRS => "Acacia Wood Stairs".into(),
+            DARK_OAK_STAIRS => "Dark Oak Wood Stairs".into(),
+            STONE_STAIRS => "Cobblestone Stairs".into(),
+            BRICK_STAIRS => "Brick Stairs".into(),
+            STONE_BRICK_STAIRS => "Stone Brick Stairs".into(),
+            NETHER_BRICK_STAIRS => "Nether Brick Stairs".into(),
+            SANDSTONE_STAIRS => "Sandstone Stairs".into(),
+            REDSTONE_WIRE => "Redstone Dust".into(),
+            DIAMOND_BLOCK => "Block of Diamond".into(),
+            WHEAT => "Crops".into(),
+            FARMLAND => "Farmland".into(),
+            WOODEN_DOOR => "Wooden Door".into(),
+            LADDER => "Ladder".into(),
+            RAIL => "Rail".into(),
+            LEVER => "Lever".into(),
+            STONE_PRESSURE_PLATE => "Stone Pressure Plate".into(),
+            IRON_DOOR => "Iron Door".into(),
+            WOODEN_PRESSURE_PLATE => "Wooden Pressure Plate".into(),
+            LIT_REDSTONE_ORE => "Redstone Ore".into(),
+            UNLIT_REDSTONE_TORCH | REDSTONE_TORCH => "Redstone Torch".into(),
+            STONE_BUTTON => "Button".into(),
+            WOODEN_BUTTON => "Button".into(),
+            JUKEBOX => "Jukebox".into(),
+            FENCE => "Fence".into(),
+            NETHERRACK => "Netherrack".into(),
+            SOUL_SAND => "Soul Sand".into(),
+            GLOWSTONE => "Glowstone".into(),
+            LIT_PUMPKIN => "Jack o'Lantern".into(),
+            UNPOWERED_REPEATER | POWERED_REPEATER => "Redstone Repeater".into(),
+            STONEBRICK => [
+                "Stone Bricks",
+                "Mossy Stone Bricks",
+                "Cracked Stone Bricks",
+                "Chiseled Stone Bricks",
+            ][m & 3]
+                .into(),
+            IRON_BARS => "Iron Bars".into(),
+            GLASS_PANE => "Glass Pane".into(),
+            NETHER_BRICK => "Nether Brick".into(),
+            CAULDRON => "Cauldron".into(),
+            END_PORTAL_FRAME => "End Portal".into(),
+            END_STONE => "End Stone".into(),
+            TRIPWIRE_HOOK => "Tripwire Hook".into(),
+            TRIPWIRE => "Tripwire".into(),
+            EMERALD_BLOCK => "Block of Emerald".into(),
+            FLOWER_POT => "Flower Pot".into(),
+            CARROTS => "Carrots".into(),
+            POTATOES => "Potatoes".into(),
+            REDSTONE_BLOCK => "Block of Redstone".into(),
+            QUARTZ_BLOCK => "Block of Quartz".into(),
+            HAY_BLOCK => "Hay Bale".into(),
+            COAL_BLOCK => "Block of Coal".into(),
             _ => format!("tile.{id}"),
         },
         id => format!("item.{id}"),
@@ -249,16 +435,39 @@ pub fn display_name(s: &Stack) -> String {
 
 /// Every non-block item id that has a texture (for the atlas).
 pub fn all_items() -> Vec<(ItemId, i32)> {
-    let mut v: Vec<(ItemId, i32)> = TOOL_IDS.iter().flatten().map(|&id| (id, 0)).collect();
-    for id in [COAL, DIAMOND, IRON_INGOT, GOLD_INGOT, STICK, STRING, SEEDS, FLINT, APPLE, REDSTONE, SNOWBALL, CLAY_BALL, REEDS_ITEM, MELON, EMERALD, BRICK] {
-        v.push((id, 0));
-    }
+    let mut v: Vec<(ItemId, i32)> = crate::item_table::ITEMS.iter().map(|d| (d.id, 0)).collect();
     v.push((COAL, 1));
-    for m in [2, 3, 4] {
+    for m in 1..16 {
         v.push((DYE, m));
+    }
+    for m in 1..4 {
+        v.push((349, m));
+    }
+    v.push((350, 1));
+    for m in 1..5 {
+        v.push((397, m));
     }
     v
 }
+
+pub const COLOR_NAMES: [&str; 16] = [
+    "White",
+    "Orange",
+    "Magenta",
+    "Light Blue",
+    "Yellow",
+    "Lime",
+    "Pink",
+    "Gray",
+    "Light Gray",
+    "Cyan",
+    "Purple",
+    "Blue",
+    "Brown",
+    "Green",
+    "Red",
+    "Black",
+];
 
 /// `Block.blockHardness`; negative means unbreakable.
 pub fn hardness(id: u8) -> f32 {
@@ -270,7 +479,9 @@ pub fn hardness(id: u8) -> f32 {
         COBBLESTONE | PLANKS | LOG | LOG2 | STONE_SLAB | MOSSY_COBBLESTONE => 2.0,
         BEDROCK => -1.0,
         FLOWING_WATER | WATER | FLOWING_LAVA | LAVA => 100.0,
-        GOLD_ORE | IRON_ORE | COAL_ORE | LAPIS_ORE | DIAMOND_ORE | REDSTONE_ORE | EMERALD_ORE => 3.0,
+        GOLD_ORE | IRON_ORE | COAL_ORE | LAPIS_ORE | DIAMOND_ORE | REDSTONE_ORE | EMERALD_ORE => {
+            3.0
+        }
         LEAVES | LEAVES2 | SNOW | VINE | BROWN_MUSHROOM_BLOCK | RED_MUSHROOM_BLOCK | COCOA => 0.2,
         GLASS => 0.3,
         SANDSTONE => 0.8,
@@ -282,6 +493,32 @@ pub fn hardness(id: u8) -> f32 {
         PUMPKIN | MELON_BLOCK => 1.0,
         MONSTER_EGG => 0.75,
         STAINED_HARDENED_CLAY | HARDENED_CLAY => 1.25,
+        SPONGE | FARMLAND => 0.6,
+        LAPIS_BLOCK | GOLD_BLOCK | END_STONE | WOODEN_DOOR | LIT_REDSTONE_ORE => 3.0,
+        DISPENSER => 3.5,
+        NOTEBLOCK | WOOL | SANDSTONE_STAIRS | QUARTZ_BLOCK => 0.8,
+        RAIL | GOLDEN_RAIL | DETECTOR_RAIL => 0.7,
+        PISTON
+        | STICKY_PISTON
+        | LEVER
+        | STONE_PRESSURE_PLATE
+        | WOODEN_PRESSURE_PLATE
+        | STONE_BUTTON
+        | WOODEN_BUTTON
+        | SOUL_SAND
+        | HAY_BLOCK => 0.5,
+        WEB => 4.0,
+        IRON_BLOCK | DIAMOND_BLOCK | EMERALD_BLOCK | IRON_DOOR | IRON_BARS | REDSTONE_BLOCK
+        | COAL_BLOCK => 5.0,
+        DOUBLE_STONE_SLAB | BRICK_BLOCK | OAK_STAIRS | SPRUCE_STAIRS | BIRCH_STAIRS
+        | JUNGLE_STAIRS | ACACIA_STAIRS | DARK_OAK_STAIRS | STONE_STAIRS | BRICK_STAIRS
+        | NETHER_BRICK_STAIRS | JUKEBOX | FENCE | NETHER_BRICK | CAULDRON => 2.0,
+        BOOKSHELF | STONEBRICK | STONE_BRICK_STAIRS => 1.5,
+        LADDER | NETHERRACK => 0.4,
+        GLOWSTONE | GLASS_PANE => 0.3,
+        LIT_PUMPKIN => 1.0,
+        END_PORTAL_FRAME => -1.0,
+        CARPET => 0.1,
         _ => 0.0,
     }
 }
@@ -291,8 +528,9 @@ fn pickaxe_level(id: u8) -> i32 {
     use block::*;
     match id {
         OBSIDIAN => 3,
-        DIAMOND_ORE | EMERALD_ORE | GOLD_ORE | REDSTONE_ORE => 2,
-        IRON_ORE | LAPIS_ORE => 1,
+        DIAMOND_ORE | EMERALD_ORE | GOLD_ORE | REDSTONE_ORE | LIT_REDSTONE_ORE | DIAMOND_BLOCK
+        | EMERALD_BLOCK | GOLD_BLOCK => 2,
+        IRON_ORE | LAPIS_ORE | IRON_BLOCK | LAPIS_BLOCK => 1,
         _ => 0,
     }
 }
@@ -301,9 +539,29 @@ fn effective(kind: ToolKind, id: u8) -> bool {
     use block::*;
     let m = block::material(id);
     match kind {
-        ToolKind::Pickaxe => matches!(m, Material::Rock | Material::PackedIce) || id == ICE,
-        ToolKind::Shovel => matches!(id, GRASS | DIRT | SAND | GRAVEL | SNOW_LAYER | SNOW | CLAY | MYCELIUM),
-        ToolKind::Axe => matches!(m, Material::Wood | Material::Plants | Material::Vine) || matches!(id, PUMPKIN | MELON_BLOCK),
+        ToolKind::Pickaxe => {
+            matches!(m, Material::Rock | Material::PackedIce | Material::Iron)
+                || id == ICE
+                || is_rail(id)
+                || matches!(id, STONE_BUTTON | STONE_PRESSURE_PLATE)
+        }
+        ToolKind::Shovel => matches!(
+            id,
+            GRASS
+                | DIRT
+                | SAND
+                | GRAVEL
+                | SNOW_LAYER
+                | SNOW
+                | CLAY
+                | MYCELIUM
+                | FARMLAND
+                | SOUL_SAND
+        ),
+        ToolKind::Axe => {
+            matches!(m, Material::Wood | Material::Plants | Material::Vine)
+                || matches!(id, PUMPKIN | MELON_BLOCK)
+        }
         _ => false,
     }
 }
@@ -312,13 +570,24 @@ fn effective(kind: ToolKind, id: u8) -> bool {
 pub fn can_harvest(held: Option<Stack>, id: u8) -> bool {
     let m = block::material(id);
     // Material.isToolNotRequired
-    let needs_tool = matches!(m, Material::Rock | Material::Snow | Material::CraftedSnow);
+    let needs_tool = matches!(
+        m,
+        Material::Rock | Material::Snow | Material::CraftedSnow | Material::Iron | Material::Web
+    );
+    if m == Material::Web {
+        // ItemSword / ItemShears.func_150897_b
+        return held.map_or(false, |s| {
+            s.id == 359 || tool(s.id).map_or(false, |t| t.kind == ToolKind::Sword)
+        });
+    }
     if !needs_tool {
         return true;
     }
     match held.and_then(|s| tool(s.id)) {
         Some(t) => match t.kind {
-            ToolKind::Pickaxe => matches!(m, Material::Rock) && t.level >= pickaxe_level(id),
+            ToolKind::Pickaxe => {
+                matches!(m, Material::Rock | Material::Iron) && t.level >= pickaxe_level(id)
+            }
             ToolKind::Shovel => id == block::SNOW_LAYER || id == block::SNOW,
             _ => false,
         },
@@ -329,8 +598,14 @@ pub fn can_harvest(held: Option<Stack>, id: u8) -> bool {
 /// `EntityPlayer.getCurrentPlayerStrVsBlock` before the water/air penalties.
 pub fn dig_speed(held: Option<Stack>, id: u8) -> f32 {
     match held.and_then(|s| tool(s.id)) {
+        _ if id == block::WEB && held.map_or(false, |s| s.id == 359) => 15.0,
         Some(t) if t.kind == ToolKind::Sword => {
-            if matches!(block::material(id), Material::Plants | Material::Vine | Material::Leaves | Material::Gourd) {
+            if id == block::WEB {
+                15.0
+            } else if matches!(
+                block::material(id),
+                Material::Plants | Material::Vine | Material::Leaves | Material::Gourd
+            ) {
                 1.5
             } else {
                 1.0
@@ -392,7 +667,15 @@ pub fn drops(id: u8, meta: i32, r: &mut JavaRandom) -> Vec<Stack> {
             let mut v = Vec::new();
             let jungle = id == LEAVES && meta & 3 == 3;
             if r.next_int_n(if jungle { 40 } else { 20 }) == 0 {
-                v.push(Stack::new(6, if id == LEAVES { meta & 3 } else { 4 + (meta & 1) }, 1));
+                v.push(Stack::new(
+                    6,
+                    if id == LEAVES {
+                        meta & 3
+                    } else {
+                        4 + (meta & 1)
+                    },
+                    1,
+                ));
             }
             let apple = (id == LEAVES && meta & 3 == 0) || (id == LEAVES2 && meta & 3 == 1);
             if apple && r.next_int_n(200) == 0 {
@@ -407,7 +690,8 @@ pub fn drops(id: u8, meta: i32, r: &mut JavaRandom) -> Vec<Stack> {
                 Vec::new()
             }
         }
-        GLASS | DEADBUSH | MOB_SPAWNER | ICE | PACKED_ICE | VINE | MONSTER_EGG | FLOWING_WATER | WATER | FLOWING_LAVA | LAVA | FIRE => Vec::new(),
+        GLASS | DEADBUSH | MOB_SPAWNER | ICE | PACKED_ICE | VINE | MONSTER_EGG | FLOWING_WATER
+        | WATER | FLOWING_LAVA | LAVA | FIRE => Vec::new(),
         SNOW_LAYER => vec![Stack::new(SNOWBALL, 0, (meta & 7) as u32 + 1)],
         SNOW => vec![Stack::new(SNOWBALL, 0, 4)],
         CLAY => vec![Stack::new(CLAY_BALL, 0, 4)],
@@ -416,12 +700,24 @@ pub fn drops(id: u8, meta: i32, r: &mut JavaRandom) -> Vec<Stack> {
         BROWN_MUSHROOM_BLOCK | RED_MUSHROOM_BLOCK => {
             let n = (r.next_int_n(10) - 7).max(0) as u32;
             if n > 0 {
-                vec![Stack::new(if id == BROWN_MUSHROOM_BLOCK { BROWN_MUSHROOM } else { RED_MUSHROOM } as ItemId, 0, n)]
+                vec![Stack::new(
+                    if id == BROWN_MUSHROOM_BLOCK {
+                        BROWN_MUSHROOM
+                    } else {
+                        RED_MUSHROOM
+                    } as ItemId,
+                    0,
+                    n,
+                )]
             } else {
                 Vec::new()
             }
         }
-        COCOA => vec![Stack::new(DYE, 3, if (meta & 12) >> 2 >= 2 { 3 } else { 1 })],
+        COCOA => vec![Stack::new(
+            DYE,
+            3,
+            if (meta & 12) >> 2 >= 2 { 3 } else { 1 },
+        )],
         DOUBLE_PLANT => {
             let variant = meta & 7;
             if meta & 8 != 0 {
@@ -436,7 +732,77 @@ pub fn drops(id: u8, meta: i32, r: &mut JavaRandom) -> Vec<Stack> {
                 one(DOUBLE_PLANT as ItemId, variant)
             }
         }
-        SAND | PLANKS | RED_FLOWER | STAINED_HARDENED_CLAY | SANDSTONE => one(id as ItemId, meta),
+        SAND
+        | PLANKS
+        | RED_FLOWER
+        | STAINED_HARDENED_CLAY
+        | SANDSTONE
+        | WOOL
+        | CARPET
+        | STONEBRICK
+        | QUARTZ_BLOCK => one(id as ItemId, meta),
+        SAPLING => one(id as ItemId, meta & 7),
+        DOUBLE_STONE_SLAB => vec![Stack::new(STONE_SLAB as ItemId, meta & 7, 2)],
+        WOODEN_DOOR => {
+            if meta & 8 == 0 {
+                one(324, 0)
+            } else {
+                Vec::new()
+            }
+        }
+        IRON_DOOR => {
+            if meta & 8 == 0 {
+                one(330, 0)
+            } else {
+                Vec::new()
+            }
+        }
+        WEB | TRIPWIRE => one(STRING, 0),
+        REDSTONE_WIRE => one(REDSTONE, 0),
+        LIT_REDSTONE_ORE => vec![Stack::new(REDSTONE, 0, 4 + r.next_int_n(2) as u32)],
+        UNLIT_REDSTONE_TORCH | REDSTONE_TORCH => one(REDSTONE_TORCH as ItemId, 0),
+        UNPOWERED_REPEATER | POWERED_REPEATER => one(356, 0),
+        CAULDRON => one(380, 0),
+        FLOWER_POT => one(390, 0),
+        BOOKSHELF => vec![Stack::new(340, 0, 3)],
+        GLOWSTONE => vec![Stack::new(348, 0, 2 + r.next_int_n(3) as u32)],
+        FARMLAND => one(DIRT as ItemId, 0),
+        GLASS_PANE | END_PORTAL_FRAME => Vec::new(),
+        WHEAT | CARROTS | POTATOES => {
+            // BlockCrops.getDrops (fortune 0)
+            let mut v = Vec::new();
+            let (crop, seed) = match id {
+                WHEAT => (296, SEEDS),
+                CARROTS => (391, 391),
+                _ => (392, 392),
+            };
+            if meta >= 7 {
+                v.push(Stack::new(crop, 0, 1));
+                for _ in 0..3 {
+                    if r.next_int_n(15) <= meta {
+                        v.push(Stack::new(seed, 0, 1));
+                    }
+                }
+                if id == POTATOES && r.next_int_n(50) == 0 {
+                    v.push(Stack::new(394, 0, 1));
+                }
+            } else {
+                v.push(Stack::new(seed, 0, 1));
+            }
+            v
+        }
+        LEVER
+        | STONE_BUTTON
+        | WOODEN_BUTTON
+        | STONE_PRESSURE_PLATE
+        | WOODEN_PRESSURE_PLATE
+        | TRIPWIRE_HOOK
+        | LADDER
+        | FENCE
+        | IRON_BARS => one(id as ItemId, 0),
+        RAIL | GOLDEN_RAIL | DETECTOR_RAIL | DISPENSER | PISTON | STICKY_PISTON | TNT
+        | LIT_PUMPKIN => one(id as ItemId, 0),
+        id if is_stairs(id) => one(id as ItemId, 0),
         STONE_SLAB => one(id as ItemId, meta & 7),
         _ => one(id as ItemId, 0),
     }
@@ -450,7 +816,9 @@ mod tests {
     /// for 1.7 (seconds * 20).
     #[test]
     fn break_times_match_vanilla() {
-        let ticks = |held: Option<Stack>, id: u8| (1.0 / break_progress(held, id, false, true)).ceil() as i32;
+        let ticks = |held: Option<Stack>, id: u8| {
+            (1.0 / break_progress(held, id, false, true)).ceil() as i32
+        };
         let pick = |m: usize| Some(Stack::new(TOOL_IDS[m][2], 0, 1));
         assert_eq!(ticks(None, block::DIRT), 15); // 0.75 s
         assert_eq!(ticks(None, block::STONE), 150); // 7.5 s
