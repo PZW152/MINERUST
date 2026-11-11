@@ -1,0 +1,24 @@
+[package]
+name = "minerust"
+version = "0.1.0"
+edition = "2021"
+description = "Minecraft 1.7.10 rewritten in pure Rust on Vulkan"
+
+[dependencies]
+ash = "0.38"
+ash-window = "0.13"
+winit = "0.30"
+raw-window-handle = "0.6"
+naga = { version = "24", features = ["wgsl-in", "spv-out"] }
+zip = { version = "2", default-features = false, features = ["deflate"] }
+png = "0.17"
+
+[profile.dev]
+opt-level = 2
+
+[profile.release]
+opt-level = 3
+debug = false
+lto = "thin"
+codegen-units = 4
+panic = "abort"

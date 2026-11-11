@@ -1,0 +1,97 @@
+# 原版 1.7.10 Bug 審計（對照 `Minecraft-1.7.10-Rust-Vulkan-Bug-Avoidance.md`）
+
+依報告第 5 節的規則：每張票分類為 R / J / E / D / W；無法驗證的一律標 `UNKNOWN`，不猜 PASS；
+尚未實作的系統標 `N/A`（等實作時必須回來補測試，不代表通過）。
+
+狀態欄：
+
+- **PASS**：有自動化測試或可重現的檢查，且通過
+- **FIXED**：移植時原樣重現了原版缺陷，已修正；`--vanilla-parity` 可切回原版行為
+- **NOT FIXED**：已知會重現，尚未修
+- **N/A**：對應的遊戲系統在本專案還不存在
+- **UNKNOWN**：無法在此環境驗證
+
+## 1. Release gates
+
+| Gate | 狀態 | 依據 |
+|---|---|---|
+| G0 Build / startup | PASS（部分） | `cargo build --release` 乾淨通過；冷啟動多次無當機。Vulkan validation layer：**UNKNOWN**，本機未安裝 `VK_LAYER_KHRONOS_validation`（`--validate` 已支援，裝了 SDK 就會啟用並計數訊息）。讀取 Java 版舊存檔：N/A，存檔是自有格式 |
+| G1 Deterministic replay | PASS（伺服端） | `sim::tests::replay_is_deterministic`：同種子＋同指令腳本跑三次，世界狀態雜湊一致，換種子則不同。腳本只有 120 tick，不是報告要求的 10 分鐘；玩家物理在客戶端依本機時鐘推進，未納入雜湊 |
+| G2 Tick-order / redstone / rail | N/A | 紅石、鐵軌、活塞、漏斗未實作。已實作的方塊更新（液體、落沙）走決定性排程佇列 |
+| G3 Chunk streaming | PASS（部分） | 區塊卸載／重載後方塊一致（`sim::tests::save_and_reload_round_trips`）。實體、跨維度：N/A |
+| G4 Vulkan render correctness | PASS（部分） | 2560×720 超寬畫面無透視；視窗縮放／最小化會重建 swapchain；座標 ±3,000,000 處渲染正常。都是人工看截圖，**沒有** golden screenshot 自動比對；device lost 未測；validation 見 G0 |
+| G5 Save / crash consistency | PASS | `world::save::tests`：暫存檔＋fsync＋rename；寫到一半留下的暫存檔不影響舊檔；截斷、位元翻轉、長度欄位造假一律拒收且不 panic；未知欄位原樣保留。NBT：N/A |
+| G6 Network / fuzz | N/A | 無網路層 |
+| G7 Audio | N/A | 無音效 |
+| G8 GUI / DPI / IME | N/A | 目前只有準星（依 GUI scale 縮放） |
+| G9 Soak | UNKNOWN | 沒有跑 2 小時測試 |
+| G10 1.7.10 behavioral parity | PASS（世界生成）＋已知例外 | 見第 4 節 |
+
+## 2. 已實作系統命中的票
+
+| BUG-ID | CLASS | 原版行為 | 本專案結果 | 測試 / 依據 | STATUS | 檔案 |
+|---|---|---|---|---|---|---|
+| MC-10176 | R | 大橡樹、黑橡樹、叢林巨樹的樹枝原木無條件放置，可取代基岩等任何方塊 | 只放進樹木可生長的方塊 | 相容模式下與原版逐方塊一致；預設模式加了檢查 | FIXED | `world/features/bigtrees.rs`, `misc.rs` |
+| MC-29490 | R | 1.7 光照黑斑：在高度圖下方新建的區段天空光全為 0 | 新區段的露天欄位直接給 15 | 這正是比對時在叢林樹冠下觀察到的現象 | FIXED | `world/server.rs` |
+| MC-7508 | R | `heightMap` 從最高區段頂層的下一格開始掃，漏看最頂那格 | 從頂層開始 | 程式碼對照 | FIXED | `world/server.rs` |
+| MC-30630 | R | 雙層草／蕨上下半各自取群系色，顏色可能不同 | 上半使用下半的取樣高度 | 程式碼對照 | FIXED | `render/mesher.rs` |
+| MC-31681 | R | 霧色隨玩家所在亮度變暗（樹下、室內） | 不再隨亮度變暗 | 程式碼對照 | FIXED | `game.rs` |
+| MC-7908 | R | 出生點搜尋放棄後可能落在海中 | 再以螺旋搜尋最近的乾地 | 程式碼對照 | FIXED | `sim.rs` |
+| MC-1168 | R | 睡蓮有時取代水方塊 | 放置由伺服端驗證：睡蓮必須在靜止水面上方，不取代水 | 程式碼對照 | FIXED | `sim.rs` |
+| MC-46082 | R | 空欄位使裝飾器 `nextInt(0)` 丟例外當機 | 回傳 0，不當機 | 程式碼對照 | FIXED | `java/random.rs` |
+| MC-4839 | R | 疾跑一段時間後自動停止（`sprintingTicksLeft`） | 沒有這個計時器 | `sprinting_speed_matches_vanilla` 跑 100 tick 仍在疾跑 | PASS | `entity/player.rs` |
+| MC-455 | R | 站在整數座標上無法操作西北側方塊 | 碰撞與射線在整數座標正常 | `exact_integer_coordinates_collide_normally` | PASS（碰撞）；射線未單獨測 | `entity/player.rs`, `game.rs` |
+| MC-3718 | R | 遠離原點時材質與效果錯位（浮點精度） | 頂點為區塊內座標，原點相對相機，世界座標 f64 | ±3,000,000 截圖正常 | PASS（人工） | `render/vk.rs` |
+| MC-8684 | R | 寬螢幕可看穿方塊 | 視錐剔除用完整投影矩陣的六個平面 | 2560×720 截圖正常 | PASS（人工） | `render/vk.rs` |
+| MC-61586 | R | 不透明度改變時客戶端凍結約 1 秒 | 光照在伺服器執行緒計算，渲染執行緒只收快照 | 架構 | PASS（架構） | `sim.rs` |
+| MC-9553 | R | 半透明物件繪製順序錯誤 | 半透明以區塊為單位由遠到近排序；**區塊內不排序**，水與冰交疊時仍可能錯 | — | NOT FIXED（部分） | `render/vk.rs` |
+| MC-3961 | R | 水、樹葉等方塊在上方被遮住後仍保留天空光 | 光照引擎是 1.7.10 的逐行移植，會重現 | — | NOT FIXED | `world/server.rs` |
+| MC-954 | R | 水中出現懸空的空氣方塊 | 成因未確認 | — | UNKNOWN | — |
+| MC-41414 | R | Mesa 色帶造成重複的粗糙邊線 | 與 1.7.10 相同。修正需改用後來版本的演算法，會改變地形 | — | NOT FIXED（保留原版地形） | `world/biome.rs` |
+| MC-2324 | R | 玩家被流水困住 | 水流推力已照原版實作；此票的情境未重現測試 | `flowing_water_pushes_the_player_downstream` 只驗證推力存在 | UNKNOWN | `entity/player.rs` |
+
+## 3. 43 張 Open / Reopened
+
+| BUG-ID | CLASS | STATUS | 說明 |
+|---|---|---|---|
+| MC-201, MC-14, MC-868, MC-957, MC-3430, MC-9551, MC-40042, MC-42269 | R | N/A | 礦車與鐵軌未實作 |
+| MC-10653, MC-62492, MC-67641, MC-12642 | R | N/A | 紅石、活塞、樓梯未實作 |
+| MC-1531 | R | N/A | 物品展示框與畫未實作 |
+| MC-1874, MC-19676 | R | N/A | 破壞粒子、裂痕、冒險模式未實作 |
+| MC-3304, MC-12656, MC-20463 | R | N/A | 物品、附魔、掉落物未實作 |
+| MC-1538 | R | N/A | 無音效 |
+| MC-61489, MC-64947, MC-2488, MC-30217, MC-3900, MC-46901, MC-56416, MC-64867 | R | N/A | 無 GUI、文字輸入、聊天 |
+| MC-72028 | R | N/A | 無閃電與傷害 |
+| MC-12918 | R | N/A | 結構（叢林神殿）未生成 |
+| MC-2110 | R | N/A | 無傳送門與投射物 |
+| MC-34756, MC-36093, MC-4890, MC-39583, MC-45602 | R | N/A | 無網路／伺服器清單。存檔已採原子寫入，同一類風險（MC-39583）在世界存檔上有測試 |
+| MC-779, MC-13937, MC-14395, MC-32110, MC-38278, MC-65065 | R | N/A | 無實體 |
+| MC-29512 | R | N/A | 無火 |
+| MC-8684 | R | PASS（人工） | 見第 2 節 |
+
+## 4. G10：與原版的一致性
+
+以反編譯的 1.7.10 類別實際執行並逐位元組比對（`tools/Harness.java`、`tools/PopHarness.java`）。
+
+- **地形階段**（`provideChunk`）：8 個種子 × 1000 區塊，方塊、中繼值、群系全部一致。
+- **裝飾階段**（`populate`，結構關閉）：3 個種子、每種群系各取一區、共 136 區，
+  比對方塊、中繼值、天空光、方塊光。方塊與中繼值全部一致；光照 133 區一致。
+- **已知例外**：3 區（都在叢林）有天空光差異，位置在巨樹樹冠附近新建的空中區段，
+  每區約五百格、原版為 15 而本專案為 0。原因沒有查出來。預設模式下這類格子由 MC-29490 的修正補上，
+  只有 `--vanilla-parity` 會看到差異。
+
+比對時保留的原版行為（不是 bug 票，但會影響結果）：
+
+- 沼澤的「y=62 換成水＋睡蓮」實際上永不執行。
+- `GenLayerHills` 的河流輸入層以 `worldGenSeed = 0` 運作。
+- 群系槽位 161 與 160 是同一物件。
+- 樹葉的 `isFullBlock()` 為 true，所以雲杉葉不覆蓋既有樹葉、蘑菇可長在樹葉上。
+- 流動液體的擴散方向陣列是方塊物件的共用欄位，立即更新時會被遞迴覆寫。
+- `WorldGenBigTree.heightLimit` 在每個群系物件上跨樹保留。
+
+## 5. 與原版的刻意差異
+
+- 上表所有 FIXED 項目（可用 `--vanilla-parity` 還原）。
+- 落沙／礫石不產生掉落實體，直接落到定點。
+- 破壞方塊為瞬間、放置不消耗物品、不需創造模式即可飛行：生存系統未實作前的暫時做法。
+- 區塊載入順序固定為由近到遠的全序，原版取決於玩家移動與執行緒時序。

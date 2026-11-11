@@ -1,0 +1,6 @@
+target/
+saves/
+screenshots/
+*.bin
+*.class
+logs/
