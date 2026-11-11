@@ -353,7 +353,7 @@ pub struct ServerWorld {
     next_tick_id: u64,
     /// `ChunkProviderGenerate.rand`
     pub gen_rand: JavaRandom,
-    update_lcg: i32,
+    pub(crate) update_lcg: i32,
     /// `WorldGenBigTree.heightLimit` of each biome object's generator.
     pub big_tree_limit: [i32; 256],
     /// `BlockDynamicLiquid.field_149814_b` for flowing water / flowing lava.

@@ -306,6 +306,7 @@ impl Sim {
         for dx in -radius..=radius {
             for dz in -radius..=radius {
                 self.world.tick_chunk(self.centre.0 + dx, self.centre.1 + dz);
+                self.world.update_blocks(self.centre.0 + dx, self.centre.1 + dz);
             }
         }
         if self.world.total_time % 40 == 0 {

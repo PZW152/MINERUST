@@ -4,6 +4,7 @@ pub mod gen;
 pub mod populate;
 pub mod save;
 pub mod server;
+pub mod ticks;
 
 pub use gen::chunk_provider::{ChunkData, ChunkProvider};
 pub use server::ServerWorld;
