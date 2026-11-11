@@ -128,6 +128,14 @@ pub struct Game {
     anim_state: Vec<(u32, usize)>,
     /// Cloud texel the current cloud mesh was built for.
     cloud_cell: Option<(i32, i32)>,
+    /// Hotbar contents and the selected slot.
+    pub hotbar: [Option<crate::gui::Stack>; 9],
+    pub slot: usize,
+    /// F3 overlay.
+    pub show_debug: bool,
+    fps: u32,
+    fps_frames: u32,
+    fps_since: Instant,
 }
 
 fn hsb_to_rgb(hue: f32, s: f32, b: f32) -> [f32; 3] {
@@ -242,6 +250,22 @@ impl Game {
             noise: BiomeNoise::new(),
             anim_state: Vec::new(),
             cloud_cell: None,
+            hotbar: [
+                Some((block::STONE, 0, 1)),
+                Some((block::COBBLESTONE, 0, 1)),
+                Some((block::DIRT, 0, 1)),
+                Some((block::PLANKS, 0, 1)),
+                Some((block::LOG, 0, 1)),
+                Some((block::LEAVES, 0, 1)),
+                Some((block::GLASS, 0, 1)),
+                Some((block::SAND, 0, 1)),
+                Some((block::FLOWING_WATER, 0, 1)),
+            ],
+            slot: 0,
+            show_debug: std::env::var_os("MINERUST_F3").is_some(),
+            fps: 0,
+            fps_frames: 0,
+            fps_since: Instant::now(),
         }
     }
     pub fn spawn_info(&self) -> String {
@@ -767,7 +791,35 @@ impl Game {
         while window_size.0 / (scale + 1) >= 320 && window_size.1 / (scale + 1) >= 240 {
             scale += 1;
         }
-        let frame = Frame { globals: &g, cam: eye, outline: self.selected.map(|s| s.0), gui_scale: scale as f32, screenshot: self.screenshot.take(), star_brightness: star, sunrise, clouds: Some(clouds) };
+        // --- GUI (GuiIngame) ---
+        self.fps_frames += 1;
+        if self.fps_since.elapsed().as_secs_f32() >= 1.0 {
+            self.fps = self.fps_frames;
+            self.fps_frames = 0;
+            self.fps_since = Instant::now();
+        }
+        let mut ui = crate::gui::Ui::new(&self.atlas, window_size.0 as f32 / scale as f32, window_size.1 as f32 / scale as f32);
+        crate::gui::hotbar(&mut ui, &self.hotbar, self.slot, false);
+        if self.show_debug {
+            let p = &self.player;
+            let (fx, fy, fz) = (math::floor_double(p.pos[0]), math::floor_double(p.bb.min[1]), math::floor_double(p.pos[2]));
+            let facing = (math::floor_double((p.yaw * 4.0f32 / 360.0f32) as f64 + 0.5) & 3) as usize;
+            let left = vec![
+                format!("Minecraft 1.7.10 ({} fps, {} chunk updates)", self.fps, self.in_flight),
+                format!("C: {}/{}. F: 0, O: 0, E: 0", self.renderer.mesh_count(), self.world.chunks.len()),
+                String::new(),
+                format!("x: {:.5} ({}) // c: {} ({})", p.pos[0], fx, fx >> 4, fx & 15),
+                format!("y: {:.3} (feet pos, {:.3} eyes pos)", p.bb.min[1], p.pos[1]),
+                format!("z: {:.5} ({}) // c: {} ({})", p.pos[2], fz, fz >> 4, fz & 15),
+                format!("f: {} ({}) / {:.5}", facing, ["SOUTH", "WEST", "NORTH", "EAST"][facing], math::wrap_angle_180(p.yaw)),
+                format!("lc: {} b: {} bl: {} sl: {} rl: {}", 0, self.world.biome(fx, fz).name, self.world.light(false, fx, fy, fz), self.world.light(true, fx, fy, fz), self.world.light(true, fx, fy, fz).max(self.world.light(false, fx, fy, fz))),
+                format!("ws: {:.3}, fs: {:.3}, g: {}, fl: {}", 0.1, 0.05, p.on_ground, 0),
+            ];
+            let right = vec![format!("Seed: {}", self.seed), format!("Time: {}", self.world_time)];
+            crate::gui::debug_overlay(&mut ui, &left, &right);
+        }
+        let ui_verts = ui.v;
+        let frame = Frame { ui: &ui_verts, globals: &g, cam: eye, outline: self.selected.map(|s| s.0), gui_scale: scale as f32, screenshot: self.screenshot.take(), star_brightness: star, sunrise, clouds: Some(clouds) };
         self.renderer.render(&frame, window_size);
     }
 }

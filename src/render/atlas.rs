@@ -6,6 +6,7 @@ use std::io::Read;
 
 pub const ATLAS_SIZE: u32 = 256;
 pub const MIP_LEVELS: u32 = 5;
+pub const UI_SIZE: u32 = 512;
 
 pub struct Atlas {
     /// RGBA8 pixels per mip level.
@@ -26,6 +27,11 @@ pub struct Atlas {
     pub grass_map: Vec<u32>,
     /// `colormap/foliage.png`
     pub foliage_map: Vec<u32>,
+    /// GUI sheet, 512x512 RGBA: `gui/widgets.png` at (0, 0), `gui/icons.png`
+    /// at (256, 0), `font/ascii.png` at (0, 256).
+    pub ui: Vec<u8>,
+    /// `FontRenderer.charWidth` for the ASCII sheet.
+    pub char_width: [u8; 256],
     /// Animated tiles (`.png.mcmeta`).
     pub anims: Vec<Anim>,
     /// `environment/clouds.png` as a 256x256 opacity mask.
@@ -324,7 +330,42 @@ impl Atlas {
             }
             img.rgba.chunks(4).map(|p| p[3] > 25).collect()
         };
+        // GUI sheet and font metrics (FontRenderer.readFontTexture).
+        let mut ui = vec![0u8; UI_SIZE as usize * UI_SIZE as usize * 4];
+        let mut blit = |img: &Image, ox: u32, oy: u32| {
+            for y in 0..img.h.min(UI_SIZE - oy) {
+                let s = (y * img.w * 4) as usize;
+                let d = (((oy + y) * UI_SIZE + ox) * 4) as usize;
+                let n = (img.w.min(UI_SIZE - ox) * 4) as usize;
+                ui[d..d + n].copy_from_slice(&img.rgba[s..s + n]);
+            }
+        };
+        blit(&read_png(jar, "assets/minecraft/textures/gui/widgets.png")?, 0, 0);
+        blit(&read_png(jar, "assets/minecraft/textures/gui/icons.png")?, 256, 0);
+        let font = read_png(jar, "assets/minecraft/textures/font/ascii.png")?;
+        blit(&font, 0, 256);
+        let mut char_width = [0u8; 256];
+        let cell = font.w / 16;
+        for (k, w) in char_width.iter_mut().enumerate() {
+            let (cx, cy) = (k as u32 % 16, k as u32 / 16);
+            let mut used = cell as i32 - 1;
+            while used >= 0 {
+                let x = cx * cell + used as u32;
+                let empty = (0..cell).all(|y| font.rgba[(((cy * cell + y) * font.w + x) * 4 + 3) as usize] == 0);
+                if !empty {
+                    break;
+                }
+                used -= 1;
+            }
+            used += 1;
+            if k == 32 {
+                used = 3;
+            }
+            *w = ((0.5 + used as f64 * (8.0 / cell as f64)) as i32 + 1) as u8;
+        }
         Ok(Atlas {
+            ui,
+            char_width,
             anims,
             clouds,
             mips: b.mips,

@@ -32,6 +32,7 @@ struct Push {
 @group(0) @binding(0) var<uniform> g: Globals;
 @group(0) @binding(1) var tex: texture_2d<f32>;
 @group(0) @binding(2) var samp: sampler;
+@group(0) @binding(3) var ui_tex: texture_2d<f32>;
 var<push_constant> pc: Push;
 
 struct TerrainOut {
@@ -139,6 +140,43 @@ fn fs_sky(i: SkyOut) -> @location(0) vec4<f32> {
     return vec4<f32>(c, 1.0);
 }
 
+struct UiOut {
+    @builtin(position) pos: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+    @location(1) color: vec4<f32>,
+    @location(2) sel: f32,
+}
+
+// GUI geometry: positions in scaled GUI pixels, `pc.offset.xy` maps them to NDC.
+// `light.x` selects the texture: 0 block atlas, 1 GUI sheet, 2 untextured.
+@vertex
+fn vs_ui(@location(0) pos: vec3<f32>, @location(1) uv: vec2<f32>, @location(2) color: vec4<f32>, @location(3) light: vec4<f32>) -> UiOut {
+    var o: UiOut;
+    o.pos = vec4<f32>(pos.x * pc.offset.x - 1.0, pos.y * pc.offset.y - 1.0, 0.0, 1.0);
+    o.uv = uv;
+    o.color = color;
+    o.sel = light.x * 255.0;
+    return o;
+}
+
+@fragment
+fn fs_ui(i: UiOut) -> @location(0) vec4<f32> {
+    let a = textureSampleLevel(tex, samp, i.uv, 0.0);
+    let b = textureSampleLevel(ui_tex, samp, i.uv, 0.0);
+    var t = a;
+    if (i.sel > 0.5) {
+        t = b;
+    }
+    if (i.sel > 1.5) {
+        t = vec4<f32>(1.0, 1.0, 1.0, 1.0);
+    }
+    let c = t * i.color;
+    if (c.a < 0.004) {
+        discard;
+    }
+    return c;
+}
+
 struct ColorOut {
     @builtin(position) pos: vec4<f32>,
     @location(0) color: vec4<f32>,
@@ -218,7 +256,11 @@ pub struct Frame<'a> {
     /// Sunrise/sunset glow: colour with alpha, and whether it is on the sunset side.
     pub sunrise: Option<([f32; 4], bool)>,
     pub clouds: Option<CloudDraw>,
+    /// GUI triangles (see `vs_ui`), in GUI pixels.
+    pub ui: &'a [Vertex],
 }
+
+const UI_BUF_SIZE: u64 = 1 << 20;
 
 pub struct CloudDraw {
     /// Mesh origin relative to the camera.
@@ -255,6 +297,9 @@ struct PerFrame {
     stage: vk::Buffer,
     stage_mem: vk::DeviceMemory,
     stage_ptr: *mut u8,
+    ui_buf: vk::Buffer,
+    ui_mem: vk::DeviceMemory,
+    ui_ptr: *mut u8,
     set: vk::DescriptorSet,
 }
 
@@ -300,6 +345,8 @@ pub struct Renderer {
     pipe_sky_add: vk::Pipeline,
     pipe_cloud_depth: vk::Pipeline,
     pipe_cloud_color: vk::Pipeline,
+    pipe_gui: vk::Pipeline,
+    ui_tex: (vk::Image, vk::DeviceMemory, vk::ImageView),
     stars: (vk::Buffer, vk::DeviceMemory, u32),
     cloud_mesh: Option<(vk::Buffer, vk::DeviceMemory, u32)>,
     tile_updates: Vec<TileUpdate>,
@@ -518,6 +565,11 @@ impl Renderer {
                     .descriptor_type(vk::DescriptorType::SAMPLER)
                     .descriptor_count(1)
                     .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+                vk::DescriptorSetLayoutBinding::default()
+                    .binding(3)
+                    .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
+                    .descriptor_count(1)
+                    .stage_flags(vk::ShaderStageFlags::FRAGMENT),
             ];
             let set_layout =
                 device.create_descriptor_set_layout(&vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings), None).map_err(|e| e.to_string())?;
@@ -529,7 +581,7 @@ impl Renderer {
                 .map_err(|e| e.to_string())?;
             let pool_sizes = [
                 vk::DescriptorPoolSize { ty: vk::DescriptorType::UNIFORM_BUFFER, descriptor_count: FRAMES as u32 },
-                vk::DescriptorPoolSize { ty: vk::DescriptorType::SAMPLED_IMAGE, descriptor_count: FRAMES as u32 },
+                vk::DescriptorPoolSize { ty: vk::DescriptorType::SAMPLED_IMAGE, descriptor_count: 2 * FRAMES as u32 },
                 vk::DescriptorPoolSize { ty: vk::DescriptorType::SAMPLER, descriptor_count: FRAMES as u32 },
             ];
             let desc_pool = device
@@ -566,11 +618,11 @@ impl Renderer {
                     vk::VertexInputAttributeDescription { location: 3, binding: 0, format: vk::Format::R8G8B8A8_UNORM, offset: 24 },
                 ];
                 let mut vi = vk::PipelineVertexInputStateCreateInfo::default();
-                if kind == 1 || kind == 2 {
+                if kind == 1 || kind == 2 || kind == 9 {
                     vi = vi.vertex_binding_descriptions(&vb).vertex_attribute_descriptions(&va_terrain);
                 } else if kind == 3 || kind == 4 {
                     vi = vi.vertex_binding_descriptions(&vb).vertex_attribute_descriptions(&va_terrain[..1]);
-                } else if kind >= 5 {
+                } else if kind >= 5 && kind != 9 {
                     vi = vi.vertex_binding_descriptions(&vb).vertex_attribute_descriptions(&va_color);
                 }
                 let ia = vk::PipelineInputAssemblyStateCreateInfo::default()
@@ -600,7 +652,7 @@ impl Renderer {
                         .dst_alpha_blend_factor(vk::BlendFactor::ZERO)
                         .alpha_blend_op(vk::BlendOp::ADD);
                 }
-                if kind == 2 || kind == 3 || kind == 5 || kind == 8 {
+                if kind == 2 || kind == 3 || kind == 5 || kind == 8 || kind == 9 {
                     att = att
                         .blend_enable(true)
                         .src_color_blend_factor(vk::BlendFactor::SRC_ALPHA)
@@ -647,6 +699,7 @@ impl Renderer {
             let pipe_sky_add = mk(c"vs_color", c"fs_color", 6);
             let pipe_cloud_depth = mk(c"vs_color", c"fs_color_fog", 7);
             let pipe_cloud_color = mk(c"vs_color", c"fs_color_fog", 8);
+            let pipe_gui = mk(c"vs_ui", c"fs_ui", 9);
             device.destroy_shader_module(module, None);
 
             let sampler = device
@@ -692,6 +745,8 @@ impl Renderer {
                 pipe_sky_add,
                 pipe_cloud_depth,
                 pipe_cloud_color,
+                pipe_gui,
+                ui_tex: (vk::Image::null(), vk::DeviceMemory::null(), vk::ImageView::null()),
                 stars: (vk::Buffer::null(), vk::DeviceMemory::null(), 0),
                 cloud_mesh: None,
                 tile_updates: Vec::new(),
@@ -712,6 +767,7 @@ impl Renderer {
                 debug,
             };
             r.upload_atlas(atlas);
+            r.upload_ui(atlas);
             r.ensure_indices(65536);
             r.create_stars();
             let size = window.inner_size();
@@ -738,6 +794,9 @@ impl Renderer {
                 let dyn_ptr = r.device.map_memory(dyn_mem, 0, DYN_SIZE, vk::MemoryMapFlags::empty()).unwrap() as *mut u8;
                 let (dyn2, dyn2_mem) = r.create_buffer(DYN_SIZE, vk::BufferUsageFlags::VERTEX_BUFFER, host);
                 let dyn2_ptr = r.device.map_memory(dyn2_mem, 0, DYN_SIZE, vk::MemoryMapFlags::empty()).unwrap() as *mut u8;
+                let (ui_buf, ui_mem) = r.create_buffer(UI_BUF_SIZE, vk::BufferUsageFlags::VERTEX_BUFFER, host);
+                let ui_ptr = r.device.map_memory(ui_mem, 0, UI_BUF_SIZE, vk::MemoryMapFlags::empty()).unwrap() as *mut u8;
+                let ui_info = [vk::DescriptorImageInfo { sampler: vk::Sampler::null(), image_view: r.ui_tex.2, image_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL }];
                 let (stage, stage_mem) = r.create_buffer(STAGE_SIZE, vk::BufferUsageFlags::TRANSFER_SRC, host);
                 let stage_ptr = r.device.map_memory(stage_mem, 0, STAGE_SIZE, vk::MemoryMapFlags::empty()).unwrap() as *mut u8;
                 let bi = [vk::DescriptorBufferInfo { buffer: ubo, offset: 0, range: ubo_size }];
@@ -747,6 +806,7 @@ impl Renderer {
                     vk::WriteDescriptorSet::default().dst_set(sets[i]).dst_binding(0).descriptor_type(vk::DescriptorType::UNIFORM_BUFFER).buffer_info(&bi),
                     vk::WriteDescriptorSet::default().dst_set(sets[i]).dst_binding(1).descriptor_type(vk::DescriptorType::SAMPLED_IMAGE).image_info(&ii),
                     vk::WriteDescriptorSet::default().dst_set(sets[i]).dst_binding(2).descriptor_type(vk::DescriptorType::SAMPLER).image_info(&si),
+                    vk::WriteDescriptorSet::default().dst_set(sets[i]).dst_binding(3).descriptor_type(vk::DescriptorType::SAMPLED_IMAGE).image_info(&ui_info),
                 ];
                 r.device.update_descriptor_sets(&writes, &[]);
                 let sem = vk::SemaphoreCreateInfo::default();
@@ -767,6 +827,9 @@ impl Renderer {
                     stage,
                     stage_mem,
                     stage_ptr,
+                    ui_buf,
+                    ui_mem,
+                    ui_ptr,
                     set: sets[i],
                 });
             }
@@ -869,6 +932,70 @@ impl Renderer {
                 )
                 .unwrap();
             self.atlas = (image, mem, view);
+        }
+    }
+
+    /// Uploads the GUI sheet (no mipmaps).
+    fn upload_ui(&mut self, atlas: &Atlas) {
+        use super::atlas::UI_SIZE;
+        unsafe {
+            let info = vk::ImageCreateInfo::default()
+                .image_type(vk::ImageType::TYPE_2D)
+                .format(vk::Format::R8G8B8A8_UNORM)
+                .extent(vk::Extent3D { width: UI_SIZE, height: UI_SIZE, depth: 1 })
+                .mip_levels(1)
+                .array_layers(1)
+                .samples(vk::SampleCountFlags::TYPE_1)
+                .tiling(vk::ImageTiling::OPTIMAL)
+                .usage(vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST)
+                .initial_layout(vk::ImageLayout::UNDEFINED);
+            let image = self.device.create_image(&info, None).unwrap();
+            let req = self.device.get_image_memory_requirements(image);
+            let mem = self
+                .device
+                .allocate_memory(
+                    &vk::MemoryAllocateInfo::default().allocation_size(req.size).memory_type_index(self.mem_type(req.memory_type_bits, vk::MemoryPropertyFlags::DEVICE_LOCAL)),
+                    None,
+                )
+                .unwrap();
+            self.device.bind_image_memory(image, mem, 0).unwrap();
+            let host = vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT;
+            let (sb, sm) = self.create_buffer(atlas.ui.len() as u64, vk::BufferUsageFlags::TRANSFER_SRC, host);
+            self.write_buffer(sm, &atlas.ui);
+            let range = vk::ImageSubresourceRange { aspect_mask: vk::ImageAspectFlags::COLOR, base_mip_level: 0, level_count: 1, base_array_layer: 0, layer_count: 1 };
+            let dev = &self.device;
+            self.one_shot(|cmd| {
+                let b1 = [vk::ImageMemoryBarrier::default()
+                    .old_layout(vk::ImageLayout::UNDEFINED)
+                    .new_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
+                    .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                    .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                    .image(image)
+                    .subresource_range(range)
+                    .dst_access_mask(vk::AccessFlags::TRANSFER_WRITE)];
+                dev.cmd_pipeline_barrier(cmd, vk::PipelineStageFlags::TOP_OF_PIPE, vk::PipelineStageFlags::TRANSFER, vk::DependencyFlags::empty(), &[], &[], &b1);
+                let region = [vk::BufferImageCopy::default()
+                    .image_subresource(vk::ImageSubresourceLayers { aspect_mask: vk::ImageAspectFlags::COLOR, mip_level: 0, base_array_layer: 0, layer_count: 1 })
+                    .image_extent(vk::Extent3D { width: UI_SIZE, height: UI_SIZE, depth: 1 })];
+                dev.cmd_copy_buffer_to_image(cmd, sb, image, vk::ImageLayout::TRANSFER_DST_OPTIMAL, &region);
+                let b2 = [vk::ImageMemoryBarrier::default()
+                    .old_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
+                    .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                    .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                    .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                    .image(image)
+                    .subresource_range(range)
+                    .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
+                    .dst_access_mask(vk::AccessFlags::SHADER_READ)];
+                dev.cmd_pipeline_barrier(cmd, vk::PipelineStageFlags::TRANSFER, vk::PipelineStageFlags::FRAGMENT_SHADER, vk::DependencyFlags::empty(), &[], &[], &b2);
+            });
+            self.device.destroy_buffer(sb, None);
+            self.device.free_memory(sm, None);
+            let view = self
+                .device
+                .create_image_view(&vk::ImageViewCreateInfo::default().image(image).view_type(vk::ImageViewType::TYPE_2D).format(vk::Format::R8G8B8A8_UNORM).subresource_range(range), None)
+                .unwrap();
+            self.ui_tex = (image, mem, view);
         }
     }
 
@@ -1395,6 +1522,15 @@ impl Renderer {
                     draw_clouds(c);
                 }
             }
+            // GUI: positions are in scaled GUI pixels with the origin top-left.
+            let ui_count = frame.ui.len().min(UI_BUF_SIZE as usize / std::mem::size_of::<Vertex>());
+            if ui_count > 0 {
+                std::ptr::copy_nonoverlapping(frame.ui.as_ptr() as *const u8, self.frames[fi].ui_ptr, ui_count * std::mem::size_of::<Vertex>());
+                dev.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, self.pipe_gui);
+                push([2.0 * frame.gui_scale / self.extent.width as f32, 2.0 * frame.gui_scale / self.extent.height as f32, 0.0, 0.0], [1.0; 4]);
+                dev.cmd_bind_vertex_buffers(cmd, 0, &[self.frames[fi].ui_buf], &[0]);
+                dev.cmd_draw(cmd, ui_count as u32, 1, 0, 0);
+            }
             dev.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, self.pipe_ui);
             push([0.0, 0.0, 0.0, 1.0], [1.0, 1.0, 1.0, 1.0]);
             dev.cmd_bind_vertex_buffers(cmd, 0, &[dynbuf], &[0]);
@@ -1536,6 +1672,8 @@ impl Drop for Renderer {
                 self.device.free_memory(f.dyn2_mem, None);
                 self.device.destroy_buffer(f.stage, None);
                 self.device.free_memory(f.stage_mem, None);
+                self.device.destroy_buffer(f.ui_buf, None);
+                self.device.free_memory(f.ui_mem, None);
             }
             self.destroy_swapchain_views();
             self.device.destroy_buffer(self.index_buf.0, None);
@@ -1544,6 +1682,10 @@ impl Drop for Renderer {
             self.device.destroy_image(self.atlas.0, None);
             self.device.free_memory(self.atlas.1, None);
             self.device.destroy_sampler(self.sampler, None);
+            self.device.destroy_image_view(self.ui_tex.2, None);
+            self.device.destroy_image(self.ui_tex.0, None);
+            self.device.free_memory(self.ui_tex.1, None);
+            self.device.destroy_pipeline(self.pipe_gui, None);
             self.device.destroy_buffer(self.stars.0, None);
             self.device.free_memory(self.stars.1, None);
             if let Some((b, m, _)) = self.cloud_mesh.take() {

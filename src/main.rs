@@ -6,6 +6,7 @@ mod block;
 mod compat;
 mod entity;
 mod game;
+mod gui;
 mod java;
 mod render;
 mod sim;
@@ -315,6 +316,7 @@ fn parse_args() -> Options {
                 i += 1;
             }
             "--freeze-time" => o.cfg.freeze_time = true,
+            "--debug" => std::env::set_var("MINERUST_F3", "1"),
             "--vanilla-parity" => compat::set_vanilla_parity(true),
             "--no-save" => o.no_save = true,
             "--validate" => std::env::set_var("MINERUST_VALIDATE", "1"),
@@ -449,13 +451,34 @@ impl ApplicationHandler for App {
                 } else if let Some(g) = &mut self.game {
                     match button {
                         MouseButton::Left => g.break_block(),
-                        MouseButton::Right => g.place_block(self.place_id.0, self.place_id.1),
+                        MouseButton::Right => {
+                            if let Some((id, meta, _)) = g.hotbar[g.slot] {
+                                g.place_block(id, meta);
+                            }
+                        }
                         MouseButton::Middle => {
-                            if let Some(id) = g.pick_block() {
-                                self.place_id = id;
+                            // Creative pick block: into the selected slot.
+                            if let Some((id, meta)) = g.pick_block() {
+                                if let Some(i) = g.hotbar.iter().position(|s| matches!(s, Some((a, b, _)) if *a == id && *b == meta)) {
+                                    g.slot = i;
+                                } else {
+                                    g.hotbar[g.slot] = Some((id, meta, 1));
+                                }
                             }
                         }
                         _ => {}
+                    }
+                }
+            }
+            WindowEvent::MouseWheel { delta, .. } => {
+                // InventoryPlayer.changeCurrentItem
+                let d = match delta {
+                    winit::event::MouseScrollDelta::LineDelta(_, y) => y,
+                    winit::event::MouseScrollDelta::PixelDelta(p) => p.y as f32,
+                };
+                if self.grabbed && d != 0.0 {
+                    if let Some(g) = &mut self.game {
+                        g.slot = if d > 0.0 { (g.slot + 8) % 9 } else { (g.slot + 1) % 9 };
                     }
                 }
             }
@@ -474,8 +497,18 @@ impl ApplicationHandler for App {
                     g.screenshot = Some(PathBuf::from(format!("screenshots/{t}.png")));
                     return;
                 }
+                if code == KeyCode::F3 && pressed && !event.repeat {
+                    g.show_debug = !g.show_debug;
+                    return;
+                }
                 if !grabbed {
                     return;
+                }
+                if pressed {
+                    let digits = [KeyCode::Digit1, KeyCode::Digit2, KeyCode::Digit3, KeyCode::Digit4, KeyCode::Digit5, KeyCode::Digit6, KeyCode::Digit7, KeyCode::Digit8, KeyCode::Digit9];
+                    if let Some(i) = digits.iter().position(|d| *d == code) {
+                        g.slot = i;
+                    }
                 }
                 match code {
                     KeyCode::KeyW => g.input.forward = pressed,
