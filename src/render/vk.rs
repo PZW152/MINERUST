@@ -11,6 +11,7 @@ use std::ffi::CStr;
 const SHADER: &str = r#"
 struct Globals {
     view_proj: mat4x4<f32>,
+    sky_rot: mat4x4<f32>,
     cam_right: vec4<f32>,
     cam_up: vec4<f32>,
     cam_fwd: vec4<f32>,
@@ -138,6 +139,36 @@ fn fs_sky(i: SkyOut) -> @location(0) vec4<f32> {
     return vec4<f32>(c, 1.0);
 }
 
+struct ColorOut {
+    @builtin(position) pos: vec4<f32>,
+    @location(0) color: vec4<f32>,
+    @location(1) rel: vec3<f32>,
+}
+
+@vertex
+fn vs_color(@location(0) pos: vec3<f32>, @location(2) color: vec4<f32>) -> ColorOut {
+    var o: ColorOut;
+    var p = pos + pc.offset.xyz;
+    if (pc.offset.w > 1.5) {
+        p = (g.sky_rot * vec4<f32>(pos, 1.0)).xyz;
+    }
+    o.pos = g.view_proj * vec4<f32>(p, 1.0);
+    o.color = color * pc.color;
+    o.rel = p;
+    return o;
+}
+
+@fragment
+fn fs_color(i: ColorOut) -> @location(0) vec4<f32> {
+    return i.color;
+}
+
+@fragment
+fn fs_color_fog(i: ColorOut) -> @location(0) vec4<f32> {
+    let f = fog_factor(length(i.rel));
+    return vec4<f32>(mix(g.fog_color.rgb, i.color.rgb, f), i.color.a);
+}
+
 @vertex
 fn vs_line(@location(0) pos: vec3<f32>) -> @builtin(position) vec4<f32> {
     if (pc.offset.w > 0.5) {
@@ -156,6 +187,8 @@ fn fs_line() -> @location(0) vec4<f32> {
 #[derive(Clone, Copy)]
 pub struct Globals {
     pub view_proj: Mat4,
+    /// Celestial rotation applied to the star field.
+    pub sky_rot: Mat4,
     pub cam_right: [f32; 4],
     pub cam_up: [f32; 4],
     pub cam_fwd: [f32; 4],
@@ -180,6 +213,19 @@ pub struct Frame<'a> {
     pub outline: Option<[i32; 3]>,
     pub gui_scale: f32,
     pub screenshot: Option<std::path::PathBuf>,
+    /// `World.getStarBrightness`
+    pub star_brightness: f32,
+    /// Sunrise/sunset glow: colour with alpha, and whether it is on the sunset side.
+    pub sunrise: Option<([f32; 4], bool)>,
+    pub clouds: Option<CloudDraw>,
+}
+
+pub struct CloudDraw {
+    /// Mesh origin relative to the camera.
+    pub offset: [f32; 3],
+    pub color: [f32; 3],
+    /// Below the cloud layer they are drawn before the terrain.
+    pub before_terrain: bool,
 }
 
 struct GpuMesh {
@@ -201,8 +247,26 @@ struct PerFrame {
     dynbuf: vk::Buffer,
     dyn_mem: vk::DeviceMemory,
     dyn_ptr: *mut u8,
+    /// Coloured dynamic geometry (sunrise glow).
+    dyn2: vk::Buffer,
+    dyn2_mem: vk::DeviceMemory,
+    dyn2_ptr: *mut u8,
+    /// Staging area for animated texture uploads.
+    stage: vk::Buffer,
+    stage_mem: vk::DeviceMemory,
+    stage_ptr: *mut u8,
     set: vk::DescriptorSet,
 }
+
+/// One animated tile frame waiting to be copied into the atlas.
+pub struct TileUpdate {
+    pub x: u32,
+    pub y: u32,
+    pub size: u32,
+    pub mips: Vec<Vec<u8>>,
+}
+
+const STAGE_SIZE: u64 = 1 << 16;
 
 const FRAMES: usize = 2;
 const DYN_SIZE: u64 = 4096;
@@ -232,6 +296,13 @@ pub struct Renderer {
     pipe_translucent: vk::Pipeline,
     pipe_line: vk::Pipeline,
     pipe_ui: vk::Pipeline,
+    pipe_sky_alpha: vk::Pipeline,
+    pipe_sky_add: vk::Pipeline,
+    pipe_cloud_depth: vk::Pipeline,
+    pipe_cloud_color: vk::Pipeline,
+    stars: (vk::Buffer, vk::DeviceMemory, u32),
+    cloud_mesh: Option<(vk::Buffer, vk::DeviceMemory, u32)>,
+    tile_updates: Vec<TileUpdate>,
     pool: vk::CommandPool,
     frames: Vec<PerFrame>,
     frame_index: usize,
@@ -481,7 +552,12 @@ impl Renderer {
                     vk::PipelineShaderStageCreateInfo::default().stage(vk::ShaderStageFlags::VERTEX).module(module).name(vs),
                     vk::PipelineShaderStageCreateInfo::default().stage(vk::ShaderStageFlags::FRAGMENT).module(module).name(fs),
                 ];
-                let stride = if kind >= 3 { 12 } else { std::mem::size_of::<Vertex>() as u32 };
+                // kind: 5 sky alpha, 6 sky additive, 7 cloud depth, 8 cloud colour
+                let stride = if kind == 3 || kind == 4 { 12 } else { std::mem::size_of::<Vertex>() as u32 };
+                let va_color = [
+                    vk::VertexInputAttributeDescription { location: 0, binding: 0, format: vk::Format::R32G32B32_SFLOAT, offset: 0 },
+                    vk::VertexInputAttributeDescription { location: 2, binding: 0, format: vk::Format::R8G8B8A8_UNORM, offset: 20 },
+                ];
                 let vb = [vk::VertexInputBindingDescription { binding: 0, stride, input_rate: vk::VertexInputRate::VERTEX }];
                 let va_terrain = [
                     vk::VertexInputAttributeDescription { location: 0, binding: 0, format: vk::Format::R32G32B32_SFLOAT, offset: 0 },
@@ -492,8 +568,10 @@ impl Renderer {
                 let mut vi = vk::PipelineVertexInputStateCreateInfo::default();
                 if kind == 1 || kind == 2 {
                     vi = vi.vertex_binding_descriptions(&vb).vertex_attribute_descriptions(&va_terrain);
-                } else if kind >= 3 {
+                } else if kind == 3 || kind == 4 {
                     vi = vi.vertex_binding_descriptions(&vb).vertex_attribute_descriptions(&va_terrain[..1]);
+                } else if kind >= 5 {
+                    vi = vi.vertex_binding_descriptions(&vb).vertex_attribute_descriptions(&va_color);
                 }
                 let ia = vk::PipelineInputAssemblyStateCreateInfo::default()
                     .topology(if kind == 3 { vk::PrimitiveTopology::LINE_LIST } else { vk::PrimitiveTopology::TRIANGLE_LIST });
@@ -505,11 +583,24 @@ impl Renderer {
                     .line_width(1.0);
                 let ms = vk::PipelineMultisampleStateCreateInfo::default().rasterization_samples(vk::SampleCountFlags::TYPE_1);
                 let ds = vk::PipelineDepthStencilStateCreateInfo::default()
-                    .depth_test_enable(kind >= 1 && kind <= 3)
-                    .depth_write_enable(kind == 1 || kind == 2)
+                    .depth_test_enable((1..=3).contains(&kind) || kind == 7 || kind == 8)
+                    .depth_write_enable(kind == 1 || kind == 2 || kind == 7)
                     .depth_compare_op(vk::CompareOp::LESS_OR_EQUAL);
                 let mut att = vk::PipelineColorBlendAttachmentState::default().color_write_mask(vk::ColorComponentFlags::RGBA);
-                if kind == 2 || kind == 3 {
+                if kind == 7 {
+                    att = att.color_write_mask(vk::ColorComponentFlags::empty());
+                }
+                if kind == 6 {
+                    att = att
+                        .blend_enable(true)
+                        .src_color_blend_factor(vk::BlendFactor::SRC_ALPHA)
+                        .dst_color_blend_factor(vk::BlendFactor::ONE)
+                        .color_blend_op(vk::BlendOp::ADD)
+                        .src_alpha_blend_factor(vk::BlendFactor::ONE)
+                        .dst_alpha_blend_factor(vk::BlendFactor::ZERO)
+                        .alpha_blend_op(vk::BlendOp::ADD);
+                }
+                if kind == 2 || kind == 3 || kind == 5 || kind == 8 {
                     att = att
                         .blend_enable(true)
                         .src_color_blend_factor(vk::BlendFactor::SRC_ALPHA)
@@ -552,6 +643,10 @@ impl Renderer {
             let pipe_translucent = mk(c"vs_terrain", c"fs_terrain", 2);
             let pipe_line = mk(c"vs_line", c"fs_line", 3);
             let pipe_ui = mk(c"vs_line", c"fs_line", 4);
+            let pipe_sky_alpha = mk(c"vs_color", c"fs_color", 5);
+            let pipe_sky_add = mk(c"vs_color", c"fs_color", 6);
+            let pipe_cloud_depth = mk(c"vs_color", c"fs_color_fog", 7);
+            let pipe_cloud_color = mk(c"vs_color", c"fs_color_fog", 8);
             device.destroy_shader_module(module, None);
 
             let sampler = device
@@ -593,6 +688,13 @@ impl Renderer {
                 pipe_translucent,
                 pipe_line,
                 pipe_ui,
+                pipe_sky_alpha,
+                pipe_sky_add,
+                pipe_cloud_depth,
+                pipe_cloud_color,
+                stars: (vk::Buffer::null(), vk::DeviceMemory::null(), 0),
+                cloud_mesh: None,
+                tile_updates: Vec::new(),
                 pool,
                 frames: Vec::new(),
                 frame_index: 0,
@@ -611,6 +713,7 @@ impl Renderer {
             };
             r.upload_atlas(atlas);
             r.ensure_indices(65536);
+            r.create_stars();
             let size = window.inner_size();
             r.create_swapchain(size.width, size.height);
 
@@ -633,6 +736,10 @@ impl Renderer {
                 let ubo_ptr = r.device.map_memory(ubo_mem, 0, ubo_size, vk::MemoryMapFlags::empty()).unwrap() as *mut u8;
                 let (dynbuf, dyn_mem) = r.create_buffer(DYN_SIZE, vk::BufferUsageFlags::VERTEX_BUFFER, host);
                 let dyn_ptr = r.device.map_memory(dyn_mem, 0, DYN_SIZE, vk::MemoryMapFlags::empty()).unwrap() as *mut u8;
+                let (dyn2, dyn2_mem) = r.create_buffer(DYN_SIZE, vk::BufferUsageFlags::VERTEX_BUFFER, host);
+                let dyn2_ptr = r.device.map_memory(dyn2_mem, 0, DYN_SIZE, vk::MemoryMapFlags::empty()).unwrap() as *mut u8;
+                let (stage, stage_mem) = r.create_buffer(STAGE_SIZE, vk::BufferUsageFlags::TRANSFER_SRC, host);
+                let stage_ptr = r.device.map_memory(stage_mem, 0, STAGE_SIZE, vk::MemoryMapFlags::empty()).unwrap() as *mut u8;
                 let bi = [vk::DescriptorBufferInfo { buffer: ubo, offset: 0, range: ubo_size }];
                 let ii = [vk::DescriptorImageInfo { sampler: vk::Sampler::null(), image_view: r.atlas.2, image_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL }];
                 let si = [vk::DescriptorImageInfo { sampler: r.sampler, image_view: vk::ImageView::null(), image_layout: vk::ImageLayout::UNDEFINED }];
@@ -654,6 +761,12 @@ impl Renderer {
                     dynbuf,
                     dyn_mem,
                     dyn_ptr,
+                    dyn2,
+                    dyn2_mem,
+                    dyn2_ptr,
+                    stage,
+                    stage_mem,
+                    stage_ptr,
                     set: sets[i],
                 });
             }
@@ -757,6 +870,71 @@ impl Renderer {
                 .unwrap();
             self.atlas = (image, mem, view);
         }
+    }
+
+    /// `RenderGlobal.renderStars`: 1500 candidate quads from `Random(10842)`.
+    fn create_stars(&mut self) {
+        let mut r = crate::java::JavaRandom::new(10842);
+        let mut verts: Vec<Vertex> = Vec::new();
+        for _ in 0..1500 {
+            let mut x = (r.next_float() * 2.0f32 - 1.0f32) as f64;
+            let mut y = (r.next_float() * 2.0f32 - 1.0f32) as f64;
+            let mut z = (r.next_float() * 2.0f32 - 1.0f32) as f64;
+            let size = (0.15f32 + r.next_float() * 0.1f32) as f64;
+            let mut d = x * x + y * y + z * z;
+            if d < 1.0 && d > 0.01 {
+                d = 1.0 / d.sqrt();
+                x *= d;
+                y *= d;
+                z *= d;
+                let (px, py, pz) = (x * 100.0, y * 100.0, z * 100.0);
+                let a = x.atan2(z);
+                let (sa, ca) = (a.sin(), a.cos());
+                let b = (x * x + z * z).sqrt().atan2(y);
+                let (sb, cb) = (b.sin(), b.cos());
+                let rot = r.next_double() * std::f64::consts::PI * 2.0;
+                let (sr, cr) = (rot.sin(), rot.cos());
+                for k in 0..4i32 {
+                    let e = ((k & 2) - 1) as f64 * size;
+                    let f = (((k + 1) & 2) - 1) as f64 * size;
+                    let g = e * cr - f * sr;
+                    let h = f * cr + e * sr;
+                    let i2 = g * sb;
+                    let j = -g * cb;
+                    let vx = j * sa - h * ca;
+                    let vz = h * sa + j * ca;
+                    verts.push(Vertex { pos: [(px + vx) as f32, (py + i2) as f32, (pz + vz) as f32], uv: [0.0; 2], color: [255; 4], light: [0; 4] });
+                }
+            }
+        }
+        let host = vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT;
+        let bytes = unsafe { std::slice::from_raw_parts(verts.as_ptr() as *const u8, verts.len() * std::mem::size_of::<Vertex>()) };
+        let (buf, mem) = self.create_buffer(bytes.len() as u64, vk::BufferUsageFlags::VERTEX_BUFFER, host);
+        self.write_buffer(mem, bytes);
+        self.stars = (buf, mem, (verts.len() / 4) as u32);
+    }
+
+    /// Replaces the cloud layer mesh (quads in `Vertex` format).
+    pub fn set_clouds(&mut self, verts: &[Vertex]) {
+        if let Some((b, m, _)) = self.cloud_mesh.take() {
+            self.garbage.push((self.frame_no, b, m));
+        }
+        if verts.is_empty() {
+            return;
+        }
+        self.ensure_indices((verts.len() / 4) as u32);
+        let host = vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT;
+        let bytes = unsafe { std::slice::from_raw_parts(verts.as_ptr() as *const u8, verts.len() * std::mem::size_of::<Vertex>()) };
+        let (buf, mem) = self.create_buffer(bytes.len() as u64, vk::BufferUsageFlags::VERTEX_BUFFER, host);
+        self.write_buffer(mem, bytes);
+        self.cloud_mesh = Some((buf, mem, (verts.len() / 4) as u32));
+    }
+
+    /// Queues a new frame of an animated tile; applied at the next frame.
+    pub fn queue_tile_update(&mut self, u: TileUpdate) {
+        // Only the newest frame of a tile matters.
+        self.tile_updates.retain(|t| t.x != u.x || t.y != u.y);
+        self.tile_updates.push(u);
     }
 
     fn ensure_indices(&mut self, quads: u32) {
@@ -970,9 +1148,9 @@ impl Renderer {
             self.collect_garbage();
             let fi = self.frame_index;
             self.frame_index = (fi + 1) % FRAMES;
-            let (cmd, fence, image_available, render_finished, set, dynbuf, dyn_ptr, ubo_ptr) = {
+            let (cmd, fence, image_available, render_finished, set, dynbuf, dyn_ptr, ubo_ptr, dyn2, dyn2_ptr, stage, stage_ptr) = {
                 let f = &self.frames[fi];
-                (f.cmd, f.fence, f.image_available, f.render_finished, f.set, f.dynbuf, f.dyn_ptr, f.ubo_ptr)
+                (f.cmd, f.fence, f.image_available, f.render_finished, f.set, f.dynbuf, f.dyn_ptr, f.ubo_ptr, f.dyn2, f.dyn2_ptr, f.stage, f.stage_ptr)
             };
             self.device.wait_for_fences(&[fence], true, u64::MAX).unwrap();
             let image_index = match self.swap_loader.acquire_next_image(self.swapchain, u64::MAX, image_available, vk::Fence::null()) {
@@ -1047,9 +1225,90 @@ impl Renderer {
             }
             visible.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
 
+            // Sunrise / sunset glow: a fan from the zenith of the rotated frame
+            // (glRotatef(90, X), glRotatef(0 or 180, Z), glRotatef(90, Z)).
+            let mut fan_count = 0u32;
+            if let Some((c, flip)) = frame.sunrise {
+                let m = super::mul(&super::mul(&super::rot_x(90.0), &super::rot_z(if flip { 180.0 } else { 0.0 })), &super::rot_z(90.0));
+                let tr = |p: [f32; 3]| {
+                    let o = super::transform(&m, [p[0], p[1], p[2], 1.0]);
+                    [o[0], o[1], o[2]]
+                };
+                let cb = |a: f32| [(c[0] * 255.0) as u8, (c[1] * 255.0) as u8, (c[2] * 255.0) as u8, (a * 255.0) as u8];
+                let centre = Vertex { pos: tr([0.0, 100.0, 0.0]), uv: [0.0; 2], color: cb(c[3]), light: [0; 4] };
+                let rim = |i: i32| {
+                    let a = i as f32 * std::f32::consts::PI * 2.0 / 16.0;
+                    let (s, co) = (crate::util::math::sin(a), crate::util::math::cos(a));
+                    Vertex { pos: tr([s * 120.0, co * 120.0, -co * 40.0 * c[3]]), uv: [0.0; 2], color: cb(0.0), light: [0; 4] }
+                };
+                let mut fan: Vec<Vertex> = Vec::with_capacity(48);
+                for i in 0..16 {
+                    fan.extend_from_slice(&[centre, rim(i), rim(i + 1)]);
+                }
+                std::ptr::copy_nonoverlapping(fan.as_ptr() as *const u8, dyn2_ptr, fan.len() * std::mem::size_of::<Vertex>());
+                fan_count = fan.len() as u32;
+            }
+
             let dev = &self.device;
             dev.reset_command_buffer(cmd, vk::CommandBufferResetFlags::empty()).unwrap();
             dev.begin_command_buffer(cmd, &vk::CommandBufferBeginInfo::default()).unwrap();
+
+            // Animated tiles: copy the new frames into the atlas.
+            if !self.tile_updates.is_empty() {
+                let mut regions = Vec::new();
+                let mut off = 0usize;
+                for u in self.tile_updates.drain(..) {
+                    let mut s = u.size;
+                    for (level, px) in u.mips.iter().enumerate() {
+                        if off + px.len() > STAGE_SIZE as usize {
+                            break;
+                        }
+                        std::ptr::copy_nonoverlapping(px.as_ptr(), stage_ptr.add(off), px.len());
+                        regions.push(
+                            vk::BufferImageCopy::default()
+                                .buffer_offset(off as u64)
+                                .image_subresource(vk::ImageSubresourceLayers { aspect_mask: vk::ImageAspectFlags::COLOR, mip_level: level as u32, base_array_layer: 0, layer_count: 1 })
+                                .image_offset(vk::Offset3D { x: (u.x >> level) as i32, y: (u.y >> level) as i32, z: 0 })
+                                .image_extent(vk::Extent3D { width: s, height: s, depth: 1 }),
+                        );
+                        off += px.len();
+                        if s > 1 {
+                            s /= 2;
+                        }
+                    }
+                }
+                let range = vk::ImageSubresourceRange { aspect_mask: vk::ImageAspectFlags::COLOR, base_mip_level: 0, level_count: MIP_LEVELS, base_array_layer: 0, layer_count: 1 };
+                let barrier = |old, new, sa, da| {
+                    [vk::ImageMemoryBarrier::default()
+                        .old_layout(old)
+                        .new_layout(new)
+                        .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                        .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                        .image(self.atlas.0)
+                        .subresource_range(range)
+                        .src_access_mask(sa)
+                        .dst_access_mask(da)]
+                };
+                dev.cmd_pipeline_barrier(
+                    cmd,
+                    vk::PipelineStageFlags::FRAGMENT_SHADER,
+                    vk::PipelineStageFlags::TRANSFER,
+                    vk::DependencyFlags::empty(),
+                    &[],
+                    &[],
+                    &barrier(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL, vk::ImageLayout::TRANSFER_DST_OPTIMAL, vk::AccessFlags::SHADER_READ, vk::AccessFlags::TRANSFER_WRITE),
+                );
+                dev.cmd_copy_buffer_to_image(cmd, stage, self.atlas.0, vk::ImageLayout::TRANSFER_DST_OPTIMAL, &regions);
+                dev.cmd_pipeline_barrier(
+                    cmd,
+                    vk::PipelineStageFlags::TRANSFER,
+                    vk::PipelineStageFlags::FRAGMENT_SHADER,
+                    vk::DependencyFlags::empty(),
+                    &[],
+                    &[],
+                    &barrier(vk::ImageLayout::TRANSFER_DST_OPTIMAL, vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL, vk::AccessFlags::TRANSFER_WRITE, vk::AccessFlags::SHADER_READ),
+                );
+            }
             let fc = frame.globals.fog_color;
             let clears = [
                 vk::ClearValue { color: vk::ClearColorValue { float32: [fc[0], fc[1], fc[2], 1.0] } },
@@ -1076,6 +1335,36 @@ impl Renderer {
             dev.cmd_draw(cmd, 3, 1, 0, 0);
 
             dev.cmd_bind_index_buffer(cmd, self.index_buf.0, 0, vk::IndexType::UINT32);
+            if fan_count > 0 {
+                dev.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, self.pipe_sky_alpha);
+                push([0.0; 4], [1.0; 4]);
+                dev.cmd_bind_vertex_buffers(cmd, 0, &[dyn2], &[0]);
+                dev.cmd_draw(cmd, fan_count, 1, 0, 0);
+            }
+            if frame.star_brightness > 0.0 && self.stars.2 > 0 {
+                let b = frame.star_brightness;
+                dev.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, self.pipe_sky_add);
+                push([0.0, 0.0, 0.0, 2.0], [b, b, b, b]);
+                dev.cmd_bind_vertex_buffers(cmd, 0, &[self.stars.0], &[0]);
+                dev.cmd_draw_indexed(cmd, self.stars.2 * 6, 1, 0, 0, 0);
+            }
+            // Fancy clouds: depth first, then colour, so only the nearest
+            // surface of the layer is blended.
+            let draw_clouds = |c: &CloudDraw| {
+                if let Some((buf, _, quads)) = self.cloud_mesh {
+                    dev.cmd_bind_vertex_buffers(cmd, 0, &[buf], &[0]);
+                    push([c.offset[0], c.offset[1], c.offset[2], 0.0], [c.color[0], c.color[1], c.color[2], 0.8]);
+                    dev.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, self.pipe_cloud_depth);
+                    dev.cmd_draw_indexed(cmd, quads * 6, 1, 0, 0, 0);
+                    dev.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, self.pipe_cloud_color);
+                    dev.cmd_draw_indexed(cmd, quads * 6, 1, 0, 0, 0);
+                }
+            };
+            if let Some(c) = &frame.clouds {
+                if c.before_terrain {
+                    draw_clouds(c);
+                }
+            }
             dev.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, self.pipe_opaque);
             for (_, o, gm) in &visible {
                 if gm.opaque_quads > 0 {
@@ -1099,6 +1388,11 @@ impl Renderer {
                     push([o[0], o[1], o[2], 0.0], [0.0; 4]);
                     dev.cmd_bind_vertex_buffers(cmd, 0, &[gm.buffer], &[0]);
                     dev.cmd_draw_indexed(cmd, gm.translucent_quads * 6, 1, 0, (gm.opaque_quads * 4) as i32, 0);
+                }
+            }
+            if let Some(c) = &frame.clouds {
+                if !c.before_terrain {
+                    draw_clouds(c);
                 }
             }
             dev.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, self.pipe_ui);
@@ -1238,6 +1532,10 @@ impl Drop for Renderer {
                 self.device.free_memory(f.ubo_mem, None);
                 self.device.destroy_buffer(f.dynbuf, None);
                 self.device.free_memory(f.dyn_mem, None);
+                self.device.destroy_buffer(f.dyn2, None);
+                self.device.free_memory(f.dyn2_mem, None);
+                self.device.destroy_buffer(f.stage, None);
+                self.device.free_memory(f.stage_mem, None);
             }
             self.destroy_swapchain_views();
             self.device.destroy_buffer(self.index_buf.0, None);
@@ -1246,7 +1544,13 @@ impl Drop for Renderer {
             self.device.destroy_image(self.atlas.0, None);
             self.device.free_memory(self.atlas.1, None);
             self.device.destroy_sampler(self.sampler, None);
-            for p in [self.pipe_sky, self.pipe_opaque, self.pipe_translucent, self.pipe_line, self.pipe_ui] {
+            self.device.destroy_buffer(self.stars.0, None);
+            self.device.free_memory(self.stars.1, None);
+            if let Some((b, m, _)) = self.cloud_mesh.take() {
+                self.device.destroy_buffer(b, None);
+                self.device.free_memory(m, None);
+            }
+            for p in [self.pipe_sky, self.pipe_opaque, self.pipe_translucent, self.pipe_line, self.pipe_ui, self.pipe_sky_alpha, self.pipe_sky_add, self.pipe_cloud_depth, self.pipe_cloud_color] {
                 self.device.destroy_pipeline(p, None);
             }
             self.device.destroy_pipeline_layout(self.layout, None);

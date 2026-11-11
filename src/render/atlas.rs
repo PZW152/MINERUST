@@ -26,6 +26,61 @@ pub struct Atlas {
     pub grass_map: Vec<u32>,
     /// `colormap/foliage.png`
     pub foliage_map: Vec<u32>,
+    /// Animated tiles (`.png.mcmeta`).
+    pub anims: Vec<Anim>,
+    /// `environment/clouds.png` as a 256x256 opacity mask.
+    pub clouds: Vec<bool>,
+}
+
+/// One animated sprite (`TextureAtlasSprite` with animation metadata).
+pub struct Anim {
+    /// Top-left pixel of the tile in the atlas.
+    pub x: u32,
+    pub y: u32,
+    pub size: u32,
+    /// Ticks each frame is shown.
+    pub frametime: u32,
+    /// Frame indices in playback order.
+    pub order: Vec<usize>,
+    /// Mip chain of every frame.
+    pub frames: Vec<Vec<Vec<u8>>>,
+}
+
+/// Mip chain for one tile, as it is stored in the atlas.
+fn mip_chain(mut px: Vec<u8>, size: u32) -> Vec<Vec<u8>> {
+    let transparent = px.chunks(4).any(|p| p[3] == 0);
+    let mut out = Vec::new();
+    let mut s = size;
+    for level in 0..MIP_LEVELS {
+        out.push(px.clone());
+        if s > 1 && level + 1 < MIP_LEVELS {
+            px = downsample(&px, s, transparent);
+            s /= 2;
+        }
+    }
+    out
+}
+
+/// Reads `frametime` and `frames` from an `.mcmeta` animation section.
+fn parse_mcmeta(text: &str) -> (u32, Option<Vec<usize>>) {
+    let number_after = |key: &str| -> Option<u32> {
+        let i = text.find(key)? + key.len();
+        let rest = text[i..].trim_start_matches(|c: char| c == ':' || c == '"' || c.is_whitespace());
+        let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+        digits.parse().ok()
+    };
+    let frametime = number_after("\"frametime\"").unwrap_or(1).max(1);
+    let frames = text.find("\"frames\"").and_then(|i| {
+        let open = text[i..].find('[')? + i + 1;
+        let close = text[open..].find(']')? + open;
+        let list: Vec<usize> = text[open..close].split(',').filter_map(|s| s.trim().parse().ok()).collect();
+        if list.is_empty() {
+            None
+        } else {
+            Some(list)
+        }
+    });
+    (frametime, frames)
 }
 
 pub struct Image {
@@ -127,6 +182,8 @@ struct Builder {
     mips: Vec<Vec<u8>>,
     rects: Vec<[f32; 4]>,
     used: [bool; 256],
+    /// Top-left pixel of each tile.
+    origins: Vec<(u32, u32)>,
 }
 
 impl Builder {
@@ -168,6 +225,7 @@ impl Builder {
         let a = ATLAS_SIZE as f32;
         let (x0, y0) = (cx as f32 * 16.0, cy as f32 * 16.0);
         self.rects.push([x0 / a, y0 / a, (x0 + size as f32) / a, (y0 + size as f32) / a]);
+        self.origins.push((cx as u32 * 16, cy as u32 * 16));
         (self.rects.len() - 1) as u16
     }
 }
@@ -183,6 +241,7 @@ impl Atlas {
             mips: (0..MIP_LEVELS).map(|l| vec![0u8; ((ATLAS_SIZE >> l) * (ATLAS_SIZE >> l) * 4) as usize]).collect(),
             rects: Vec::new(),
             used: [false; 256],
+            origins: Vec::new(),
         };
         let block_tex = |jar: &mut Jar, name: &str, size: u32| -> Result<Vec<u8>, String> {
             let img = read_png(jar, &format!("assets/minecraft/textures/blocks/{name}.png"))?;
@@ -243,7 +302,31 @@ impl Atlas {
         let grass_side_snowed = extra(jar, "grass_side_snowed")?;
         let sunflower_front = extra(jar, "double_plant_sunflower_front")?;
         let sunflower_back = extra(jar, "double_plant_sunflower_back")?;
+        // Animated sprites: every frame of the strip, in metadata order.
+        let mut anims = Vec::new();
+        for (name, tile, size) in [("water_still", names["water_still"], 16u32), ("lava_still", names["lava_still"], 16), ("water_flow", water_flow, 32), ("lava_flow", lava_flow, 32)] {
+            let img = read_png(jar, &format!("assets/minecraft/textures/blocks/{name}.png"))?;
+            let count = (img.h / size).max(1) as usize;
+            let mut meta = String::new();
+            if let Ok(mut f) = jar.by_name(&format!("assets/minecraft/textures/blocks/{name}.png.mcmeta")) {
+                let _ = f.read_to_string(&mut meta);
+            }
+            let (frametime, order) = parse_mcmeta(&meta);
+            let order: Vec<usize> = order.unwrap_or_else(|| (0..count).collect()).into_iter().filter(|&i| i < count).collect();
+            let frames = (0..count).map(|i| mip_chain(crop(&img, 0, i as u32 * size, size), size)).collect();
+            let (x, y) = b.origins[tile as usize];
+            anims.push(Anim { x, y, size, frametime, order, frames });
+        }
+        let clouds = {
+            let img = read_png(jar, "assets/minecraft/textures/environment/clouds.png")?;
+            if img.w != 256 || img.h != 256 {
+                return Err(format!("clouds.png: unexpected size {}x{}", img.w, img.h));
+            }
+            img.rgba.chunks(4).map(|p| p[3] > 25).collect()
+        };
         Ok(Atlas {
+            anims,
+            clouds,
             mips: b.mips,
             rects: b.rects,
             face_tile,

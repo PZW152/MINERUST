@@ -124,6 +124,10 @@ pub struct Game {
     light_table: [f32; 16],
     ticks: u64,
     noise: BiomeNoise,
+    /// `(ticks shown, position in the frame order)` per animated tile.
+    anim_state: Vec<(u32, usize)>,
+    /// Cloud texel the current cloud mesh was built for.
+    cloud_cell: Option<(i32, i32)>,
 }
 
 fn hsb_to_rgb(hue: f32, s: f32, b: f32) -> [f32; 3] {
@@ -236,6 +240,8 @@ impl Game {
             light_table,
             ticks: 0,
             noise: BiomeNoise::new(),
+            anim_state: Vec::new(),
+            cloud_cell: None,
         }
     }
     pub fn spawn_info(&self) -> String {
@@ -350,8 +356,64 @@ impl Game {
         sim::celestial_angle(self.world_time, partial)
     }
 
+    /// `TextureAtlasSprite.updateAnimation` for every animated tile.
+    fn tick_animations(&mut self) {
+        if self.anim_state.len() != self.atlas.anims.len() {
+            self.anim_state = vec![(0, 0); self.atlas.anims.len()];
+        }
+        for (i, a) in self.atlas.anims.iter().enumerate() {
+            let st = &mut self.anim_state[i];
+            st.0 += 1;
+            if st.0 >= a.frametime && !a.order.is_empty() {
+                st.0 = 0;
+                st.1 = (st.1 + 1) % a.order.len();
+                let frame = a.order[st.1];
+                self.renderer.queue_tile_update(crate::render::vk::TileUpdate { x: a.x, y: a.y, size: a.size, mips: a.frames[frame].clone() });
+            }
+        }
+    }
+
+    /// Fancy cloud layer around cloud texel `(bx, bz)`: one 12x4x12 box per
+    /// opaque texel of `clouds.png`, only the faces on the outside.
+    fn build_clouds(&self, bx: i32, bz: i32) -> Vec<crate::render::mesher::Vertex> {
+        use crate::render::mesher::Vertex;
+        let opaque = |i: i32, j: i32| self.atlas.clouds[((((bz + j) & 255) as usize) << 8) | ((bx + i) & 255) as usize];
+        let mut v: Vec<Vertex> = Vec::new();
+        let mut quad = |p: [[f32; 3]; 4], shade: f32| {
+            let c = (shade * 255.0) as u8;
+            for pos in p {
+                v.push(Vertex { pos, uv: [0.0; 2], color: [c, c, c, 255], light: [0; 4] });
+            }
+        };
+        for i in -24..40i32 {
+            for j in -24..40i32 {
+                if !opaque(i, j) {
+                    continue;
+                }
+                let (x0, x1) = (i as f32 * 12.0, (i + 1) as f32 * 12.0);
+                let (z0, z1) = (j as f32 * 12.0, (j + 1) as f32 * 12.0);
+                quad([[x0, 0.0, z1], [x1, 0.0, z1], [x1, 0.0, z0], [x0, 0.0, z0]], 0.7);
+                quad([[x0, 4.0, z1], [x1, 4.0, z1], [x1, 4.0, z0], [x0, 4.0, z0]], 1.0);
+                if !opaque(i - 1, j) {
+                    quad([[x0, 0.0, z1], [x0, 4.0, z1], [x0, 4.0, z0], [x0, 0.0, z0]], 0.9);
+                }
+                if !opaque(i + 1, j) {
+                    quad([[x1, 0.0, z1], [x1, 4.0, z1], [x1, 4.0, z0], [x1, 0.0, z0]], 0.9);
+                }
+                if !opaque(i, j - 1) {
+                    quad([[x0, 4.0, z0], [x1, 4.0, z0], [x1, 0.0, z0], [x0, 0.0, z0]], 0.8);
+                }
+                if !opaque(i, j + 1) {
+                    quad([[x0, 4.0, z1], [x1, 4.0, z1], [x1, 0.0, z1], [x0, 0.0, z1]], 0.8);
+                }
+            }
+        }
+        v
+    }
+
     fn tick(&mut self) {
         self.ticks += 1;
+        self.tick_animations();
         if !self.freeze_time {
             self.world_time += 1;
         }
@@ -650,8 +712,41 @@ impl Game {
 
         let theta = angle * math::PI * 2.0f32;
         let moon_phase = ((self.world_time / 24000) % 8) as usize;
+        // --- Sky extras (RenderGlobal.renderSky / renderCloudsFancy) ---
+        let star = {
+            let f = (1.0f32 - (math::cos(angle * math::PI * 2.0f32) * 2.0f32 + 0.25f32)).clamp(0.0, 1.0);
+            f * f * 0.5f32
+        };
+        let sunrise = {
+            let f3 = math::cos(angle * math::PI * 2.0f32);
+            if (-0.4f32..=0.4f32).contains(&f3) {
+                let c = f3 / 0.4f32 * 0.5f32 + 0.5f32;
+                let mut a = 1.0f32 - (1.0f32 - math::sin(c * math::PI)) * 0.99f32;
+                a *= a;
+                Some(([c * 0.3f32 + 0.7f32, c * c * 0.7f32 + 0.2f32, 0.2f32, a], math::sin(angle * math::PI * 2.0f32) < 0.0))
+            } else {
+                None
+            }
+        };
+        let clouds = {
+            let t = self.ticks as f64 + partial as f64;
+            let mut cx = (eye[0] + t * 0.03f32 as f64) / 12.0;
+            let mut cz = eye[2] / 12.0 + 0.33f32 as f64;
+            cx -= (math::floor_double(cx / 2048.0) * 2048) as f64;
+            cz -= (math::floor_double(cz / 2048.0) * 2048) as f64;
+            let (bx, bz) = (math::floor_double(cx), math::floor_double(cz));
+            if self.cloud_cell != Some((bx, bz)) {
+                let mesh = self.build_clouds(bx, bz);
+                self.renderer.set_clouds(&mesh);
+                self.cloud_cell = Some((bx, bz));
+            }
+            let y = 128.0f32 - eye[1] as f32 + 0.33f32;
+            let color = [day * 0.9f32 + 0.1f32, day * 0.9f32 + 0.1f32, day * 0.85f32 + 0.15f32];
+            crate::render::vk::CloudDraw { offset: [-((cx - bx as f64) * 12.0) as f32, y, -((cz - bz as f64) * 12.0) as f32], color, before_terrain: eye[1] < 128.0 }
+        };
         let mut g = Globals {
             view_proj,
+            sky_rot: render::mul(&render::rot_y(-90.0), &render::rot_x(angle * 360.0)),
             cam_right: row(0, tan * aspect),
             cam_up: row(1, tan),
             cam_fwd: row(2, -1.0),
@@ -672,7 +767,7 @@ impl Game {
         while window_size.0 / (scale + 1) >= 320 && window_size.1 / (scale + 1) >= 240 {
             scale += 1;
         }
-        let frame = Frame { globals: &g, cam: eye, outline: self.selected.map(|s| s.0), gui_scale: scale as f32, screenshot: self.screenshot.take() };
+        let frame = Frame { globals: &g, cam: eye, outline: self.selected.map(|s| s.0), gui_scale: scale as f32, screenshot: self.screenshot.take(), star_brightness: star, sunrise, clouds: Some(clouds) };
         self.renderer.render(&frame, window_size);
     }
 }
