@@ -2,13 +2,19 @@
 //! (`Minecraft.runTick`, `EntityRenderer`).
 
 use crate::block::{self, Material};
-use crate::entity::player::{Aabb, Input, Player};
+use crate::entity::player::{Input, Player};
 use crate::java::JavaRandom;
 use crate::render::atlas::Atlas;
 use crate::render::mesher::{self, ChunkMesh, MeshChunk};
 use crate::render::vk::{Frame, Globals, Renderer};
 use crate::render::{self, Mat4};
 use crate::util::math;
+use crate::entity::survival::{GameMode, Stats};
+use crate::inventory::Slot;
+use crate::item::Stack;
+use crate::play::{InvView, ItemView, Open};
+use crate::render::entities;
+use crate::screens::{self, MenuAction};
 use crate::sim::{self, Command, Event, Sim, SimConfig, SimHandle};
 use crate::world::biome::{self, Biome, BiomeNoise};
 use crate::world::BlockView;
@@ -87,6 +93,35 @@ pub struct Config {
     pub pos: Option<[f64; 3]>,
     pub look: Option<[f32; 2]>,
     pub freeze_time: bool,
+    pub mode: GameMode,
+}
+
+/// What has keyboard and mouse focus.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Screen {
+    Playing,
+    /// A container window is open (state comes from the server).
+    Window,
+    Paused,
+    Dead,
+}
+
+/// What the window wants after an input event.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Request {
+    None,
+    /// Release the mouse (a screen opened).
+    Release,
+    /// Capture the mouse again.
+    Grab,
+    Quit,
+}
+
+/// `PlayerControllerMP` digging state.
+#[derive(Clone, Copy, Debug)]
+struct Digging {
+    pos: [i32; 3],
+    damage: f32,
 }
 
 pub struct Game {
@@ -128,14 +163,58 @@ pub struct Game {
     anim_state: Vec<(u32, usize)>,
     /// Cloud texel the current cloud mesh was built for.
     cloud_cell: Option<(i32, i32)>,
-    /// Hotbar contents and the selected slot.
-    pub hotbar: [Option<crate::gui::Stack>; 9],
-    pub slot: usize,
+    /// Server view of the inventory and open window.
+    pub view: InvView,
+    items: Vec<ItemView>,
+    pub stats: Stats,
+    pub mode: GameMode,
+    pub screen: Screen,
+    /// Mouse position in window pixels.
+    pub mouse_px: (f32, f32),
+    gui_scale: f32,
+    pub left_down: bool,
+    pub right_down: bool,
+    dig: Option<Digging>,
+    hit_delay: i32,
+    right_delay: i32,
+    /// `swingProgressInt`, -1 when not swinging.
+    swing: i32,
+    prev_swing_f: f32,
+    swing_f: f32,
+    equip: f32,
+    prev_equip: f32,
+    equipped: Option<Stack>,
+    death_sent: bool,
+    jitter: JavaRandom,
+    prev_feet: [f64; 3],
     /// F3 overlay.
     pub show_debug: bool,
     fps: u32,
     fps_frames: u32,
     fps_since: Instant,
+}
+
+fn encode_stats(s: &Stats) -> String {
+    format!("{},{},{},{},{},{}", s.health, s.food, s.saturation, s.exhaustion, s.air, s.fire)
+}
+
+fn decode_stats(t: &str) -> Option<Stats> {
+    let f: Vec<&str> = t.split(',').collect();
+    if f.len() != 6 {
+        return None;
+    }
+    let mut s = Stats::default();
+    s.health = f[0].parse::<f32>().ok()?.clamp(0.0, 20.0);
+    s.food = f[1].parse::<i32>().ok()?.clamp(0, 20);
+    s.saturation = f[2].parse::<f32>().ok()?.clamp(0.0, 20.0);
+    s.exhaustion = f[3].parse::<f32>().ok()?.clamp(0.0, 40.0);
+    s.air = f[4].parse::<i32>().ok()?.clamp(-20, 300);
+    s.fire = f[5].parse::<i32>().ok()?.max(0);
+    if s.health <= 0.0 {
+        // Died and quit: come back alive.
+        s = Stats::default();
+    }
+    Some(s)
 }
 
 fn hsb_to_rgb(hue: f32, s: f32, b: f32) -> [f32; 3] {
@@ -159,7 +238,9 @@ fn hsb_to_rgb(hue: f32, s: f32, b: f32) -> [f32; 3] {
 impl Game {
     pub fn new(renderer: Renderer, atlas: Arc<Atlas>, cfg: &Config) -> Game {
         // The integrated server: world generation, population, block updates.
-        let (server, start) = Sim::new(&SimConfig { seed: cfg.seed, view: cfg.render_distance, save_dir: cfg.save_dir.clone(), start_time: cfg.start_time, freeze_time: cfg.freeze_time });
+        let (server, start) = Sim::new(&SimConfig { seed: cfg.seed, view: cfg.render_distance, save_dir: cfg.save_dir.clone(), start_time: cfg.start_time, freeze_time: cfg.freeze_time, mode: cfg.mode });
+        let mode = if start.resumed { start.mode } else { cfg.mode };
+        let stats = start.stats.as_deref().and_then(decode_stats).unwrap_or_default();
         let sim = sim::spawn(server);
 
         // Meshing workers.
@@ -194,7 +275,8 @@ impl Game {
         let mut player = Player::new(pos[0], pos[1], pos[2]);
         player.yaw = rot[0];
         player.pitch = rot[1];
-        player.flying = flying;
+        player.flying = flying && mode == GameMode::Creative;
+        player.allow_flying = mode == GameMode::Creative;
 
         let r = cfg.render_distance;
         let mut offsets = Vec::new();
@@ -212,6 +294,15 @@ impl Game {
         }
 
         let center = (math::floor_double(pos[0]) >> 4, math::floor_double(pos[2]) >> 4);
+        // `--give id:meta:count,...` (the /give command).
+        if let Ok(list) = std::env::var("MINERUST_GIVE") {
+            for part in list.split(',') {
+                let f: Vec<u32> = part.split(':').filter_map(|x| x.parse().ok()).collect();
+                if f.len() == 3 {
+                    let _ = sim.commands.send(Command::Give(Stack::new(f[0] as u16, f[1] as i32, f[2])));
+                }
+            }
+        }
         let _ = sim.commands.send(Command::Center(center.0, center.1));
         Game {
             renderer,
@@ -250,19 +341,27 @@ impl Game {
             noise: BiomeNoise::new(),
             anim_state: Vec::new(),
             cloud_cell: None,
-            hotbar: [
-                Some((block::STONE, 0, 1)),
-                Some((block::COBBLESTONE, 0, 1)),
-                Some((block::DIRT, 0, 1)),
-                Some((block::PLANKS, 0, 1)),
-                Some((block::LOG, 0, 1)),
-                Some((block::LEAVES, 0, 1)),
-                Some((block::GLASS, 0, 1)),
-                Some((block::SAND, 0, 1)),
-                Some((block::FLOWING_WATER, 0, 1)),
-            ],
-            slot: 0,
-            show_debug: std::env::var_os("MINERUST_F3").is_some(),
+            view: InvView { inv: Default::default(), open: Open::None, result: None, tile_slots: Vec::new(), furnace: None },
+            items: Vec::new(),
+            stats,
+            mode,
+            screen: Screen::Playing,
+            mouse_px: (0.0, 0.0),
+            gui_scale: 2.0,
+            left_down: false,
+            right_down: false,
+            dig: None,
+            hit_delay: 0,
+            right_delay: 0,
+            swing: -1,
+            prev_swing_f: 0.0,
+            swing_f: 0.0,
+            equip: 0.0,
+            prev_equip: 0.0,
+            equipped: None,
+            death_sent: false,
+            jitter: JavaRandom::new(312871),
+            prev_feet: [0.0; 3],            show_debug: std::env::var_os("MINERUST_F3").is_some(),
             fps: 0,
             fps_frames: 0,
             fps_since: Instant::now(),
@@ -277,6 +376,29 @@ impl Game {
     }
 
     /// True once every chunk in view has an up-to-date mesh.
+    /// `--open`: start with a screen open (automated captures).
+    pub fn apply_start_screen(&mut self) {
+        if let Ok(s) = std::env::var("MINERUST_OPEN") {
+            match s.as_str() {
+                "inventory" => {
+                    let _ = self.sim.commands.send(Command::OpenInventory);
+                    self.screen = Screen::Window;
+                }
+                "pause" => self.screen = Screen::Paused,
+                "dead" => {
+                    self.stats.health = 0.0;
+                    self.stats.dead = true;
+                    self.stats.death_time = 40;
+                    self.stats.last_cause = Some(crate::entity::survival::Damage::Fall);
+                    self.death_sent = true;
+                    self.screen = Screen::Dead;
+                }
+                _ => {}
+            }
+            self.mouse_px = (self.renderer.extent.width as f32 / 2.0 + 40.0, self.renderer.extent.height as f32 / 2.0 - 10.0);
+        }
+    }
+
     pub fn idle(&self) -> bool {
         let side = (self.render_distance * 2 + 1) as usize;
         self.in_flight == 0 && self.dirty.is_empty() && self.renderer.mesh_count() >= side * side
@@ -324,6 +446,24 @@ impl Game {
                     self.world.chunks.remove(&key);
                     self.renderer.remove_mesh(key);
                     self.dirty.remove(&key);
+                }
+                Event::Inventory(v) => {
+                    let was_open = self.view.open != Open::None;
+                    self.view = *v;
+                    if self.view.open != Open::None && !was_open && self.screen == Screen::Playing {
+                        self.screen = Screen::Window;
+                    }
+                    if self.view.open == Open::None && self.screen == Screen::Window {
+                        self.screen = Screen::Playing;
+                    }
+                }
+                Event::Items(v) => self.items = v,
+                Event::Respawn(p) => {
+                    self.player = Player::new(p[0], p[1], p[2]);
+                    self.player.allow_flying = self.mode == GameMode::Creative;
+                    self.stats = Stats::default();
+                    self.death_sent = false;
+                    self.screen = Screen::Playing;
                 }
             }
         }
@@ -467,11 +607,63 @@ impl Game {
             let p = &self.player;
             let _ = self.sim.commands.send(Command::Player([p.pos[0], p.bb.min[1], p.pos[2]], [p.yaw, p.pitch], p.flying));
         }
-        if self.world.loaded(pcx << 4, pcz << 4) {
-            let input = self.input;
+        let before = [self.player.pos[0], self.player.bb.min[1], self.player.pos[2]];
+        if self.world.loaded(pcx << 4, pcz << 4) && !self.stats.dead {
+            let input = if self.screen == Screen::Playing { self.input } else { Input::default() };
             self.player.tick(&self.world, &input);
         } else {
             self.player.prev_pos = self.player.pos;
+        }
+        let after = [self.player.pos[0], self.player.bb.min[1], self.player.pos[2]];
+        let moved = [after[0] - before[0], after[1] - before[1], after[2] - before[2]];
+        let eye_mat = self.player.eye_material(&self.world, self.player.pos);
+        let lava = self.player.in_lava_now;
+        let jumped = self.player.jumped;
+        self.stats.tick(&self.player, moved, jumped, eye_mat, lava, self.mode);
+        if self.stats.dead && !self.death_sent {
+            self.death_sent = true;
+            let _ = self.sim.commands.send(Command::Died);
+            self.screen = Screen::Dead;
+            self.input = Input::default();
+            self.dig = None;
+        }
+        {
+            let p = &self.player;
+            let _ = self.sim.commands.send(Command::Player(after, [p.yaw, p.pitch], p.flying));
+        }
+        if self.ticks % 100 == 0 {
+            let _ = self.sim.commands.send(Command::Stats(encode_stats(&self.stats)));
+        }
+        // Digging, right-click repeat, arm swing, equip animation.
+        self.tick_digging();
+        if self.right_delay > 0 {
+            self.right_delay -= 1;
+        }
+        if self.right_down && self.right_delay == 0 && self.screen == Screen::Playing && !self.stats.dead {
+            self.use_item();
+        }
+        self.prev_swing_f = self.swing_f;
+        if self.swing >= 0 {
+            self.swing += 1;
+            if self.swing >= 6 {
+                self.swing = -1;
+            }
+        }
+        self.swing_f = if self.swing >= 0 { self.swing as f32 / 6.0 } else { 0.0 };
+        if self.prev_swing_f > self.swing_f && self.swing < 0 {
+            self.prev_swing_f = 0.0;
+        }
+        self.prev_equip = self.equip;
+        let held = self.view.inv.held();
+        let same = match (held, self.equipped) {
+            (Some(a), Some(b)) => a.id == b.id && a.meta == b.meta,
+            (None, None) => true,
+            _ => false,
+        };
+        let target = if same { 1.0 } else { 0.0 };
+        self.equip += (target - self.equip).clamp(-0.4, 0.4);
+        if self.equip < 0.1 {
+            self.equipped = held;
         }
         if self.ticks % 40 == 0 {
             self.unload_far();
@@ -543,38 +735,222 @@ impl Game {
         }
     }
 
-    /// Left click: remove the targeted block.
-    pub fn break_block(&mut self) {
-        if let Some((b, _)) = self.selected {
-            let _ = self.sim.commands.send(Command::Break(b));
+    fn gui_mouse(&self) -> (f32, f32) {
+        (self.mouse_px.0 / self.gui_scale, self.mouse_px.1 / self.gui_scale)
+    }
+
+    fn gui_size(&self) -> (f32, f32) {
+        let e = self.renderer.extent;
+        (e.width as f32 / self.gui_scale, e.height as f32 / self.gui_scale)
+    }
+
+    /// `EntityLivingBase.swingItem`
+    fn swing_item(&mut self) {
+        if self.swing < 0 || self.swing >= 3 {
+            self.swing = -1;
+        }
+        if self.swing == -1 {
+            self.swing = 0;
         }
     }
 
-    /// Right click: place a block against the targeted face.
-    pub fn place_block(&mut self, id: u8, meta: i32) {
+    /// `PlayerControllerMP.clickBlock` / `onPlayerDamageBlock`, once per tick
+    /// while the attack button is held.
+    fn tick_digging(&mut self) {
+        if self.screen != Screen::Playing || !self.left_down || self.stats.dead {
+            self.dig = None;
+            return;
+        }
+        let Some((pos, _)) = self.selected else {
+            self.dig = None;
+            return;
+        };
+        self.swing_item();
+        if self.hit_delay > 0 {
+            self.hit_delay -= 1;
+            return;
+        }
+        if self.mode == GameMode::Creative {
+            self.hit_delay = 5;
+            let _ = self.sim.commands.send(Command::Dig(pos));
+            return;
+        }
+        let id = self.world.peek_block(pos[0], pos[1], pos[2]);
+        let in_water = self.player.eye_material(&self.world, self.eye(0.0)) == Material::Water;
+        let step = crate::item::break_progress(self.view.inv.held(), id, in_water, self.player.on_ground);
+        match self.dig {
+            Some(d) if d.pos == pos => {
+                let damage = d.damage + step;
+                if damage >= 1.0 {
+                    let _ = self.sim.commands.send(Command::Dig(pos));
+                    self.stats.add_exhaustion(0.025);
+                    self.dig = None;
+                    self.hit_delay = 5;
+                } else {
+                    self.dig = Some(Digging { pos, damage });
+                }
+            }
+            _ => {
+                if step >= 1.0 {
+                    let _ = self.sim.commands.send(Command::Dig(pos));
+                    self.stats.add_exhaustion(0.025);
+                    self.dig = None;
+                } else {
+                    self.dig = Some(Digging { pos, damage: 0.0 });
+                }
+            }
+        }
+    }
+
+    fn use_item(&mut self) {
         if let Some((b, n)) = self.selected {
-            let target = self.world.peek_block(b[0], b[1], b[2]);
-            // Replaceable targets (tall grass, snow layers, vines) are replaced in place.
-            let p = if block::material(target).replaceable() { b } else { [b[0] + n[0], b[1] + n[1], b[2] + n[2]] };
-            if n == [0, 0, 0] || !(0..256).contains(&p[1]) {
-                return;
+            if n != [0, 0, 0] {
+                let _ = self.sim.commands.send(Command::Use { target: b, face: n, sneaking: self.input.sneak });
+                self.swing_item();
             }
-            if !block::material(self.world.peek_block(p[0], p[1], p[2])).replaceable() {
-                return;
-            }
-            let bb = Aabb { min: [p[0] as f64, p[1] as f64, p[2] as f64], max: [p[0] as f64 + 1.0, p[1] as f64 + 1.0, p[2] as f64 + 1.0] };
-            if block::collision_box(id, meta as u8).is_some() && bb.intersects(&self.player.bb) {
-                return;
-            }
-            let _ = self.sim.commands.send(Command::Place { pos: p, id, meta });
+        }
+        self.right_delay = 4;
+    }
+
+    fn open_window_hit(&self) -> (bool, Option<screens::SlotHit>) {
+        let (w, h) = self.gui_size();
+        let (left, top, xs, ys, slots) = screens::layout(&self.view, w, h);
+        let (mx, my) = self.gui_mouse();
+        let inside = mx >= left && my >= top && mx < left + xs && my < top + ys;
+        let hit = slots.into_iter().find(|s| mx >= left + s.x - 1.0 && mx < left + s.x + 17.0 && my >= top + s.y - 1.0 && my < top + s.y + 17.0);
+        (inside, hit)
+    }
+
+    fn menu_hit(&mut self) -> Option<MenuAction> {
+        let (w, h) = self.gui_size();
+        let mut ui = crate::gui::Ui::new(&self.atlas, w, h);
+        let m = self.gui_mouse();
+        match self.screen {
+            Screen::Paused => screens::pause_menu(&mut ui, m),
+            Screen::Dead => screens::death_screen(&mut ui, &self.stats, m),
+            _ => None,
         }
     }
 
-    /// Middle click: id and metadata of the targeted block.
-    pub fn pick_block(&self) -> Option<(u8, i32)> {
-        self.selected.map(|(b, _)| (self.world.peek_block(b[0], b[1], b[2]), self.world.peek_meta(b[0], b[1], b[2]) as i32))
+    /// Mouse buttons: 0 left, 1 right, 2 middle.
+    pub fn mouse_button(&mut self, button: u8, pressed: bool, shift: bool) -> Request {
+        match button {
+            0 => self.left_down = pressed,
+            1 => self.right_down = pressed,
+            _ => {}
+        }
+        if !pressed {
+            if button == 0 {
+                self.dig = None;
+            }
+            return Request::None;
+        }
+        match self.screen {
+            Screen::Playing => {
+                match button {
+                    0 => {
+                        self.swing_item();
+                        // The first hit happens on the press (clickBlock).
+                        self.hit_delay = 0;
+                        self.tick_digging();
+                    }
+                    1 => self.use_item(),
+                    _ => {
+                        if let Some((b, _)) = self.selected {
+                            let id = self.world.peek_block(b[0], b[1], b[2]);
+                            let meta = self.world.peek_meta(b[0], b[1], b[2]) as i32;
+                            let _ = self.sim.commands.send(Command::PickBlock(id, meta));
+                        }
+                    }
+                }
+                Request::None
+            }
+            Screen::Window => {
+                let (inside, hit) = self.open_window_hit();
+                if button <= 1 {
+                    match hit {
+                        Some(s) => {
+                            let _ = self.sim.commands.send(Command::Click { slot: s.slot, tile: s.tile, right: button == 1, shift });
+                        }
+                        None if !inside => {
+                            let _ = self.sim.commands.send(Command::Click { slot: Slot::Outside, tile: None, right: button == 1, shift: false });
+                        }
+                        None => {}
+                    }
+                }
+                Request::None
+            }
+            Screen::Paused | Screen::Dead => match self.menu_hit() {
+                Some(MenuAction::BackToGame) => {
+                    self.screen = Screen::Playing;
+                    Request::Grab
+                }
+                Some(MenuAction::SaveAndQuit) => Request::Quit,
+                Some(MenuAction::Respawn) => {
+                    let _ = self.sim.commands.send(Command::Respawn);
+                    Request::Grab
+                }
+                None => Request::None,
+            },
+        }
     }
 
+    pub fn key(&mut self, code: winit::keyboard::KeyCode, pressed: bool, ctrl: bool) -> Request {
+        use winit::keyboard::KeyCode as K;
+        if !pressed {
+            return Request::None;
+        }
+        match (self.screen, code) {
+            (Screen::Playing, K::Escape) => {
+                self.screen = Screen::Paused;
+                self.input = Input::default();
+                Request::Release
+            }
+            (Screen::Paused, K::Escape) => {
+                self.screen = Screen::Playing;
+                Request::Grab
+            }
+            (Screen::Playing, K::KeyE) => {
+                let _ = self.sim.commands.send(Command::OpenInventory);
+                self.screen = Screen::Window;
+                self.input = Input::default();
+                Request::Release
+            }
+            (Screen::Window, K::KeyE | K::Escape) => {
+                let _ = self.sim.commands.send(Command::CloseWindow);
+                self.screen = Screen::Playing;
+                Request::Grab
+            }
+            (Screen::Playing, K::KeyQ) => {
+                let _ = self.sim.commands.send(Command::DropHeld { all: ctrl });
+                self.swing_item();
+                Request::None
+            }
+            (Screen::Playing, _) => {
+                let digits = [K::Digit1, K::Digit2, K::Digit3, K::Digit4, K::Digit5, K::Digit6, K::Digit7, K::Digit8, K::Digit9];
+                if let Some(i) = digits.iter().position(|d| *d == code) {
+                    let _ = self.sim.commands.send(Command::Select(i));
+                    self.view.inv.selected = i;
+                }
+                Request::None
+            }
+            _ => Request::None,
+        }
+    }
+
+    pub fn scroll(&mut self, up: bool) {
+        if self.screen == Screen::Playing {
+            let s = self.view.inv.selected;
+            let n = if up { (s + 8) % 9 } else { (s + 1) % 9 };
+            self.view.inv.selected = n;
+            let _ = self.sim.commands.send(Command::Select(n));
+        }
+    }
+
+    /// Whether the mouse should be captured for looking around.
+    pub fn wants_grab(&self) -> bool {
+        self.screen == Screen::Playing
+    }
     fn lightmap(&self, out: &mut [[f32; 4]; 256]) {
         // World.getSunBrightness (client)
         let angle = self.celestial_angle(1.0);
@@ -723,9 +1099,23 @@ impl Game {
         let b1 = -(p.distance_walked + fw * partial);
         let b2 = p.prev_camera_yaw + (p.camera_yaw - p.prev_camera_yaw) * partial;
         let b3 = p.prev_camera_pitch + (p.camera_pitch - p.prev_camera_pitch) * partial;
-        let mut view: Mat4 = render::translate(math::sin(b1 * math::PI) * b2 * 0.5f32, -(math::cos(b1 * math::PI) * b2).abs(), 0.0);
-        view = render::mul(&view, &render::rot_z(math::sin(b1 * math::PI) * b2 * 3.0f32));
-        view = render::mul(&view, &render::rot_x((math::cos(b1 * math::PI - 0.2f32) * b2).abs() * 5.0f32));
+        // EntityRenderer.hurtCameraEffect
+        let mut hurt: Mat4 = render::IDENTITY;
+        if self.stats.dead {
+            let d = self.stats.death_time as f32 + partial;
+            hurt = render::rot_z(40.0f32 - 8000.0f32 / (d + 200.0f32));
+        }
+        let hf = self.stats.hurt_time as f32 - partial;
+        if hf >= 0.0 && !self.stats.dead {
+            let f = hf / crate::entity::survival::MAX_HURT_TIME as f32;
+            let f = math::sin(f * f * f * f * math::PI);
+            hurt = render::mul(&hurt, &render::rot_z(-f * 14.0f32));
+        }
+        let mut bob: Mat4 = render::translate(math::sin(b1 * math::PI) * b2 * 0.5f32, -(math::cos(b1 * math::PI) * b2).abs(), 0.0);
+        bob = render::mul(&bob, &render::rot_z(math::sin(b1 * math::PI) * b2 * 3.0f32));
+        bob = render::mul(&bob, &render::rot_x((math::cos(b1 * math::PI - 0.2f32) * b2).abs() * 5.0f32));
+        let shake = render::mul(&hurt, &bob);
+        let mut view: Mat4 = shake;
         view = render::mul(&view, &render::rot_x(b3));
         view = render::mul(&view, &render::translate(0.0, 0.0, -0.1));
         view = render::mul(&view, &render::rot_x(p.pitch));
@@ -771,6 +1161,7 @@ impl Game {
         let mut g = Globals {
             view_proj,
             sky_rot: render::mul(&render::rot_y(-90.0), &render::rot_x(angle * 360.0)),
+            hand_proj: render::mul(&render::perspective(70.0, aspect, 0.05, rd * 16.0 * 2.0), &shake),
             cam_right: row(0, tan * aspect),
             cam_up: row(1, tan),
             cam_fwd: row(2, -1.0),
@@ -798,8 +1189,49 @@ impl Game {
             self.fps_frames = 0;
             self.fps_since = Instant::now();
         }
+        self.gui_scale = scale as f32;
+
+        // --- Dropped items, crack overlay, hand ---
+        let mut dynamic: Vec<crate::render::mesher::Vertex> = Vec::new();
+        for it in &self.items {
+            let t = partial as f64;
+            let p = [it.prev[0] + (it.pos[0] - it.prev[0]) * t, it.prev[1] + (it.pos[1] - it.prev[1]) * t, it.prev[2] + (it.pos[2] - it.prev[2]) * t];
+            let rel = [(p[0] - eye[0]) as f32, (p[1] - eye[1]) as f32, (p[2] - eye[2]) as f32];
+            if rel[0] * rel[0] + rel[2] * rel[2] > (rd * 16.0) * (rd * 16.0) {
+                continue;
+            }
+            let (lx, ly, lz) = (math::floor_double(p[0]), math::floor_double(p[1]), math::floor_double(p[2]));
+            let light = (self.world.light(true, lx, ly, lz), self.world.light(false, lx, ly, lz));
+            entities::item_entity(&mut dynamic, &self.atlas, &it.stack, [rel[0], rel[1] - 0.125, rel[2]], it.age as f32 + partial, it.hover, self.player.yaw, light);
+        }
+        let mut crack: Vec<crate::render::mesher::Vertex> = Vec::new();
+        if let Some(d) = self.dig {
+            let stage = (d.damage * 10.0) as i32 - 1;
+            if stage >= 0 {
+                let id = self.world.peek_block(d.pos[0], d.pos[1], d.pos[2]);
+                let b = block::collision_box(id, self.world.peek_meta(d.pos[0], d.pos[1], d.pos[2])).unwrap_or([0.0, 0.0, 0.0, 1.0, 1.0, 1.0]);
+                let rel = [(d.pos[0] as f64 - eye[0]) as f32, (d.pos[1] as f64 - eye[1]) as f32, (d.pos[2] as f64 - eye[2]) as f32];
+                entities::crack(&mut crack, &self.atlas, stage as usize, rel, b);
+            }
+        }
+        let mut hand: Vec<crate::render::mesher::Vertex> = Vec::new();
+        if !self.stats.dead {
+            let (lx, ly, lz) = (math::floor_double(eye[0]), math::floor_double(eye[1]), math::floor_double(eye[2]));
+            let light = (self.world.light(true, lx, ly, lz), self.world.light(false, lx, ly, lz));
+            let equip = self.prev_equip + (self.equip - self.prev_equip) * partial;
+            let swing = self.prev_swing_f + (self.swing_f - self.prev_swing_f) * partial;
+            entities::hand(&mut hand, &self.atlas, self.equipped, equip, swing, light);
+        }
+
         let mut ui = crate::gui::Ui::new(&self.atlas, window_size.0 as f32 / scale as f32, window_size.1 as f32 / scale as f32);
-        crate::gui::hotbar(&mut ui, &self.hotbar, self.slot, false);
+        screens::hotbar(&mut ui, &self.view.inv);
+        if self.mode == GameMode::Survival {
+            let under = eye_mat == Material::Water;
+            let mut jitter = std::mem::replace(&mut self.jitter, JavaRandom::new(0));
+            jitter.set_seed(self.ticks as i64 * 312871);
+            screens::survival_bars(&mut ui, &self.stats, self.ticks as u32, &mut jitter, under);
+            self.jitter = jitter;
+        }
         if self.show_debug {
             let p = &self.player;
             let (fx, fy, fz) = (math::floor_double(p.pos[0]), math::floor_double(p.bb.min[1]), math::floor_double(p.pos[2]));
@@ -818,8 +1250,22 @@ impl Game {
             let right = vec![format!("Seed: {}", self.seed), format!("Time: {}", self.world_time)];
             crate::gui::debug_overlay(&mut ui, &left, &right);
         }
+        let m = (self.mouse_px.0 / scale as f32, self.mouse_px.1 / scale as f32);
+        match self.screen {
+            Screen::Window => {
+                screens::container(&mut ui, &self.view, m);
+            }
+            Screen::Paused => {
+                screens::pause_menu(&mut ui, m);
+            }
+            Screen::Dead => {
+                screens::death_screen(&mut ui, &self.stats, m);
+            }
+            Screen::Playing => {}
+        }
         let ui_verts = ui.v;
-        let frame = Frame { ui: &ui_verts, globals: &g, cam: eye, outline: self.selected.map(|s| s.0), gui_scale: scale as f32, screenshot: self.screenshot.take(), star_brightness: star, sunrise, clouds: Some(clouds) };
+        let outline = if self.screen == Screen::Playing { self.selected.map(|s| s.0) } else { None };
+        let frame = Frame { crosshair: self.screen == Screen::Playing, dynamic: &dynamic, crack: &crack, hand: &hand, ui: &ui_verts, globals: &g, cam: eye, outline, gui_scale: scale as f32, screenshot: self.screenshot.take(), star_brightness: star, sunrise, clouds: Some(clouds) };
         self.renderer.render(&frame, window_size);
     }
 }

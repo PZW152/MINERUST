@@ -23,7 +23,7 @@ pub struct Aabb {
 }
 
 impl Aabb {
-    fn offset(&mut self, x: f64, y: f64, z: f64) {
+    pub fn offset(&mut self, x: f64, y: f64, z: f64) {
         self.min[0] += x;
         self.max[0] += x;
         self.min[1] += y;
@@ -31,13 +31,13 @@ impl Aabb {
         self.min[2] += z;
         self.max[2] += z;
     }
-    fn offset_copy(&self, x: f64, y: f64, z: f64) -> Aabb {
+    pub fn offset_copy(&self, x: f64, y: f64, z: f64) -> Aabb {
         let mut b = *self;
         b.offset(x, y, z);
         b
     }
     /// `AxisAlignedBB.addCoord`
-    fn add_coord(&self, x: f64, y: f64, z: f64) -> Aabb {
+    pub fn add_coord(&self, x: f64, y: f64, z: f64) -> Aabb {
         let mut b = *self;
         for (i, d) in [x, y, z].into_iter().enumerate() {
             if d < 0.0 {
@@ -54,7 +54,7 @@ impl Aabb {
     }
     /// `calculateXOffset` / `calculateYOffset` / `calculateZOffset`: `self` is the
     /// obstacle, `o` the moving box.
-    fn calc_offset(&self, o: &Aabb, axis: usize, mut d: f64) -> f64 {
+    pub fn calc_offset(&self, o: &Aabb, axis: usize, mut d: f64) -> f64 {
         for i in 0..3 {
             if i != axis && !(o.max[i] > self.min[i] && o.min[i] < self.max[i]) {
                 return d;
@@ -122,6 +122,9 @@ pub struct Player {
     pub flying: bool,
     pub allow_flying: bool,
     pub in_water: bool,
+    /// Set by `tick` when the player jumped this tick.
+    pub jumped: bool,
+    pub in_lava_now: bool,
     y_size: f32,
     jump_ticks: i32,
     sprint_toggle_timer: i32,
@@ -160,6 +163,8 @@ impl Player {
             flying: false,
             allow_flying: true,
             in_water: false,
+            jumped: false,
+            in_lava_now: false,
             y_size: 0.0,
             jump_ticks: 0,
             sprint_toggle_timer: 0,
@@ -556,6 +561,8 @@ impl Player {
 
     /// One game tick (`onUpdate`).
     pub fn tick(&mut self, world: &dyn BlockView, input: &Input) {
+        self.jumped = false;
+        self.in_lava_now = self.in_lava(world);
         self.prev_pos = self.pos;
         self.prev_distance_walked = self.distance_walked;
         self.prev_camera_pitch = self.camera_pitch;
@@ -640,6 +647,7 @@ impl Player {
                 self.motion[1] += 0.04f32 as f64;
             } else if self.on_ground && self.jump_ticks == 0 {
                 self.motion[1] = 0.42f32 as f64;
+                self.jumped = true;
                 if self.sprinting {
                     let f = self.yaw * 0.017453292f32;
                     self.motion[0] -= (math::sin(f) * 0.2f32) as f64;

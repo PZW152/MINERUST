@@ -33,11 +33,15 @@ pub const RED_MUSHROOM: u8 = 40;
 pub const STONE_SLAB: u8 = 44;
 pub const MOSSY_COBBLESTONE: u8 = 48;
 pub const OBSIDIAN: u8 = 49;
+pub const TORCH: u8 = 50;
 pub const FIRE: u8 = 51;
 pub const MOB_SPAWNER: u8 = 52;
 pub const CHEST: u8 = 54;
 pub const DIAMOND_ORE: u8 = 56;
+pub const CRAFTING_TABLE: u8 = 58;
 pub const FARMLAND: u8 = 60;
+pub const FURNACE: u8 = 61;
+pub const LIT_FURNACE: u8 = 62;
 pub const REDSTONE_ORE: u8 = 73;
 pub const SNOW_LAYER: u8 = 78;
 pub const ICE: u8 = 79;
@@ -79,6 +83,7 @@ pub enum Shape {
     Slab,
     Chest,
     Cocoa,
+    Torch,
 }
 
 /// `net.minecraft.block.material.Material`
@@ -104,6 +109,8 @@ pub enum Material {
     Clay,
     Gourd,
     Fire,
+    /// `Material.circuits`
+    Circuits,
 }
 
 impl Material {
@@ -114,7 +121,7 @@ impl Material {
     /// `Material.isSolid()`
     #[inline]
     pub fn is_solid(self) -> bool {
-        !matches!(self, Material::Air | Material::Water | Material::Lava | Material::Plants | Material::Vine | Material::Snow | Material::Fire)
+        !matches!(self, Material::Air | Material::Water | Material::Lava | Material::Plants | Material::Vine | Material::Snow | Material::Fire | Material::Circuits)
     }
     /// `Material.blocksMovement()`
     #[inline]
@@ -141,7 +148,7 @@ impl Material {
     /// `Material.getCanBlockGrass()`
     #[inline]
     fn can_block_grass(self) -> bool {
-        !matches!(self, Material::Air | Material::Plants | Material::Vine | Material::Snow | Material::Fire)
+        !matches!(self, Material::Air | Material::Plants | Material::Vine | Material::Snow | Material::Fire | Material::Circuits)
     }
 }
 
@@ -235,6 +242,9 @@ fn build() -> [BlockInfo; 256] {
         (BROWN_MUSHROOM_BLOCK, M::Wood),
         (RED_MUSHROOM_BLOCK, M::Wood),
         (MELON_BLOCK, M::Gourd),
+        (CRAFTING_TABLE, M::Wood),
+        (FURNACE, M::Rock),
+        (LIT_FURNACE, M::Rock),
         (MYCELIUM, M::Grass),
         (EMERALD_ORE, M::Rock),
         (STAINED_HARDENED_CLAY, M::Rock),
@@ -293,6 +303,10 @@ fn build() -> [BlockInfo; 256] {
     t[SNOW_LAYER as usize] = base(Shape::SnowLayer, M::Snow, false);
     t[CACTUS as usize] = base(Shape::Cactus, M::Cactus, false);
     t[COCOA as usize] = base(Shape::Cocoa, M::Plants, false);
+    t[LIT_FURNACE as usize].light_value = 13;
+    let mut torch = base(Shape::Torch, M::Circuits, false);
+    torch.light_value = 14;
+    t[TORCH as usize] = torch;
     t[FIRE as usize] = base(Shape::None, M::Fire, false);
     t[FIRE as usize].light_value = 15;
 
@@ -499,6 +513,8 @@ pub fn texture_name(id: u8, meta: u8, face: usize) -> Option<&'static str> {
                     0 => "sandstone_bottom",
                     _ => "sandstone_normal",
                 }
+            } else if meta & 7 == 3 {
+                "cobblestone"
             } else if face < 2 {
                 "stone_slab_top"
             } else {
@@ -518,6 +534,29 @@ pub fn texture_name(id: u8, meta: u8, face: usize) -> Option<&'static str> {
         MOSSY_COBBLESTONE => "cobblestone_mossy",
         OBSIDIAN => "obsidian",
         MOB_SPAWNER => "mob_spawner",
+        TORCH => "torch_on",
+        CRAFTING_TABLE => match face {
+            1 => "crafting_table_top",
+            0 => "planks_oak",
+            2 | 4 => "crafting_table_front",
+            _ => "crafting_table_side",
+        },
+        FURNACE | LIT_FURNACE => {
+            // BlockFurnace.getIcon: the front faces the metadata direction;
+            // metadata 0 (item form) shows the front on side 3.
+            let front = if meta == 0 { 3 } else { meta as usize };
+            if face < 2 {
+                "furnace_top"
+            } else if face == front {
+                if id == LIT_FURNACE {
+                    "furnace_front_on"
+                } else {
+                    "furnace_front_off"
+                }
+            } else {
+                "furnace_side"
+            }
+        }
         DIAMOND_ORE => "diamond_ore",
         REDSTONE_ORE => "redstone_ore",
         SNOW_LAYER | SNOW => "snow",

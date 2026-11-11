@@ -427,6 +427,7 @@ pub fn build(chunks: &[MeshChunk; 9], atlas: &Atlas, noise: &BiomeNoise) -> Chun
                         boxed(&cx, out, id, meta, x, y, z, b, 0.0)
                     }
                     Shape::Chest => boxed(&cx, out, id, meta, x, y, z, [0.0625, 0.0, 0.0625, 0.9375, 0.875, 0.9375], 0.0),
+                    Shape::Torch => torch(&cx, out, meta, x, y, z),
                     Shape::Cocoa | Shape::None => {}
                 }
                 if out.len() != before {
@@ -644,6 +645,60 @@ fn double_plant(cx: &Ctx, out: &mut Vec<Vertex>, meta: i32, x: i32, y: i32, z: i
         let b = cx.atlas.rects[cx.atlas.sunflower_back as usize];
         out.extend_from_slice(&[v(p4, 1.0, b[0], b[3]), v(p3, 1.0, b[2], b[3]), v(p2, 0.0, b[2], b[1]), v(p1, 0.0, b[0], b[1])]);
     }
+}
+
+/// `renderBlockTorch` / `renderTorchAtAngle`
+fn torch(cx: &Ctx, out: &mut Vec<Vertex>, meta: i32, x: i32, y: i32, z: i32) {
+    let r = &cx.r;
+    let Some(t) = cx.rect(block::TORCH, 0, 0) else { return };
+    let light = light_bytes(r.bright(x, y, z));
+    let color = [255u8; 4];
+    let (bx, by, bz) = ((x - 16) as f64, y as f64, (z - 16) as f64);
+    let (d7, d9, d11) = (0.4f32 as f64, 0.5 - 0.4f32 as f64, 0.2f32 as f64);
+    let (mut px, py, mut pz, dx, dz) = match meta {
+        1 => (bx - d9, by + d11, bz, -d7, 0.0),
+        2 => (bx + d9, by + d11, bz, d7, 0.0),
+        3 => (bx, by + d11, bz - d9, 0.0, -d7),
+        4 => (bx, by + d11, bz + d9, 0.0, d7),
+        _ => (bx, by, bz, 0.0, 0.0),
+    };
+    let u = |p: f32| t[0] + (t[2] - t[0]) * p / 16.0;
+    let v = |p: f32| t[1] + (t[3] - t[1]) * p / 16.0;
+    let (u0, v0, u1, v1) = (t[0], t[1], t[2], t[3]);
+    px += 0.5;
+    pz += 0.5;
+    let (x0, x1, z0, z1) = (px - 0.5, px + 0.5, pz - 0.5, pz + 0.5);
+    let e = 0.0625f64;
+    let h = 0.625f64;
+    let vt = |x: f64, y: f64, z: f64, uu: f32, vv: f32| Vertex { pos: [x as f32, y as f32, z as f32], uv: [uu, vv], color, light };
+    let tx = px + dx * (1.0 - h);
+    let tz = pz + dz * (1.0 - h);
+    out.extend_from_slice(&[
+        vt(tx - e, py + h, tz - e, u(7.0), v(6.0)),
+        vt(tx - e, py + h, tz + e, u(7.0), v(8.0)),
+        vt(tx + e, py + h, tz + e, u(9.0), v(8.0)),
+        vt(tx + e, py + h, tz - e, u(9.0), v(6.0)),
+        vt(px + e + dx, py, pz - e + dz, u(9.0), v(13.0)),
+        vt(px + e + dx, py, pz + e + dz, u(9.0), v(15.0)),
+        vt(px - e + dx, py, pz + e + dz, u(7.0), v(15.0)),
+        vt(px - e + dx, py, pz - e + dz, u(7.0), v(13.0)),
+        vt(px - e, py + 1.0, z0, u0, v0),
+        vt(px - e + dx, py, z0 + dz, u0, v1),
+        vt(px - e + dx, py, z1 + dz, u1, v1),
+        vt(px - e, py + 1.0, z1, u1, v0),
+        vt(px + e, py + 1.0, z1, u0, v0),
+        vt(px + dx + e, py, z1 + dz, u0, v1),
+        vt(px + dx + e, py, z0 + dz, u1, v1),
+        vt(px + e, py + 1.0, z0, u1, v0),
+        vt(x0, py + 1.0, pz + e, u0, v0),
+        vt(x0 + dx, py, pz + e + dz, u0, v1),
+        vt(x1 + dx, py, pz + e + dz, u1, v1),
+        vt(x1, py + 1.0, pz + e, u1, v0),
+        vt(x1, py + 1.0, pz - e, u0, v0),
+        vt(x1 + dx, py, pz - e + dz, u0, v1),
+        vt(x0 + dx, py, pz - e + dz, u1, v1),
+        vt(x0, py + 1.0, pz - e, u1, v0),
+    ]);
 }
 
 /// `renderBlockVine`

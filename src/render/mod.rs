@@ -1,4 +1,5 @@
 pub mod atlas;
+pub mod entities;
 pub mod mesher;
 pub mod vk;
 

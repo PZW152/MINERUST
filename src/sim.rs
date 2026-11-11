@@ -8,6 +8,9 @@
 //! never depend on wall-clock time, hash-map iteration or thread scheduling.
 
 use crate::block::{self, Material};
+use crate::entity::survival::GameMode;
+use crate::inventory::{Inventory, Slot};
+use crate::play::{InvView, ItemView, Open, Play};
 use crate::render::mesher::MeshChunk;
 use crate::world::save::{self, Level};
 use crate::world::{BlockView, ChunkData, ChunkProvider, ServerWorld};
@@ -29,6 +32,24 @@ pub enum Command {
     Place { pos: [i32; 3], id: u8, meta: i32 },
     /// Position, rotation and flying state, kept for the save file.
     Player([f64; 3], [f32; 2], bool),
+    /// Survival digging finished (or a creative click) at the block.
+    Dig([i32; 3]),
+    /// Right click on a block face.
+    Use { target: [i32; 3], face: [i32; 3], sneaking: bool },
+    Select(usize),
+    Click { slot: Slot, tile: Option<usize>, right: bool, shift: bool },
+    OpenInventory,
+    CloseWindow,
+    DropHeld { all: bool },
+    PickBlock(u8, i32),
+    SetMode(GameMode),
+    /// Health, food and the like, encoded by the client for the save file.
+    Stats(String),
+    /// The player died: the inventory spills out.
+    Died,
+    Respawn,
+    /// `/give`: adds the stack to the inventory.
+    Give(crate::item::Stack),
     Shutdown,
 }
 
@@ -38,6 +59,11 @@ pub enum Event {
     Chunk { key: (i32, i32), chunk: MeshChunk, ready: bool },
     /// The chunk left the client's range.
     Unload((i32, i32)),
+    Inventory(Box<InvView>),
+    /// Every dropped item near the player, sent each tick.
+    Items(Vec<ItemView>),
+    /// After `Respawn`: where to put the player (feet).
+    Respawn([f64; 3]),
 }
 
 pub struct SimConfig {
@@ -46,6 +72,7 @@ pub struct SimConfig {
     pub save_dir: Option<PathBuf>,
     pub start_time: i64,
     pub freeze_time: bool,
+    pub mode: GameMode,
 }
 
 pub struct Start {
@@ -55,6 +82,9 @@ pub struct Start {
     pub world_time: i64,
     pub seed: i64,
     pub resumed: bool,
+    pub mode: GameMode,
+    /// Saved player stats, if any.
+    pub stats: Option<String>,
 }
 
 pub struct Sim {
@@ -70,7 +100,14 @@ pub struct Sim {
     freeze_time: bool,
     player: Option<([f64; 3], [f32; 2], bool)>,
     unknown_level_keys: Vec<(String, String)>,
+    pub play: Play,
+    spawn: [f64; 3],
+    stats: Option<String>,
+    respawn_pending: bool,
 }
+
+/// Level keys owned by the gameplay state (kept out of `unknown`).
+const PLAY_KEYS: [&str; 5] = ["inventory", "mode", "tile", "spawn", "stats"];
 
 fn spiral(radius: i32) -> Vec<(i32, i32)> {
     let mut v = Vec::new();
@@ -106,6 +143,10 @@ impl Sim {
             freeze_time: cfg.freeze_time,
             player: None,
             unknown_level_keys: Vec::new(),
+            play: Play::new(cfg.mode),
+            spawn: [0.0; 3],
+            stats: None,
+            respawn_pending: false,
         };
         let start = match level {
             Some(l) => {
@@ -114,22 +155,44 @@ impl Sim {
                 for t in &l.ticks {
                     sim.world.restore_tick(t.0, t.1, t.2, t.3, t.4);
                 }
-                sim.unknown_level_keys = l.unknown.clone();
-                sim.player = l.player;
-                let (pos, rot, flying) = match l.player {
-                    Some(p) => p,
-                    None => {
-                        let p = sim.find_spawn();
-                        (p, [0.0, 0.0], false)
+                sim.unknown_level_keys = l.unknown.iter().filter(|(k, _)| !PLAY_KEYS.contains(&k.as_str())).cloned().collect();
+                let mut spawn = None;
+                for (k, v) in &l.unknown {
+                    match k.as_str() {
+                        "inventory" => {
+                            if let Some(inv) = Inventory::decode(v) {
+                                sim.play.inv = inv;
+                            }
+                        }
+                        "mode" => sim.play.mode = if v == "creative" { GameMode::Creative } else { GameMode::Survival },
+                        "tile" => {
+                            let _ = sim.play.decode_tile(v);
+                        }
+                        "spawn" => {
+                            let f: Vec<f64> = v.split(',').filter_map(|x| x.parse().ok()).collect();
+                            if f.len() == 3 {
+                                spawn = Some([f[0], f[1], f[2]]);
+                            }
+                        }
+                        "stats" => sim.stats = Some(v.clone()),
+                        _ => {}
                     }
+                }
+                sim.player = l.player;
+                sim.spawn = match spawn {
+                    Some(s) => s,
+                    None => sim.find_spawn(),
                 };
-                Start { pos, rot, flying, world_time: l.world_time, seed, resumed: true }
+                let (pos, rot, flying) = l.player.unwrap_or((sim.spawn, [0.0, 0.0], false));
+                Start { pos, rot, flying, world_time: l.world_time, seed, resumed: true, mode: sim.play.mode, stats: sim.stats.clone() }
             }
             None => {
                 let pos = sim.find_spawn();
-                Start { pos, rot: [0.0, 0.0], flying: false, world_time: cfg.start_time, seed, resumed: false }
+                sim.spawn = pos;
+                Start { pos, rot: [0.0, 0.0], flying: false, world_time: cfg.start_time, seed, resumed: false, mode: sim.play.mode, stats: None }
             }
         };
+        sim.play.player = (start.pos, start.rot[0]);
         sim.centre = ((start.pos[0].floor() as i32) >> 4, (start.pos[2].floor() as i32) >> 4);
         (sim, start)
     }
@@ -203,7 +266,10 @@ impl Sim {
     fn apply(&mut self, cmd: &Command) {
         match *cmd {
             Command::Center(x, z) => self.centre = (x, z),
-            Command::Player(p, r, f) => self.player = Some((p, r, f)),
+            Command::Player(p, r, f) => {
+                self.player = Some((p, r, f));
+                self.play.player = (p, r[0]);
+            }
             Command::Break(p) => {
                 let id = self.world.block(p[0], p[1], p[2]);
                 if id != block::AIR && id != block::BEDROCK && !block::material(id).is_liquid() {
@@ -233,6 +299,72 @@ impl Sim {
                     w.set_block(p[0], p[1] + 1, p[2], id, 8, 3);
                 } else {
                     w.set_block(p[0], p[1], p[2], id, meta, 3);
+                }
+            }
+            Command::Dig(p) => {
+                let mut play = std::mem::replace(&mut self.play, Play::new(GameMode::Survival));
+                play.dig(&mut self.world, p);
+                self.play = play;
+            }
+            Command::Use { target, face, sneaking } => {
+                let mut play = std::mem::replace(&mut self.play, Play::new(GameMode::Survival));
+                play.use_block(&mut self.world, target, face, sneaking);
+                self.play = play;
+            }
+            Command::Select(i) => {
+                if i < 9 && self.play.inv.selected != i {
+                    self.play.inv.selected = i;
+                    self.play.inv_dirty = true;
+                }
+            }
+            Command::Click { slot, tile, right, shift } => {
+                if self.play.open != Open::None {
+                    let mut play = std::mem::replace(&mut self.play, Play::new(GameMode::Survival));
+                    play.click(&mut self.world, slot, tile, right, shift);
+                    self.play = play;
+                }
+            }
+            Command::OpenInventory => {
+                self.play.open = Open::Inventory;
+                self.play.inv.grid_size = 2;
+                self.play.inv_dirty = true;
+            }
+            Command::CloseWindow => {
+                let mut play = std::mem::replace(&mut self.play, Play::new(GameMode::Survival));
+                play.close(&mut self.world);
+                self.play = play;
+            }
+            Command::DropHeld { all } => {
+                let mut play = std::mem::replace(&mut self.play, Play::new(GameMode::Survival));
+                play.drop_held(&mut self.world, all);
+                self.play = play;
+            }
+            Command::PickBlock(id, meta) => self.play.pick_block(id, meta),
+            Command::SetMode(m) => {
+                self.play.mode = m;
+                self.play.inv_dirty = true;
+            }
+            Command::Stats(ref s) => self.stats = Some(s.clone()),
+            Command::Died => {
+                let mut play = std::mem::replace(&mut self.play, Play::new(GameMode::Survival));
+                if play.mode == GameMode::Survival {
+                    let mut rnd = std::mem::replace(&mut self.world.rand, crate::java::JavaRandom::new(0));
+                    play.close(&mut self.world);
+                    for i in 0..crate::inventory::MAIN {
+                        if let Some(st) = play.inv.main[i].take() {
+                            play.throw(st, &mut rnd);
+                        }
+                    }
+                    self.world.rand = rnd;
+                    play.inv_dirty = true;
+                }
+                self.play = play;
+            }
+            Command::Respawn => self.respawn_pending = true,
+            Command::Give(s) => {
+                if s.count > 0 && s.count <= 64 {
+                    let _ = self.play.inv.add(s);
+                    self.play.inv_dirty = true;
                 }
             }
             Command::Shutdown => {}
@@ -312,6 +444,19 @@ impl Sim {
         if self.world.total_time % 40 == 0 {
             self.unload_far();
         }
+        let mut play = std::mem::replace(&mut self.play, Play::new(GameMode::Survival));
+        play.tick(&mut self.world);
+        self.play = play;
+        if self.play.inv_dirty {
+            self.play.inv_dirty = false;
+            events.push(Event::Inventory(Box::new(self.play.view())));
+        }
+        events.push(Event::Items(self.play.item_views()));
+        if self.respawn_pending {
+            self.respawn_pending = false;
+            self.centre = ((self.spawn[0].floor() as i32) >> 4, (self.spawn[2].floor() as i32) >> 4);
+            events.push(Event::Respawn(self.spawn));
+        }
 
         // Changes, in a fixed order.
         let mut dirty: Vec<(i32, i32)> = self.world.dirty.drain().collect();
@@ -367,7 +512,19 @@ impl Sim {
             vanilla_parity: crate::compat::vanilla_parity(),
             player: self.player,
             ticks: self.world.pending_tick_list(),
-            unknown: self.unknown_level_keys.clone(),
+            unknown: {
+                let mut u = self.unknown_level_keys.clone();
+                u.push(("inventory".into(), self.play.inv.encode()));
+                u.push(("mode".into(), if self.play.mode == GameMode::Creative { "creative" } else { "survival" }.into()));
+                u.push(("spawn".into(), format!("{:?},{:?},{:?}", self.spawn[0], self.spawn[1], self.spawn[2])));
+                if let Some(st) = &self.stats {
+                    u.push(("stats".into(), st.clone()));
+                }
+                for t in self.play.encode_tiles() {
+                    u.push(("tile".into(), t));
+                }
+                u
+            },
         };
         save::write_level(&dir, &level)
     }
@@ -514,7 +671,7 @@ mod tests {
     use super::*;
 
     fn run(seed: i64, ticks: usize) -> (u64, usize) {
-        let cfg = SimConfig { seed, view: 2, save_dir: None, start_time: 0, freeze_time: false };
+        let cfg = SimConfig { seed, view: 2, save_dir: None, start_time: 0, freeze_time: false, mode: GameMode::Creative };
         let (mut sim, start) = Sim::new(&cfg);
         let (cx, cz) = ((start.pos[0].floor() as i32) >> 4, (start.pos[2].floor() as i32) >> 4);
         let (bx, by, bz) = (start.pos[0].floor() as i32, start.pos[1] as i32, start.pos[2].floor() as i32);
@@ -558,7 +715,7 @@ mod tests {
     fn save_and_reload_round_trips() {
         let dir = std::env::temp_dir().join(format!("minerust-sim-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        let cfg = SimConfig { seed: 77, view: 2, save_dir: Some(dir.clone()), start_time: 0, freeze_time: false };
+        let cfg = SimConfig { seed: 77, view: 2, save_dir: Some(dir.clone()), start_time: 0, freeze_time: false, mode: GameMode::Creative };
         let mut events = Vec::new();
         let (hash_before, pos) = {
             let (mut sim, start) = Sim::new(&cfg);
@@ -580,5 +737,54 @@ mod tests {
         assert_eq!(sim.world.block(pos[0], pos[1] + 2, pos[2]), block::COBBLESTONE);
         let _ = hash_before;
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Survival loop: dig with a pickaxe, the drop is picked up, placing
+    /// consumes it, and the crafting grid works through the server.
+    #[test]
+    fn survival_dig_pickup_place_and_craft() {
+        let cfg = SimConfig { seed: 2026, view: 2, save_dir: None, start_time: 0, freeze_time: true, mode: GameMode::Survival };
+        let (mut sim, start) = Sim::new(&cfg);
+        let mut ev = Vec::new();
+        for _ in 0..3 {
+            sim.step(&[], &mut ev);
+        }
+        let (bx, by, bz) = (start.pos[0].floor() as i32, start.pos[1] as i32, start.pos[2].floor() as i32);
+        let below = [bx, by - 1, bz];
+        // Make sure there is stone to dig right under the player.
+        sim.world.set_block(below[0], below[1], below[2], block::STONE, 0, 3);
+        let feet = [start.pos[0], start.pos[1], start.pos[2]];
+        let pick = crate::item::Stack::new(270, 0, 1);
+        sim.step(&[Command::Player(feet, [0.0, 0.0], false), Command::Give(pick), Command::Select(0), Command::Dig(below)], &mut ev);
+        assert_eq!(sim.world.block(below[0], below[1], below[2]), block::AIR);
+        assert_eq!(sim.play.inv.main[0].map(|s| s.meta), Some(1), "pickaxe loses durability");
+        let mut picked = false;
+        for _ in 0..60 {
+            sim.step(&[Command::Player(feet, [0.0, 0.0], false)], &mut ev);
+            if sim.play.inv.main.iter().flatten().any(|s| s.id == block::COBBLESTONE as u16) {
+                picked = true;
+                break;
+            }
+        }
+        assert!(picked, "cobblestone was not picked up");
+        assert!(sim.play.items.is_empty());
+        // Digging stone by hand yields nothing.
+        let side = [bx + 2, by - 1, bz];
+        sim.world.set_block(side[0], side[1], side[2], block::STONE, 0, 3);
+        sim.step(&[Command::Select(8), Command::Dig(side)], &mut ev);
+        assert_eq!(sim.world.block(side[0], side[1], side[2]), block::AIR);
+        assert!(sim.play.items.is_empty(), "stone dug by hand must not drop");
+        // Place the cobblestone back: the stack shrinks.
+        let slot = sim.play.inv.main.iter().position(|s| matches!(s, Some(s) if s.id == block::COBBLESTONE as u16)).unwrap();
+        sim.world.set_block(bx + 3, by - 1, bz, block::STONE, 0, 3);
+        sim.world.set_block(bx + 3, by, bz, block::AIR, 0, 3);
+        sim.step(&[Command::Select(slot), Command::Use { target: [bx + 3, by - 1, bz], face: [0, 1, 0], sneaking: false }], &mut ev);
+        assert_eq!(sim.world.block(bx + 3, by, bz), block::COBBLESTONE);
+        assert!(sim.play.inv.main[slot].is_none());
+        // Craft planks from a log in the 2x2 grid.
+        sim.step(&[Command::Give(crate::item::Stack::new(block::LOG as u16, 0, 1)), Command::OpenInventory], &mut ev);
+        let log_slot = sim.play.inv.main.iter().position(|s| matches!(s, Some(s) if s.id == block::LOG as u16)).unwrap();
+        sim.step(&[Command::Click { slot: Slot::Main(log_slot), tile: None, right: false, shift: false }, Command::Click { slot: Slot::Craft(0), tile: None, right: false, shift: false }, Command::Click { slot: Slot::Result, tile: None, right: false, shift: true }, Command::CloseWindow], &mut ev);
+        assert_eq!(sim.play.inv.main.iter().flatten().filter(|s| s.id == block::PLANKS as u16).map(|s| s.count).sum::<u32>(), 4);
     }
 }

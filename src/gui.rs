@@ -45,6 +45,38 @@ impl<'a> Ui<'a> {
         self.quad([[x, y], [x, y + h], [x + w, y + h], [x + w, y]], [[u0, v0], [u0, v1], [u1, v1], [u1, v0]], [255; 4], SHEET);
     }
 
+    /// Sheet region scaled to `w` x `h`, tinted.
+    pub fn sheet_tinted(&mut self, x: f32, y: f32, u: f32, v: f32, w: f32, h: f32, uw: f32, vh: f32, tint: u32) {
+        let s = UI_SIZE as f32;
+        let (u0, v0, u1, v1) = (u / s, v / s, (u + uw) / s, (v + vh) / s);
+        self.quad([[x, y], [x, y + h], [x + w, y + h], [x + w, y]], [[u0, v0], [u0, v1], [u1, v1], [u1, v0]], rgba(tint, 1.0), SHEET);
+    }
+
+    /// Text drawn at an integer scale (`glScalef` around the origin).
+    pub fn text_scaled(&mut self, s: &str, x: f32, y: f32, scale: f32, color: u32) {
+        let start = self.v.len();
+        self.text(s, x, y, color, true);
+        for v in &mut self.v[start..] {
+            v.pos[0] *= scale;
+            v.pos[1] *= scale;
+        }
+    }
+
+    /// Any stack: block icons in 3D, items as flat sprites.
+    pub fn stack_icon(&mut self, s: &crate::item::Stack, x: f32, y: f32) {
+        if let Some(b) = s.block() {
+            if crate::block::info(b).shape != crate::block::Shape::None || b == crate::block::FLOWING_WATER {
+                self.block_icon(b, s.meta, x, y);
+                return;
+            }
+        }
+        let meta = if crate::item::tool(s.id).is_some() { 0 } else { s.meta };
+        if let Some(&t) = self.atlas.items.get(&(s.id, meta)) {
+            let t = self.atlas.rects[t as usize];
+            self.quad([[x, y], [x, y + 16.0], [x + 16.0, y + 16.0], [x + 16.0, y]], [[t[0], t[1]], [t[0], t[3]], [t[2], t[3]], [t[2], t[1]]], [255; 4], BLOCKS);
+        }
+    }
+
     /// `widgets.png` region.
     pub fn widget(&mut self, x: f32, y: f32, u: f32, v: f32, w: f32, h: f32) {
         self.sheet(x, y, u, v, w, h);

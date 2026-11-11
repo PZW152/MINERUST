@@ -12,6 +12,7 @@ const SHADER: &str = r#"
 struct Globals {
     view_proj: mat4x4<f32>,
     sky_rot: mat4x4<f32>,
+    hand_proj: mat4x4<f32>,
     cam_right: vec4<f32>,
     cam_up: vec4<f32>,
     cam_fwd: vec4<f32>,
@@ -47,7 +48,11 @@ struct TerrainOut {
 fn vs_terrain(@location(0) pos: vec3<f32>, @location(1) uv: vec2<f32>, @location(2) color: vec4<f32>, @location(3) light: vec4<f32>) -> TerrainOut {
     var o: TerrainOut;
     let rel = pos + pc.offset.xyz;
-    o.pos = g.view_proj * vec4<f32>(rel, 1.0);
+    if (pc.offset.w > 0.5) {
+        o.pos = g.hand_proj * vec4<f32>(rel, 1.0);
+    } else {
+        o.pos = g.view_proj * vec4<f32>(rel, 1.0);
+    }
     o.uv = uv;
     o.color = color;
     o.light = light.xy * (255.0 / 16.0);
@@ -197,6 +202,15 @@ fn vs_color(@location(0) pos: vec3<f32>, @location(2) color: vec4<f32>) -> Color
 }
 
 @fragment
+fn fs_crack(i: TerrainOut) -> @location(0) vec4<f32> {
+    let t = textureSample(tex, samp, i.uv);
+    if (t.a <= 0.1) {
+        discard;
+    }
+    return vec4<f32>(t.rgb, 0.5);
+}
+
+@fragment
 fn fs_color(i: ColorOut) -> @location(0) vec4<f32> {
     return i.color;
 }
@@ -227,6 +241,8 @@ pub struct Globals {
     pub view_proj: Mat4,
     /// Celestial rotation applied to the star field.
     pub sky_rot: Mat4,
+    /// Projection (with camera shake) for the first-person hand, view space.
+    pub hand_proj: Mat4,
     pub cam_right: [f32; 4],
     pub cam_up: [f32; 4],
     pub cam_fwd: [f32; 4],
@@ -258,6 +274,13 @@ pub struct Frame<'a> {
     pub clouds: Option<CloudDraw>,
     /// GUI triangles (see `vs_ui`), in GUI pixels.
     pub ui: &'a [Vertex],
+    /// Camera-relative quads drawn with the terrain shader (dropped items).
+    pub dynamic: &'a [Vertex],
+    /// Block-breaking overlay quads (camera-relative).
+    pub crack: &'a [Vertex],
+    /// First-person hand / held item quads, in view space.
+    pub hand: &'a [Vertex],
+    pub crosshair: bool,
 }
 
 const UI_BUF_SIZE: u64 = 1 << 20;
@@ -300,6 +323,10 @@ struct PerFrame {
     ui_buf: vk::Buffer,
     ui_mem: vk::DeviceMemory,
     ui_ptr: *mut u8,
+    /// Dynamic world geometry: items, then crack overlay, then the hand.
+    world_buf: vk::Buffer,
+    world_mem: vk::DeviceMemory,
+    world_ptr: *mut u8,
     set: vk::DescriptorSet,
 }
 
@@ -346,6 +373,8 @@ pub struct Renderer {
     pipe_cloud_depth: vk::Pipeline,
     pipe_cloud_color: vk::Pipeline,
     pipe_gui: vk::Pipeline,
+    pipe_crack: vk::Pipeline,
+    pipe_hand: vk::Pipeline,
     ui_tex: (vk::Image, vk::DeviceMemory, vk::ImageView),
     stars: (vk::Buffer, vk::DeviceMemory, u32),
     cloud_mesh: Option<(vk::Buffer, vk::DeviceMemory, u32)>,
@@ -618,7 +647,7 @@ impl Renderer {
                     vk::VertexInputAttributeDescription { location: 3, binding: 0, format: vk::Format::R8G8B8A8_UNORM, offset: 24 },
                 ];
                 let mut vi = vk::PipelineVertexInputStateCreateInfo::default();
-                if kind == 1 || kind == 2 || kind == 9 {
+                if kind == 1 || kind == 2 || kind == 9 || kind == 10 || kind == 11 {
                     vi = vi.vertex_binding_descriptions(&vb).vertex_attribute_descriptions(&va_terrain);
                 } else if kind == 3 || kind == 4 {
                     vi = vi.vertex_binding_descriptions(&vb).vertex_attribute_descriptions(&va_terrain[..1]);
@@ -629,18 +658,32 @@ impl Renderer {
                     .topology(if kind == 3 { vk::PrimitiveTopology::LINE_LIST } else { vk::PrimitiveTopology::TRIANGLE_LIST });
                 let vp = vk::PipelineViewportStateCreateInfo::default().viewport_count(1).scissor_count(1);
                 let rs = vk::PipelineRasterizationStateCreateInfo::default()
+                    .depth_bias_enable(kind == 10)
+                    .depth_bias_constant_factor(-3.0)
+                    .depth_bias_slope_factor(-3.0)
                     .polygon_mode(vk::PolygonMode::FILL)
                     .cull_mode(if kind == 1 || kind == 2 { vk::CullModeFlags::BACK } else { vk::CullModeFlags::NONE })
                     .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
                     .line_width(1.0);
                 let ms = vk::PipelineMultisampleStateCreateInfo::default().rasterization_samples(vk::SampleCountFlags::TYPE_1);
                 let ds = vk::PipelineDepthStencilStateCreateInfo::default()
-                    .depth_test_enable((1..=3).contains(&kind) || kind == 7 || kind == 8)
-                    .depth_write_enable(kind == 1 || kind == 2 || kind == 7)
+                    .depth_test_enable((1..=3).contains(&kind) || kind == 7 || kind == 8 || kind == 10 || kind == 11)
+                    .depth_write_enable(kind == 1 || kind == 2 || kind == 7 || kind == 11)
                     .depth_compare_op(vk::CompareOp::LESS_OR_EQUAL);
                 let mut att = vk::PipelineColorBlendAttachmentState::default().color_write_mask(vk::ColorComponentFlags::RGBA);
                 if kind == 7 {
                     att = att.color_write_mask(vk::ColorComponentFlags::empty());
+                }
+                if kind == 10 {
+                    // glBlendFunc(GL_DST_COLOR, GL_SRC_COLOR)
+                    att = att
+                        .blend_enable(true)
+                        .src_color_blend_factor(vk::BlendFactor::DST_COLOR)
+                        .dst_color_blend_factor(vk::BlendFactor::SRC_COLOR)
+                        .color_blend_op(vk::BlendOp::ADD)
+                        .src_alpha_blend_factor(vk::BlendFactor::ZERO)
+                        .dst_alpha_blend_factor(vk::BlendFactor::ONE)
+                        .alpha_blend_op(vk::BlendOp::ADD);
                 }
                 if kind == 6 {
                     att = att
@@ -700,6 +743,8 @@ impl Renderer {
             let pipe_cloud_depth = mk(c"vs_color", c"fs_color_fog", 7);
             let pipe_cloud_color = mk(c"vs_color", c"fs_color_fog", 8);
             let pipe_gui = mk(c"vs_ui", c"fs_ui", 9);
+            let pipe_crack = mk(c"vs_terrain", c"fs_crack", 10);
+            let pipe_hand = mk(c"vs_terrain", c"fs_terrain", 11);
             device.destroy_shader_module(module, None);
 
             let sampler = device
@@ -746,6 +791,8 @@ impl Renderer {
                 pipe_cloud_depth,
                 pipe_cloud_color,
                 pipe_gui,
+                pipe_crack,
+                pipe_hand,
                 ui_tex: (vk::Image::null(), vk::DeviceMemory::null(), vk::ImageView::null()),
                 stars: (vk::Buffer::null(), vk::DeviceMemory::null(), 0),
                 cloud_mesh: None,
@@ -796,6 +843,8 @@ impl Renderer {
                 let dyn2_ptr = r.device.map_memory(dyn2_mem, 0, DYN_SIZE, vk::MemoryMapFlags::empty()).unwrap() as *mut u8;
                 let (ui_buf, ui_mem) = r.create_buffer(UI_BUF_SIZE, vk::BufferUsageFlags::VERTEX_BUFFER, host);
                 let ui_ptr = r.device.map_memory(ui_mem, 0, UI_BUF_SIZE, vk::MemoryMapFlags::empty()).unwrap() as *mut u8;
+                let (world_buf, world_mem) = r.create_buffer(UI_BUF_SIZE * 2, vk::BufferUsageFlags::VERTEX_BUFFER, host);
+                let world_ptr = r.device.map_memory(world_mem, 0, UI_BUF_SIZE * 2, vk::MemoryMapFlags::empty()).unwrap() as *mut u8;
                 let ui_info = [vk::DescriptorImageInfo { sampler: vk::Sampler::null(), image_view: r.ui_tex.2, image_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL }];
                 let (stage, stage_mem) = r.create_buffer(STAGE_SIZE, vk::BufferUsageFlags::TRANSFER_SRC, host);
                 let stage_ptr = r.device.map_memory(stage_mem, 0, STAGE_SIZE, vk::MemoryMapFlags::empty()).unwrap() as *mut u8;
@@ -830,6 +879,9 @@ impl Renderer {
                     ui_buf,
                     ui_mem,
                     ui_ptr,
+                    world_buf,
+                    world_mem,
+                    world_ptr,
                     set: sets[i],
                 });
             }
@@ -1273,6 +1325,8 @@ impl Renderer {
             }
             self.frame_no += 1;
             self.collect_garbage();
+            let need = (frame.dynamic.len().max(frame.crack.len()).max(frame.hand.len()) / 4 + 1) as u32;
+            self.ensure_indices(need);
             let fi = self.frame_index;
             self.frame_index = (fi + 1) % FRAMES;
             let (cmd, fence, image_available, render_finished, set, dynbuf, dyn_ptr, ubo_ptr, dyn2, dyn2_ptr, stage, stage_ptr) = {
@@ -1500,6 +1554,29 @@ impl Renderer {
                     dev.cmd_draw_indexed(cmd, gm.opaque_quads * 6, 1, 0, 0, 0);
                 }
             }
+            // Dropped items, then the crack overlay, all camera-relative quads.
+            let vsz = std::mem::size_of::<Vertex>();
+            let cap = (UI_BUF_SIZE as usize * 2) / vsz;
+            let n_dyn = frame.dynamic.len().min(cap);
+            let n_crack = frame.crack.len().min(cap - n_dyn);
+            let n_hand = frame.hand.len().min(cap - n_dyn - n_crack);
+            let wptr = self.frames[fi].world_ptr;
+            let wbuf = self.frames[fi].world_buf;
+            std::ptr::copy_nonoverlapping(frame.dynamic.as_ptr() as *const u8, wptr, n_dyn * vsz);
+            std::ptr::copy_nonoverlapping(frame.crack.as_ptr() as *const u8, wptr.add(n_dyn * vsz), n_crack * vsz);
+            std::ptr::copy_nonoverlapping(frame.hand.as_ptr() as *const u8, wptr.add((n_dyn + n_crack) * vsz), n_hand * vsz);
+            if n_dyn >= 4 {
+                dev.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, self.pipe_opaque);
+                push([0.0; 4], [0.0; 4]);
+                dev.cmd_bind_vertex_buffers(cmd, 0, &[wbuf], &[0]);
+                dev.cmd_draw_indexed(cmd, (n_dyn / 4) as u32 * 6, 1, 0, 0, 0);
+            }
+            if n_crack >= 4 {
+                dev.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, self.pipe_crack);
+                push([0.0; 4], [0.0; 4]);
+                dev.cmd_bind_vertex_buffers(cmd, 0, &[wbuf], &[(n_dyn * vsz) as u64]);
+                dev.cmd_draw_indexed(cmd, (n_crack / 4) as u32 * 6, 1, 0, 0, 0);
+            }
             if outline_count > 0 {
                 dev.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, self.pipe_line);
                 if self.wide_lines {
@@ -1522,6 +1599,18 @@ impl Renderer {
                     draw_clouds(c);
                 }
             }
+            // First-person hand: its own depth range (EntityRenderer.renderHand
+            // clears the depth buffer first).
+            if n_hand >= 4 {
+                let clear = [vk::ClearAttachment { aspect_mask: vk::ImageAspectFlags::DEPTH, color_attachment: 0, clear_value: vk::ClearValue { depth_stencil: vk::ClearDepthStencilValue { depth: 1.0, stencil: 0 } } }];
+                let rect = [vk::ClearRect { rect: area, base_array_layer: 0, layer_count: 1 }];
+                dev.cmd_clear_attachments(cmd, &clear, &rect);
+                dev.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, self.pipe_hand);
+                push([0.0, 0.0, 0.0, 1.0], [0.0; 4]);
+                dev.cmd_bind_index_buffer(cmd, self.index_buf.0, 0, vk::IndexType::UINT32);
+                dev.cmd_bind_vertex_buffers(cmd, 0, &[wbuf], &[((n_dyn + n_crack) * vsz) as u64]);
+                dev.cmd_draw_indexed(cmd, (n_hand / 4) as u32 * 6, 1, 0, 0, 0);
+            }
             // GUI: positions are in scaled GUI pixels with the origin top-left.
             let ui_count = frame.ui.len().min(UI_BUF_SIZE as usize / std::mem::size_of::<Vertex>());
             if ui_count > 0 {
@@ -1534,7 +1623,9 @@ impl Renderer {
             dev.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, self.pipe_ui);
             push([0.0, 0.0, 0.0, 1.0], [1.0, 1.0, 1.0, 1.0]);
             dev.cmd_bind_vertex_buffers(cmd, 0, &[dynbuf], &[0]);
-            dev.cmd_draw(cmd, cross_count, 1, cross_first, 0);
+            if frame.crosshair {
+                dev.cmd_draw(cmd, cross_count, 1, cross_first, 0);
+            }
             dev.cmd_end_render_pass(cmd);
 
             // Optional screenshot readback.
@@ -1674,6 +1765,8 @@ impl Drop for Renderer {
                 self.device.free_memory(f.stage_mem, None);
                 self.device.destroy_buffer(f.ui_buf, None);
                 self.device.free_memory(f.ui_mem, None);
+                self.device.destroy_buffer(f.world_buf, None);
+                self.device.free_memory(f.world_mem, None);
             }
             self.destroy_swapchain_views();
             self.device.destroy_buffer(self.index_buf.0, None);
@@ -1686,6 +1779,8 @@ impl Drop for Renderer {
             self.device.destroy_image(self.ui_tex.0, None);
             self.device.free_memory(self.ui_tex.1, None);
             self.device.destroy_pipeline(self.pipe_gui, None);
+            self.device.destroy_pipeline(self.pipe_crack, None);
+            self.device.destroy_pipeline(self.pipe_hand, None);
             self.device.destroy_buffer(self.stars.0, None);
             self.device.free_memory(self.stars.1, None);
             if let Some((b, m, _)) = self.cloud_mesh.take() {

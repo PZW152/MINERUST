@@ -7,13 +7,17 @@ mod compat;
 mod entity;
 mod game;
 mod gui;
+mod item;
+mod inventory;
+mod play;
+mod screens;
 mod java;
 mod render;
 mod sim;
 mod util;
 mod world;
 
-use game::{Config, Game};
+use game::{Config, Game, Request};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
@@ -272,6 +276,7 @@ fn parse_args() -> Options {
     let args: Vec<String> = std::env::args().collect();
     let mut o = Options {
         cfg: Config {
+            mode: entity::survival::GameMode::Survival,
             save_dir: None,
             // A new vanilla world without a typed seed uses `new Random().nextLong()`.
             seed: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos() as i64).unwrap_or(0),
@@ -319,6 +324,15 @@ fn parse_args() -> Options {
             "--debug" => std::env::set_var("MINERUST_F3", "1"),
             "--vanilla-parity" => compat::set_vanilla_parity(true),
             "--no-save" => o.no_save = true,
+            "--give" if i + 1 < args.len() => {
+                std::env::set_var("MINERUST_GIVE", &args[i + 1]);
+                i += 1;
+            }
+            "--open" if i + 1 < args.len() => {
+                std::env::set_var("MINERUST_OPEN", &args[i + 1]);
+                i += 1;
+            }
+            "--creative" => o.cfg.mode = entity::survival::GameMode::Creative,
             "--validate" => std::env::set_var("MINERUST_VALIDATE", "1"),
             "--world" if i + 1 < args.len() => {
                 o.save_dir = Some(args[i + 1].clone().into());
@@ -354,7 +368,8 @@ struct App {
     grabbed: bool,
     focused: bool,
     started: Instant,
-    place_id: (u8, i32),
+    shift: bool,
+    ctrl: bool,
     shot_taken: Option<Instant>,
     error: Option<String>,
 }
@@ -375,6 +390,23 @@ impl App {
             }
         }
         self.grabbed = grab;
+    }
+}
+
+impl App {
+    fn handle(&mut self, req: Request, el: &ActiveEventLoop) {
+        match req {
+            Request::None => {}
+            Request::Release => self.set_grab(false),
+            Request::Grab => self.set_grab(true),
+            Request::Quit => {
+                if let Some(g) = &mut self.game {
+                    g.shutdown();
+                }
+                self.game = None;
+                el.exit();
+            }
+        }
     }
 }
 
@@ -404,7 +436,8 @@ impl ApplicationHandler for App {
                 let dir = self.opts.save_dir.clone().unwrap_or_else(|| PathBuf::from("saves").join(if self.opts.seed_given { format!("seed_{}", self.opts.cfg.seed) } else { "world".to_string() }));
                 self.opts.cfg.save_dir = Some(dir);
             }
-            let game = Game::new(renderer, atlas, &self.opts.cfg);
+            let mut game = Game::new(renderer, atlas, &self.opts.cfg);
+            game.apply_start_screen();
             println!("Seed: {}{}", game.seed, if game.resumed { " (resumed)" } else { "" });
             if let Some(d) = &self.opts.cfg.save_dir {
                 println!("World: {}", d.display());
@@ -445,30 +478,28 @@ impl ApplicationHandler for App {
                     self.set_grab(false);
                 }
             }
-            WindowEvent::MouseInput { state: ElementState::Pressed, button, .. } => {
-                if !self.grabbed {
-                    self.set_grab(true);
-                } else if let Some(g) = &mut self.game {
-                    match button {
-                        MouseButton::Left => g.break_block(),
-                        MouseButton::Right => {
-                            if let Some((id, meta, _)) = g.hotbar[g.slot] {
-                                g.place_block(id, meta);
-                            }
-                        }
-                        MouseButton::Middle => {
-                            // Creative pick block: into the selected slot.
-                            if let Some((id, meta)) = g.pick_block() {
-                                if let Some(i) = g.hotbar.iter().position(|s| matches!(s, Some((a, b, _)) if *a == id && *b == meta)) {
-                                    g.slot = i;
-                                } else {
-                                    g.hotbar[g.slot] = Some((id, meta, 1));
-                                }
-                            }
-                        }
-                        _ => {}
-                    }
+            WindowEvent::CursorMoved { position, .. } => {
+                if let Some(g) = &mut self.game {
+                    g.mouse_px = (position.x as f32, position.y as f32);
                 }
+            }
+            WindowEvent::MouseInput { state, button, .. } => {
+                let pressed = state == ElementState::Pressed;
+                let Some(g) = &mut self.game else { return };
+                if pressed && g.wants_grab() && !self.grabbed {
+                    // The first click only captures the mouse.
+                    self.set_grab(true);
+                    return;
+                }
+                let b = match button {
+                    MouseButton::Left => 0,
+                    MouseButton::Right => 1,
+                    MouseButton::Middle => 2,
+                    _ => return,
+                };
+                let shift = self.shift;
+                let req = g.mouse_button(b, pressed, shift);
+                self.handle(req, el);
             }
             WindowEvent::MouseWheel { delta, .. } => {
                 // InventoryPlayer.changeCurrentItem
@@ -476,20 +507,20 @@ impl ApplicationHandler for App {
                     winit::event::MouseScrollDelta::LineDelta(_, y) => y,
                     winit::event::MouseScrollDelta::PixelDelta(p) => p.y as f32,
                 };
-                if self.grabbed && d != 0.0 {
+                if d != 0.0 {
                     if let Some(g) = &mut self.game {
-                        g.slot = if d > 0.0 { (g.slot + 8) % 9 } else { (g.slot + 1) % 9 };
+                        g.scroll(d > 0.0);
                     }
                 }
             }
             WindowEvent::KeyboardInput { event, .. } => {
                 let pressed = event.state == ElementState::Pressed;
                 let PhysicalKey::Code(code) = event.physical_key else { return };
-                if code == KeyCode::Escape && pressed {
-                    self.set_grab(false);
-                    return;
+                match code {
+                    KeyCode::ShiftLeft | KeyCode::ShiftRight => self.shift = pressed,
+                    KeyCode::ControlLeft | KeyCode::ControlRight => self.ctrl = pressed,
+                    _ => {}
                 }
-                let grabbed = self.grabbed;
                 let Some(g) = &mut self.game else { return };
                 if code == KeyCode::F2 && pressed && !event.repeat {
                     let _ = std::fs::create_dir_all("screenshots");
@@ -501,14 +532,17 @@ impl ApplicationHandler for App {
                     g.show_debug = !g.show_debug;
                     return;
                 }
-                if !grabbed {
-                    return;
-                }
-                if pressed {
-                    let digits = [KeyCode::Digit1, KeyCode::Digit2, KeyCode::Digit3, KeyCode::Digit4, KeyCode::Digit5, KeyCode::Digit6, KeyCode::Digit7, KeyCode::Digit8, KeyCode::Digit9];
-                    if let Some(i) = digits.iter().position(|d| *d == code) {
-                        g.slot = i;
+                if pressed && !event.repeat {
+                    let ctrl = self.ctrl;
+                    let req = g.key(code, true, ctrl);
+                    if req != Request::None {
+                        self.handle(req, el);
+                        return;
                     }
+                }
+                let Some(g) = &mut self.game else { return };
+                if !g.wants_grab() {
+                    return;
                 }
                 match code {
                     KeyCode::KeyW => g.input.forward = pressed,
@@ -520,8 +554,7 @@ impl ApplicationHandler for App {
                     KeyCode::ControlLeft => g.input.sprint = pressed,
                     _ => {}
                 }
-            }
-            WindowEvent::RedrawRequested => {
+            }            WindowEvent::RedrawRequested => {
                 let Some(w) = self.window.clone() else { return };
                 let size = w.inner_size();
                 if let Some(g) = &mut self.game {
@@ -594,7 +627,7 @@ fn main() {
     let opts = parse_args();
     let el = EventLoop::new().expect("event loop");
     el.set_control_flow(ControlFlow::Poll);
-    let mut app = App { opts, game: None, window: None, grabbed: false, focused: true, started: Instant::now(), place_id: (block::STONE, 0), shot_taken: None, error: None };
+    let mut app = App { opts, game: None, window: None, grabbed: false, focused: true, started: Instant::now(), shift: false, ctrl: false, shot_taken: None, error: None };
     let _ = el.run_app(&mut app);
     // The renderer must go before the window it presents to.
     app.game = None;

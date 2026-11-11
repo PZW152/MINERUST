@@ -4,9 +4,11 @@ use crate::block;
 use std::collections::HashMap;
 use std::io::Read;
 
-pub const ATLAS_SIZE: u32 = 256;
+pub const ATLAS_SIZE: u32 = 512;
+/// Atlas width in 16px cells.
+const GRID: usize = (ATLAS_SIZE / 16) as usize;
 pub const MIP_LEVELS: u32 = 5;
-pub const UI_SIZE: u32 = 512;
+pub const UI_SIZE: u32 = 1024;
 
 pub struct Atlas {
     /// RGBA8 pixels per mip level.
@@ -34,6 +36,12 @@ pub struct Atlas {
     pub char_width: [u8; 256],
     /// Animated tiles (`.png.mcmeta`).
     pub anims: Vec<Anim>,
+    /// `destroy_stage_0` .. `destroy_stage_9`.
+    pub destroy: [u16; 10],
+    /// Item sprites by `(id, meta)`.
+    pub items: HashMap<(u16, i32), u16>,
+    /// `entity/steve.png` (64x32) in the top half of a 64x64 tile.
+    pub skin: u16,
     /// `environment/clouds.png` as a 256x256 opacity mask.
     pub clouds: Vec<bool>,
 }
@@ -187,7 +195,7 @@ fn downsample(src: &[u8], s: u32, transparent: bool) -> Vec<u8> {
 struct Builder {
     mips: Vec<Vec<u8>>,
     rects: Vec<[f32; 4]>,
-    used: [bool; 256],
+    used: Vec<bool>,
     /// Top-left pixel of each tile.
     origins: Vec<(u32, u32)>,
 }
@@ -197,9 +205,9 @@ impl Builder {
     fn add(&mut self, mut px: Vec<u8>, size: u32) -> u16 {
         let cells = (size / 16) as usize;
         let mut pos = None;
-        'search: for cy in (0..16).step_by(cells) {
-            for cx in (0..16).step_by(cells) {
-                let free = (0..cells).all(|a| (0..cells).all(|b| !self.used[(cy + a) * 16 + cx + b]));
+        'search: for cy in (0..GRID).step_by(cells) {
+            for cx in (0..GRID).step_by(cells) {
+                let free = (0..cells).all(|a| (0..cells).all(|b| !self.used[(cy + a) * GRID + cx + b]));
                 if free {
                     pos = Some((cx, cy));
                     break 'search;
@@ -209,7 +217,7 @@ impl Builder {
         let (cx, cy) = pos.expect("texture atlas full");
         for a in 0..cells {
             for b in 0..cells {
-                self.used[(cy + a) * 16 + cx + b] = true;
+                self.used[(cy + a) * GRID + cx + b] = true;
             }
         }
         let transparent = px.chunks(4).any(|p| p[3] == 0);
@@ -246,7 +254,7 @@ impl Atlas {
         let mut b = Builder {
             mips: (0..MIP_LEVELS).map(|l| vec![0u8; ((ATLAS_SIZE >> l) * (ATLAS_SIZE >> l) * 4) as usize]).collect(),
             rects: Vec::new(),
-            used: [false; 256],
+            used: vec![false; GRID * GRID],
             origins: Vec::new(),
         };
         let block_tex = |jar: &mut Jar, name: &str, size: u32| -> Result<Vec<u8>, String> {
@@ -308,6 +316,28 @@ impl Atlas {
         let grass_side_snowed = extra(jar, "grass_side_snowed")?;
         let sunflower_front = extra(jar, "double_plant_sunflower_front")?;
         let sunflower_back = extra(jar, "double_plant_sunflower_back")?;
+        let mut destroy = [0u16; 10];
+        for (i, d) in destroy.iter_mut().enumerate() {
+            let p = block_tex(jar, &format!("destroy_stage_{i}"), 16)?;
+            *d = b.add(p, 16);
+        }
+        let mut items = HashMap::new();
+        for (id, meta) in crate::item::all_items() {
+            if let Some(name) = crate::item::item_texture(id, meta) {
+                let img = read_png(jar, &format!("assets/minecraft/textures/items/{name}.png"))?;
+                items.insert((id, meta), b.add(crop(&img, 0, 0, 16), 16));
+            }
+        }
+        let skin = {
+            let img = read_png(jar, "assets/minecraft/textures/entity/steve.png")?;
+            let mut px = vec![0u8; 64 * 64 * 4];
+            for y in 0..img.h.min(64) {
+                let s = (y * img.w * 4) as usize;
+                let n = (img.w.min(64) * 4) as usize;
+                px[(y * 64 * 4) as usize..(y * 64 * 4) as usize + n].copy_from_slice(&img.rgba[s..s + n]);
+            }
+            b.add(px, 64)
+        };
         // Animated sprites: every frame of the strip, in metadata order.
         let mut anims = Vec::new();
         for (name, tile, size) in [("water_still", names["water_still"], 16u32), ("lava_still", names["lava_still"], 16), ("water_flow", water_flow, 32), ("lava_flow", lava_flow, 32)] {
@@ -344,6 +374,16 @@ impl Atlas {
         blit(&read_png(jar, "assets/minecraft/textures/gui/icons.png")?, 256, 0);
         let font = read_png(jar, "assets/minecraft/textures/font/ascii.png")?;
         blit(&font, 0, 256);
+        for (path, x, y) in [
+            ("gui/container/inventory.png", 256, 256),
+            ("gui/container/crafting_table.png", 512, 0),
+            ("gui/container/furnace.png", 512, 256),
+            ("gui/container/generic_54.png", 768, 0),
+            ("gui/options_background.png", 768, 256),
+            ("entity/steve.png", 768, 512),
+        ] {
+            blit(&read_png(jar, &format!("assets/minecraft/textures/{path}"))?, x, y);
+        }
         let mut char_width = [0u8; 256];
         let cell = font.w / 16;
         for (k, w) in char_width.iter_mut().enumerate() {
@@ -364,6 +404,9 @@ impl Atlas {
             *w = ((0.5 + used as f64 * (8.0 / cell as f64)) as i32 + 1) as u8;
         }
         Ok(Atlas {
+            skin,
+            destroy,
+            items,
             ui,
             char_width,
             anims,
