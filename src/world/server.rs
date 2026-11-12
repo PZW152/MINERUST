@@ -1694,7 +1694,7 @@ impl ServerWorld {
     }
 
     /// `BlockChest.func_149954_e`
-    fn chest_init_meta(&mut self, x: i32, y: i32, z: i32) {
+    pub(crate) fn chest_init_meta(&mut self, x: i32, y: i32, z: i32) {
         let full =
             |w: &mut ServerWorld, x: i32, y: i32, z: i32| block::info(w.block(x, y, z)).full_block;
         let n = self.block(x, y, z - 1);

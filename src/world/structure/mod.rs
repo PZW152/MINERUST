@@ -1193,8 +1193,26 @@ pub fn generate_in_chunk(w: &mut ServerWorld, r: &mut JavaRandom, cx: i32, cz: i
     let Some(mut s) = w.structures.take() else {
         return false;
     };
+    let before = w.gen_tiles.len();
     let village = s.generate(w, r, cx, cz);
     w.structures = Some(s);
+    if crate::compat::fixed() {
+        // MC-12918: a structure chest picks its facing from the blocks around
+        // it when it is placed, before the rest of the piece is built, so it
+        // can end up facing a wall. Re-run the facing once the piece is done.
+        let chests: Vec<[i32; 3]> = w.gen_tiles[before..]
+            .iter()
+            .filter_map(|t| match t {
+                GenTile::Chest { pos, .. } => Some(*pos),
+                _ => None,
+            })
+            .collect();
+        for p in chests {
+            if w.block(p[0], p[1], p[2]) == block::CHEST {
+                w.chest_init_meta(p[0], p[1], p[2]);
+            }
+        }
+    }
     // Chunks provided meanwhile (should not happen inside the populate area).
     w.flush_structure_registrations();
     village

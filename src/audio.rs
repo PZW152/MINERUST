@@ -392,6 +392,14 @@ fn fill(mixer: &Mutex<Mixer>, out: &mut [f32], ch: usize) {
         }
         true
     });
+    // MC-1538: many overlapping sounds used to clip and crackle. Compress
+    // only the part above 0.8 so normal levels are untouched.
+    for s in out.iter_mut() {
+        let a = s.abs();
+        if a > 0.8 {
+            *s = s.signum() * (0.8 + 0.2 * ((a - 0.8) / 0.2).tanh());
+        }
+    }
 }
 
 /// `Block.stepSound`: name of the sound type of a block.
