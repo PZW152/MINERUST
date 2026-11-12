@@ -183,7 +183,14 @@ fn dump_pop(args: &[String]) {
             }
         }
     }
-    let mut out = std::io::BufWriter::new(std::fs::File::create(&args[4]).unwrap());
+    write_dump(&w, ox, oz, r, &args[4]);
+    println!("chunks loaded: {}", w.chunks.len());
+}
+
+/// Writes chunks `-r..r` around `(ox, oz)` in the PopHarness dump format.
+fn write_dump(w: &world::server::ServerWorld, ox: i32, oz: i32, r: i32, path: &str) {
+    use std::io::Write;
+    let mut out = std::io::BufWriter::new(std::fs::File::create(path).unwrap());
     let mut sky = vec![0u8; 65536];
     let mut blk = vec![0u8; 65536];
     for cx in -r..r {
@@ -209,7 +216,53 @@ fn dump_pop(args: &[String]) {
             }
         }
     }
-    println!("chunks loaded: {}", w.chunks.len());
+}
+
+/// `--write-region <seed> <cx> <cz> <radius> <dir>`: generates like
+/// `--dump-pop` and stores the chunks as vanilla region files.
+fn write_region(args: &[String]) {
+    let seed: i64 = args[0].parse().unwrap();
+    let (ox, oz, r): (i32, i32, i32) = (
+        args[1].parse().unwrap(),
+        args[2].parse().unwrap(),
+        args[3].parse().unwrap(),
+    );
+    let mut w = world::server::ServerWorld::new(Arc::new(world::ChunkProvider::new(seed)));
+    w.map_features = std::env::var_os("NO_FEATURES").is_none();
+    for cx in -r..=r {
+        for cz in -r..=r {
+            w.load_chunk(ox + cx, oz + cz);
+        }
+    }
+    let dir = std::path::PathBuf::from(&args[4]);
+    for cx in -r..r {
+        for cz in -r..r {
+            w.write_anvil_chunk(&dir, ox + cx, oz + cz, Some((Vec::new(), Vec::new())))
+                .unwrap();
+        }
+    }
+    println!("written");
+}
+
+/// `--dump-region <seed> <cx> <cz> <radius> <dir> <out>`: reads region files
+/// (from either side) and dumps them like `--dump-pop`.
+fn dump_region(args: &[String]) {
+    let seed: i64 = args[0].parse().unwrap();
+    let (ox, oz, r): (i32, i32, i32) = (
+        args[1].parse().unwrap(),
+        args[2].parse().unwrap(),
+        args[3].parse().unwrap(),
+    );
+    let mut w = world::server::ServerWorld::new(Arc::new(world::ChunkProvider::new(seed)));
+    w.anvil = true;
+    w.save_dir = Some(std::path::PathBuf::from(&args[4]));
+    for cx in -r..r {
+        for cz in -r..r {
+            w.load_chunk(ox + cx, oz + cz);
+        }
+    }
+    write_dump(&w, ox, oz, r, &args[5]);
+    println!("read");
 }
 
 /// `--compare-pop <a> <b> <cx> <cz> <radius>`
@@ -821,6 +874,31 @@ fn main() {
     }
     if args.len() >= 3 && args[1] == "--find-biomes" {
         find_biomes(&args[2..]);
+        return;
+    }
+    if args.len() >= 4 && args[1] == "--export-anvil" {
+        // --export-anvil <world dir> <new vanilla world dir>
+        let cfg = sim::SimConfig {
+            seed: 0,
+            view: 2,
+            save_dir: Some(std::path::PathBuf::from(&args[2])),
+            start_time: 0,
+            freeze_time: true,
+            mode: entity::survival::GameMode::Survival,
+        };
+        let (mut s, _) = sim::Sim::new(&cfg);
+        match s.export_anvil(std::path::Path::new(&args[3])) {
+            Ok(n) => println!("exported {n} chunks to {}", args[3]),
+            Err(e) => eprintln!("export failed: {e}"),
+        }
+        return;
+    }
+    if args.len() >= 7 && args[1] == "--write-region" {
+        write_region(&args[2..]);
+        return;
+    }
+    if args.len() >= 8 && args[1] == "--dump-region" {
+        dump_region(&args[2..]);
         return;
     }
     if args.len() >= 7 && args[1] == "--dump-pop" {

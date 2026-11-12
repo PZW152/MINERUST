@@ -2121,6 +2121,145 @@ impl Mobs {
             .collect()
     }
 
+    /// `EntityLiving.writeToNBT` for the region files.
+    pub fn to_nbt(m: &Mob) -> crate::world::anvil::Nbt {
+        use crate::world::anvil::{compound, list, Nbt};
+        let mut v = vec![
+            ("id", Nbt::String(m.kind.id().to_string())),
+            (
+                "Pos",
+                list(vec![
+                    Nbt::Double(m.pos[0]),
+                    Nbt::Double(m.pos[1]),
+                    Nbt::Double(m.pos[2]),
+                ]),
+            ),
+            (
+                "Motion",
+                list(vec![
+                    Nbt::Double(m.motion[0]),
+                    Nbt::Double(m.motion[1]),
+                    Nbt::Double(m.motion[2]),
+                ]),
+            ),
+            (
+                "Rotation",
+                list(vec![Nbt::Float(m.yaw), Nbt::Float(m.pitch)]),
+            ),
+            ("HealF", Nbt::Float(m.health)),
+            ("Health", Nbt::Short(m.health.ceil() as i16)),
+            ("PersistenceRequired", Nbt::Byte(m.persistent as i8)),
+        ];
+        match m.kind {
+            Kind::Sheep => {
+                v.push(("Color", Nbt::Byte(m.variant as i8)));
+                v.push(("Sheared", Nbt::Byte(m.sheared as i8)));
+            }
+            Kind::Villager => v.push(("Profession", Nbt::Int(m.variant))),
+            Kind::Skeleton => v.push(("SkeletonType", Nbt::Byte(m.variant as i8))),
+            Kind::Slime | Kind::MagmaCube => v.push(("Size", Nbt::Int(m.variant - 1))),
+            Kind::Enderman => {
+                v.push(("carried", Nbt::Short(m.carried as i16)));
+                v.push(("carriedData", Nbt::Short(m.carried_meta as i16)));
+            }
+            Kind::Wolf => {
+                v.push(("Angry", Nbt::Byte(m.angry as i8)));
+                v.push(("Sitting", Nbt::Byte(m.sitting as i8)));
+                v.push(("CollarColor", Nbt::Byte(m.variant as i8)));
+                v.push((
+                    "Owner",
+                    Nbt::String(if m.tamed {
+                        "Player".into()
+                    } else {
+                        String::new()
+                    }),
+                ));
+            }
+            Kind::Ocelot => {
+                v.push(("CatType", Nbt::Int(m.variant)));
+                v.push(("Sitting", Nbt::Byte(m.sitting as i8)));
+                v.push((
+                    "Owner",
+                    Nbt::String(if m.tamed {
+                        "Player".into()
+                    } else {
+                        String::new()
+                    }),
+                ));
+            }
+            Kind::Horse => {
+                v.push(("Type", Nbt::Int(m.variant >> 16)));
+                v.push(("Variant", Nbt::Int(m.variant & 0xFFFF)));
+            }
+            Kind::IronGolem => v.push(("PlayerCreated", Nbt::Byte(m.player_made as i8))),
+            Kind::PigZombie => v.push(("Anger", Nbt::Short(m.anger as i16))),
+            _ => {}
+        }
+        compound(v)
+    }
+
+    /// Reads a living entity from a region file's `Entities` list.
+    pub fn from_nbt(&mut self, t: &crate::world::anvil::Nbt) -> Option<u32> {
+        use crate::world::anvil::Nbt;
+        let kind = Kind::from_id(t.string("id")?)?;
+        let pos = t.list("Pos");
+        let p = |i: usize| match pos.get(i) {
+            Some(Nbt::Double(v)) => Some(*v),
+            _ => None,
+        };
+        let at = [p(0)?, p(1)?, p(2)?];
+        let yaw = match t.list("Rotation").first() {
+            Some(Nbt::Float(v)) => *v,
+            _ => 0.0,
+        };
+        let mut m = self.make(kind, at, yaw);
+        let id = m.id;
+        match kind {
+            Kind::Slime | Kind::MagmaCube => {
+                m.set_slime_size(t.int("Size").unwrap_or(0) as i32 + 1)
+            }
+            Kind::Sheep => {
+                m.variant = t.int("Color").unwrap_or(0) as i32;
+                m.sheared = t.int("Sheared").unwrap_or(0) != 0;
+            }
+            Kind::Villager => m.variant = t.int("Profession").unwrap_or(0) as i32,
+            Kind::Skeleton => {
+                m.variant = t.int("SkeletonType").unwrap_or(0) as i32;
+                m.set_position(at[0], at[1], at[2]);
+            }
+            Kind::Enderman => {
+                m.carried = t.int("carried").unwrap_or(0) as u8;
+                m.carried_meta = t.int("carriedData").unwrap_or(0) as u8;
+            }
+            Kind::Wolf => {
+                m.angry = t.int("Angry").unwrap_or(0) != 0;
+                m.sitting = t.int("Sitting").unwrap_or(0) != 0;
+                m.variant = t.int("CollarColor").unwrap_or(14) as i32;
+                m.tamed = t.string("Owner").map_or(false, |o| !o.is_empty());
+            }
+            Kind::Ocelot => {
+                m.variant = t.int("CatType").unwrap_or(0) as i32;
+                m.sitting = t.int("Sitting").unwrap_or(0) != 0;
+                m.tamed = t.string("Owner").map_or(false, |o| !o.is_empty());
+            }
+            Kind::Horse => {
+                m.variant = (t.int("Type").unwrap_or(0) as i32) << 16
+                    | (t.int("Variant").unwrap_or(0) as i32 & 0xFFFF);
+            }
+            Kind::IronGolem => m.player_made = t.int("PlayerCreated").unwrap_or(0) != 0,
+            Kind::PigZombie => m.anger = t.int("Anger").unwrap_or(0) as i32,
+            _ => {}
+        }
+        if let Some(h) = t.float("HealF").or_else(|| t.float("Health")) {
+            if h > 0.0 {
+                m.health = h as f32;
+            }
+        }
+        m.persistent = t.int("PersistenceRequired").unwrap_or(0) != 0;
+        self.list.push(m);
+        Some(id)
+    }
+
     pub fn decode(&mut self, line: &str) -> Option<()> {
         let f: Vec<&str> = line.split(',').collect();
         if f.len() < 9 {

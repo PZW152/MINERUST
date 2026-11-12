@@ -1356,6 +1356,165 @@ impl Play {
     }
 
     /// Level-file lines for the tile entities.
+    /// `TileEntity.writeToNBT` for the tiles in one chunk.
+    pub fn tiles_nbt(&self, cx: i32, cz: i32) -> Vec<crate::world::anvil::Nbt> {
+        use crate::world::anvil::{compound, item_nbt, Nbt};
+        let items = |slots: &[Option<Stack>]| {
+            Nbt::List(
+                10,
+                slots
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, s)| s.as_ref().map(|s| item_nbt(Some(i as i8), s)))
+                    .collect(),
+            )
+        };
+        self.tiles
+            .iter()
+            .filter(|(p, _)| p[0] >> 4 == cx && p[2] >> 4 == cz)
+            .map(|(p, t)| {
+                let (id, mut extra) = match t {
+                    Tile::Chest { slots } => ("Chest", vec![("Items", items(slots))]),
+                    Tile::Dispenser { slots } => ("Trap", vec![("Items", items(slots))]),
+                    Tile::Furnace {
+                        slots,
+                        burn,
+                        item_burn,
+                        cook,
+                    } => {
+                        let _ = item_burn;
+                        (
+                            "Furnace",
+                            vec![
+                                ("Items", items(slots)),
+                                ("BurnTime", Nbt::Short(*burn as i16)),
+                                ("CookTime", Nbt::Short(*cook as i16)),
+                            ],
+                        )
+                    }
+                    Tile::Spawner { mob } => (
+                        "MobSpawner",
+                        vec![
+                            ("EntityId", Nbt::String(mob.clone())),
+                            ("Delay", Nbt::Short(20)),
+                        ],
+                    ),
+                };
+                let mut v = vec![
+                    ("id", Nbt::String(id.into())),
+                    ("x", Nbt::Int(p[0])),
+                    ("y", Nbt::Int(p[1])),
+                    ("z", Nbt::Int(p[2])),
+                ];
+                v.append(&mut extra);
+                compound(v)
+            })
+            .collect()
+    }
+
+    /// `TileEntity.createAndLoadEntity` for the tiles this port keeps.
+    pub fn tile_from_nbt(&mut self, t: &crate::world::anvil::Nbt) {
+        use crate::world::anvil::slots;
+        let (Some(id), Some(x), Some(y), Some(z)) =
+            (t.string("id"), t.int("x"), t.int("y"), t.int("z"))
+        else {
+            return;
+        };
+        let pos = [x as i32, y as i32, z as i32];
+        let got = slots(t.list("Items"));
+        let fill = |n: usize| {
+            let mut v = vec![None; n];
+            for (&k, s) in &got {
+                if (k as usize) < n {
+                    v[k as usize] = Some(*s);
+                }
+            }
+            v
+        };
+        let tile = match id {
+            "Chest" => {
+                let v = fill(27);
+                let mut a = [None; 27];
+                a.copy_from_slice(&v);
+                Tile::Chest { slots: a }
+            }
+            "Trap" => {
+                let v = fill(9);
+                let mut a = [None; 9];
+                a.copy_from_slice(&v);
+                Tile::Dispenser { slots: a }
+            }
+            "Furnace" => {
+                let v = fill(3);
+                Tile::Furnace {
+                    slots: [v[0], v[1], v[2]],
+                    burn: t.int("BurnTime").unwrap_or(0) as i32,
+                    item_burn: t.int("BurnTime").unwrap_or(0) as i32,
+                    cook: t.int("CookTime").unwrap_or(0) as i32,
+                }
+            }
+            "MobSpawner" => Tile::Spawner {
+                mob: t.string("EntityId").unwrap_or("Pig").to_string(),
+            },
+            _ => return,
+        };
+        self.tiles.insert(pos, tile);
+    }
+
+    /// Dropped items in one chunk as `EntityItem` NBT.
+    pub fn items_nbt(&self, cx: i32, cz: i32) -> Vec<crate::world::anvil::Nbt> {
+        use crate::world::anvil::{compound, item_nbt, list, Nbt};
+        self.items
+            .iter()
+            .filter(|e| {
+                (e.pos[0].floor() as i32) >> 4 == cx && (e.pos[2].floor() as i32) >> 4 == cz
+            })
+            .map(|e| {
+                compound(vec![
+                    ("id", Nbt::String("Item".into())),
+                    (
+                        "Pos",
+                        list(vec![
+                            Nbt::Double(e.pos[0]),
+                            Nbt::Double(e.pos[1]),
+                            Nbt::Double(e.pos[2]),
+                        ]),
+                    ),
+                    (
+                        "Motion",
+                        list(vec![
+                            Nbt::Double(e.motion[0]),
+                            Nbt::Double(e.motion[1]),
+                            Nbt::Double(e.motion[2]),
+                        ]),
+                    ),
+                    ("Age", Nbt::Short(e.age as i16)),
+                    ("Item", item_nbt(None, &e.stack)),
+                ])
+            })
+            .collect()
+    }
+
+    /// An `EntityItem` from a region file.
+    pub fn item_from_nbt(&mut self, t: &crate::world::anvil::Nbt, r: &mut JavaRandom) {
+        use crate::world::anvil::Nbt;
+        let Some(stack) = t.get("Item").and_then(crate::world::anvil::item_from_nbt) else {
+            return;
+        };
+        let pos = t.list("Pos");
+        let p = |i: usize| match pos.get(i) {
+            Some(Nbt::Double(v)) => *v,
+            _ => 0.0,
+        };
+        let id = self.next_item;
+        self.next_item += 1;
+        let mut e = ItemEntity::new(id, stack, [p(0), p(1), p(2)], r);
+        e.motion = [0.0; 3];
+        e.age = t.int("Age").unwrap_or(0) as i32;
+        e.pickup_delay = 0;
+        self.spawn(e);
+    }
+
     pub fn encode_tiles(&self) -> Vec<String> {
         let enc = |s: &[Option<Stack>]| {
             s.iter()

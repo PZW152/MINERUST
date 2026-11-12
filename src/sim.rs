@@ -268,6 +268,10 @@ pub struct Sim {
     /// Tell the client on the first tick which dimension the save is in.
     announce_dim: bool,
     eyes: Vec<EnderEye>,
+    /// `level.dat` of a world opened from vanilla (Anvil mode).
+    anvil_level: Option<crate::world::anvil::Nbt>,
+    /// Chunks whose tile entities and entities were taken over already.
+    anvil_imported: std::collections::BTreeSet<(i32, i32, i32)>,
 }
 
 /// Level keys owned by the gameplay state (kept out of `unknown`).
@@ -372,13 +376,28 @@ fn spiral(radius: i32) -> Vec<(i32, i32)> {
 impl Sim {
     pub fn new(cfg: &SimConfig) -> (Sim, Start) {
         let level = cfg.save_dir.as_ref().and_then(|d| save::read_level(d));
-        let seed = level.as_ref().map_or(cfg.seed, |l| l.seed);
+        // A vanilla world: level.dat and region files, no level.txt.
+        let anvil = if level.is_none() {
+            cfg.save_dir
+                .as_ref()
+                .and_then(|d| crate::world::anvil::read_level_dat(d))
+        } else {
+            None
+        };
+        let anvil_seed = anvil
+            .as_ref()
+            .and_then(|r| r.get("Data"))
+            .and_then(|d| d.int("RandomSeed"));
+        let seed = level
+            .as_ref()
+            .map_or(anvil_seed.unwrap_or(cfg.seed), |l| l.seed);
         if let Some(l) = &level {
             crate::compat::set_vanilla_parity(l.vanilla_parity);
         }
         let provider = Arc::new(ChunkProvider::new(seed));
         let mut world = ServerWorld::new(provider);
         world.save_dir = cfg.save_dir.clone();
+        world.anvil = anvil.is_some();
         if let Some(d) = &cfg.save_dir {
             // data/structures.txt: the MapGenStructureData of vanilla.
             if let Ok(text) = std::fs::read_to_string(d.join("data").join("structures.txt")) {
@@ -420,6 +439,8 @@ impl Sim {
             pending_travel: None,
             announce_dim: false,
             eyes: Vec::new(),
+            anvil_level: None,
+            anvil_imported: Default::default(),
         };
         if let Some(d) = &cfg.save_dir {
             if let Ok(text) = std::fs::read_to_string(d.join("data").join("entities.txt")) {
@@ -429,7 +450,13 @@ impl Sim {
             }
         }
         let mut saved_dim = 0;
+        sim.anvil_level = anvil;
+        let anvil_start = sim
+            .anvil_level
+            .clone()
+            .map(|root| sim.start_from_level_dat(&root, &mut saved_dim));
         let start = match level {
+            _ if anvil_start.is_some() => anvil_start.unwrap(),
             Some(l) => {
                 sim.world.total_time = l.total_time;
                 sim.world_time = l.world_time;
@@ -875,6 +902,9 @@ impl Sim {
             self.apply(c);
         }
         self.load_chunks();
+        if self.world.anvil {
+            self.import_anvil();
+        }
         self.summon_once();
         if !self.freeze_time {
             self.world_time += 1;
@@ -1102,6 +1132,310 @@ impl Sim {
         }
     }
 
+    /// Reads `level.dat` (`WorldInfo`, the player of a single-player world).
+    fn start_from_level_dat(&mut self, root: &crate::world::anvil::Nbt, dim: &mut i32) -> Start {
+        use crate::world::anvil::Nbt;
+        let d = root
+            .get("Data")
+            .cloned()
+            .unwrap_or(Nbt::Compound(Vec::new()));
+        self.world.total_time = d.int("Time").unwrap_or(0);
+        self.world_time = d.int("DayTime").unwrap_or(self.world.total_time);
+        self.weather.raining = d.int("raining").unwrap_or(0) != 0;
+        self.weather.rain_time = d.int("rainTime").unwrap_or(0) as i32;
+        self.weather.thundering = d.int("thundering").unwrap_or(0) != 0;
+        self.weather.thunder_time = d.int("thunderTime").unwrap_or(0) as i32;
+        self.weather.rain = if self.weather.raining { 1.0 } else { 0.0 };
+        self.weather.prev_rain = self.weather.rain;
+        self.play.mode = if d.int("GameType").unwrap_or(0) == 1 {
+            GameMode::Creative
+        } else {
+            GameMode::Survival
+        };
+        let sx = d.int("SpawnX").unwrap_or(0) as f64 + 0.5;
+        let sy = d.int("SpawnY").unwrap_or(64) as f64;
+        let sz = d.int("SpawnZ").unwrap_or(0) as f64 + 0.5;
+        self.spawn = [sx, sy, sz];
+        let mut pos = self.spawn;
+        let mut rot = [0.0f32; 2];
+        let mut flying = false;
+        if let Some(p) = d.get("Player") {
+            let ps = p.list("Pos");
+            if let (Some(Nbt::Double(x)), Some(Nbt::Double(y)), Some(Nbt::Double(z))) =
+                (ps.first(), ps.get(1), ps.get(2))
+            {
+                // EntityPlayer.posY sits yOffset (1.62) above the feet
+                pos = [*x, *y - 1.62, *z];
+            }
+            if let (Some(Nbt::Float(a)), Some(Nbt::Float(b))) =
+                (p.list("Rotation").first(), p.list("Rotation").get(1))
+            {
+                rot = [*a, *b];
+            }
+            *dim = p.int("Dimension").unwrap_or(0) as i32;
+            for (k, st) in crate::world::anvil::slots(p.list("Inventory")) {
+                if (0..36).contains(&k) {
+                    self.play.inv.main[k as usize] = Some(st);
+                }
+            }
+            if let Some(ab) = p.get("abilities") {
+                flying = ab.int("flying").unwrap_or(0) != 0;
+            }
+        }
+        self.player = Some((pos, rot, flying));
+        Start {
+            pos,
+            rot,
+            flying,
+            world_time: self.world_time,
+            seed: self.world.seed(),
+            resumed: true,
+            mode: self.play.mode,
+            stats: None,
+        }
+    }
+
+    /// Tile entities, entities and dropped items of one chunk, in NBT.
+    fn chunk_lists(
+        play: &Play,
+        mobs: &crate::entity::mob::Mobs,
+        cx: i32,
+        cz: i32,
+    ) -> (Vec<crate::world::anvil::Nbt>, Vec<crate::world::anvil::Nbt>) {
+        let tiles = play.tiles_nbt(cx, cz);
+        let mut entities: Vec<crate::world::anvil::Nbt> = mobs
+            .list
+            .iter()
+            .filter(|m| {
+                m.health > 0.0
+                    && (m.pos[0].floor() as i32) >> 4 == cx
+                    && (m.pos[2].floor() as i32) >> 4 == cz
+            })
+            .map(crate::entity::mob::Mobs::to_nbt)
+            .collect();
+        entities.extend(play.items_nbt(cx, cz));
+        (tiles, entities)
+    }
+
+    /// Saves one dimension in Anvil form: changed chunks and every chunk that
+    /// holds (or held) tile entities or entities.
+    fn save_anvil_world(
+        world: &mut ServerWorld,
+        play: &Play,
+        mobs: &crate::entity::mob::Mobs,
+        unsaved: &mut std::collections::BTreeSet<(i32, i32)>,
+        touched: &std::collections::BTreeSet<(i32, i32)>,
+    ) -> std::io::Result<()> {
+        use crate::world::anvil;
+        let Some(dir) = world.save_dir.clone() else {
+            return Ok(());
+        };
+        let mut keys: std::collections::BTreeSet<(i32, i32)> = std::mem::take(unsaved);
+        keys.extend(touched.iter().copied());
+        for p in play.tiles.keys() {
+            keys.insert((p[0] >> 4, p[2] >> 4));
+        }
+        for m in &mobs.list {
+            keys.insert((
+                (m.pos[0].floor() as i32) >> 4,
+                (m.pos[2].floor() as i32) >> 4,
+            ));
+        }
+        for e in &play.items {
+            keys.insert((
+                (e.pos[0].floor() as i32) >> 4,
+                (e.pos[2].floor() as i32) >> 4,
+            ));
+        }
+        for (cx, cz) in keys {
+            let lists = Self::chunk_lists(play, mobs, cx, cz);
+            if world.chunks.contains_key(&(cx, cz)) {
+                world.write_anvil_chunk(&dir, cx, cz, Some(lists))?;
+            } else if let Some(mut root) = anvil::read_region_chunk(&dir, cx, cz) {
+                if let Some(level) = root.get_mut("Level") {
+                    level.set("TileEntities", anvil::Nbt::List(10, lists.0));
+                    level.set("Entities", anvil::Nbt::List(10, lists.1));
+                }
+                anvil::write_region_chunk(&dir, cx, cz, &root, (world.total_time / 20) as u32)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Writes an opened vanilla world back: region files and `level.dat`.
+    fn save_anvil(&mut self) -> std::io::Result<()> {
+        use crate::world::anvil::{compound, item_nbt, list, Nbt};
+        let Some(base) = self.base_dir.clone() else {
+            return Ok(());
+        };
+        let touched: std::collections::BTreeSet<(i32, i32)> = self
+            .anvil_imported
+            .iter()
+            .filter(|k| k.0 == self.dim)
+            .map(|k| (k.1, k.2))
+            .collect();
+        Self::save_anvil_world(
+            &mut self.world,
+            &self.play,
+            &self.mobs,
+            &mut self.unsaved,
+            &touched,
+        )?;
+        for p in &mut self.parked {
+            let touched: std::collections::BTreeSet<(i32, i32)> = self
+                .anvil_imported
+                .iter()
+                .filter(|k| k.0 == p.dim)
+                .map(|k| (k.1, k.2))
+                .collect();
+            let mut tmp = Play::new(GameMode::Survival);
+            tmp.tiles = p.tiles.clone();
+            tmp.items = p.items.clone();
+            Self::save_anvil_world(&mut p.world, &tmp, &p.mobs, &mut p.unsaved, &touched)?;
+        }
+        let mut root = self
+            .anvil_level
+            .clone()
+            .unwrap_or_else(|| compound(vec![("Data", compound(vec![]))]));
+        if root.get("Data").is_none() {
+            root.set("Data", compound(vec![]));
+        }
+        let (feet, rot, flying) = self.player.unwrap_or((self.spawn, [0.0, 0.0], false));
+        let d = root.get_mut("Data").unwrap();
+        d.set("RandomSeed", Nbt::Long(self.world.seed()));
+        d.set("Time", Nbt::Long(self.world.total_time));
+        d.set("DayTime", Nbt::Long(self.world_time));
+        d.set("raining", Nbt::Byte(self.weather.raining as i8));
+        d.set("rainTime", Nbt::Int(self.weather.rain_time));
+        d.set("thundering", Nbt::Byte(self.weather.thundering as i8));
+        d.set("thunderTime", Nbt::Int(self.weather.thunder_time));
+        d.set(
+            "GameType",
+            Nbt::Int((self.play.mode == GameMode::Creative) as i32),
+        );
+        d.set("version", Nbt::Int(19133));
+        d.set("SpawnX", Nbt::Int(self.spawn[0].floor() as i32));
+        d.set("SpawnY", Nbt::Int(self.spawn[1].floor() as i32));
+        d.set("SpawnZ", Nbt::Int(self.spawn[2].floor() as i32));
+        if d.get("LevelName").is_none() {
+            d.set("LevelName", Nbt::String("MINERUST".into()));
+        }
+        if d.get("generatorName").is_none() {
+            d.set("generatorName", Nbt::String("default".into()));
+            d.set("generatorVersion", Nbt::Int(1));
+            d.set("MapFeatures", Nbt::Byte(1));
+        }
+        let inv: Vec<Nbt> = self
+            .play
+            .inv
+            .main
+            .iter()
+            .enumerate()
+            .filter_map(|(i, s)| s.as_ref().map(|s| item_nbt(Some(i as i8), s)))
+            .collect();
+        let mut player = d.get("Player").cloned().unwrap_or_else(|| compound(vec![]));
+        player.set(
+            "Pos",
+            list(vec![
+                Nbt::Double(feet[0]),
+                Nbt::Double(feet[1] + 1.62),
+                Nbt::Double(feet[2]),
+            ]),
+        );
+        player.set(
+            "Rotation",
+            list(vec![Nbt::Float(rot[0]), Nbt::Float(rot[1])]),
+        );
+        player.set("Dimension", Nbt::Int(self.dim));
+        player.set("Inventory", Nbt::List(10, inv));
+        player.set("SelectedItemSlot", Nbt::Int(self.play.inv.selected as i32));
+        let mut ab = player
+            .get("abilities")
+            .cloned()
+            .unwrap_or_else(|| compound(vec![]));
+        ab.set("flying", Nbt::Byte(flying as i8));
+        ab.set(
+            "mayfly",
+            Nbt::Byte((self.play.mode == GameMode::Creative) as i8),
+        );
+        ab.set(
+            "instabuild",
+            Nbt::Byte((self.play.mode == GameMode::Creative) as i8),
+        );
+        player.set("abilities", ab);
+        d.set("Player", player);
+        d.set(
+            "LastPlayed",
+            Nbt::Long(
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |t| t.as_millis() as i64),
+            ),
+        );
+        self.anvil_level = Some(root.clone());
+        crate::world::anvil::write_level_dat(&base, &root)
+    }
+
+    /// `--export-anvil`: writes this world (in this project's format) as a
+    /// vanilla 1.7.10 world in `dst`: every stored chunk, tile entity and
+    /// entity, and `level.dat`.
+    pub fn export_anvil(&mut self, dst: &std::path::Path) -> std::io::Result<usize> {
+        let src = self.world.save_dir.clone();
+        let mut keys = Vec::new();
+        if let Some(d) = &src {
+            let chunks = d.join("chunks");
+            if let Ok(regions) = std::fs::read_dir(&chunks) {
+                for r in regions.flatten() {
+                    if let Ok(files) = std::fs::read_dir(r.path()) {
+                        for f in files.flatten() {
+                            let name = f.file_name().to_string_lossy().to_string();
+                            let parts: Vec<&str> =
+                                name.trim_end_matches(".mrc").split('.').collect();
+                            if parts.len() == 3 && parts[0] == "c" {
+                                if let (Ok(x), Ok(z)) = (parts[1].parse(), parts[2].parse()) {
+                                    keys.push((x, z));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        keys.sort();
+        for &(x, z) in &keys {
+            self.world.load_chunk(x, z);
+        }
+        std::fs::create_dir_all(dst)?;
+        self.world.save_dir = Some(dst.to_path_buf());
+        self.world.anvil = true;
+        self.base_dir = Some(dst.to_path_buf());
+        self.unsaved.extend(keys.iter().copied());
+        self.save_anvil()?;
+        Ok(keys.len())
+    }
+
+    /// Takes over the tile entities and entities of chunks read from region files.
+    fn import_anvil(&mut self) {
+        let loaded = std::mem::take(&mut self.world.anvil_loaded);
+        let mut rnd = std::mem::replace(&mut self.world.rand, JavaRandom::new(0));
+        for (cx, cz, tiles, entities) in loaded {
+            if !self.anvil_imported.insert((self.dim, cx, cz)) {
+                continue;
+            }
+            for t in &tiles {
+                self.play.tile_from_nbt(t);
+            }
+            for e in &entities {
+                if e.string("id") == Some("Item") {
+                    self.play.item_from_nbt(e, &mut rnd);
+                } else {
+                    let _ = self.mobs.from_nbt(e);
+                }
+            }
+        }
+        self.world.rand = rnd;
+    }
+
     /// `ItemEnderEye.onItemRightClick`: thrown towards the nearest stronghold.
     fn use_air(&mut self) {
         let Some(held) = self.play.inv.held() else {
@@ -1232,6 +1566,7 @@ impl Sim {
         let mut world = ServerWorld::new(provider);
         world.save_dir = self.dim_dir(dim);
         world.total_time = self.world.total_time;
+        world.anvil = self.world.anvil;
         let mut mobs = crate::entity::mob::Mobs::default();
         let mut tiles = std::collections::BTreeMap::new();
         if let Some(d) = &world.save_dir {
@@ -1441,6 +1776,9 @@ impl Sim {
         let Some(base) = self.base_dir.clone() else {
             return Ok(());
         };
+        if self.world.anvil {
+            return self.save_anvil();
+        }
         // every dimension but the overworld keeps its own data folder
         let wdir = self.world.save_dir.clone().unwrap_or(base.clone());
         for key in std::mem::take(&mut self.unsaved) {
@@ -2561,5 +2899,141 @@ mod tests {
         }
         assert!(found, "exit portal at y 64");
         assert!((0..256).any(|py| sim.world.block(0, py, 0) == block::DRAGON_EGG));
+    }
+
+    #[test]
+    fn anvil_world_round_trip() {
+        use crate::world::anvil::{compound, Nbt};
+        let dir = std::env::temp_dir().join(format!("minerust-anvilsim-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // a fresh vanilla level.dat
+        let root = compound(vec![(
+            "Data",
+            compound(vec![
+                ("RandomSeed", Nbt::Long(77)),
+                ("Time", Nbt::Long(1000)),
+                ("DayTime", Nbt::Long(1000)),
+                ("SpawnX", Nbt::Int(0)),
+                ("SpawnY", Nbt::Int(80)),
+                ("SpawnZ", Nbt::Int(0)),
+                ("GameType", Nbt::Int(1)),
+            ]),
+        )]);
+        crate::world::anvil::write_level_dat(&dir, &root).unwrap();
+        let cfg = SimConfig {
+            seed: 0,
+            view: 2,
+            save_dir: Some(dir.clone()),
+            start_time: 0,
+            freeze_time: true,
+            mode: GameMode::Creative,
+        };
+        let (chest, mob_pos);
+        {
+            let (mut sim, start) = Sim::new(&cfg);
+            assert_eq!(sim.world.seed(), 77);
+            assert!(sim.world.anvil);
+            let mut ev = Vec::new();
+            for _ in 0..30 {
+                sim.step(&[], &mut ev);
+            }
+            let (x, z) = (start.pos[0].floor() as i32, start.pos[2].floor() as i32);
+            chest = [x + 1, 100, z + 1];
+            sim.world
+                .set_block(chest[0], chest[1], chest[2], block::CHEST, 2, 3);
+            let mut slots = [None; 27];
+            slots[4] = Some(crate::item::Stack::new(264, 0, 3));
+            sim.play
+                .tiles
+                .insert(chest, crate::play::Tile::Chest { slots });
+            let mut r = JavaRandom::new(3);
+            mob_pos = [x as f64 + 0.5, 101.0, z as f64 + 3.5];
+            let id = sim
+                .mobs
+                .spawn(crate::entity::mob::Kind::Cow, mob_pos, 0.0, &mut r);
+            sim.mobs
+                .list
+                .iter_mut()
+                .find(|m| m.id == id)
+                .unwrap()
+                .persistent = true;
+            sim.save().unwrap();
+        }
+        assert!(dir.join("region").read_dir().unwrap().count() > 0);
+        assert!(
+            !dir.join("level.txt").exists(),
+            "an Anvil world stays Anvil"
+        );
+        let (mut sim, _) = Sim::new(&cfg);
+        let mut ev = Vec::new();
+        for _ in 0..30 {
+            sim.step(&[], &mut ev);
+        }
+        assert_eq!(sim.world.block(chest[0], chest[1], chest[2]), block::CHEST);
+        match sim.play.tiles.get(&chest) {
+            Some(crate::play::Tile::Chest { slots }) => {
+                assert_eq!(slots[4].map(|s| (s.id, s.count)), Some((264, 3)))
+            }
+            other => panic!("chest lost: {other:?}"),
+        }
+        assert!(sim.mobs.list.iter().any(
+            |m| m.kind == crate::entity::mob::Kind::Cow && (m.pos[0] - mob_pos[0]).abs() < 2.0
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn export_to_anvil() {
+        let base = std::env::temp_dir().join(format!("minerust-export-{}", std::process::id()));
+        let (src, dst) = (base.join("own"), base.join("vanilla"));
+        let _ = std::fs::remove_dir_all(&base);
+        let cfg = SimConfig {
+            seed: 99,
+            view: 2,
+            save_dir: Some(src.clone()),
+            start_time: 0,
+            freeze_time: true,
+            mode: GameMode::Creative,
+        };
+        let marker;
+        {
+            let (mut sim, start) = Sim::new(&cfg);
+            let mut ev = Vec::new();
+            for _ in 0..20 {
+                sim.step(&[], &mut ev);
+            }
+            marker = [
+                start.pos[0].floor() as i32,
+                120,
+                start.pos[2].floor() as i32,
+            ];
+            sim.world
+                .set_block(marker[0], marker[1], marker[2], block::GOLD_BLOCK, 0, 3);
+            sim.step(&[], &mut ev);
+            sim.save().unwrap();
+            // unloading writes the rest to disk
+            let keys: Vec<(i32, i32)> = sim.world.chunks.keys().copied().collect();
+            for k in keys {
+                sim.world.unload_chunk(k.0, k.1);
+            }
+        }
+        let (mut sim, _) = Sim::new(&cfg);
+        let n = sim.export_anvil(&dst).unwrap();
+        assert!(n > 0);
+        assert!(dst.join("level.dat").exists());
+        let cfg2 = SimConfig {
+            save_dir: Some(dst.clone()),
+            ..cfg
+        };
+        let (mut sim, _) = Sim::new(&cfg2);
+        assert!(sim.world.anvil);
+        assert_eq!(sim.world.seed(), 99);
+        sim.world.load_chunk(marker[0] >> 4, marker[2] >> 4);
+        assert_eq!(
+            sim.world.block(marker[0], marker[1], marker[2]),
+            block::GOLD_BLOCK
+        );
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

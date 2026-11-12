@@ -892,6 +892,7 @@ dependencies = [
  "ash",
  "ash-window",
  "cpal",
+ "flate2",
  "lewton",
  "naga",
  "png",

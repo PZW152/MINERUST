@@ -1,3 +1,4 @@
+pub mod anvil;
 pub mod biome;
 pub mod features;
 pub mod fire;

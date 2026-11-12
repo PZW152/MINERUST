@@ -302,6 +302,46 @@ impl Chunk {
         out
     }
 
+    /// A chunk read from a region file (`AnvilChunkLoader.readChunkFromNBT`).
+    pub(crate) fn from_anvil(a: super::anvil::AChunk) -> Chunk {
+        let data = ChunkData {
+            cx: a.cx,
+            cz: a.cz,
+            blocks: a.blocks,
+            meta: a.meta,
+            biomes: a.biomes,
+            sky: a.sky,
+            blk: a.blk,
+        };
+        let mut c = Chunk::new(data);
+        c.sections = a.sections;
+        c.height = a.height;
+        c.height_min = a.height.iter().copied().min().unwrap_or(0);
+        c.terrain_populated = a.populated;
+        c.light_populated = a.light_populated;
+        c
+    }
+
+    /// This chunk in the shape of a region file entry.
+    pub(crate) fn to_anvil(&self) -> super::anvil::AChunk {
+        super::anvil::AChunk {
+            cx: self.data.cx,
+            cz: self.data.cz,
+            blocks: self.data.blocks.clone(),
+            meta: self.data.meta.clone(),
+            sky: self.data.sky.clone(),
+            blk: self.data.blk.clone(),
+            biomes: self.data.biomes,
+            height: self.height,
+            sections: self.sections,
+            populated: self.terrain_populated,
+            light_populated: self.light_populated,
+            entities: Vec::new(),
+            tiles: Vec::new(),
+            ticks: Vec::new(),
+        }
+    }
+
     /// Decodes a stored chunk; `None` if the data is truncated or malformed.
     fn from_bytes(cx: i32, cz: i32, b: &[u8]) -> Option<Chunk> {
         use crate::world::gen::chunk_provider::boxed;
@@ -479,6 +519,11 @@ pub struct ServerWorld {
     pub raining: bool,
     /// `World.getCurrentMoonPhaseFactor`
     pub moon_factor: f32,
+    /// Chunks live in vanilla region files (a world opened from 1.7.10).
+    pub anvil: bool,
+    /// Tile entities, entities and scheduled updates of chunks read from
+    /// region files, for the game state to pick up.
+    pub anvil_loaded: Vec<(i32, i32, Vec<super::anvil::Nbt>, Vec<super::anvil::Nbt>)>,
     /// `BlockRedstoneWire.field_150181_a` (wires stop providing power while
     /// a wire recomputes its own input).
     pub(crate) wire_off: bool,
@@ -528,6 +573,8 @@ impl ServerWorld {
             map_features: true,
             raining: false,
             moon_factor: 1.0,
+            anvil: false,
+            anvil_loaded: Vec::new(),
             wire_off: false,
             torch_toggles: Vec::new(),
             note_powered: FastMap::default(),
@@ -574,6 +621,28 @@ impl ServerWorld {
                 .as_ref()
                 .and_then(|d| crate::world::save::read_chunk(d, cx, cz)),
         };
+        if stored.is_none() && self.anvil {
+            if let Some(dir) = self.save_dir.clone() {
+                if let Some(a) = super::anvil::read_region_chunk(&dir, cx, cz)
+                    .and_then(|n| super::anvil::chunk_from_nbt(&n))
+                {
+                    let (entities, tiles, ticks) =
+                        (a.entities.clone(), a.tiles.clone(), a.ticks.clone());
+                    let mut c = Chunk::from_anvil(a);
+                    c.no_sky = self.provider.dim != 0;
+                    self.insert_restored(Box::new(c));
+                    for t in &ticks {
+                        if let (Some(id), Some(x), Some(y), Some(z), Some(d)) =
+                            (t.int("i"), t.int("x"), t.int("y"), t.int("z"), t.int("t"))
+                        {
+                            self.restore_tick(x as i32, y as i32, z as i32, id as u8, d);
+                        }
+                    }
+                    self.anvil_loaded.push((cx, cz, tiles, entities));
+                    return;
+                }
+            }
+        }
         if let Some(bytes) = stored {
             if let Some(mut c) = Chunk::from_bytes(cx, cz, &bytes) {
                 c.no_sky = self.provider.dim != 0;
@@ -647,6 +716,18 @@ impl ServerWorld {
     /// Unloads a chunk: to its file when the world has a save directory,
     /// otherwise into the compressed in-memory store.
     pub fn unload_chunk(&mut self, cx: i32, cz: i32) {
+        if self.anvil {
+            if let Some(dir) = self.save_dir.clone() {
+                if self.chunks.contains_key(&(cx, cz)) {
+                    if let Err(e) = self.write_anvil_chunk(&dir, cx, cz, None) {
+                        eprintln!("failed to save chunk {cx},{cz}: {e}");
+                        return;
+                    }
+                    self.chunks.remove(&(cx, cz));
+                    return;
+                }
+            }
+        }
         if let Some(c) = self.chunks.remove(&(cx, cz)) {
             let bytes = c.to_bytes();
             match &self.save_dir {
@@ -661,6 +742,54 @@ impl ServerWorld {
                 }
             }
         }
+    }
+
+    /// Writes a loaded chunk to its region file. The tile entity and entity
+    /// lists come from the game state; `None` keeps what the file has.
+    pub fn write_anvil_chunk(
+        &mut self,
+        dir: &std::path::Path,
+        cx: i32,
+        cz: i32,
+        lists: Option<(Vec<super::anvil::Nbt>, Vec<super::anvil::Nbt>)>,
+    ) -> std::io::Result<()> {
+        use super::anvil::{self, Nbt};
+        let Some(c) = self.chunks.get(&(cx, cz)) else {
+            return Ok(());
+        };
+        let mut a = c.to_anvil();
+        match lists {
+            Some((tiles, entities)) => {
+                a.tiles = tiles;
+                a.entities = entities;
+            }
+            None => {
+                if let Some(old) =
+                    anvil::read_region_chunk(dir, cx, cz).and_then(|n| anvil::chunk_from_nbt(&n))
+                {
+                    a.tiles = old.tiles;
+                    a.entities = old.entities;
+                }
+            }
+        }
+        let now = self.total_time;
+        a.ticks = self
+            .ticks
+            .iter()
+            .filter(|t| t.x >> 4 == cx && t.z >> 4 == cz)
+            .map(|t| {
+                anvil::compound(vec![
+                    ("i", Nbt::Int(t.block as i32)),
+                    ("x", Nbt::Int(t.x)),
+                    ("y", Nbt::Int(t.y)),
+                    ("z", Nbt::Int(t.z)),
+                    ("t", Nbt::Int((t.time - now) as i32)),
+                    ("p", Nbt::Int(t.priority)),
+                ])
+            })
+            .collect();
+        let root = anvil::chunk_to_nbt(&a, now);
+        anvil::write_region_chunk(dir, cx, cz, &root, (now / 20) as u32)
     }
 
     /// Writes every loaded chunk to disk without unloading it.
@@ -684,6 +813,14 @@ impl ServerWorld {
 
     /// Whether the chunk can be restored without generating it.
     pub fn is_stored(&self, cx: i32, cz: i32) -> bool {
+        if self.anvil
+            && self
+                .save_dir
+                .as_ref()
+                .map_or(false, |d| super::anvil::region_has(d, cx, cz))
+        {
+            return true;
+        }
         self.stash.contains_key(&(cx, cz))
             || self.save_dir.as_ref().map_or(false, |d| {
                 crate::world::save::chunk_path(d, cx, cz).is_file()
