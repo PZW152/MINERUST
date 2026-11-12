@@ -9,7 +9,9 @@
       `World.addBlockEvent` 佇列
 - [ ] 終界傳送門：`TileEntityEndPortalRenderer`（16 層星空視差）
 - [x] `Potion` / `PotionEffect` / `PotionHelper` 與玩家身上的效果（凋零、中毒、抗性、速度、跳躍、生命提升、吸收……）
-- [ ] 生物身上的藥水效果、藥水物品（飲用、噴濺）、釀造台、牛奶、金蘋果
+- [x] 藥水物品（飲用）、釀造台（方塊、`TileEntityBrewingStand`、介面、存檔）、牛奶、金蘋果
+- [ ] 生物身上的藥水效果、噴濺藥水 `EntityPotion`、玻璃瓶裝水
+- [ ] 容器點擊一律改為 `Container.slotClick` / `mergeItemStack` / `transferStackInSlot` 逐行移植；方塊破壞時內容物的散落方式
 - [ ] 騎乘：`Entity.mountEntity`、`updateRidden`，馬（跳躍、鞍、馬鎧、箱子、馬的物品欄）、豬＋鞍＋胡蘿蔔釣竿
 - [ ] 傳送門建造時的中繼值與原版一致
 - [ ] 實體（生物、掉落物、箭、礦車）穿越傳送門 `Entity.travelToDimension`

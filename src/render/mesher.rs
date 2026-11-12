@@ -614,6 +614,9 @@ fn mesh_block(cx: &Ctx, out: &mut Vec<Vertex>, id: u8, meta: i32, x: i32, y: i32
         Shape::Wire => wire(&cx, out, meta, x, y, z),
         Shape::Fire => fire(&cx, out, x, y, z),
         Shape::Tripwire => tripwire(&cx, out, meta, x, y, z),
+        Shape::BrewingStand => {
+            rb::Rb::new(cx, out, id, meta).render_brewing_stand(x, y, z);
+        }
         Shape::Cocoa | Shape::None => {}
     }
 }

@@ -514,6 +514,11 @@ pub fn collision(get: Get, id: u8, meta: u8, x: i32, y: i32, z: i32, out: &mut V
                 out.extend(static_boxes(id, meta))
             }
             block::FLOWER_POT => out.push([0.3125, 0.0, 0.3125, 0.6875, 0.375, 0.6875]),
+            // BlockBrewingStand.addCollisionBoxesToList: the rod, then the base
+            block::BREWING_STAND => {
+                out.push([0.4375, 0.0, 0.4375, 0.5625, 0.875, 0.5625]);
+                out.push([0.0, 0.0, 0.0, 1.0, 0.125, 1.0]);
+            }
             block::CAULDRON => {
                 // BlockCauldron.addCollisionBoxesToList
                 let f = 0.125f32;
@@ -547,6 +552,10 @@ fn union(v: &[Bx]) -> Bx {
 pub fn selection(get: Get, id: u8, meta: u8, x: i32, y: i32, z: i32) -> Bx {
     if id == block::PORTAL {
         return portal_bounds(portal_axis(get, x, y, z, meta));
+    }
+    // the bounds addCollisionBoxesToList leaves (setBlockBoundsForItemRender)
+    if id == block::BREWING_STAND {
+        return [0.0, 0.0, 0.0, 1.0, 0.125, 1.0];
     }
     let b = block::info(id);
     match b.shape {

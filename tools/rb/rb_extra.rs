@@ -293,3 +293,47 @@
         let i = self.side_icon(5);
         self.face_x_pos(-0.5, -0.5, -0.5, i);
     }
+
+    /// `RenderBlocks.renderBlockBrewingStand`
+    pub fn render_brewing_stand(&mut self, x: i32, y: i32, z: i32) -> bool {
+        self.set_render_bounds(0.4375, 0.0, 0.4375, 0.5625, 0.875, 0.5625);
+        self.render_standard(x, y, z);
+        self.overrideBlockTexture = Some(Icon::new(self.atlas().named("brewing_stand_base")));
+        let all = self.renderAllFaces;
+        self.renderAllFaces = true;
+        self.set_render_bounds(0.5625, 0.0, 0.3125, 0.9375, 0.125, 0.6875);
+        self.render_standard(x, y, z);
+        self.set_render_bounds(0.125, 0.0, 0.0625, 0.5, 0.125, 0.4375);
+        self.render_standard(x, y, z);
+        self.set_render_bounds(0.125, 0.0, 0.5625, 0.5, 0.125, 0.9375);
+        self.render_standard(x, y, z);
+        self.renderAllFaces = all;
+        self.overrideBlockTexture = None;
+        self.bright = self.mixed(x, y, z);
+        self.color(1.0, 1.0, 1.0);
+        let icon = Icon::new(self.atlas().named("brewing_stand"));
+        let (v0, v1) = (icon.min_v(), icon.max_v());
+        let m = self.meta;
+        let (xf, yf, zf) = (x as f64, y as f64, z as f64);
+        for i in 0..3 {
+            let a = i as f64 * std::f64::consts::PI * 2.0 / 3.0 + std::f64::consts::PI / 2.0;
+            let u0 = icon.u(8.0);
+            let mut u1 = icon.max_u();
+            if m & 1 << i != 0 {
+                u1 = icon.min_u();
+            }
+            let (x0, z0) = (xf + 0.5, zf + 0.5);
+            let x1 = xf + 0.5 + a.sin() * 8.0 / 16.0;
+            let z1 = zf + 0.5 + a.cos() * 8.0 / 16.0;
+            self.vertex(x0, yf + 1.0, z0, u0, v0);
+            self.vertex(x0, yf, z0, u0, v1);
+            self.vertex(x1, yf, z1, u1, v1);
+            self.vertex(x1, yf + 1.0, z1, u1, v0);
+            self.vertex(x1, yf + 1.0, z1, u1, v0);
+            self.vertex(x1, yf, z1, u1, v1);
+            self.vertex(x0, yf, z0, u0, v1);
+            self.vertex(x0, yf + 1.0, z0, u0, v0);
+        }
+        self.set_render_bounds(0.0, 0.0, 0.0, 1.0, 0.125, 1.0);
+        true
+    }

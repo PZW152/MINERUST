@@ -3510,6 +3510,48 @@ mod tests {
         );
     }
 
+    /// TileEntityBrewingStand: water bottles and nether wart make awkward
+    /// potions in 400 ticks; sugar then makes swiftness.
+    #[test]
+    fn brewing_stand_brews() {
+        use crate::item::Stack;
+        use crate::play::Tile;
+        let (mut sim, x, y, z) = redstone_sim();
+        sim.world.set_block(x, y, z, block::BREWING_STAND, 0, 3);
+        let p = [x, y, z];
+        sim.play.tiles.insert(
+            p,
+            Tile::Brewing {
+                slots: [
+                    Some(Stack::new(373, 0, 1)),
+                    Some(Stack::new(373, 0, 1)),
+                    None,
+                    Some(Stack::new(372, 0, 1)),
+                ],
+                brew_time: 0,
+                filled: 0,
+                ingredient: 0,
+            },
+        );
+        steps(&mut sim, 1);
+        assert_eq!(sim.world.meta(x, y, z), 3, "two bottles show on the block");
+        steps(&mut sim, 400);
+        let Some(Tile::Brewing { slots, .. }) = sim.play.tiles.get(&p).cloned() else {
+            panic!()
+        };
+        assert_eq!(slots[0].unwrap().meta, 16, "awkward potion");
+        assert!(slots[3].is_none(), "the wart is used up");
+        if let Some(Tile::Brewing { slots, .. }) = sim.play.tiles.get_mut(&p) {
+            slots[3] = Some(Stack::new(353, 0, 1));
+        }
+        steps(&mut sim, 402);
+        let Some(Tile::Brewing { slots, .. }) = sim.play.tiles.get(&p).cloned() else {
+            panic!()
+        };
+        let e = crate::potion::effects_of(slots[0].unwrap().meta, false);
+        assert_eq!(e[0].id, crate::potion::MOVE_SPEED);
+    }
+
     /// TileEntityPiston.launchWithSlimeBlock moves an item lying in front.
     #[test]
     fn piston_pushes_items() {

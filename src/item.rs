@@ -532,6 +532,7 @@ pub fn hardness(id: u8) -> f32 {
         DOUBLE_STONE_SLAB | BRICK_BLOCK | OAK_STAIRS | SPRUCE_STAIRS | BIRCH_STAIRS
         | JUNGLE_STAIRS | ACACIA_STAIRS | DARK_OAK_STAIRS | STONE_STAIRS | BRICK_STAIRS
         | NETHER_BRICK_STAIRS | JUKEBOX | FENCE | NETHER_BRICK | CAULDRON => 2.0,
+        BREWING_STAND => 0.5,
         BOOKSHELF | STONEBRICK | STONE_BRICK_STAIRS => 1.5,
         LADDER | NETHERRACK => 0.4,
         GLOWSTONE | GLASS_PANE => 0.3,
@@ -789,6 +790,8 @@ pub fn drops(id: u8, meta: i32, r: &mut JavaRandom) -> Vec<Stack> {
         UNLIT_REDSTONE_TORCH | REDSTONE_TORCH => one(REDSTONE_TORCH as ItemId, 0),
         UNPOWERED_REPEATER | POWERED_REPEATER => one(356, 0),
         CAULDRON => one(380, 0),
+        // BlockBrewingStand.getItemDropped
+        BREWING_STAND => one(379, 0),
         REDSTONE_LAMP | LIT_REDSTONE_LAMP => one(REDSTONE_LAMP as ItemId, 0),
         PISTON_HEAD | PORTAL | END_PORTAL => Vec::new(),
         QUARTZ_ORE => one(406, 0),

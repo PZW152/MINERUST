@@ -125,6 +125,7 @@ pub const BRICK_STAIRS: u8 = 108;
 pub const STONE_BRICK_STAIRS: u8 = 109;
 pub const NETHER_BRICK: u8 = 112;
 pub const NETHER_BRICK_STAIRS: u8 = 114;
+pub const BREWING_STAND: u8 = 117;
 pub const CAULDRON: u8 = 118;
 pub const END_PORTAL_FRAME: u8 = 120;
 pub const END_STONE: u8 = 121;
@@ -230,6 +231,8 @@ pub enum Shape {
     Boxes,
     /// `renderBlockFire` (3)
     Fire,
+    /// `renderBlockBrewingStand` (25)
+    BrewingStand,
 }
 
 /// `net.minecraft.block.material.Material`
@@ -557,6 +560,10 @@ fn build() -> [BlockInfo; 256] {
     t[LIT_REDSTONE_LAMP as usize] = cube(M::Iron);
     t[LIT_REDSTONE_LAMP as usize].light_value = 15;
     t[PISTON_HEAD as usize] = base(Shape::Boxes, M::Piston, false);
+    // BlockBrewingStand: Material.iron, setLightLevel(0.125F)
+    let mut brew = base(Shape::BrewingStand, M::Iron, false);
+    brew.light_value = (0.125f32 * 15.0) as u8;
+    t[BREWING_STAND as usize] = brew;
     // BlockPistonMoving: render type -1, drawn by TileEntityRendererPiston.
     t[PISTON_EXTENSION as usize] = base(Shape::None, M::Piston, false);
     // BlockPortal: a thin translucent pane that glows.
@@ -1260,6 +1267,7 @@ pub fn texture_name(id: u8, meta: u8, face: usize) -> Option<&'static str> {
             }
         }
         NETHER_BRICK => "nether_brick",
+        BREWING_STAND => "brewing_stand",
         CAULDRON => {
             if meta >= 8 {
                 "cauldron_inner"

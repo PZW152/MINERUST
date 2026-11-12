@@ -12,6 +12,7 @@ const INVENTORY: (f32, f32) = (256.0, 256.0);
 const WORKBENCH: (f32, f32) = (512.0, 0.0);
 const FURNACE: (f32, f32) = (512.0, 256.0);
 const CHEST: (f32, f32) = (768.0, 0.0);
+const BREWING: (f32, f32) = (256.0, 512.0);
 const OPTIONS_BG: (f32, f32) = (768.0, 256.0);
 
 /// A clickable slot of the open window.
@@ -109,6 +110,21 @@ pub fn layout_with(
                         tile: None,
                     });
                 }
+            }
+            main(&mut v, 84.0);
+        }
+        Open::Brewing(_) => {
+            // ContainerBrewingStand: bottles, then the ingredient
+            for (i, (x, y)) in [(56.0, 46.0), (79.0, 53.0), (102.0, 46.0), (79.0, 17.0)]
+                .iter()
+                .enumerate()
+            {
+                v.push(SlotHit {
+                    x: *x,
+                    y: *y,
+                    slot: Slot::Outside,
+                    tile: Some(i),
+                });
             }
             main(&mut v, 84.0);
         }
@@ -275,6 +291,35 @@ pub fn container(
                 );
             }
         }
+        Open::Brewing(_) => {
+            // GuiBrewingStand.drawGuiContainerBackgroundLayer
+            ui.sheet(left, top, BREWING.0, BREWING.1, xs, ys);
+            let t = view.furnace.map_or(0, |f| f.0);
+            if t > 0 {
+                let j = (28.0f32 * (1.0 - t as f32 / 400.0)) as i32;
+                if j > 0 {
+                    ui.sheet(
+                        left + 97.0,
+                        top + 16.0,
+                        BREWING.0 + 176.0,
+                        BREWING.1,
+                        9.0,
+                        j as f32,
+                    );
+                }
+                let j = [29, 24, 20, 16, 11, 6, 0][(t / 2 % 7) as usize];
+                if j > 0 {
+                    ui.sheet(
+                        left + 65.0,
+                        top + 14.0 + 29.0 - j as f32,
+                        BREWING.0 + 185.0,
+                        BREWING.1 + 29.0 - j as f32,
+                        12.0,
+                        j as f32,
+                    );
+                }
+            }
+        }
         Open::Chest(_) => {
             let rows = view.tile_slots.len() / 9;
             ui.sheet(left, top, CHEST.0, CHEST.1, xs, rows as f32 * 18.0 + 17.0);
@@ -298,6 +343,17 @@ pub fn container(
         }
         Open::Furnace(_) => {
             let t = "Furnace";
+            ui.text(
+                t,
+                left + xs / 2.0 - ui.text_width(t) / 2.0,
+                top + 6.0,
+                fg,
+                false,
+            );
+            ui.text("Inventory", left + 8.0, top + ys - 96.0 + 2.0, fg, false);
+        }
+        Open::Brewing(_) => {
+            let t = "Brewing Stand";
             ui.text(
                 t,
                 left + xs / 2.0 - ui.text_width(t) / 2.0,

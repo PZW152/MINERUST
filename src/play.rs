@@ -28,6 +28,101 @@ pub enum Tile {
     Dispenser { slots: [Option<Stack>; 9] },
     /// `TileEntityMobSpawner` (`MobSpawnerBaseLogic.mobID`)
     Spawner { mob: String },
+    /// `TileEntityBrewingStand`: three bottles and the ingredient.
+    Brewing {
+        slots: [Option<Stack>; 4],
+        brew_time: i32,
+        /// `filledSlots` (the block's metadata)
+        filled: i32,
+        /// `ingredientID`
+        ingredient: u16,
+    },
+}
+
+/// `Item.isPotionIngredient` (`getPotionEffect` is set), with nether wart.
+pub fn is_potion_ingredient(s: &Stack) -> bool {
+    s.id == 372 || crate::potion::ingredient_effect(s.id, s.meta).is_some()
+}
+
+/// `TileEntityBrewingStand.func_145936_c` (getPotionResult)
+fn potion_result(meta: i32, ing: Option<Stack>) -> i32 {
+    match ing {
+        None => meta,
+        Some(i) if is_potion_ingredient(&i) => {
+            let e = if i.id == 372 {
+                "+4"
+            } else {
+                crate::potion::ingredient_effect(i.id, i.meta).unwrap()
+            };
+            crate::potion::apply_ingredient(meta, e)
+        }
+        _ => meta,
+    }
+}
+
+/// `ItemPotion.getEffects(meta)` compared the way the brewing code does:
+/// the cached lists are the same object only for the same metadata.
+fn brew_changes(j: i32, k: i32) -> bool {
+    let a = crate::potion::effects_of(j, false);
+    let b = crate::potion::effects_of(k, false);
+    let (la, lb) = (
+        if a.is_empty() { None } else { Some(&a) },
+        if b.is_empty() { None } else { Some(&b) },
+    );
+    let differ = j != k && (la.is_some() || lb.is_some());
+    (j <= 0 || differ) && (la.is_none() || (la != lb && lb.is_some()))
+}
+
+/// `TileEntityBrewingStand.canBrew`
+fn can_brew(slots: &[Option<Stack>; 4]) -> bool {
+    let Some(ing) = slots[3] else { return false };
+    if ing.count == 0 || !is_potion_ingredient(&ing) {
+        return false;
+    }
+    for s in slots[..3].iter().flatten() {
+        if s.id == 373 {
+            let j = s.meta;
+            let k = potion_result(j, Some(ing));
+            if !crate::item_use::is_splash(j) && crate::item_use::is_splash(k) {
+                return true;
+            }
+            if brew_changes(j, k) && j != k {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// `TileEntityBrewingStand.brewPotions`
+fn brew_potions(slots: &mut [Option<Stack>; 4]) {
+    if !can_brew(slots) {
+        return;
+    }
+    let ing = slots[3];
+    for s in slots[..3].iter_mut().flatten() {
+        if s.id == 373 {
+            let j = s.meta;
+            let k = potion_result(j, ing);
+            if brew_changes(j, k) {
+                if j != k {
+                    s.meta = k;
+                }
+            } else if !crate::item_use::is_splash(j) && crate::item_use::is_splash(k) {
+                s.meta = k;
+            }
+        }
+    }
+    let ing = slots[3].unwrap();
+    // Item.hasContainerItem: none of the ingredients has one
+    slots[3] = if ing.count > 1 {
+        Some(Stack {
+            count: ing.count - 1,
+            ..ing
+        })
+    } else {
+        None
+    };
 }
 
 /// The window the player has open.
@@ -37,6 +132,7 @@ pub enum Open {
     Inventory,
     Workbench(Pos),
     Furnace(Pos),
+    Brewing(Pos),
     /// One or two chest halves; the first is the top half of the window.
     Chest(Vec<Pos>),
 }
@@ -335,6 +431,12 @@ impl Play {
                 }
                 _ => (Vec::new(), None),
             },
+            Open::Brewing(p) => match self.tiles.get(p) {
+                Some(Tile::Brewing {
+                    slots, brew_time, ..
+                }) => (slots.to_vec(), Some((*brew_time, -1))),
+                _ => (Vec::new(), None),
+            },
             Open::Chest(ps) => {
                 let mut v = Vec::new();
                 for p in ps {
@@ -488,6 +590,7 @@ impl Play {
                 Tile::Furnace { slots, .. } => slots.to_vec(),
                 Tile::Chest { slots } => slots.to_vec(),
                 Tile::Dispenser { slots } => slots.to_vec(),
+                Tile::Brewing { slots, .. } => slots.to_vec(),
                 Tile::Spawner { .. } => Vec::new(),
             };
             for s in slots.into_iter().flatten() {
@@ -602,6 +705,17 @@ impl Play {
                     self.inv_dirty = true;
                     return;
                 }
+                block::BREWING_STAND => {
+                    self.tiles.entry(target).or_insert(Tile::Brewing {
+                        slots: [None; 4],
+                        brew_time: 0,
+                        filled: 0,
+                        ingredient: 0,
+                    });
+                    self.open = Open::Brewing(target);
+                    self.inv_dirty = true;
+                    return;
+                }
                 block::LEVER => {
                     w.toggle_lever(target[0], target[1], target[2]);
                     return;
@@ -694,6 +808,9 @@ impl Play {
         let id = match held.id {
             331 => block::REDSTONE_WIRE,
             356 => block::UNPOWERED_REPEATER,
+            // ItemReed for the brewing stand and the cauldron
+            379 => block::BREWING_STAND,
+            380 => block::CAULDRON,
             _ => match held.block() {
                 Some(id) => id,
                 None => return,
@@ -1052,6 +1169,8 @@ impl Play {
         let mut rnd = std::mem::replace(&mut w.rand, JavaRandom::new(0));
         if let Some(t) = tile {
             self.click_tile(t, right, shift);
+        } else if let (Slot::Main(i), true, Open::Brewing(_)) = (slot, shift, &self.open) {
+            self.shift_into_brewing(i);
         } else if let (Slot::Main(i), true, Open::Chest(_) | Open::Furnace(_)) =
             (slot, shift, &self.open)
         {
@@ -1068,6 +1187,10 @@ impl Play {
         match &self.open {
             Open::Furnace(p) => match self.tiles.get_mut(p) {
                 Some(Tile::Furnace { slots, .. }) => slots.iter_mut().collect(),
+                _ => Vec::new(),
+            },
+            Open::Brewing(p) => match self.tiles.get_mut(p) {
+                Some(Tile::Brewing { slots, .. }) => slots.iter_mut().collect(),
                 _ => Vec::new(),
             },
             Open::Chest(ps) => {
@@ -1092,7 +1215,68 @@ impl Play {
 
     fn click_tile(&mut self, t: usize, right: bool, shift: bool) {
         let furnace = matches!(self.open, Open::Furnace(_));
+        let brewing = matches!(self.open, Open::Brewing(_));
         let mut cursor = self.inv.cursor;
+        if brewing && !shift {
+            // ContainerBrewingStand$Potion (bottles, one per slot) and
+            // $Ingredient: Slot.isItemValid
+            let valid = |s: &Stack| {
+                if t < 3 {
+                    s.id == 373 || s.id == 374
+                } else {
+                    is_potion_ingredient(s)
+                }
+            };
+            let limit = if t < 3 { 1 } else { 64 };
+            let mut slots = self.tile_slots_mut();
+            let Some(slot) = slots.get_mut(t) else { return };
+            match (cursor, **slot) {
+                (Some(c), None) if valid(&c) => {
+                    let n = if right { 1 } else { c.count.min(limit) };
+                    **slot = Some(Stack { count: n, ..c });
+                    cursor = if c.count > n {
+                        Some(Stack {
+                            count: c.count - n,
+                            ..c
+                        })
+                    } else {
+                        None
+                    };
+                }
+                (Some(c), Some(st)) if valid(&c) => {
+                    if c.same_item(&st) && c.meta == st.meta && c.ench == st.ench {
+                        let room = limit.min(max_stack(st.id)).saturating_sub(st.count);
+                        let n = if right {
+                            1.min(room).min(c.count)
+                        } else {
+                            room.min(c.count)
+                        };
+                        **slot = Some(Stack {
+                            count: st.count + n,
+                            ..st
+                        });
+                        cursor = if c.count > n {
+                            Some(Stack {
+                                count: c.count - n,
+                                ..c
+                            })
+                        } else {
+                            None
+                        };
+                    } else if c.count <= limit {
+                        **slot = Some(c);
+                        cursor = Some(st);
+                    }
+                }
+                (Some(_), _) => {}
+                (None, _) => {
+                    click_slot(slot, &mut cursor, right, true, false);
+                }
+            }
+            drop(slots);
+            self.inv.cursor = cursor;
+            return;
+        }
         if shift {
             let s = {
                 let mut slots = self.tile_slots_mut();
@@ -1123,6 +1307,64 @@ impl Play {
             click_slot(slot, &mut cursor, right, true, take_only);
         }
         self.inv.cursor = cursor;
+    }
+
+    /// `ContainerBrewingStand.transferStackInSlot` from the inventory.
+    fn shift_into_brewing(&mut self, i: usize) {
+        let Some(s) = self.inv.main[i] else { return };
+        let ing_empty = { self.tile_slots_mut()[3].is_none() };
+        if ing_empty && is_potion_ingredient(&s) {
+            self.inv.main[i] = None;
+            *self.tile_slots_mut()[3] = Some(s);
+        } else if s.id == 373 || s.id == 374 {
+            // mergeItemStack(0, 3): bottles go one per empty slot
+            let mut left = s.count;
+            {
+                let mut slots = self.tile_slots_mut();
+                for k in 0..3 {
+                    if left > 0 && slots[k].is_none() {
+                        *slots[k] = Some(Stack { count: 1, ..s });
+                        left -= 1;
+                    }
+                }
+            }
+            self.inv.main[i] = if left > 0 {
+                Some(Stack { count: left, ..s })
+            } else {
+                None
+            };
+        } else {
+            // between the main inventory (9..36) and the hotbar (0..9)
+            self.inv.main[i] = None;
+            let range: Vec<usize> = if i >= 9 {
+                (0..9).collect()
+            } else {
+                (9..36).collect()
+            };
+            let mut left = s;
+            for k in range.clone() {
+                if let Some(t) = &mut self.inv.main[k] {
+                    if t.same_item(&left) && t.meta == left.meta && t.ench == left.ench {
+                        let n = (max_stack(t.id) - t.count).min(left.count);
+                        t.count += n;
+                        left.count -= n;
+                    }
+                }
+            }
+            if left.count > 0 {
+                for k in range {
+                    if self.inv.main[k].is_none() {
+                        self.inv.main[k] = Some(left);
+                        left.count = 0;
+                        break;
+                    }
+                }
+            }
+            if left.count > 0 {
+                self.inv.main[i] = Some(left);
+            }
+        }
+        self.inv_dirty = true;
     }
 
     /// Shift-click from the player inventory into the open container.
@@ -1238,8 +1480,47 @@ impl Play {
 
     /// Items, furnaces and pickup for one tick.
     pub fn tick(&mut self, w: &mut ServerWorld) {
-        // TileEntityFurnace.updateEntity
+        // TileEntityBrewingStand.updateEntity
         let keys: Vec<Pos> = self.tiles.keys().copied().collect();
+        for p in &keys {
+            if !w.chunk_exists(p[0] >> 4, p[2] >> 4) {
+                continue;
+            }
+            if let Some(Tile::Brewing {
+                slots,
+                brew_time,
+                filled,
+                ingredient,
+            }) = self.tiles.get_mut(p)
+            {
+                if *brew_time > 0 {
+                    *brew_time -= 1;
+                    if *brew_time == 0 {
+                        brew_potions(slots);
+                    } else if !can_brew(slots) || Some(*ingredient) != slots[3].map(|s| s.id) {
+                        *brew_time = 0;
+                    }
+                } else if can_brew(slots) {
+                    *brew_time = 400;
+                    *ingredient = slots[3].unwrap().id;
+                }
+                // getFilledSlots: a bit per potion bottle
+                let mut i = 0;
+                for (k, s) in slots[..3].iter().enumerate() {
+                    if s.is_some_and(|s| s.id == 373) {
+                        i |= 1 << k;
+                    }
+                }
+                if i != *filled {
+                    *filled = i;
+                    w.set_meta(p[0], p[1], p[2], i, 2);
+                }
+                if self.open == Open::Brewing(*p) {
+                    self.inv_dirty = true;
+                }
+            }
+        }
+        // TileEntityFurnace.updateEntity
         for p in keys {
             if !w.chunk_exists(p[0] >> 4, p[2] >> 4) {
                 continue;
@@ -1453,6 +1734,16 @@ impl Play {
                             ],
                         )
                     }
+                    Tile::Brewing {
+                        slots, brew_time, ..
+                    } => (
+                        // TileEntity.addMapping(TileEntityBrewingStand, "Cauldron")
+                        "Cauldron",
+                        vec![
+                            ("Items", items(slots)),
+                            ("BrewTime", Nbt::Short(*brew_time as i16)),
+                        ],
+                    ),
                     Tile::Spawner { mob } => (
                         "MobSpawner",
                         vec![
@@ -1512,6 +1803,15 @@ impl Play {
                     burn: t.int("BurnTime").unwrap_or(0) as i32,
                     item_burn: t.int("BurnTime").unwrap_or(0) as i32,
                     cook: t.int("CookTime").unwrap_or(0) as i32,
+                }
+            }
+            "Cauldron" => {
+                let v = fill(4);
+                Tile::Brewing {
+                    slots: [v[0], v[1], v[2], v[3]],
+                    brew_time: t.int("BrewTime").unwrap_or(0) as i32,
+                    filled: 0,
+                    ingredient: v[3].map_or(0, |s| s.id),
                 }
             }
             "MobSpawner" => Tile::Spawner {
@@ -1705,6 +2005,22 @@ impl Play {
                 Tile::Chest { slots } => format!("C,{},{},{},{}", p[0], p[1], p[2], enc(slots)),
                 Tile::Dispenser { slots } => format!("D,{},{},{},{}", p[0], p[1], p[2], enc(slots)),
                 Tile::Spawner { mob } => format!("S,{},{},{},{}", p[0], p[1], p[2], mob),
+                Tile::Brewing {
+                    slots,
+                    brew_time,
+                    ingredient,
+                    ..
+                } => {
+                    format!(
+                        "B,{},{},{},{},{},{}",
+                        p[0],
+                        p[1],
+                        p[2],
+                        brew_time,
+                        ingredient,
+                        enc(slots)
+                    )
+                }
             })
             .collect()
     }
@@ -1741,6 +2057,19 @@ impl Play {
                         burn: f[4].parse().ok()?,
                         item_burn: f[5].parse().ok()?,
                         cook: f[6].parse().ok()?,
+                    },
+                );
+            }
+            "B" => {
+                let f: Vec<&str> = line.splitn(7, ',').collect();
+                let v = dec(f.get(6)?, 4)?;
+                self.tiles.insert(
+                    pos(f[1], f[2], f[3])?,
+                    Tile::Brewing {
+                        slots: [v[0], v[1], v[2], v[3]],
+                        brew_time: f[4].parse().ok()?,
+                        filled: 0,
+                        ingredient: f[5].parse().ok()?,
                     },
                 );
             }

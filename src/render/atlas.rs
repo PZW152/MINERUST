@@ -366,6 +366,9 @@ impl Atlas {
             Ok(b.add(p, 16))
         };
         let grass_side_snowed = extra(jar, "grass_side_snowed")?;
+        // BlockBrewingStand.iconBrewingStandBase
+        let t = extra(jar, "brewing_stand_base")?;
+        names.insert("brewing_stand_base", t);
         let sunflower_front = extra(jar, "double_plant_sunflower_front")?;
         let sunflower_back = extra(jar, "double_plant_sunflower_back")?;
         let mut destroy = [0u16; 10];
@@ -498,6 +501,7 @@ impl Atlas {
             ("gui/container/generic_54.png", 768, 0),
             ("gui/options_background.png", 768, 256),
             ("entity/steve.png", 768, 512),
+            ("gui/container/brewing_stand.png", 256, 512),
         ] {
             blit(
                 &read_png(jar, &format!("assets/minecraft/textures/{path}"))?,
