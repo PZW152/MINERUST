@@ -24,7 +24,22 @@ pub struct SlotHit {
 }
 
 /// Window size and slot layout (`Container` slot coordinates).
+/// One active effect as `InventoryEffectRenderer` draws it: status icon
+/// index, the name line and the duration line.
+pub type EffectLine = (i32, String, String);
+
 pub fn layout(view: &InvView, w: f32, h: f32) -> (f32, f32, f32, f32, Vec<SlotHit>) {
+    layout_with(view, w, h, false)
+}
+
+/// `GuiContainer.initGui`; `InventoryEffectRenderer` moves the player's
+/// inventory right when effects are active.
+pub fn layout_with(
+    view: &InvView,
+    w: f32,
+    h: f32,
+    effects: bool,
+) -> (f32, f32, f32, f32, Vec<SlotHit>) {
     let rows = match &view.open {
         Open::Chest(ps) => ps.len() * 3,
         _ => 0,
@@ -33,7 +48,10 @@ pub fn layout(view: &InvView, w: f32, h: f32) -> (f32, f32, f32, f32, Vec<SlotHi
         Open::Chest(_) => (176.0, 114.0 + rows as f32 * 18.0),
         _ => (176.0, 166.0),
     };
-    let (left, top) = (((w - xs) / 2.0).floor(), ((h - ys) / 2.0).floor());
+    let (mut left, top) = (((w - xs) / 2.0).floor(), ((h - ys) / 2.0).floor());
+    if effects && matches!(view.open, Open::Inventory | Open::None) {
+        left = 160.0 + ((w - xs - 200.0) / 2.0).trunc();
+    }
     let mut v = Vec::new();
     let main = |v: &mut Vec<SlotHit>, y0: f32| {
         for i in 0..3 {
@@ -194,9 +212,40 @@ pub fn draw_stack(ui: &mut Ui, s: &Stack, x: f32, y: f32) {
 }
 
 /// Draws the open container window; returns the hovered slot.
-pub fn container(ui: &mut Ui, view: &InvView, mouse: (f32, f32)) -> Option<SlotHit> {
+pub fn container(
+    ui: &mut Ui,
+    view: &InvView,
+    mouse: (f32, f32),
+    effects: &[EffectLine],
+) -> Option<SlotHit> {
     dim_background(ui);
-    let (left, top, xs, ys, slots) = layout(view, ui.w, ui.h);
+    let (left, top, xs, ys, slots) = layout_with(view, ui.w, ui.h, !effects.is_empty());
+    if !effects.is_empty() && matches!(view.open, Open::Inventory | Open::None) {
+        // InventoryEffectRenderer.drawActivePotionEffects
+        let x = left - 124.0;
+        let mut y = top;
+        let step = if effects.len() > 5 {
+            (132 / (effects.len() as i32 - 1)) as f32
+        } else {
+            33.0
+        };
+        for (icon, name, dur) in effects {
+            ui.sheet(x, y, INVENTORY.0, INVENTORY.1 + 166.0, 140.0, 32.0);
+            if *icon >= 0 {
+                ui.sheet(
+                    x + 6.0,
+                    y + 7.0,
+                    INVENTORY.0 + (icon % 8 * 18) as f32,
+                    INVENTORY.1 + 198.0 + (icon / 8 * 18) as f32,
+                    18.0,
+                    18.0,
+                );
+            }
+            ui.text(name, x + 10.0 + 18.0, y + 6.0, 16777215, true);
+            ui.text(dur, x + 10.0 + 18.0, y + 6.0 + 10.0, 8355711, true);
+            y += step;
+        }
+    }
     match &view.open {
         Open::Inventory | Open::None => ui.sheet(left, top, INVENTORY.0, INVENTORY.1, xs, ys),
         Open::Workbench(_) => ui.sheet(left, top, WORKBENCH.0, WORKBENCH.1, xs, ys),

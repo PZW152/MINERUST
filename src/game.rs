@@ -563,6 +563,38 @@ impl Game {
         )
     }
 
+    /// The lines of `InventoryEffectRenderer`: name with its level and
+    /// `Potion.getDurationString`.
+    fn effect_lines(&self) -> Vec<screens::EffectLine> {
+        self.stats
+            .effects
+            .iter()
+            .map(|e| {
+                let p = e.potion();
+                let mut name = self.lang.get(p.name).to_string();
+                match e.amplifier {
+                    1 => name = format!("{} {}", name, self.lang.get("enchantment.level.2")),
+                    2 => name = format!("{} {}", name, self.lang.get("enchantment.level.3")),
+                    3 => name = format!("{} {}", name, self.lang.get("enchantment.level.4")),
+                    _ => {}
+                }
+                let dur = if e.duration_max {
+                    "**:**".to_string()
+                } else {
+                    // StringUtils.ticksToElapsedTime
+                    let i = e.duration / 20;
+                    let (j, i) = (i / 60, i % 60);
+                    if i < 10 {
+                        format!("{j}:0{i}")
+                    } else {
+                        format!("{j}:{i}")
+                    }
+                };
+                (p.icon, name, dur)
+            })
+            .collect()
+    }
+
     /// `EntityPlayer.updateItemUse`: drinking sounds, eating crumbs.
     fn update_item_use(&mut self, st: crate::item::Stack, n: i32) {
         use crate::item_use::{action, Action};
@@ -1824,7 +1856,8 @@ impl Game {
 
     fn open_window_hit(&self) -> (bool, Option<screens::SlotHit>) {
         let (w, h) = self.gui_size();
-        let (left, top, xs, ys, slots) = screens::layout(&self.view, w, h);
+        let (left, top, xs, ys, slots) =
+            screens::layout_with(&self.view, w, h, !self.stats.effects.is_empty());
         let (mx, my) = self.gui_mouse();
         let inside = mx >= left && my >= top && mx < left + xs && my < top + ys;
         let hit = slots.into_iter().find(|s| {
@@ -2900,7 +2933,8 @@ impl Game {
         );
         match self.screen {
             Screen::Window => {
-                screens::container(&mut ui, &self.view, m);
+                let lines = self.effect_lines();
+                screens::container(&mut ui, &self.view, m, &lines);
             }
             Screen::Paused => {
                 screens::pause_menu(&mut ui, m);

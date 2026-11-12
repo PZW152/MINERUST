@@ -2103,6 +2103,23 @@ impl Sim {
             }
         }
         DONE.store(true, std::sync::atomic::Ordering::Relaxed);
+        // CommandEffect: id, seconds (30), amplifier (0)
+        if let Ok(list) = std::env::var("MINERUST_EFFECT") {
+            for e in list.split(',') {
+                let v: Vec<i32> = e.split(':').filter_map(|t| t.parse().ok()).collect();
+                if let Some(&id) = v.first() {
+                    if crate::potion::potion(id).is_some() {
+                        let secs = v.get(1).copied().unwrap_or(30);
+                        let amp = v.get(2).copied().unwrap_or(0);
+                        self.splayer.living.add_effect(crate::potion::Effect::new(
+                            id,
+                            secs * 20,
+                            amp,
+                        ));
+                    }
+                }
+            }
+        }
         // CommandSetBlock: x y z id [meta]
         if let Ok(list) = std::env::var("MINERUST_SETBLOCK") {
             for cmd in list.split(';') {

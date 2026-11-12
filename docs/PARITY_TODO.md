@@ -53,6 +53,9 @@
 
 ## F. 渲染
 
+- [ ] 物品欄裡的玩家模型（`GuiInventory.func_147046_a`）
+- [ ] 物品名稱與說明一律由 `en_US.lang` 取得（藥水前綴與後綴、附魔書等）
+
 - [x] `RenderBlocks.renderStandardBlock`（含兩種平滑光照與六個 `renderFace*`）逐行移植；方塊、原木、石英柱、活塞底座與活塞頭已改走這條路
 - [ ] 其餘 `RenderBlocks` 渲染型態（樓梯、柵欄、門、液體、植物、紅石線……）改成逐行移植
 - [ ] 粒子系統（`EffectRenderer` 與所有 `EntityFX`）逐類移植

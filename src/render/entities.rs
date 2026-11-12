@@ -403,20 +403,26 @@ pub fn item_entity(
             }
         }
         None => {
-            let Some(t) = sprite_rect(atlas, s) else {
-                return;
-            };
-            let tint = s.block().map_or([1.0; 3], |b| tint_for(b, s.meta, 0));
-            // Fancy graphics: 3D sprites that spin like blocks.
-            for i in 0..copies {
-                let mut m = mul(&translate(pos[0], pos[1] + bob, pos[2]), &rot_y(spin));
-                m = mul(&m, &scale(0.5, 0.5, 0.5));
-                if i > 0 {
-                    let off = 0.0625 * 1.5 * i as f32 * 0.5;
-                    m = mul(&m, &translate(0.0, 0.0, off));
+            let passes: Vec<([f32; 4], [f32; 3])> = if s.block().is_some() {
+                match sprite_rect(atlas, s) {
+                    Some(t) => vec![(t, s.block().map_or([1.0; 3], |b| tint_for(b, s.meta, 0)))],
+                    None => return,
                 }
-                m = mul(&m, &translate(-0.5, -0.25, 0.0));
-                extruded(out, t, &m, l, tint, 0.0625);
+            } else {
+                atlas.item_passes(s.id, s.meta)
+            };
+            // Fancy graphics: 3D sprites that spin like blocks.
+            for (t, tint) in passes {
+                for i in 0..copies {
+                    let mut m = mul(&translate(pos[0], pos[1] + bob, pos[2]), &rot_y(spin));
+                    m = mul(&m, &scale(0.5, 0.5, 0.5));
+                    if i > 0 {
+                        let off = 0.0625 * 1.5 * i as f32 * 0.5;
+                        m = mul(&m, &translate(0.0, 0.0, off));
+                    }
+                    m = mul(&m, &translate(-0.5, -0.25, 0.0));
+                    extruded(out, t, &m, l, tint, 0.0625);
+                }
             }
             let _ = view_yaw;
         }
@@ -649,16 +655,24 @@ pub fn hand(
                     block_cube(out, atlas, b, s.meta, &mm, l, h);
                 }
                 None => {
-                    let Some(t) = sprite_rect(atlas, &s) else {
-                        return;
+                    let passes: Vec<([f32; 4], [f32; 3])> = if s.block().is_some() || s.id == 261 {
+                        match sprite_rect(atlas, &s) {
+                            Some(t) => {
+                                vec![(t, s.block().map_or([1.0; 3], |b| tint_for(b, s.meta, 0)))]
+                            }
+                            None => return,
+                        }
+                    } else {
+                        atlas.item_passes(s.id, s.meta)
                     };
-                    let tint = s.block().map_or([1.0; 3], |b| tint_for(b, s.meta, 0));
-                    let mut mm = mul(&m, &translate(0.0, -0.3, 0.0));
-                    mm = mul(&mm, &scale(1.5, 1.5, 1.5));
-                    mm = mul(&mm, &rot_y(50.0));
-                    mm = mul(&mm, &rot_z(335.0));
-                    mm = mul(&mm, &translate(-0.9375, -0.0625, 0.0));
-                    extruded(out, t, &mm, l, tint, 0.0625);
+                    for (t, tint) in passes {
+                        let mut mm = mul(&m, &translate(0.0, -0.3, 0.0));
+                        mm = mul(&mm, &scale(1.5, 1.5, 1.5));
+                        mm = mul(&mm, &rot_y(50.0));
+                        mm = mul(&mm, &rot_z(335.0));
+                        mm = mul(&mm, &translate(-0.9375, -0.0625, 0.0));
+                        extruded(out, t, &mm, l, tint, 0.0625);
+                    }
                 }
             }
         }

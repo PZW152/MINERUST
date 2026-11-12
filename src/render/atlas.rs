@@ -30,6 +30,9 @@ pub struct Atlas {
     /// (`RenderEndPortal`).
     pub end_sky: u16,
     pub end_portal: u16,
+    /// `ItemPotion` icons: the liquid overlay and the splash bottle.
+    pub potion_overlay: u16,
+    pub potion_splash: u16,
     pub moon: [u16; 8],
     /// `colormap/grass.png` as 256x256 RGB.
     pub grass_map: Vec<u32>,
@@ -377,6 +380,17 @@ impl Atlas {
                 items.insert((id, meta), b.add(crop(&img, 0, 0, 16), 16));
             }
         }
+        let potion_overlay = {
+            let img = read_png(jar, "assets/minecraft/textures/items/potion_overlay.png")?;
+            b.add(crop(&img, 0, 0, 16), 16)
+        };
+        let potion_splash = {
+            let img = read_png(
+                jar,
+                "assets/minecraft/textures/items/potion_bottle_splash.png",
+            )?;
+            b.add(crop(&img, 0, 0, 16), 16)
+        };
         let skin = {
             let img = read_png(jar, "assets/minecraft/textures/entity/steve.png")?;
             let mut px = vec![0u8; 64 * 64 * 4];
@@ -533,6 +547,8 @@ impl Atlas {
             sun,
             end_sky,
             end_portal,
+            potion_overlay,
+            potion_splash,
             moon,
             grass_map: color_map(jar, "assets/minecraft/textures/colormap/grass.png")?,
             foliage_map: color_map(jar, "assets/minecraft/textures/colormap/foliage.png")?,
@@ -545,6 +561,49 @@ impl Atlas {
             rect: self.rects[t as usize],
             size: cell as f32,
         })
+    }
+
+    /// `Item.requiresMultipleRenderPasses` items: each pass's icon
+    /// (`getIconFromDamageForRenderPass`) with its colour
+    /// (`getColorFromItemStack`). Single-pass items give one entry.
+    pub fn item_passes(&self, id: u16, meta: i32) -> Vec<([f32; 4], [f32; 3])> {
+        let rgb = |c: i32| {
+            [
+                (c >> 16 & 255) as f32 / 255.0,
+                (c >> 8 & 255) as f32 / 255.0,
+                (c & 255) as f32 / 255.0,
+            ]
+        };
+        if id == 373 {
+            // ItemPotion: pass 0 the liquid in its colour, pass 1 the bottle
+            let bottle = if crate::item_use::is_splash(meta) {
+                self.rects[self.potion_splash as usize]
+            } else {
+                self.items
+                    .get(&(373, 0))
+                    .map_or([0.0; 4], |&t| self.rects[t as usize])
+            };
+            return vec![
+                (
+                    self.rects[self.potion_overlay as usize],
+                    rgb(crate::potion::liquid_color(meta)),
+                ),
+                (bottle, [1.0; 3]),
+            ];
+        }
+        let m = if crate::item::tool(id).is_some() {
+            0
+        } else {
+            meta
+        };
+        match self
+            .items
+            .get(&(id, m))
+            .or_else(|| self.items.get(&(id, 0)))
+        {
+            Some(&t) => vec![(self.rects[t as usize], [1.0; 3])],
+            None => Vec::new(),
+        }
     }
 
     /// A block texture by name.

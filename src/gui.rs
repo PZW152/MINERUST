@@ -138,17 +138,18 @@ impl<'a> Ui<'a> {
                 return;
             }
         }
-        let meta = if crate::item::tool(s.id).is_some() {
-            0
-        } else {
-            s.meta
-        };
-        if let Some(&t) = self.atlas.items.get(&(s.id, meta)) {
-            let t = self.atlas.rects[t as usize];
+        // RenderItem.renderItemIntoGUI: one quad per render pass
+        for (t, c) in self.atlas.item_passes(s.id, s.meta) {
+            let col = [
+                (c[0] * 255.0) as u8,
+                (c[1] * 255.0) as u8,
+                (c[2] * 255.0) as u8,
+                255,
+            ];
             self.quad(
                 [[x, y], [x, y + 16.0], [x + 16.0, y + 16.0], [x + 16.0, y]],
                 [[t[0], t[1]], [t[0], t[3]], [t[2], t[3]], [t[2], t[1]]],
-                [255; 4],
+                col,
                 BLOCKS,
             );
         }

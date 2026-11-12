@@ -549,6 +549,11 @@ fn parse_args() -> Options {
                 std::env::set_var("MINERUST_GIVE", &args[i + 1]);
                 i += 1;
             }
+            "--effect" if i + 1 < args.len() => {
+                // CommandEffect: "id:seconds:amplifier", several separated by ','
+                std::env::set_var("MINERUST_EFFECT", &args[i + 1]);
+                i += 1;
+            }
             "--open" if i + 1 < args.len() => {
                 std::env::set_var("MINERUST_OPEN", &args[i + 1]);
                 i += 1;
