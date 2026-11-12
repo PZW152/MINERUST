@@ -119,7 +119,22 @@ fn block_cube(
     light: [u8; 4],
     height: f32,
 ) {
+    block_cube_tinted(out, atlas, id, meta, m, light, height, 1.0);
+}
+
+#[allow(clippy::too_many_arguments)]
+fn block_cube_tinted(
+    out: &mut Vec<Vertex>,
+    atlas: &Atlas,
+    id: u8,
+    meta: i32,
+    m: &Mat4,
+    light: [u8; 4],
+    height: f32,
+    brightness: f32,
+) {
     for (face, corners, uvs, shade) in FACES {
+        let shade = shade * brightness;
         let Some(t) = atlas.tile(id, meta as u8, face) else {
             continue;
         };
@@ -347,6 +362,20 @@ pub fn block_model(
     light: [u8; 4],
 ) {
     block_cube(out, atlas, id, meta as i32, m, light, 1.0);
+}
+
+/// `RenderBlocks.renderBlockAsItem(block, meta, brightness)`: a unit block
+/// with its colour scaled by `brightness`.
+pub fn block_model_lit(
+    out: &mut Vec<Vertex>,
+    atlas: &Atlas,
+    id: u8,
+    meta: u8,
+    m: &Mat4,
+    light: [u8; 4],
+    brightness: f32,
+) {
+    block_cube_tinted(out, atlas, id, meta as i32, m, light, 1.0, brightness);
 }
 
 /// `RenderTNTPrimed.doRender`: the block swells in its last ten ticks and

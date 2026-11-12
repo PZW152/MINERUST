@@ -43,10 +43,11 @@ pub fn layout_with(
 ) -> (f32, f32, f32, f32, Vec<SlotHit>) {
     let rows = match &view.open {
         Open::Chest(ps) => ps.len() * 3,
+        Open::Cart(_) => 3,
         _ => 0,
     };
     let (xs, ys) = match &view.open {
-        Open::Chest(_) => (176.0, 114.0 + rows as f32 * 18.0),
+        Open::Chest(_) | Open::Cart(_) => (176.0, 114.0 + rows as f32 * 18.0),
         _ => (176.0, 166.0),
     };
     let (mut left, top) = (((w - xs) / 2.0).floor(), ((h - ys) / 2.0).floor());
@@ -142,7 +143,7 @@ pub fn layout_with(
             }
             main(&mut v, 84.0);
         }
-        Open::Chest(_) => {
+        Open::Chest(_) | Open::Cart(_) => {
             for i in 0..rows {
                 for j in 0..9 {
                     v.push(SlotHit {
@@ -320,7 +321,7 @@ pub fn container(
                 }
             }
         }
-        Open::Chest(_) => {
+        Open::Chest(_) | Open::Cart(_) => {
             let rows = view.tile_slots.len() / 9;
             ui.sheet(left, top, CHEST.0, CHEST.1, xs, rows as f32 * 18.0 + 17.0);
             ui.sheet(
@@ -361,6 +362,11 @@ pub fn container(
                 fg,
                 false,
             );
+            ui.text("Inventory", left + 8.0, top + ys - 96.0 + 2.0, fg, false);
+        }
+        Open::Cart(_) => {
+            // container.minecart
+            ui.text("Minecart", left + 8.0, top + 6.0, fg, false);
             ui.text("Inventory", left + 8.0, top + ys - 96.0 + 2.0, fg, false);
         }
         Open::Chest(ps) => {

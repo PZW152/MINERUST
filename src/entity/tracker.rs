@@ -108,6 +108,9 @@ pub enum Packet {
     /// `S0EPacketSpawnObject`: `floor(pos * 32)`, angles, and the velocity
     /// sent right after (`sendVelocityUpdates`).
     Spawn {
+        /// `S0EPacketSpawnObject` type (1 boat, 10 minecart) and data
+        object: i32,
+        data: i32,
         pos: [i32; 3],
         yaw: i32,
         pitch: i32,
@@ -148,11 +151,21 @@ pub struct Tracker {
     checked: Option<[f64; 3]>,
     /// Whether the player sees it.
     pub watching: bool,
+    /// The spawn packet's type and data.
+    object: i32,
+    data: i32,
 }
 
 impl Tracker {
     /// `EntityTracker.addEntityToTracker(entity, range, frequency, velocity)`
-    pub fn new(e: &Ent, range: i32, freq: i32, send_velocity: bool) -> Tracker {
+    pub fn new(
+        e: &Ent,
+        range: i32,
+        freq: i32,
+        send_velocity: bool,
+        object: i32,
+        data: i32,
+    ) -> Tracker {
         Tracker {
             range,
             freq,
@@ -171,6 +184,8 @@ impl Tracker {
             riding: false,
             checked: None,
             watching: false,
+            object,
+            data,
         }
     }
 
@@ -186,6 +201,8 @@ impl Tracker {
                 self.watching = true;
                 // S0EPacketSpawnObject, then S12 (sendVelocityUpdates)
                 return Some(Packet::Spawn {
+                    object: self.object,
+                    data: self.data,
                     pos: [
                         math::floor_double(e.pos[0] * 32.0),
                         math::floor_double(e.pos[1] * 32.0),

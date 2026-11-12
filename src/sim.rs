@@ -174,9 +174,10 @@ pub enum Event {
     Throwables(Vec<([f64; 3], [f64; 3], u16, i32)>),
     /// `EntityTrackerEntry` packets about vehicles: id and packet.
     Vehicles(Vec<(u32, crate::entity::tracker::Packet)>),
-    /// `S1CPacketEntityMetadata` of boats: id, time since hit, forward
-    /// direction, damage taken.
-    VehicleMeta(Vec<(u32, i32, i32, f32)>),
+    /// `S1CPacketEntityMetadata` of vehicles.
+    VehicleMeta(Vec<(u32, crate::entity::vehicle::VMeta)>),
+    /// `S19PacketEntityStatus` of vehicles (10: a TNT minecart ignites).
+    VehicleStatus(Vec<(u32, i32)>),
     /// `S1BPacketEntityAttach` for the player: the vehicle, or none.
     Mount(Option<u32>),
     /// `playAuxSFX(2001)` of blocks the world broke: position, block, meta.
@@ -213,7 +214,7 @@ struct Parked {
     tiles: std::collections::BTreeMap<[i32; 3], crate::play::Tile>,
     items: Vec<crate::entity::item::ItemEntity>,
     falling: Vec<crate::entity::falling::FallingBlock>,
-    boats: Vec<crate::entity::boat::Tracked>,
+    vehicles: Vec<crate::entity::vehicle::Tracked>,
     teleport_rand: JavaRandom,
 }
 
@@ -312,6 +313,8 @@ pub struct Sim {
     teleport_to: Option<[f64; 3]>,
     /// Events from commands, sent with the tick's.
     vehicle_events: Vec<Event>,
+    /// Sounds from vehicles outside their tick.
+    vehicle_sounds: Vec<(&'static str, [f64; 3], f32, f32)>,
     /// `ridingEntity` of the player: a boat's id.
     riding: Option<u32>,
     /// The last `C0CPacketInput`.
@@ -517,6 +520,7 @@ impl Sim {
             using_changed: false,
             teleport_to: None,
             vehicle_events: Vec::new(),
+            vehicle_sounds: Vec::new(),
             riding: None,
             ride: RideInput::default(),
             track_check: None,
@@ -681,7 +685,7 @@ impl Sim {
                 tiles: std::mem::replace(&mut sim.play.tiles, next.tiles),
                 items: std::mem::replace(&mut sim.play.items, next.items),
                 falling: std::mem::replace(&mut sim.play.falling, next.falling),
-                boats: std::mem::replace(&mut sim.play.boats, next.boats),
+                vehicles: std::mem::replace(&mut sim.play.vehicles, next.vehicles),
                 teleport_rand: std::mem::replace(&mut sim.teleport_rand, next.teleport_rand),
             };
             sim.world.total_time = old.world.total_time;
@@ -864,6 +868,10 @@ impl Sim {
                 face,
                 sneaking,
             } => {
+                // ItemMinecart.onItemUse (rails have no onBlockActivated)
+                if self.place_cart(target) {
+                    return;
+                }
                 let mut play = std::mem::replace(&mut self.play, Play::new(GameMode::Survival));
                 let used = play.use_block(&mut self.world, target, face, sneaking);
                 self.play = play;
@@ -953,17 +961,13 @@ impl Sim {
                 damage,
                 knockback,
                 ..
-            } if id & crate::entity::boat::VEHICLE_ID != 0 => {
+            } if id & crate::entity::vehicle::VEHICLE_ID != 0 => {
                 // attackTargetEntityWithCurrentItem: addExhaustion(0.3)
                 self.splayer.food.add_exhaustion(0.3);
-                let mut ev = Vec::new();
-                self.attack_vehicle(id, damage, knockback, &mut ev);
-                self.vehicle_events.extend(ev);
+                self.attack_vehicle(id, damage, knockback);
             }
-            Command::Interact { id } if id & crate::entity::boat::VEHICLE_ID != 0 => {
-                let mut ev = Vec::new();
-                self.interact_vehicle(id, &mut ev);
-                self.vehicle_events.extend(ev);
+            Command::Interact { id } if id & crate::entity::vehicle::VEHICLE_ID != 0 => {
+                self.interact_vehicle(id);
             }
             Command::Input {
                 strafe,
@@ -1166,6 +1170,7 @@ impl Sim {
                         max: [f[0] + 0.3, f[1] + 1.8, f[2] + 0.3],
                     },
                     living: true,
+                    minecart: false,
                 });
             }
             for m in &self.mobs.list {
@@ -1176,6 +1181,7 @@ impl Sim {
                             max: m.bb.max,
                         },
                         living: true,
+                        minecart: false,
                     });
                 }
             }
@@ -1187,6 +1193,7 @@ impl Sim {
                         max: b.max,
                     },
                     living: false,
+                    minecart: false,
                 });
             }
             for a in &self.mobs.arrows {
@@ -1196,6 +1203,7 @@ impl Sim {
                         max: a.e.bb.max,
                     },
                     living: false,
+                    minecart: false,
                 });
             }
             for t in &self.mobs.tnt {
@@ -1205,6 +1213,18 @@ impl Sim {
                         max: [t.pos[0] + 0.49, t.pos[1] + 0.49, t.pos[2] + 0.49],
                     },
                     living: false,
+                    minecart: false,
+                });
+            }
+            for b in &play.vehicles {
+                let e = b.v.e();
+                occ.push(Occupant {
+                    bb: Aabb6 {
+                        min: e.bb.min,
+                        max: e.bb.max,
+                    },
+                    living: false,
+                    minecart: matches!(b.v, crate::entity::vehicle::Vehicle::Cart(_)),
                 });
             }
             self.world.occupants = occ;
@@ -1268,7 +1288,7 @@ impl Sim {
         }
         self.world.rand = rnd;
         self.tick_mobs(&mut play, events);
-        self.tick_boats(&mut play, events);
+        self.tick_vehicles(&mut play, events);
         // World.updateEntities: tile entities after the entities.
         self.world.tick_moving();
         self.apply_pushes(&mut play, events);
@@ -1471,7 +1491,7 @@ impl Sim {
             .collect();
         entities.extend(play.items_nbt(cx, cz, dim));
         entities.extend(play.falling_nbt(cx, cz, dim));
-        entities.extend(play.boats_nbt(cx, cz, dim));
+        entities.extend(play.vehicles_nbt(cx, cz, dim));
         (tiles, entities)
     }
 
@@ -1689,9 +1709,7 @@ impl Sim {
                     self.play.item_from_nbt(e, &mut rnd);
                 } else if e.string("id") == Some("FallingSand") {
                     self.play.falling_from_nbt(e);
-                } else if e.string("id") == Some("Boat") {
-                    self.play.boat_from_nbt(e);
-                } else {
+                } else if !self.play.vehicle_from_nbt(e) {
                     let _ = self.mobs.from_nbt(e);
                 }
             }
@@ -2118,7 +2136,7 @@ impl Sim {
             tiles,
             items: drops.items,
             falling: drops.falling,
-            boats: drops.boats,
+            vehicles: drops.vehicles,
             teleport_rand: JavaRandom::new(seed),
         }
     }
@@ -2140,7 +2158,7 @@ impl Sim {
             tiles: std::mem::replace(&mut self.play.tiles, next.tiles),
             items: std::mem::replace(&mut self.play.items, next.items),
             falling: std::mem::replace(&mut self.play.falling, next.falling),
-            boats: std::mem::replace(&mut self.play.boats, next.boats),
+            vehicles: std::mem::replace(&mut self.play.vehicles, next.vehicles),
             teleport_rand: std::mem::replace(&mut self.teleport_rand, next.teleport_rand),
         };
         // Unloaded chunks of the old dimension go to disk now.
@@ -2288,6 +2306,47 @@ impl Sim {
             let mut parts = item.split(':');
             let name = parts.next().unwrap_or("");
             let off = (i as f64 - (n - 1.0) / 2.0) * 2.2;
+            if let Some(kind) = crate::entity::minecart::CartKind::from_entity_id(name) {
+                // on the rail under the summoning spot
+                let dist = 3.0;
+                let x = feet[0] + fwd[0] * dist + side[0] * off;
+                let z = feet[2] + fwd[1] * dist + side[1] * off;
+                let (bx, bz) = (x.floor() as i32, z.floor() as i32);
+                let mut y = feet[1].floor() as i32 + 3;
+                while y > 1
+                    && !crate::entity::minecart::is_rail(self.world.block(bx, y, bz))
+                    && !self.world.material(bx, y - 1, bz).blocks_movement()
+                {
+                    y -= 1;
+                }
+                let id = self.alloc_vehicle_id();
+                let seed = self.mobs.rand.next_long();
+                let mut c = crate::entity::minecart::Minecart::new(id, kind, seed);
+                c.e.set_location_and_angles(
+                    bx as f64 + 0.5,
+                    y as f64,
+                    bz as f64 + 0.5,
+                    yaw + 90.0,
+                    0.0,
+                );
+                let parts: Vec<&str> = parts.collect();
+                if parts.contains(&"lit") {
+                    c.fuel = 3600;
+                    c.push = [
+                        -(yaw.to_radians().sin() as f64),
+                        yaw.to_radians().cos() as f64,
+                    ];
+                }
+                self.play
+                    .vehicles
+                    .push(crate::entity::vehicle::Tracked::new(
+                        crate::entity::vehicle::Vehicle::Cart(c),
+                    ));
+                if parts.contains(&"ride") {
+                    self.interact_vehicle(id);
+                }
+                continue;
+            }
             if name == "Boat" {
                 // CommandSummon: EntityList.createEntityByName + setLocationAndAngles
                 let dist = 4.0;
@@ -2306,11 +2365,13 @@ impl Sim {
                 let mut b = crate::entity::boat::Boat::new(id, seed);
                 b.e.set_location_and_angles(x, y as f64, z, yaw + 90.0, 0.0);
                 self.world.solid_entities.push((id, b.bounding_box()));
-                self.play.boats.push(crate::entity::boat::Tracked::new(b));
+                self.play
+                    .vehicles
+                    .push(crate::entity::vehicle::Tracked::new(
+                        crate::entity::vehicle::Vehicle::Boat(b),
+                    ));
                 if parts.any(|p| p == "ride") {
-                    let mut ev = Vec::new();
-                    self.interact_vehicle(id, &mut ev);
-                    self.vehicle_events.extend(ev);
+                    self.interact_vehicle(id);
                 }
                 continue;
             }
@@ -2389,7 +2450,7 @@ impl Sim {
             )?;
             save::write_atomic(
                 &data.join("drops.dat"),
-                &Play::drops_nbt(&p.items, &p.falling, &p.boats, p.dim),
+                &Play::drops_nbt(&p.items, &p.falling, &p.vehicles, p.dim),
             )?;
             if p.dim != 0 {
                 let mut tmp = Play::new(GameMode::Survival);
@@ -2478,7 +2539,7 @@ impl Sim {
                 &Play::drops_nbt(
                     &self.play.items,
                     &self.play.falling,
-                    &self.play.boats,
+                    &self.play.vehicles,
                     self.dim,
                 ),
             )?;
@@ -3750,6 +3811,160 @@ mod tests {
         assert_eq!(e[0].id, crate::potion::MOVE_SPEED);
     }
 
+    /// ItemMinecart.onItemUse puts a cart on a rail; moveOnRail keeps it on
+    /// the line, a detector rail powers under it, a rider's forward push
+    /// starts it from rest, and a broken chest minecart drops the cart, the
+    /// chest and its contents.
+    #[test]
+    fn minecarts_on_rails() {
+        use crate::entity::vehicle::Vehicle;
+        let (mut sim, x, y, z) = redstone_sim();
+        let rx = x + 3;
+        for dz in 0..14 {
+            let id = if dz == 5 {
+                block::DETECTOR_RAIL
+            } else {
+                block::RAIL
+            };
+            sim.world.set_block(rx, y, z + dz, id, 0, 3);
+        }
+        let feet = [rx as f64 + 0.5, y as f64, z as f64 - 1.5];
+        for _ in 0..2 {
+            sim.step(
+                &[Command::Player(feet, [0.0, 30.0], false)],
+                &mut Vec::new(),
+            );
+        }
+        let sel = sim.play.inv.selected;
+        sim.play.inv.main[sel] = Some(crate::item::Stack::new(328, 0, 1));
+        sim.step(
+            &[Command::Use {
+                target: [rx, y, z + 1],
+                face: [0, 1, 0],
+                sneaking: false,
+            }],
+            &mut Vec::new(),
+        );
+        assert_eq!(sim.play.vehicles.len(), 1, "placed");
+        let id = sim.play.vehicles[0].v.id();
+        sim.play.vehicles[0].v.e_mut().motion = [0.0, 0.0, 0.3];
+        let mut powered = false;
+        for _ in 0..40 {
+            sim.step(
+                &[Command::Player(feet, [0.0, 30.0], false)],
+                &mut Vec::new(),
+            );
+            if sim.world.meta(rx, y, z + 5) & 8 != 0 {
+                powered = true;
+            }
+            let p = sim.play.vehicles[0].v.e().pos;
+            assert!(
+                (p[0] - (rx as f64 + 0.5)).abs() < 1.0e-9,
+                "on the line: {:?}",
+                p
+            );
+        }
+        assert!(powered, "the detector rail saw it");
+        let p = sim.play.vehicles[0].v.e().pos;
+        assert!(p[2] > z as f64 + 5.0, "rolled: {:?}", p);
+        // the cart stopped against the end; ride it back with forward
+        for _ in 0..80 {
+            sim.step(
+                &[Command::Player(feet, [0.0, 30.0], false)],
+                &mut Vec::new(),
+            );
+        }
+        let feet2 = [p[0], y as f64, p[2] - 1.5];
+        sim.step(
+            &[Command::Player(feet2, [180.0, 0.0], false)],
+            &mut Vec::new(),
+        );
+        sim.step(&[Command::Interact { id }], &mut Vec::new());
+        assert_eq!(sim.riding, Some(id));
+        let before = sim.play.vehicles[0].v.e().pos;
+        for _ in 0..20 {
+            sim.step(
+                &[
+                    Command::Player(feet2, [180.0, 0.0], false),
+                    Command::Input {
+                        strafe: 0.0,
+                        forward: 1.0,
+                        jump: false,
+                        sneak: false,
+                    },
+                ],
+                &mut Vec::new(),
+            );
+        }
+        let after = sim.play.vehicles[0].v.e().pos;
+        assert!(
+            after[2] < before[2] - 0.5,
+            "pushed north: {:?} -> {:?}",
+            before,
+            after
+        );
+        sim.step(
+            &[Command::Input {
+                strafe: 0.0,
+                forward: 0.0,
+                jump: false,
+                sneak: true,
+            }],
+            &mut Vec::new(),
+        );
+        assert_eq!(sim.riding, None);
+        // a chest minecart with a stack in it, broken in survival
+        sim.play.mode = GameMode::Survival;
+        sim.play.inv.main[sel] = Some(crate::item::Stack::new(342, 0, 1));
+        let feet3 = [rx as f64 + 0.5, y as f64, z as f64 - 1.5];
+        sim.step(
+            &[Command::Player(feet3, [0.0, 30.0], false)],
+            &mut Vec::new(),
+        );
+        sim.step(
+            &[Command::Use {
+                target: [rx, y, z + 1],
+                face: [0, 1, 0],
+                sneaking: false,
+            }],
+            &mut Vec::new(),
+        );
+        let chest = sim
+            .play
+            .vehicles
+            .iter_mut()
+            .find(|b| matches!(&b.v, Vehicle::Cart(c) if c.kind == crate::entity::minecart::CartKind::Chest))
+            .expect("chest minecart");
+        let cid = chest.v.id();
+        if let Vehicle::Cart(c) = &mut chest.v {
+            c.slots[0] = Some(crate::item::Stack::new(block::STONE as u16, 0, 40));
+        }
+        sim.play.items.clear();
+        for _ in 0..5 {
+            sim.step(
+                &[Command::Attack {
+                    id: cid,
+                    damage: 1.0,
+                    crit: false,
+                    knockback: 0,
+                }],
+                &mut Vec::new(),
+            );
+        }
+        assert!(!sim.play.vehicles.iter().any(|b| b.v.id() == cid), "broken");
+        let n = |id: u16| -> u32 {
+            sim.play
+                .items
+                .iter()
+                .filter(|i| i.stack.id == id)
+                .map(|i| i.stack.count as u32)
+                .sum()
+        };
+        assert_eq!(n(328), 1);
+        assert_eq!(n(block::CHEST as u16), 1);
+        assert_eq!(n(block::STONE as u16), 40);
+    }
+
     /// EntityBoat.onUpdate: running into a wall faster than 0.2 breaks the
     /// boat into three planks and two sticks; the rider is let go.
     #[test]
@@ -3771,7 +3986,7 @@ mod tests {
         }
         sim.play.inv.main[sim.play.inv.selected] = Some(crate::item::Stack::new(333, 0, 1));
         sim.step(&[Command::UseAir], &mut Vec::new());
-        let id = sim.play.boats[0].b.id;
+        let id = sim.play.vehicles[0].v.id();
         sim.step(&[Command::Interact { id }], &mut Vec::new());
         assert_eq!(sim.riding, Some(id));
         for _ in 0..80 {
@@ -3788,7 +4003,7 @@ mod tests {
                 &mut Vec::new(),
             );
         }
-        assert!(sim.play.boats.is_empty(), "wrecked");
+        assert!(sim.play.vehicles.is_empty(), "wrecked");
         assert_eq!(sim.riding, None);
         let n = |id: u16| -> u32 {
             sim.play
@@ -3824,11 +4039,11 @@ mod tests {
         sim.play.inv.selected = 0;
         sim.play.inv.main[0] = Some(crate::item::Stack::new(333, 0, 1));
         sim.step(&[Command::UseAir], &mut ev);
-        assert_eq!(sim.play.boats.len(), 1, "placed on the water");
-        let b0 = sim.play.boats[0].b.e.pos;
+        assert_eq!(sim.play.vehicles.len(), 1, "placed on the water");
+        let b0 = sim.play.vehicles[0].v.e().pos;
         assert_eq!(b0[0], x as f64 + 6.5);
         assert!(b0[2] > feet[2] + 1.0);
-        let id = sim.play.boats[0].b.id;
+        let id = sim.play.vehicles[0].v.id();
         // it settles in the water
         for _ in 0..40 {
             sim.step(&[Command::Player(feet, [0.0, 45.0], false)], &mut ev);
@@ -3839,7 +4054,7 @@ mod tests {
         assert!(ev
             .iter()
             .any(|e| matches!(e, Event::Mount(Some(i)) if *i == id)));
-        let start = sim.play.boats[0].b.e.pos;
+        let start = sim.play.vehicles[0].v.e().pos;
         // paddle south
         for _ in 0..25 {
             sim.step(
@@ -3855,7 +4070,7 @@ mod tests {
                 &mut Vec::new(),
             );
         }
-        let now = sim.play.boats[0].b.e.pos;
+        let now = sim.play.vehicles[0].v.e().pos;
         assert!(
             now[2] > start[2] + 1.0,
             "moved south: {:?} -> {:?}",
@@ -3863,7 +4078,7 @@ mod tests {
             now
         );
         // the rider sits on the boat (updateRiderPosition)
-        let r = sim.play.boats[0].b.rider_position(-0.5f32 as f64);
+        let r = sim.play.vehicles[0].v.rider_position(-0.5f32 as f64);
         assert!((sim.play.player.0[2] - r[2]).abs() < 1.0);
         // sneak: off
         let mut ev = Vec::new();
@@ -3892,7 +4107,7 @@ mod tests {
                 &mut Vec::new(),
             );
         }
-        assert!(sim.play.boats.is_empty(), "broken");
+        assert!(sim.play.vehicles.is_empty(), "broken");
         assert!(sim.play.items.iter().any(|i| i.stack.id == 333));
     }
 

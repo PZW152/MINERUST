@@ -232,7 +232,7 @@ pub struct Game {
     /// Throwables: position, previous position, item, damage.
     throwables: Vec<([f64; 3], [f64; 3], u16, i32)>,
     /// `EntityBoat`s in the client's world.
-    boats: Vec<vehicles::ClientBoat>,
+    boats: Vec<vehicles::ClientVehicle>,
     /// The player's `ridingEntity`.
     riding: Option<u32>,
     /// `GuiIngame.recordPlaying`, `recordPlayingUpFor`, `recordIsPlaying`.
@@ -855,6 +855,7 @@ impl Game {
                 Event::Throwables(v) => self.throwables = v,
                 Event::Vehicles(v) => self.vehicle_packets(v),
                 Event::VehicleMeta(v) => self.vehicle_meta(v),
+                Event::VehicleStatus(v) => self.vehicle_status(v),
                 Event::Mount(v) => self.mounted(v),
                 Event::Destroyed(v) => self.destroyed_fx(v),
                 Event::Teleport(p) => {
@@ -1805,7 +1806,7 @@ impl Game {
                 dmg += base + mat;
             }
         }
-        let vehicle = id & crate::entity::boat::VEHICLE_ID != 0;
+        let vehicle = id & crate::entity::vehicle::VEHICLE_ID != 0;
         let crit = self.stats.fall_distance > 0.0
             && !self.player.on_ground
             && !self.player.in_water
@@ -1815,10 +1816,11 @@ impl Game {
             // the client's own attackTargetEntityWithCurrentItem knocks its boat
             let r = std::f32::consts::PI;
             let yaw = self.player.yaw;
-            if let Some(c) = self.boats.iter_mut().find(|c| c.b.id == id) {
-                c.b.e.motion[0] += (-math::sin(yaw * r / 180.0) * 0.5) as f64;
-                c.b.e.motion[1] += 0.1;
-                c.b.e.motion[2] += (math::cos(yaw * r / 180.0) * 0.5) as f64;
+            if let Some(c) = self.boats.iter_mut().find(|c| c.v.id() == id) {
+                let e = c.v.e_mut();
+                e.motion[0] += (-math::sin(yaw * r / 180.0) * 0.5) as f64;
+                e.motion[1] += 0.1;
+                e.motion[2] += (math::cos(yaw * r / 180.0) * 0.5) as f64;
             }
         }
         let knockback = if self.player.sprinting { 1 } else { 0 };
@@ -2290,7 +2292,7 @@ impl Game {
             }
             for c in &self.boats {
                 // canBeCollidedWith: !isDead; getCollisionBorderSize 0.1
-                let b = &c.b.e.bb;
+                let b = &c.v.e().bb;
                 let bb = crate::entity::player::Aabb {
                     min: [b.min[0] - 0.1, b.min[1] - 0.1, b.min[2] - 0.1],
                     max: [b.max[0] + 0.1, b.max[1] + 0.1, b.max[2] + 0.1],
@@ -2300,7 +2302,7 @@ impl Game {
                         && block_d.map_or(true, |d| t < d)
                         && self.target_mob.map_or(true, |x| t < x.1)
                     {
-                        self.target_mob = Some((c.b.id, t));
+                        self.target_mob = Some((c.v.id(), t));
                     }
                 }
             }

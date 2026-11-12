@@ -135,6 +135,8 @@ pub enum Open {
     Brewing(Pos),
     /// One or two chest halves; the first is the top half of the window.
     Chest(Vec<Pos>),
+    /// An `EntityMinecartChest` (`displayGUIChest`).
+    Cart(u32),
 }
 
 /// What the client needs to draw the inventory and an open window.
@@ -166,8 +168,8 @@ pub struct Play {
     pub items: Vec<ItemEntity>,
     /// `EntityFallingBlock`s
     pub falling: Vec<crate::entity::falling::FallingBlock>,
-    /// `EntityBoat`s with their trackers.
-    pub boats: Vec<crate::entity::boat::Tracked>,
+    /// Boats and minecarts with their trackers.
+    pub vehicles: Vec<crate::entity::vehicle::Tracked>,
     pub next_item: u32,
     /// Sounds and particles of the item entities this tick.
     pub fx: Vec<crate::entity::base::Fx>,
@@ -406,7 +408,7 @@ impl Play {
             mode,
             items: Vec::new(),
             falling: Vec::new(),
-            boats: Vec::new(),
+            vehicles: Vec::new(),
             next_item: 1,
             pitch: 0.0,
             fx: Vec::new(),
@@ -449,6 +451,13 @@ impl Play {
                 }
                 (v, None)
             }
+            Open::Cart(id) => match self.vehicles.iter().find(|b| b.v.id() == *id) {
+                Some(crate::entity::vehicle::Tracked {
+                    v: crate::entity::vehicle::Vehicle::Cart(c),
+                    ..
+                }) => (c.slots.clone(), None),
+                _ => (Vec::new(), None),
+            },
             _ => (Vec::new(), None),
         };
         InvView {
@@ -517,6 +526,19 @@ impl Play {
                     r,
                 );
                 self.spawn(it);
+            }
+            GenEntity::MinecartChest { pos, slots } => {
+                use crate::entity::minecart::{CartKind, Minecart};
+                let id = crate::entity::vehicle::VEHICLE_ID | self.next_item;
+                self.next_item += 1;
+                let seed = self.prand.next_long();
+                let mut c = Minecart::at(id, CartKind::Chest, pos[0], pos[1], pos[2], seed);
+                for (d, s) in c.slots.iter_mut().zip(slots) {
+                    *d = s;
+                }
+                self.vehicles.push(crate::entity::vehicle::Tracked::new(
+                    crate::entity::vehicle::Vehicle::Cart(c),
+                ));
             }
             other => self.pending.push(other),
         }
@@ -1186,7 +1208,7 @@ impl Play {
             self.click_tile(t, right, shift);
         } else if let (Slot::Main(i), true, Open::Brewing(_)) = (slot, shift, &self.open) {
             self.shift_into_brewing(i);
-        } else if let (Slot::Main(i), true, Open::Chest(_) | Open::Furnace(_)) =
+        } else if let (Slot::Main(i), true, Open::Chest(_) | Open::Furnace(_) | Open::Cart(_)) =
             (slot, shift, &self.open)
         {
             self.shift_into_tile(i);
@@ -1223,6 +1245,16 @@ impl Play {
                     out.extend(unsafe { (*ptr).iter_mut() });
                 }
                 out
+            }
+            Open::Cart(id) => {
+                let id = *id;
+                match self.vehicles.iter_mut().find(|b| b.v.id() == id) {
+                    Some(crate::entity::vehicle::Tracked {
+                        v: crate::entity::vehicle::Vehicle::Cart(c),
+                        ..
+                    }) => c.slots.iter_mut().collect(),
+                    _ => Vec::new(),
+                }
             }
             _ => Vec::new(),
         }
@@ -1862,7 +1894,7 @@ impl Play {
     pub fn drops_nbt(
         items: &[ItemEntity],
         falling: &[crate::entity::falling::FallingBlock],
-        boats: &[crate::entity::boat::Tracked],
+        vehicles: &[crate::entity::vehicle::Tracked],
         dim: i32,
     ) -> Vec<u8> {
         use crate::world::anvil::{compound, Nbt};
@@ -1887,7 +1919,7 @@ impl Play {
             list.extend(tmp.items_nbt(cx, cz, dim));
             list.extend(tmp.falling_nbt(cx, cz, dim));
         }
-        list.extend(boats.iter().map(|b| b.to_nbt(dim)));
+        list.extend(vehicles.iter().map(|b| b.to_nbt(dim)));
         crate::world::anvil::write_nbt(&compound(vec![("Entities", Nbt::List(10, list))]))
     }
 
@@ -1900,30 +1932,38 @@ impl Play {
             match e.string("id") {
                 Some("Item") => self.item_from_nbt(e, r),
                 Some("FallingSand") => self.falling_from_nbt(e),
-                Some("Boat") => self.boat_from_nbt(e),
+                Some(_) => {
+                    self.vehicle_from_nbt(e);
+                }
                 _ => {}
             }
         }
     }
 
-    /// The boats of a chunk.
-    pub fn boats_nbt(&self, cx: i32, cz: i32, dim: i32) -> Vec<crate::world::anvil::Nbt> {
-        self.boats
+    /// The boats and minecarts of a chunk.
+    pub fn vehicles_nbt(&self, cx: i32, cz: i32, dim: i32) -> Vec<crate::world::anvil::Nbt> {
+        self.vehicles
             .iter()
             .filter(|b| {
-                (b.b.e.pos[0].floor() as i32) >> 4 == cx && (b.b.e.pos[2].floor() as i32) >> 4 == cz
+                let p = b.v.e().pos;
+                (p[0].floor() as i32) >> 4 == cx && (p[2].floor() as i32) >> 4 == cz
             })
             .map(|b| b.to_nbt(dim))
             .collect()
     }
 
-    /// An `EntityBoat` from a save.
-    pub fn boat_from_nbt(&mut self, t: &crate::world::anvil::Nbt) {
-        let id = crate::entity::boat::VEHICLE_ID | self.next_item;
-        self.next_item += 1;
+    /// An `EntityBoat` or `EntityMinecart` from a save; false for other ids.
+    pub fn vehicle_from_nbt(&mut self, t: &crate::world::anvil::Nbt) -> bool {
+        let id = crate::entity::vehicle::VEHICLE_ID | self.next_item;
         let seed = self.prand.next_long();
-        self.boats
-            .push(crate::entity::boat::Tracked::from_nbt(t, id, seed));
+        match crate::entity::vehicle::Tracked::from_nbt(t, id, seed) {
+            Some(v) => {
+                self.next_item += 1;
+                self.vehicles.push(v);
+                true
+            }
+            None => false,
+        }
     }
 
     /// `EntityFallingBlock.writeEntityToNBT` for the falling blocks of a chunk.

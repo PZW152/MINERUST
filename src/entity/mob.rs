@@ -406,6 +406,8 @@ pub struct Mob {
     bat_target: Option<[i32; 3]>,
     /// Tamed by the player, and sitting (wolves and ocelots).
     pub tamed: bool,
+    /// `ridingEntity`: the minecart it sits in.
+    pub riding: Option<u32>,
     pub sitting: bool,
     /// Iron golem arm swing timer; built by the player.
     pub attack_timer: i32,
@@ -640,6 +642,7 @@ impl Mob {
             hanging: kind == Kind::Bat,
             bat_target: None,
             tamed: false,
+            riding: None,
             sitting: false,
             attack_timer: 0,
             player_made: false,
@@ -1470,6 +1473,11 @@ impl Mob {
         }
     }
 
+    /// `moveStrafing`, `moveForward` (for the minecart it rides)
+    pub fn move_input(&self) -> (f32, f32) {
+        (self.move_strafe, self.move_forward)
+    }
+
     pub fn eye(&self) -> [f64; 3] {
         [
             self.pos[0],
@@ -1535,6 +1543,9 @@ pub struct Mobs {
     pub splashes: Vec<([f64; 3], i32)>,
     pub tnt: Vec<Tnt>,
     pub fireballs: Vec<Fireball>,
+    /// Explosions of other entities (`EntityMinecartTNT.explodeCart`), done
+    /// in the next tick.
+    pub queued_explosions: Vec<([f64; 3], f32)>,
     next_id: u32,
     pub rand: JavaRandom,
 }
@@ -1548,6 +1559,7 @@ impl Default for Mobs {
             splashes: Vec::new(),
             tnt: Vec::new(),
             fireballs: Vec::new(),
+            queued_explosions: Vec::new(),
             next_id: 1,
             rand: JavaRandom::new(0x6D6F62),
         }
@@ -1612,6 +1624,12 @@ fn tnt_move(t: &mut Tnt, w: &ServerWorld) {
 
 impl Mobs {
     /// `new EntityTNTPrimed(world, x, y, z, placer)` at the block centre.
+    /// `World.createExplosion(entity, x, y, z, size, true)` for an entity
+    /// that is not a mob.
+    pub fn queue_explosion(&mut self, pos: [f64; 3], size: f32, _rails_survive: bool) {
+        self.queued_explosions.push((pos, size));
+    }
+
     pub fn prime_tnt(&mut self, pos: [f64; 3], fuse: i32) {
         let f = (self.rand.next_double() * std::f64::consts::PI * 2.0) as f32;
         let motion = [
@@ -1930,6 +1948,9 @@ impl Mobs {
             } else {
                 k += 1;
             }
+        }
+        for (c, size) in std::mem::take(&mut self.queued_explosions) {
+            explosions.push((c, size, false, false));
         }
         for (c, size, fire, living) in explosions {
             explode(

@@ -48,6 +48,8 @@ impl Aabb6 {
 pub struct Occupant {
     pub bb: Aabb6,
     pub living: bool,
+    /// An `EntityMinecart` (detector rails)
+    pub minecart: bool,
 }
 
 pub fn can_provide_power(id: u8) -> bool {
@@ -774,6 +776,11 @@ impl ServerWorld {
                     self.plate_update(id, x, y, z, 15);
                 }
             }
+            DETECTOR_RAIL => {
+                if self.meta(x, y, z) & 8 != 0 {
+                    self.detector_update(x, y, z);
+                }
+            }
             LIT_REDSTONE_LAMP => {
                 if !self.indirectly_powered(x, y, z) {
                     self.set_block(x, y, z, REDSTONE_LAMP, 0, 2);
@@ -1016,6 +1023,36 @@ impl ServerWorld {
         }
     }
 
+    /// `BlockRailDetector.func_150054_a`: powered while a minecart is on it.
+    pub fn detector_update(&mut self, x: i32, y: i32, z: i32) {
+        let m = self.meta(x, y, z);
+        let was = m & 8 != 0;
+        let f = 0.125f32 as f64;
+        let sensitive = Aabb6 {
+            min: [x as f64 + f, y as f64, z as f64 + f],
+            max: [(x + 1) as f64 - f, (y + 1) as f64 - f, (z + 1) as f64 - f],
+        };
+        let is = self
+            .occupants
+            .iter()
+            .any(|o| o.minecart && o.bb.intersects(&sensitive));
+        if is && !was {
+            self.set_meta(x, y, z, m | 8, 3);
+            self.notify_neighbours(x, y, z, DETECTOR_RAIL);
+            self.notify_neighbours(x, y - 1, z, DETECTOR_RAIL);
+        }
+        if !is && was {
+            self.set_meta(x, y, z, m & 7, 3);
+            self.notify_neighbours(x, y, z, DETECTOR_RAIL);
+            self.notify_neighbours(x, y - 1, z, DETECTOR_RAIL);
+        }
+        if is {
+            self.schedule_update(x, y, z, DETECTOR_RAIL, 20);
+        }
+        // func_147453_f
+        self.update_neighbors_about_output(x, y, z, DETECTOR_RAIL);
+    }
+
     // ------------------------------------------------------------ lamps, TNT, notes
 
     fn lamp_check(&mut self, id: u8, x: i32, y: i32, z: i32) {
@@ -1139,6 +1176,12 @@ impl ServerWorld {
                 TRIPWIRE => {
                     if self.meta(x, y, z) & 1 == 0 {
                         self.tripwire_check(x, y, z);
+                    }
+                }
+                // BlockRailDetector.onEntityCollidedWithBlock
+                DETECTOR_RAIL => {
+                    if self.meta(x, y, z) & 8 == 0 {
+                        self.detector_update(x, y, z);
                     }
                 }
                 _ => {}

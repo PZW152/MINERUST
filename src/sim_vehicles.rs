@@ -1,12 +1,15 @@
-//! The server side of boats: `ItemBoat.onItemRightClick`, the entity ticks
-//! in `World.updateEntities` order (the boat, then its rider's
-//! `updateRidden`), `interactFirst` / `mountEntity` / `dismountEntity`,
-//! hits, and what `EntityTrackerEntry` tells the client.
+//! The server side of boats and minecarts: `ItemBoat.onItemRightClick`,
+//! `ItemMinecart.onItemUse`, the entity ticks in `World.updateEntities`
+//! order (the vehicle, then its rider's `updateRidden`), `interactFirst`,
+//! `mountEntity` / `dismountEntity`, hits, `applyEntityCollision`, and what
+//! `EntityTrackerEntry` tells the client.
 
 use super::*;
-use crate::entity::boat::{Boat, Out, Rider, Tracked, VEHICLE_ID};
+use crate::entity::boat::{Boat, Out, Rider};
+use crate::entity::minecart::{self, CartKind, CartOut, Minecart};
 use crate::entity::player::Aabb;
 use crate::entity::tracker::Packet;
+use crate::entity::vehicle::{Tracked, Vehicle, VEHICLE_ID};
 use crate::util::math;
 
 /// `EntityPlayer.getYOffset()` on the server, where `yOffset` is 0.
@@ -86,7 +89,7 @@ impl Sim {
         let mut hits = crate::entity::player::colliding_boxes(&self.world, &probe);
         // getCollisionBox: every other entity's box
         hits.extend(
-            self.entity_boxes(None)
+            self.entity_boxes_in(&self.play, None, false)
                 .into_iter()
                 .filter(|b| b.intersects(&probe)),
         );
@@ -94,7 +97,38 @@ impl Sim {
             return true;
         }
         self.world.solid_entities.push((id, boat.bounding_box()));
-        self.play.boats.push(Tracked::new(boat));
+        self.play.vehicles.push(Tracked::new(Vehicle::Boat(boat)));
+        if self.play.mode != GameMode::Creative {
+            self.play.inv.consume_held();
+            self.play.inv_dirty = true;
+        }
+        true
+    }
+
+    /// `ItemMinecart.onItemUse` on a rail. Returns whether it was used.
+    pub(super) fn place_cart(&mut self, target: [i32; 3]) -> bool {
+        let Some(held) = self.play.inv.held() else {
+            return false;
+        };
+        let Some(kind) = CartKind::from_item(held.id) else {
+            return false;
+        };
+        let [x, y, z] = target;
+        if !minecart::is_rail(self.world.block(x, y, z)) {
+            return false;
+        }
+        let id = self.alloc_vehicle_id();
+        let seed = self.mobs.rand.next_long();
+        let c = Minecart::at(
+            id,
+            kind,
+            (x as f32 + 0.5) as f64,
+            (y as f32 + 0.5) as f64,
+            (z as f32 + 0.5) as f64,
+            seed,
+        );
+        self.play.vehicles.push(Tracked::new(Vehicle::Cart(c)));
+        // ItemInWorldManager: a creative player's stack is put back
         if self.play.mode != GameMode::Creative {
             self.play.inv.consume_held();
             self.play.inv_dirty = true;
@@ -116,9 +150,9 @@ impl Sim {
                 v.push((m.bb, 0.1f32 as f64));
             }
         }
-        for b in &self.play.boats {
-            if !b.b.e.dead {
-                v.push((b.b.e.bb, 0.1f32 as f64));
+        for b in &self.play.vehicles {
+            if !b.v.dead() {
+                v.push((b.v.e().bb, 0.1f32 as f64));
             }
         }
         for f in &self.play.falling {
@@ -137,12 +171,9 @@ impl Sim {
         v
     }
 
-    /// The boxes of every entity but `except` (for `getCollisionBox`).
-    fn entity_boxes(&self, except: Option<u32>) -> Vec<Aabb> {
-        self.entity_boxes_in(&self.play, except)
-    }
-
-    fn entity_boxes_in(&self, play: &Play, except: Option<u32>) -> Vec<Aabb> {
+    /// The boxes `getCollisionBox` gives a moving vehicle: every other
+    /// entity's (boats), or the `canBePushed` ones' (minecarts).
+    fn entity_boxes_in(&self, play: &Play, except: Option<u32>, pushable_only: bool) -> Vec<Aabb> {
         let mut v = Vec::new();
         if !self.respawn_pending && !self.splayer.dead {
             v.push(Self::player_box(play.player.0));
@@ -152,28 +183,30 @@ impl Sim {
                 v.push(m.bb);
             }
         }
-        for a in &self.mobs.arrows {
-            v.push(a.e.bb);
+        if !pushable_only {
+            for a in &self.mobs.arrows {
+                v.push(a.e.bb);
+            }
+            for t in &self.mobs.throwables {
+                v.push(t.e.bb);
+            }
+            for t in &self.mobs.tnt {
+                let p = t.pos;
+                v.push(Aabb {
+                    min: [p[0] - 0.49, p[1] - 0.49, p[2] - 0.49],
+                    max: [p[0] + 0.49, p[1] + 0.49, p[2] + 0.49],
+                });
+            }
+            for it in &play.items {
+                v.push(it.bb());
+            }
+            for f in &play.falling {
+                v.push(f.e.bb);
+            }
         }
-        for t in &self.mobs.throwables {
-            v.push(t.e.bb);
-        }
-        for t in &self.mobs.tnt {
-            let p = t.pos;
-            v.push(Aabb {
-                min: [p[0] - 0.49, p[1] - 0.49, p[2] - 0.49],
-                max: [p[0] + 0.49, p[1] + 0.49, p[2] + 0.49],
-            });
-        }
-        for it in &play.items {
-            v.push(it.bb());
-        }
-        for f in &play.falling {
-            v.push(f.e.bb);
-        }
-        for b in &play.boats {
-            if Some(b.b.id) != except && !b.b.e.dead {
-                v.push(b.b.e.bb);
+        for b in &play.vehicles {
+            if Some(b.v.id()) != except && !b.v.dead() {
+                v.push(b.v.e().bb);
             }
         }
         v
@@ -191,21 +224,21 @@ impl Sim {
         play.items.push(it);
     }
 
-    /// `EntityPlayerMP.mountEntity(boat)`: `S1BPacketEntityAttach` and
+    /// `EntityPlayerMP.mountEntity(vehicle)`: `S1BPacketEntityAttach` and
     /// `setPlayerLocation`.
-    fn mount(&mut self, id: u32, events: &mut Vec<Event>) {
+    fn mount(&mut self, id: u32) {
         if let Some(old) = self.riding.take() {
-            if let Some(b) = self.play.boats.iter_mut().find(|b| b.b.id == old) {
-                b.b.ridden = false;
+            if let Some(b) = self.play.vehicles.iter_mut().find(|b| b.v.id() == old) {
+                b.v.set_ridden(false);
             }
         }
-        let Some(b) = self.play.boats.iter_mut().find(|b| b.b.id == id) else {
+        let Some(b) = self.play.vehicles.iter_mut().find(|b| b.v.id() == id) else {
             return;
         };
-        b.b.ridden = true;
+        b.v.set_ridden(true);
         self.riding = Some(id);
         self.ride = Default::default();
-        events.push(Event::Mount(Some(id)));
+        self.vehicle_events.push(Event::Mount(Some(id)));
         let feet = self.play.player.0;
         self.teleport_to = Some(feet);
     }
@@ -213,15 +246,15 @@ impl Sim {
     /// `EntityPlayer.mountEntity(null)` on the server:
     /// `EntityLivingBase.dismountEntity`, then the attach packet and
     /// `setPlayerLocation`.
-    fn dismount(&mut self, events: &mut Vec<Event>) {
+    fn dismount(&mut self) {
         let Some(id) = self.riding.take() else {
             return;
         };
-        let Some(i) = self.play.boats.iter().position(|b| b.b.id == id) else {
+        let Some(i) = self.play.vehicles.iter().position(|b| b.v.id() == id) else {
             return;
         };
-        self.play.boats[i].b.ridden = false;
-        let v = &self.play.boats[i].b.e;
+        self.play.vehicles[i].v.set_ridden(false);
+        let v = self.play.vehicles[i].v.e();
         let feet = self.play.player.0;
         let mut to = [v.pos[0], v.bb.min[1] + v.height as f64, v.pos[2]];
         let pb = Self::player_box(feet);
@@ -248,7 +281,7 @@ impl Sim {
             }
         }
         self.place_player(to);
-        events.push(Event::Mount(None));
+        self.vehicle_events.push(Event::Mount(None));
         self.teleport_to = Some(to);
     }
 
@@ -276,213 +309,356 @@ impl Sim {
         }
     }
 
-    /// `EntityBoat.interactFirst`
-    pub(super) fn interact_vehicle(&mut self, id: u32, events: &mut Vec<Event>) {
-        if self.play.boats.iter().any(|b| b.b.id == id && !b.b.e.dead) {
-            self.mount(id, events);
+    /// `interactFirst`
+    pub(super) fn interact_vehicle(&mut self, id: u32) {
+        let Some(i) = self
+            .play
+            .vehicles
+            .iter()
+            .position(|b| b.v.id() == id && !b.v.dead())
+        else {
+            return;
+        };
+        let feet = self.play.player.0;
+        let creative = self.play.mode == GameMode::Creative;
+        let held = self.play.inv.held();
+        match &mut self.play.vehicles[i].v {
+            Vehicle::Boat(_) => self.mount(id),
+            Vehicle::Cart(c) => match c.kind {
+                CartKind::Empty => {
+                    // EntityMinecartEmpty.interactFirst: not while a mob rides it
+                    if !self.mobs.list.iter().any(|m| m.riding == Some(id)) {
+                        self.mount(id);
+                    }
+                }
+                CartKind::Furnace => {
+                    let coal = held.map_or(false, |s| s.id == 263);
+                    if c.furnace_interact(coal, feet) && !creative {
+                        self.play.inv.consume_held();
+                        self.play.inv_dirty = true;
+                    }
+                }
+                CartKind::Chest => {
+                    // displayGUIChest
+                    self.play.open = Open::Cart(id);
+                    self.play.inv_dirty = true;
+                }
+                _ => {}
+            },
         }
     }
 
-    /// `EntityPlayer.attackTargetEntityWithCurrentItem` on a boat.
-    pub(super) fn attack_vehicle(
-        &mut self,
-        id: u32,
-        damage: f32,
-        knockback: i32,
-        events: &mut Vec<Event>,
-    ) {
+    /// `EntityPlayer.attackTargetEntityWithCurrentItem` on a vehicle.
+    pub(super) fn attack_vehicle(&mut self, id: u32, damage: f32, knockback: i32) {
         let creative = self.play.mode == GameMode::Creative;
         let yaw = self.play.player.1;
-        let Some(i) = self.play.boats.iter().position(|b| b.b.id == id) else {
+        let Some(i) = self.play.vehicles.iter().position(|b| b.v.id() == id) else {
             return;
         };
         if damage <= 0.0 {
             return;
         }
-        let broke = self.play.boats[i].b.attack(damage, creative);
+        let mut play = std::mem::replace(&mut self.play, Play::new(GameMode::Survival));
+        let mut outs = Vec::new();
+        let mut broke = None;
+        match &mut play.vehicles[i].v {
+            Vehicle::Boat(b) => broke = b.attack(damage, creative),
+            Vehicle::Cart(c) => c.attack(damage, creative, false, false, &mut outs),
+        }
         if knockback > 0 {
             let r = std::f32::consts::PI;
             let k = knockback as f32 * 0.5;
-            let b = &mut self.play.boats[i];
-            b.b.e.motion[0] += (-math::sin(yaw * r / 180.0) * k) as f64;
-            b.b.e.motion[1] += 0.1;
-            b.b.e.motion[2] += (math::cos(yaw * r / 180.0) * k) as f64;
+            let b = &mut play.vehicles[i];
+            let e = b.v.e_mut();
+            e.motion[0] += (-math::sin(yaw * r / 180.0) * k) as f64;
+            e.motion[1] += 0.1;
+            e.motion[2] += (math::cos(yaw * r / 180.0) * k) as f64;
             b.airborne = true;
         }
         if let Some(drop) = broke {
-            self.boat_broken(i, drop, true, events);
+            if self.riding == Some(id) {
+                // riddenByEntity.mountEntity(this): the attach packet and
+                // setPlayerLocation again
+                self.vehicle_events.push(Event::Mount(Some(id)));
+                self.teleport_to = Some(play.player.0);
+            }
+            if drop {
+                let p = play.vehicles[i].v.e().pos;
+                Self::entity_drop(&mut play, p, crate::item::Stack::new(333, 0, 1));
+            }
+        }
+        self.cart_outs(&mut play, i, outs);
+        self.play = play;
+    }
+
+    /// The results of a minecart's tick or hit.
+    fn cart_outs(&mut self, play: &mut Play, i: usize, outs: Vec<CartOut>) {
+        let id = play.vehicles[i].v.id();
+        let pos = play.vehicles[i].v.e().pos;
+        for o in outs {
+            match o {
+                CartOut::Drop(st) => Self::entity_drop(play, pos, st),
+                CartOut::Scatter(p, m, st) => {
+                    let nid = play.next_item;
+                    play.next_item += 1;
+                    let mut r = std::mem::replace(&mut play.prand, JavaRandom::new(0));
+                    let mut it = crate::entity::item::ItemEntity::new(nid, st, p, &mut r);
+                    play.prand = r;
+                    it.e.motion = m;
+                    play.items.push(it);
+                }
+                CartOut::Explode(p, size) => self.mobs.queue_explosion(p, size, true),
+                CartOut::Sound(n, v, pi) => self.vehicle_sounds.push((n, pos, v, pi)),
+                CartOut::Ignited => self
+                    .vehicle_events
+                    .push(Event::VehicleStatus(vec![(id, 10)])),
+                CartOut::Remount => {
+                    if self.riding == Some(id) {
+                        self.vehicle_events.push(Event::Mount(Some(id)));
+                        self.teleport_to = Some(play.player.0);
+                    }
+                }
+            }
         }
     }
 
-    /// The boat at `i` was killed by `attackEntityFrom`: the rider is
-    /// mounted again (`riddenByEntity.mountEntity(this)`), the item drops.
-    fn boat_broken(&mut self, i: usize, drop: bool, remount: bool, events: &mut Vec<Event>) {
-        let id = self.play.boats[i].b.id;
-        if remount && self.riding == Some(id) {
-            // EntityPlayerMP.mountEntity: the attach packet and setPlayerLocation
-            events.push(Event::Mount(Some(id)));
-            self.teleport_to = Some(self.play.player.0);
-        }
-        if drop {
-            let p = self.play.boats[i].b.e.pos;
-            let mut play = std::mem::replace(&mut self.play, Play::new(GameMode::Survival));
-            Self::entity_drop(&mut play, p, crate::item::Stack::new(333, 0, 1));
-            self.play = play;
-        }
-    }
-
-    /// `World.updateEntities` for the boats, and each rider's
-    /// `updateRidden` right after its boat (`updateEntityWithOptionalForce`).
-    pub(super) fn tick_boats(&mut self, play: &mut Play, events: &mut Vec<Event>) {
+    /// `World.updateEntities` for the vehicles, and each rider's
+    /// `updateRidden` right after its vehicle (`updateEntityWithOptionalForce`).
+    pub(super) fn tick_vehicles(&mut self, play: &mut Play, events: &mut Vec<Event>) {
         use crate::entity::base::Fx;
-        let mut sounds = Vec::new();
+        let mut sounds = std::mem::take(&mut self.vehicle_sounds);
+        // the boats' boxes as the world sees them
+        self.world.solid_entities = play
+            .vehicles
+            .iter()
+            .filter_map(|b| b.v.bounding_box().map(|bb| (b.v.id(), bb)))
+            .collect();
         // EntityLivingBase.collideWithNearbyEntities of the player and the
-        // mobs: boat.applyEntityCollision(them).
+        // mobs: vehicle.applyEntityCollision(them).
         {
             let feet = play.player.0;
             let pb = Self::player_box(feet);
             let near = crate::entity::base::Ent::expand(&pb, 0.2f32 as f64, 0.0, 0.2f32 as f64);
-            for b in play.boats.iter_mut() {
-                if b.b.e.dead {
+            for b in play.vehicles.iter_mut() {
+                if b.v.dead() {
                     continue;
                 }
-                let own = self.riding == Some(b.b.id);
-                if !own && !self.splayer.dead && b.b.e.bb.intersects(&near) {
-                    if let Some((a, _)) = b.b.collision_push(feet) {
+                let own = self.riding == Some(b.v.id());
+                let id = b.v.id();
+                if !own && !self.splayer.dead && b.v.e().bb.intersects(&near) {
+                    let push = match &b.v {
+                        Vehicle::Boat(boat) => boat.collision_push(feet).map(|p| p.0),
+                        Vehicle::Cart(c) => c
+                            .push_entity(feet, false, self.riding.is_some())
+                            .1
+                            .map(|p| p.0),
+                    };
+                    if let Some(a) = push {
                         for k in 0..3 {
-                            b.b.e.motion[k] += a[k];
+                            b.v.e_mut().motion[k] += a[k];
                         }
                         b.airborne = true;
                     }
                 }
                 for m in self.mobs.list.iter_mut() {
-                    if m.dead {
+                    if m.dead || m.riding == Some(id) {
                         continue;
                     }
                     let mn =
                         crate::entity::base::Ent::expand(&m.bb, 0.2f32 as f64, 0.0, 0.2f32 as f64);
-                    if b.b.e.bb.intersects(&mn) {
-                        if let Some((a, o)) = b.b.collision_push(m.pos) {
-                            for k in 0..3 {
-                                b.b.e.motion[k] += a[k];
-                                m.motion[k] += o[k];
-                            }
-                            b.airborne = true;
+                    if !b.v.e().bb.intersects(&mn) {
+                        continue;
+                    }
+                    let (seat, push) = match &b.v {
+                        Vehicle::Boat(boat) => (false, boat.collision_push(m.pos)),
+                        Vehicle::Cart(c) => {
+                            let golem = m.kind == crate::entity::mob::Kind::IronGolem;
+                            c.push_entity(m.pos, !golem, m.riding.is_some())
                         }
+                    };
+                    if seat {
+                        // var1.mountEntity(this)
+                        m.riding = Some(id);
+                        b.v.set_ridden(true);
+                    }
+                    if let Some((a, o)) = push {
+                        for k in 0..3 {
+                            b.v.e_mut().motion[k] += a[k];
+                            m.motion[k] += o[k];
+                        }
+                        b.airborne = true;
                     }
                 }
             }
         }
-        let n = play.boats.len();
+        let n = play.vehicles.len();
         for i in 0..n {
-            if play.boats[i].b.e.dead {
+            if play.vehicles[i].v.dead() {
                 continue;
             }
-            let id = play.boats[i].b.id;
-            let rider = if self.riding == Some(id) && !self.splayer.dead {
+            let id = play.vehicles[i].v.id();
+            let player_rides = self.riding == Some(id) && !self.splayer.dead;
+            let mob_rider = self
+                .mobs
+                .list
+                .iter()
+                .position(|m| m.riding == Some(id) && !m.dead);
+            let rider = if player_rides {
                 Some(Rider {
                     yaw: play.player.1,
                     strafe: self.ride.strafe,
                     forward: self.ride.forward,
                 })
             } else {
-                None
+                mob_rider.map(|k| {
+                    let m = &self.mobs.list[k];
+                    let (strafe, forward) = m.move_input();
+                    Rider {
+                        yaw: m.yaw,
+                        strafe,
+                        forward,
+                    }
+                })
             };
-            let others = self.entity_boxes_in(play, Some(id));
+            let boat = matches!(play.vehicles[i].v, Vehicle::Boat(_));
+            let others = self.entity_boxes_in(play, Some(id), !boat);
             let mut fx = Vec::new();
-            play.boats[i].b.e.ticks_existed += 1;
-            let outs = {
-                let b = &mut play.boats[i].b;
-                b.tick(&mut self.world, false, rider, &others, &mut fx)
-            };
-            let bb = play.boats[i].b.bounding_box();
-            if let Some(e) = self.world.solid_entities.iter_mut().find(|e| e.0 == id) {
-                e.1 = bb;
+            {
+                // updateEntityWithOptionalForce
+                let e = play.vehicles[i].v.e_mut();
+                e.last_tick = e.pos;
+                e.prev_yaw = e.yaw;
+                e.prev_pitch = e.pitch;
+                e.ticks_existed += 1;
+            }
+            let mut fell = None;
+            match &mut play.vehicles[i].v {
+                Vehicle::Boat(b) => {
+                    let outs = b.tick(&mut self.world, false, rider, &others, &mut fx);
+                    let pos = b.e.pos;
+                    for o in outs {
+                        match o {
+                            Out::Wreck => {
+                                for _ in 0..3 {
+                                    Self::entity_drop(
+                                        play,
+                                        pos,
+                                        crate::item::Stack::new(block::PLANKS as u16, 0, 1),
+                                    );
+                                }
+                                for _ in 0..2 {
+                                    Self::entity_drop(
+                                        play,
+                                        pos,
+                                        crate::item::Stack::new(280, 0, 1),
+                                    );
+                                }
+                            }
+                            Out::Broken => {
+                                if player_rides {
+                                    self.vehicle_events.push(Event::Mount(Some(id)));
+                                    self.teleport_to = Some(play.player.0);
+                                }
+                                Self::entity_drop(play, pos, crate::item::Stack::new(333, 0, 1));
+                            }
+                            Out::Fall(d) => fell = Some(d),
+                        }
+                    }
+                }
+                Vehicle::Cart(c) => {
+                    let mut outs = Vec::new();
+                    let fall0 = c.e.fall_distance;
+                    c.tick(&mut self.world, false, rider, &others, &mut fx, &mut outs);
+                    let _ = fall0;
+                    self.cart_outs(play, i, outs);
+                }
+            }
+            if let (Some(d), true) = (fell, rider.is_some()) {
+                if player_rides {
+                    self.splayer.fall_from(&self.world, d);
+                }
+            }
+            if let Some(bb) = play.vehicles[i].v.bounding_box() {
+                if let Some(e) = self.world.solid_entities.iter_mut().find(|e| e.0 == id) {
+                    e.1 = bb;
+                }
             }
             for f in fx {
-                match f {
-                    Fx::Sound(a, p, v, pi) => sounds.push((a, p, v, pi)),
-                    // WorldServer.spawnParticle reaches no client
-                    _ => {}
+                // WorldServer.spawnParticle reaches no client
+                if let Fx::Sound(a, p, v, pi) = f {
+                    sounds.push((a, p, v, pi));
                 }
             }
-            for o in outs {
-                let pos = play.boats[i].b.e.pos;
-                match o {
-                    Out::Wreck => {
-                        for _ in 0..3 {
-                            Self::entity_drop(
-                                play,
-                                pos,
-                                crate::item::Stack::new(block::PLANKS as u16, 0, 1),
-                            );
-                        }
-                        for _ in 0..2 {
-                            Self::entity_drop(play, pos, crate::item::Stack::new(280, 0, 1));
-                        }
-                    }
-                    Out::Broken => {
-                        if self.riding == Some(id) {
-                            events.push(Event::Mount(Some(id)));
-                            self.teleport_to = Some(play.player.0);
-                        }
-                        Self::entity_drop(play, pos, crate::item::Stack::new(333, 0, 1));
-                    }
-                    Out::Fall(d) => {
-                        if rider.is_some() {
-                            self.splayer.fall_from(&self.world, d);
-                        }
-                    }
-                }
-            }
-            // other boats near: applyEntityCollision
-            if !play.boats[i].b.e.dead {
-                let me = play.boats[i].b.e.pos;
+            // other vehicles near: var.applyEntityCollision(this)
+            if !play.vehicles[i].v.dead() {
                 let near = crate::entity::base::Ent::expand(
-                    &play.boats[i].b.e.bb,
+                    &play.vehicles[i].v.e().bb,
                     0.2f32 as f64,
                     0.0,
                     0.2f32 as f64,
                 );
-                let mut add_me = [0.0; 3];
                 for j in 0..n {
-                    if j == i || play.boats[j].b.e.dead || !play.boats[j].b.e.bb.intersects(&near) {
+                    if j == i
+                        || play.vehicles[j].v.dead()
+                        || !play.vehicles[j].v.e().bb.intersects(&near)
+                    {
                         continue;
                     }
-                    // var18.applyEntityCollision(this): the other boat is `this`
-                    if let Some((o, a)) = play.boats[j].b.collision_push(me) {
-                        for k in 0..3 {
-                            play.boats[j].b.e.motion[k] += o[k];
-                            add_me[k] += a[k];
+                    let (a, b) = if i < j {
+                        let (l, r) = play.vehicles.split_at_mut(j);
+                        (&mut l[i], &mut r[0])
+                    } else {
+                        let (l, r) = play.vehicles.split_at_mut(i);
+                        (&mut r[0], &mut l[j])
+                    };
+                    match (&mut a.v, &mut b.v) {
+                        (Vehicle::Boat(me), Vehicle::Boat(other)) => {
+                            if let Some((o, m)) = other.collision_push(me.e.pos) {
+                                for k in 0..3 {
+                                    other.e.motion[k] += o[k];
+                                    me.e.motion[k] += m[k];
+                                }
+                                a.airborne = true;
+                                b.airborne = true;
+                            }
                         }
-                        play.boats[j].airborne = true;
+                        (Vehicle::Cart(me), Vehicle::Cart(other)) => {
+                            minecart::carts_collide(other, me);
+                        }
+                        _ => {}
                     }
-                }
-                if add_me != [0.0; 3] {
-                    for k in 0..3 {
-                        play.boats[i].b.e.motion[k] += add_me[k];
-                    }
-                    play.boats[i].airborne = true;
                 }
             }
             if self.splayer.dead && self.riding == Some(id) {
                 // riddenByEntity.isDead
                 self.riding = None;
-                play.boats[i].b.ridden = false;
+                play.vehicles[i].v.set_ridden(false);
             }
-            // updateEntity(riddenByEntity): EntityPlayer.updateRidden
+            // updateEntity(riddenByEntity)
+            if let Some(k) = mob_rider {
+                if play.vehicles[i].v.dead() {
+                    self.mobs.list[k].riding = None;
+                } else {
+                    // Entity.updateRidden: motion 0, then the seat
+                    let p = play.vehicles[i].v.rider_position(0.0);
+                    let m = &mut self.mobs.list[k];
+                    m.motion = [0.0; 3];
+                    m.set_position(p[0], p[1], p[2]);
+                }
+            }
             if self.riding == Some(id) {
-                if play.boats[i].b.e.dead {
+                if play.vehicles[i].v.dead() {
                     // Entity.updateRidden: ridingEntity.isDead
                     self.riding = None;
                 } else if self.ride.sneak {
+                    // EntityPlayer.updateRidden
                     std::mem::swap(play, &mut self.play);
-                    self.dismount(events);
+                    self.dismount();
                     std::mem::swap(play, &mut self.play);
                     self.ride.sneak = false;
                     self.splayer.sneaking = false;
                 } else {
-                    let feet = play.boats[i].b.rider_position(PLAYER_Y_OFFSET_MP);
+                    let feet = play.vehicles[i].v.rider_position(PLAYER_Y_OFFSET_MP);
                     play.player.0 = feet;
                     self.splayer.place(feet);
                     if let Some(p) = &mut self.player {
@@ -491,23 +667,44 @@ impl Sim {
                 }
             }
         }
+        // Container.canInteractWith: a minecart chest more than 8 away
+        if let Open::Cart(id) = play.open {
+            let feet = play.player.0;
+            let ok = play.vehicles.iter().any(|b| {
+                let e = b.v.e();
+                b.v.id() == id
+                    && !e.dead
+                    && (e.pos[0] - feet[0]).powi(2)
+                        + (e.pos[1] - feet[1]).powi(2)
+                        + (e.pos[2] - feet[2]).powi(2)
+                        <= 64.0
+            });
+            if !ok {
+                play.close(&mut self.world);
+            }
+        }
         // removed entities
         let mut packets = Vec::new();
         let mut keep = Vec::new();
-        for b in std::mem::take(&mut play.boats) {
-            if b.b.e.dead {
+        for b in std::mem::take(&mut play.vehicles) {
+            if b.v.dead() {
                 if b.t.watching {
-                    packets.push((b.b.id, Packet::Destroy));
+                    packets.push((b.v.id(), Packet::Destroy));
                 }
-                self.world.solid_entities.retain(|e| e.0 != b.b.id);
-                if self.riding == Some(b.b.id) {
+                self.world.solid_entities.retain(|e| e.0 != b.v.id());
+                if self.riding == Some(b.v.id()) {
                     self.riding = None;
+                }
+                for m in self.mobs.list.iter_mut() {
+                    if m.riding == Some(b.v.id()) {
+                        m.riding = None;
+                    }
                 }
                 continue;
             }
             keep.push(b);
         }
-        play.boats = keep;
+        play.vehicles = keep;
         // EntityTracker.updateTrackedEntities
         let feet = play.player.0;
         let player_moved = match self.track_check {
@@ -521,10 +718,10 @@ impl Sim {
             self.track_check = Some(feet);
         }
         let mut metas = Vec::new();
-        for b in play.boats.iter_mut() {
+        for b in play.vehicles.iter_mut() {
             let (cx, cz) = (
-                math::floor_double(b.b.e.pos[0]) >> 4,
-                math::floor_double(b.b.e.pos[2]) >> 4,
+                math::floor_double(b.v.e().pos[0]) >> 4,
+                math::floor_double(b.v.e().pos[2]) >> 4,
             );
             let in_view = (cx - self.centre.0).abs() <= self.view
                 && (cz - self.centre.1).abs() <= self.view
@@ -532,11 +729,12 @@ impl Sim {
             let changed = b.meta_changed();
             let mut out = Vec::new();
             let mut air = b.airborne;
-            let mut vc = b.b.velocity_changed;
+            let mut vc = *b.v.velocity_changed();
+            let e = b.v.e().clone();
             b.t.update(
-                &b.b.e,
+                &e,
                 &mut air,
-                changed.is_some(),
+                changed,
                 &mut vc,
                 feet,
                 player_moved,
@@ -544,21 +742,22 @@ impl Sim {
                 &mut out,
             );
             b.airborne = air;
-            b.b.velocity_changed = vc;
+            *b.v.velocity_changed() = vc;
             for p in out {
-                if let Packet::Spawn { .. } = p {
-                    metas.push((b.b.id, b.b.time_since_hit, b.b.forward, b.b.damage));
+                let spawn = matches!(p, Packet::Spawn { .. });
+                packets.push((b.v.id(), p));
+                if spawn {
+                    metas.push((b.v.id(), b.v.meta()));
                 }
-                packets.push((b.b.id, p));
             }
-            if changed.is_some() && b.t.watching {
-                metas.push((b.b.id, b.b.time_since_hit, b.b.forward, b.b.damage));
+            if changed && b.t.watching {
+                metas.push((b.v.id(), b.v.meta()));
             }
         }
         if !packets.is_empty() {
             events.push(Event::Vehicles(packets));
         }
-        // S1BPacketEntityAttach from this tick's commands, after the spawns
+        // S1BPacketEntityAttach and S19 from this tick, after the spawns
         events.extend(std::mem::take(&mut self.vehicle_events));
         if !metas.is_empty() {
             events.push(Event::VehicleMeta(metas));

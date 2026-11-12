@@ -1,20 +1,22 @@
-//! The client side of boats: `NetHandlerPlayClient` (spawn, move,
-//! velocity, metadata, attach, destroy), the client's `EntityBoat.onUpdate`
-//! and the local player's `updateRidden`, and `RenderBoat`.
+//! The client side of boats and minecarts: `NetHandlerPlayClient` (spawn,
+//! move, velocity, metadata, status, attach, destroy), the client's
+//! `onUpdate`, the local player's `updateRidden`, `RenderBoat` and
+//! `RenderMinecart`.
 
 use super::*;
 use crate::entity::base::{Ent, Fx};
-use crate::entity::boat::{Boat, BoatWorld, Rider};
+use crate::entity::boat::{BoatWorld, Rider};
 use crate::entity::player::Aabb;
 use crate::entity::tracker::{byte_angle, Packet, ServerPos};
+use crate::entity::vehicle::{VMeta, Vehicle};
 use crate::render::mesher::Vertex;
 
 /// `EntityPlayer.getYOffset()` on the client: `yOffset - 0.5F`.
 const PLAYER_Y_OFFSET: f64 = (1.62f32 - 0.5f32) as f64;
 
-/// A boat in the client's world.
-pub(super) struct ClientBoat {
-    pub b: Boat,
+/// A vehicle in the client's world.
+pub(super) struct ClientVehicle {
+    pub v: Vehicle,
     /// `serverPosX/Y/Z`
     pub sp: ServerPos,
 }
@@ -75,53 +77,59 @@ impl BoatWorld for ClientWorld {
 }
 
 impl Game {
-    /// `handleSpawnObject` (type 1), `handleEntityMovement`,
+    /// `handleSpawnObject` (types 1 and 10), `handleEntityMovement`,
     /// `handleEntityTeleport`, `handleEntityVelocity`, `handleDestroyEntities`.
     pub(super) fn vehicle_packets(&mut self, list: Vec<(u32, Packet)>) {
         for (id, p) in list {
             match p {
                 Packet::Spawn {
+                    object,
+                    data,
                     pos,
                     yaw,
                     pitch,
                     velocity,
                 } => {
-                    self.boats.retain(|b| b.b.id != id);
+                    self.boats.retain(|b| b.v.id() != id);
                     let seed = self.rng.next_long();
-                    let mut b = Boat::at(
-                        id,
+                    let at = [
                         pos[0] as f64 / 32.0,
                         pos[1] as f64 / 32.0,
                         pos[2] as f64 / 32.0,
-                        seed,
-                    );
-                    b.e.pitch = byte_angle(pitch);
-                    b.e.yaw = byte_angle(yaw);
-                    b.e.last_tick = b.e.pos;
-                    b.e.prev_yaw = b.e.yaw;
-                    if let Some(v) = velocity {
-                        b.set_velocity([
-                            v[0] as f64 / 8000.0,
-                            v[1] as f64 / 8000.0,
-                            v[2] as f64 / 8000.0,
+                    ];
+                    let Some(mut v) = Vehicle::from_spawn(object, data, id, at, seed) else {
+                        continue;
+                    };
+                    {
+                        let e = v.e_mut();
+                        e.pitch = byte_angle(pitch);
+                        e.yaw = byte_angle(yaw);
+                        e.last_tick = e.pos;
+                        e.prev_yaw = e.yaw;
+                    }
+                    if let Some(s) = velocity {
+                        v.set_velocity([
+                            s[0] as f64 / 8000.0,
+                            s[1] as f64 / 8000.0,
+                            s[2] as f64 / 8000.0,
                         ]);
                     }
-                    self.boats.push(ClientBoat {
-                        b,
+                    self.boats.push(ClientVehicle {
+                        v,
                         sp: ServerPos { pos },
                     });
                 }
-                Packet::Velocity(v) => {
-                    if let Some(c) = self.boats.iter_mut().find(|c| c.b.id == id) {
-                        c.b.set_velocity([
-                            v[0] as f64 / 8000.0,
-                            v[1] as f64 / 8000.0,
-                            v[2] as f64 / 8000.0,
+                Packet::Velocity(s) => {
+                    if let Some(c) = self.boats.iter_mut().find(|c| c.v.id() == id) {
+                        c.v.set_velocity([
+                            s[0] as f64 / 8000.0,
+                            s[1] as f64 / 8000.0,
+                            s[2] as f64 / 8000.0,
                         ]);
                     }
                 }
                 Packet::Destroy => {
-                    self.boats.retain(|b| b.b.id != id);
+                    self.boats.retain(|b| b.v.id() != id);
                     self.world.solid_entities.retain(|e| e.0 != id);
                     if self.riding == Some(id) {
                         // Entity.updateRidden: ridingEntity.isDead
@@ -130,9 +138,10 @@ impl Game {
                     }
                 }
                 _ => {
-                    if let Some(c) = self.boats.iter_mut().find(|c| c.b.id == id) {
-                        if let Some((at, y, pi)) = c.sp.apply(&p, c.b.e.yaw, c.b.e.pitch) {
-                            c.b.set_position_and_rotation2(at, y, pi, 3);
+                    if let Some(c) = self.boats.iter_mut().find(|c| c.v.id() == id) {
+                        let (yaw, pitch) = (c.v.e().yaw, c.v.e().pitch);
+                        if let Some((at, y, pi)) = c.sp.apply(&p, yaw, pitch) {
+                            c.v.set_position_and_rotation2(at, y, pi, 3);
                         }
                     }
                 }
@@ -140,13 +149,27 @@ impl Game {
         }
     }
 
-    /// `handleEntityMetadata` for boats.
-    pub(super) fn vehicle_meta(&mut self, list: Vec<(u32, i32, i32, f32)>) {
-        for (id, hit, fwd, dmg) in list {
-            if let Some(c) = self.boats.iter_mut().find(|c| c.b.id == id) {
-                c.b.time_since_hit = hit;
-                c.b.forward = fwd;
-                c.b.damage = dmg;
+    /// `handleEntityMetadata` for vehicles.
+    pub(super) fn vehicle_meta(&mut self, list: Vec<(u32, VMeta)>) {
+        for (id, m) in list {
+            if let Some(c) = self.boats.iter_mut().find(|c| c.v.id() == id) {
+                c.v.set_meta(m);
+            }
+        }
+    }
+
+    /// `handleEntityStatus` for vehicles: 10 ignites a TNT minecart.
+    pub(super) fn vehicle_status(&mut self, list: Vec<(u32, i32)>) {
+        for (id, s) in list {
+            if let Some(ClientVehicle {
+                v: Vehicle::Cart(c),
+                ..
+            }) = self.boats.iter_mut().find(|c| c.v.id() == id)
+            {
+                if s == 10 {
+                    // EntityMinecartTNT.ignite on the client
+                    c.fuse = 80;
+                }
             }
         }
     }
@@ -156,8 +179,10 @@ impl Game {
         match v {
             Some(id) => {
                 let first = self.riding.is_none();
-                if let Some(c) = self.boats.iter_mut().find(|c| c.b.id == id) {
-                    c.b.empty = false;
+                if let Some(c) = self.boats.iter_mut().find(|c| c.v.id() == id) {
+                    if let Vehicle::Boat(b) = &mut c.v {
+                        b.empty = false;
+                    }
                     self.riding = Some(id);
                     self.player.riding = true;
                     if first {
@@ -168,8 +193,8 @@ impl Game {
                 }
             }
             None => {
-                // EntityPlayer.mountEntity(null) on the client: the boat
-                // stays isBoatEmpty = false
+                // EntityPlayer.mountEntity(null) on the client: a boat stays
+                // isBoatEmpty = false
                 self.riding = None;
                 self.player.riding = false;
             }
@@ -194,19 +219,24 @@ impl Game {
             });
         }
         for c in &self.boats {
-            if c.b.id != except {
-                v.push(c.b.e.bb);
+            if c.v.id() != except {
+                v.push(c.v.e().bb);
             }
         }
         v
     }
 
-    /// `World.updateEntities` for the client's boats.
+    /// `World.updateEntities` for the client's vehicles.
     pub(super) fn tick_boats(&mut self) {
         let n = self.boats.len();
         for i in 0..n {
-            let id = self.boats[i].b.id;
-            let others = self.client_entity_boxes(id);
+            let id = self.boats[i].v.id();
+            let boat = matches!(self.boats[i].v, Vehicle::Boat(_));
+            let others = if boat {
+                self.client_entity_boxes(id)
+            } else {
+                Vec::new()
+            };
             let rider = (self.riding == Some(id)).then(|| Rider {
                 yaw: self.player.yaw,
                 strafe: self.player.move_strafe,
@@ -215,19 +245,29 @@ impl Game {
             let mut fx = Vec::new();
             {
                 let mut world = std::mem::take(&mut self.world);
-                let b = &mut self.boats[i].b;
+                let v = &mut self.boats[i].v;
                 // updateEntityWithOptionalForce
-                b.e.last_tick = b.e.pos;
-                b.e.prev_yaw = b.e.yaw;
-                b.e.prev_pitch = b.e.pitch;
-                b.e.ticks_existed += 1;
-                let _ = b.tick(&mut world, true, rider, &others, &mut fx);
+                let e = v.e_mut();
+                e.last_tick = e.pos;
+                e.prev_yaw = e.yaw;
+                e.prev_pitch = e.pitch;
+                e.ticks_existed += 1;
+                match v {
+                    Vehicle::Boat(b) => {
+                        let _ = b.tick(&mut world, true, rider, &others, &mut fx);
+                    }
+                    Vehicle::Cart(c) => {
+                        let mut out = Vec::new();
+                        c.tick(&mut world, true, rider, &others, &mut fx, &mut out);
+                    }
+                }
                 self.world = world;
             }
-            let bb = self.boats[i].b.bounding_box();
-            match self.world.solid_entities.iter_mut().find(|e| e.0 == id) {
-                Some(e) => e.1 = bb,
-                None => self.world.solid_entities.push((id, bb)),
+            if let Some(bb) = self.boats[i].v.bounding_box() {
+                match self.world.solid_entities.iter_mut().find(|e| e.0 == id) {
+                    Some(e) => e.1 = bb,
+                    None => self.world.solid_entities.push((id, bb)),
+                }
             }
             for f in fx {
                 match f {
@@ -241,16 +281,16 @@ impl Game {
         self.destroyed_fx(destroyed);
     }
 
-    /// `updateRiderPosition` of the local player's boat, after the
+    /// `updateRiderPosition` of the local player's vehicle, after the
     /// player's own update (`Entity.updateRidden`).
     pub(super) fn update_rider(&mut self) {
         let Some(id) = self.riding else {
             return;
         };
-        let Some(c) = self.boats.iter().find(|c| c.b.id == id) else {
+        let Some(c) = self.boats.iter().find(|c| c.v.id() == id) else {
             return;
         };
-        let r = c.b.rider_position(PLAYER_Y_OFFSET);
+        let r = c.v.rider_position(PLAYER_Y_OFFSET);
         self.player.set_eye_position(r[0], r[1], r[2]);
         // EntityPlayer.updateRidden
         self.player.prev_camera_yaw = self.player.camera_yaw;
@@ -266,13 +306,13 @@ impl Game {
         }
     }
 
-    /// `RenderBoat` for every boat.
+    /// `RenderBoat` and `RenderMinecart` for every vehicle.
     pub(super) fn draw_boats(&self, out: &mut Vec<Vertex>, eye: [f64; 3], partial: f32) {
-        let Some(t) = self.atlas.mob_tex("boat") else {
-            return;
-        };
+        let boat_tex = self.atlas.mob_tex("boat");
+        let cart_tex = self.atlas.mob_tex("minecart");
+        let sub = sim::skylight_subtracted(self.world_time);
         for c in &self.boats {
-            let e = &c.b.e;
+            let e = c.v.e();
             let tp = partial as f64;
             let p = [
                 e.last_tick[0] + (e.pos[0] - e.last_tick[0]) * tp,
@@ -285,24 +325,53 @@ impl Game {
                 (p[1] - eye[1]) as f32,
                 (p[2] - eye[2]) as f32,
             ];
-            // Entity.getBrightnessForRender
+            // Entity.getBrightnessForRender / getBrightness
             let ly =
                 math::floor_double(p[1] - e.y_offset as f64 + (e.bb.max[1] - e.bb.min[1]) * 0.66);
             let (lx, lz) = (math::floor_double(p[0]), math::floor_double(p[2]));
             let sky = self.world.light(true, lx, ly, lz);
             let blk = self.world.light(false, lx, ly, lz);
             let light = [(blk << 4) as u8, (sky << 4) as u8, 0, 0];
-            crate::render::vehicles::boat(
-                out,
-                t,
-                rel,
-                yaw,
-                c.b.time_since_hit,
-                c.b.damage,
-                c.b.forward,
-                partial,
-                light,
-            );
+            match &c.v {
+                Vehicle::Boat(b) => {
+                    if let Some(t) = boat_tex {
+                        crate::render::vehicles::boat(
+                            out,
+                            t,
+                            rel,
+                            yaw,
+                            b.time_since_hit,
+                            b.damage,
+                            b.forward,
+                            partial,
+                            light,
+                        );
+                    }
+                }
+                Vehicle::Cart(m) => {
+                    let Some(t) = cart_tex else { continue };
+                    let brightness = self.light_table[((sky - sub).max(blk)).clamp(0, 15) as usize];
+                    let pitch = e.prev_pitch + (e.pitch - e.prev_pitch) * partial;
+                    let atlas = &self.atlas;
+                    crate::render::vehicles::minecart(
+                        out,
+                        t,
+                        &self.world,
+                        m,
+                        p,
+                        rel,
+                        yaw,
+                        pitch,
+                        partial,
+                        light,
+                        &|o, id, meta, mat, l| {
+                            crate::render::entities::block_model_lit(
+                                o, atlas, id, meta, mat, l, brightness,
+                            )
+                        },
+                    );
+                }
+            }
         }
     }
 }
