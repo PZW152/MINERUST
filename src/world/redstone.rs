@@ -1164,48 +1164,160 @@ impl ServerWorld {
             || self.indirect_power_to(x + 1, y + 1, z, 5) > 0
     }
 
-    /// `BlockPistonBase.updatePistonState` + `onBlockEventReceived` (moves
-    /// complete at once instead of over two ticks of `TileEntityPiston`).
+    /// `BlockPistonBase.updatePistonState`
     fn piston_update(&mut self, id: u8, x: i32, y: i32, z: i32) {
         let m = self.meta(x, y, z);
         let d = (m & 7) as usize;
-        if d > 5 {
+        if d == 7 {
             return;
         }
-        let powered = self.piston_powered(x, y, z, d);
-        let extended = m & 8 != 0;
-        let c = [x as f64 + 0.5, y as f64 + 0.5, z as f64 + 0.5];
-        if powered && !extended {
-            if self.piston_extend(id, x, y, z, d) {
-                self.set_meta(x, y, z, d as i32 | 8, 2);
-                let p = self.rand.next_float() * 0.25 + 0.6;
-                self.redstone_effects
-                    .push(Effect::Sound("tile.piston.out", c, 0.5, p));
+        let powered = self.piston_powered(x, y, z, d.min(5));
+        if powered && m & 8 == 0 {
+            if self.piston_can_extend(x, y, z, d) {
+                self.add_block_event(x, y, z, id, 0, d as i32);
             }
-        } else if !powered && extended {
+        } else if !powered && m & 8 != 0 {
             self.set_meta(x, y, z, d as i32, 2);
-            let (hx, hy, hz) = (x + FX[d], y + FY[d], z + FZ[d]);
-            if self.block(hx, hy, hz) == PISTON_HEAD {
-                self.set_block(hx, hy, hz, AIR, 0, 3);
+            self.add_block_event(x, y, z, id, 1, d as i32);
+        }
+    }
+
+    /// `World.addBlockEvent` (`WorldServer`: identical events are queued once).
+    pub fn add_block_event(&mut self, x: i32, y: i32, z: i32, id: u8, a: i32, b: i32) {
+        let e = BlockEvent {
+            x,
+            y,
+            z,
+            block: id,
+            a,
+            b,
+        };
+        if !self.block_events.contains(&e) {
+            self.block_events.push(e);
+        }
+    }
+
+    /// `WorldServer.func_147488_Z`: runs the queued block events; events added
+    /// meanwhile run in the next round of the same call.
+    pub fn run_block_events(&mut self) {
+        while !self.block_events.is_empty() {
+            let list = std::mem::take(&mut self.block_events);
+            for e in list {
+                if self.block(e.x, e.y, e.z) == e.block {
+                    self.block_event_received(e);
+                }
             }
+        }
+    }
+
+    /// `Block.onBlockEventReceived` for the blocks that use events.
+    fn block_event_received(&mut self, e: BlockEvent) -> bool {
+        match e.block {
+            PISTON | STICKY_PISTON => self.piston_event(e.block, e.x, e.y, e.z, e.a, e.b as usize),
+            _ => false,
+        }
+    }
+
+    /// `BlockPistonBase.onBlockEventReceived`
+    fn piston_event(&mut self, id: u8, x: i32, y: i32, z: i32, kind: i32, d: usize) -> bool {
+        let powered = self.piston_powered(x, y, z, d.min(5));
+        if powered && kind == 1 {
+            self.set_meta(x, y, z, d as i32 | 8, 2);
+            return false;
+        }
+        if !powered && kind == 0 {
+            return false;
+        }
+        let c = [x as f64 + 0.5, y as f64 + 0.5, z as f64 + 0.5];
+        if kind == 0 {
+            if !self.piston_extend(id, x, y, z, d) {
+                return false;
+            }
+            self.set_meta(x, y, z, d as i32 | 8, 2);
+            let p = self.rand.next_float() * 0.25 + 0.6;
+            self.redstone_effects
+                .push(Effect::Sound("tile.piston.out", c, 0.5, p));
+        } else if kind == 1 {
+            let (hx, hy, hz) = (x + FX[d], y + FY[d], z + FZ[d]);
+            if let Some(i) = self.moving.iter().position(|m| m.pos == [hx, hy, hz]) {
+                self.clear_moving(i);
+            }
+            self.set_block(x, y, z, PISTON_EXTENSION, d as i32, 3);
+            self.set_moving(Moving::new([x, y, z], id, d as i32, d, false, true));
             if id == STICKY_PISTON {
                 let (bx, by, bz) = (x + FX[d] * 2, y + FY[d] * 2, z + FZ[d] * 2);
-                let b = self.block(bx, by, bz);
-                let bm = self.meta(bx, by, bz);
-                if b != AIR && pushable(b, bm, false) && mobility(b) == 0 {
-                    self.set_block(bx, by, bz, AIR, 0, 3);
-                    self.set_block(hx, hy, hz, b, bm, 3);
+                let mut b = self.block(bx, by, bz);
+                let mut bm = self.meta(bx, by, bz);
+                let mut pulled_moving = false;
+                if b == PISTON_EXTENSION {
+                    if let Some(i) = self.moving.iter().position(|m| m.pos == [bx, by, bz]) {
+                        let m = self.moving[i];
+                        if m.facing == d && m.extending {
+                            self.clear_moving(i);
+                            b = m.block;
+                            bm = m.meta;
+                            pulled_moving = true;
+                        }
+                    }
                 }
+                if pulled_moving
+                    || block::material(b) == block::Material::Air
+                    || !pushable(self, b, bx, by, bz, false)
+                    || mobility(b) != 0 && b != PISTON && b != STICKY_PISTON
+                {
+                    if !pulled_moving {
+                        self.set_block(hx, hy, hz, AIR, 0, 3);
+                    }
+                } else {
+                    self.set_block(hx, hy, hz, PISTON_EXTENSION, bm, 3);
+                    self.set_moving(Moving::new([hx, hy, hz], b, bm, d, false, false));
+                    self.set_block(bx, by, bz, AIR, 0, 3);
+                }
+            } else {
+                self.set_block(hx, hy, hz, AIR, 0, 3);
             }
             let p = self.rand.next_float() * 0.15 + 0.6;
             self.redstone_effects
                 .push(Effect::Sound("tile.piston.in", c, 0.5, p));
-            self.notify_neighbours(x, y, z, id);
         }
+        true
+    }
+
+    /// `BlockPistonBase.canExtend`
+    fn piston_can_extend(&mut self, x: i32, y: i32, z: i32, d: usize) -> bool {
+        if d > 5 {
+            return true;
+        }
+        let (mut px, mut py, mut pz) = (x + FX[d], y + FY[d], z + FZ[d]);
+        for n in 0..13 {
+            if py <= 0 || py >= 255 {
+                return false;
+            }
+            let b = self.block(px, py, pz);
+            if block::material(b) != block::Material::Air {
+                if !pushable(self, b, px, py, pz, true) {
+                    return false;
+                }
+                if mobility(b) != 1 {
+                    if n == 12 {
+                        return false;
+                    }
+                    px += FX[d];
+                    py += FY[d];
+                    pz += FZ[d];
+                    continue;
+                }
+            }
+            break;
+        }
+        true
     }
 
     /// `BlockPistonBase.tryExtend`
     fn piston_extend(&mut self, id: u8, x: i32, y: i32, z: i32, d: usize) -> bool {
+        if d > 5 {
+            return false;
+        }
         let (mut px, mut py, mut pz) = (x + FX[d], y + FY[d], z + FZ[d]);
         let mut n = 0;
         while n < 13 {
@@ -1216,8 +1328,7 @@ impl ServerWorld {
             if block::material(b) == block::Material::Air {
                 break;
             }
-            let bm = self.meta(px, py, pz);
-            if !pushable(b, bm, true) {
+            if !pushable(self, b, px, py, pz, true) {
                 return false;
             }
             if mobility(b) != 1 {
@@ -1229,34 +1340,32 @@ impl ServerWorld {
                 pz += FZ[d];
                 n += 1;
             } else {
-                let drops = crate::item::drops(b, bm, &mut self.rand.clone());
-                for s in drops {
-                    self.gen_entities.push(GenEntity::Item {
-                        pos: [px as f64 + 0.5, py as f64 + 0.5, pz as f64 + 0.5],
-                        stack: s,
-                    });
-                }
+                let bm = self.meta(px, py, pz);
+                self.drop_block_as_item(b, bm, px, py, pz);
                 self.set_block(px, py, pz, AIR, 0, 3);
                 break;
             }
         }
         let end = (px, py, pz);
+        let sticky = if id == STICKY_PISTON { 8 } else { 0 };
         let mut moved = Vec::new();
         while (px, py, pz) != (x, y, z) {
             let (sx, sy, sz) = (px - FX[d], py - FY[d], pz - FZ[d]);
             let b = self.block(sx, sy, sz);
             let bm = self.meta(sx, sy, sz);
-            if (sx, sy, sz) == (x, y, z) {
-                self.set_block(
-                    px,
-                    py,
-                    pz,
+            if b == id && (sx, sy, sz) == (x, y, z) {
+                self.set_block(px, py, pz, PISTON_EXTENSION, d as i32 | sticky, 4);
+                self.set_moving(Moving::new(
+                    [px, py, pz],
                     PISTON_HEAD,
-                    d as i32 | if id == STICKY_PISTON { 8 } else { 0 },
-                    4,
-                );
+                    d as i32 | sticky,
+                    d,
+                    true,
+                    false,
+                ));
             } else {
-                self.set_block(px, py, pz, b, bm, 4);
+                self.set_block(px, py, pz, PISTON_EXTENSION, bm, 4);
+                self.set_moving(Moving::new([px, py, pz], b, bm, d, true, false));
             }
             moved.push(b);
             px = sx;
@@ -1274,6 +1383,253 @@ impl ServerWorld {
             pz = sz;
         }
         true
+    }
+
+    /// `Block.dropBlockAsItem` for blocks a piston breaks.
+    fn drop_block_as_item(&mut self, b: u8, bm: i32, x: i32, y: i32, z: i32) {
+        let mut r = std::mem::replace(&mut self.rand, JavaRandom::new(0));
+        let drops = crate::item::drops(b, bm, &mut r);
+        self.rand = r;
+        for st in drops {
+            self.gen_entities.push(GenEntity::Item {
+                pos: [x as f64 + 0.5, y as f64 + 0.5, z as f64 + 0.5],
+                stack: st,
+            });
+        }
+    }
+
+    /// `World.setTileEntity` for a moving block.
+    fn set_moving(&mut self, m: Moving) {
+        if let Some(i) = self.moving.iter().position(|o| o.pos == m.pos) {
+            self.moving.remove(i);
+        }
+        self.moving.push(m);
+    }
+
+    pub fn moving_at(&self, pos: [i32; 3]) -> Option<&Moving> {
+        self.moving.iter().find(|m| m.pos == pos)
+    }
+
+    /// `TileEntityPiston.clearPistonTileEntity`
+    fn clear_moving(&mut self, i: usize) {
+        let m = self.moving[i];
+        if m.last < 1.0 {
+            self.moving.remove(i);
+            let [x, y, z] = m.pos;
+            if self.block(x, y, z) == PISTON_EXTENSION {
+                self.set_block(x, y, z, m.block, m.meta, 3);
+                self.notify_one(x, y, z, m.block);
+            }
+        }
+    }
+
+    /// `TileEntityPiston.updateEntity` for every moving block, in list order.
+    /// Blocks that start moving during the loop wait for the next tick.
+    pub fn tick_moving(&mut self) {
+        let order: Vec<[i32; 3]> = self.moving.iter().map(|m| m.pos).collect();
+        for pos in order {
+            let Some(i) = self.moving.iter().position(|m| m.pos == pos) else {
+                continue;
+            };
+            let mut m = self.moving[i];
+            m.last = m.progress;
+            if m.last >= 1.0 {
+                self.launch(&m, 1.0, 0.25);
+                self.moving.remove(i);
+                let [x, y, z] = pos;
+                if self.block(x, y, z) == PISTON_EXTENSION {
+                    self.set_block(x, y, z, m.block, m.meta, 3);
+                    self.notify_one(x, y, z, m.block);
+                }
+            } else {
+                m.progress += 0.5;
+                if m.progress >= 1.0 {
+                    m.progress = 1.0;
+                }
+                self.moving[i] = m;
+                if m.extending {
+                    self.launch(&m, m.progress, m.progress - m.last + 0.0625);
+                }
+            }
+        }
+    }
+
+    /// `TileEntityPiston.launchWithSlimeBlock`: the entities in the moving
+    /// block's box are moved along with it.
+    fn launch(&mut self, m: &Moving, f: f32, dist: f32) {
+        let f = if m.extending { 1.0 - f } else { f - 1.0 };
+        let Some(bb) = self.moving_collision_shape(m, f) else {
+            return;
+        };
+        let d = m.facing;
+        self.pushes.push((
+            bb,
+            [
+                (dist * FX[d] as f32) as f64,
+                (dist * FY[d] as f32) as f64,
+                (dist * FZ[d] as f32) as f64,
+            ],
+        ));
+    }
+
+    /// `BlockPistonMoving.getCollisionShape`
+    fn moving_collision_shape(&mut self, m: &Moving, f: f32) -> Option<Aabb6> {
+        moving_shape(self, m.pos, m.block, m.meta, m.facing, f)
+    }
+}
+
+/// `BlockPistonMoving.getCollisionShape` against any block view.
+pub fn moving_shape(
+    w: &dyn super::BlockView,
+    pos: [i32; 3],
+    id: u8,
+    meta: i32,
+    d: usize,
+    f: f32,
+) -> Option<Aabb6> {
+    if id == PISTON_EXTENSION || block::material(id) == block::Material::Air {
+        return None;
+    }
+    let get = |x: i32, y: i32, z: i32| (w.peek_block(x, y, z), w.peek_meta(x, y, z));
+    let mut boxes = Vec::new();
+    crate::shapes::collision(&get, id, meta as u8, pos[0], pos[1], pos[2], &mut boxes);
+    if boxes.is_empty() {
+        return None;
+    }
+    let mut u = boxes[0];
+    for b in &boxes[1..] {
+        for a in 0..3 {
+            u[a] = u[a].min(b[a]);
+            u[a + 3] = u[a + 3].max(b[a + 3]);
+        }
+    }
+    let mut min = [
+        pos[0] as f64 + u[0] as f64,
+        pos[1] as f64 + u[1] as f64,
+        pos[2] as f64 + u[2] as f64,
+    ];
+    let mut max = [
+        pos[0] as f64 + u[3] as f64,
+        pos[1] as f64 + u[4] as f64,
+        pos[2] as f64 + u[5] as f64,
+    ];
+    for (a, o) in [FX[d], FY[d], FZ[d]].into_iter().enumerate() {
+        if o < 0 {
+            min[a] -= (o as f32 * f) as f64;
+        } else {
+            max[a] -= (o as f32 * f) as f64;
+        }
+    }
+    Some(Aabb6 { min, max })
+}
+
+/// A queued `addBlockEvent` (`BlockEventData`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct BlockEvent {
+    pub x: i32,
+    pub y: i32,
+    pub z: i32,
+    pub block: u8,
+    pub a: i32,
+    pub b: i32,
+}
+
+/// `TileEntityPiston`
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Moving {
+    pub pos: [i32; 3],
+    /// `storedBlock` / `storedMetadata`
+    pub block: u8,
+    pub meta: i32,
+    /// `storedOrientation`
+    pub facing: usize,
+    pub extending: bool,
+    /// `shouldHeadBeRendered`
+    pub head: bool,
+    pub progress: f32,
+    /// `lastProgress`
+    pub last: f32,
+}
+
+/// What collision and rendering read from a moving block.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MovingView {
+    pub block: u8,
+    pub meta: u8,
+    pub facing: u8,
+    pub extending: bool,
+    pub head: bool,
+    pub progress: f32,
+    pub last: f32,
+}
+
+impl Moving {
+    pub fn new(
+        pos: [i32; 3],
+        block: u8,
+        meta: i32,
+        facing: usize,
+        extending: bool,
+        head: bool,
+    ) -> Moving {
+        Moving {
+            pos,
+            block,
+            meta,
+            facing,
+            extending,
+            head,
+            progress: 0.0,
+            last: 0.0,
+        }
+    }
+
+    pub fn view(&self) -> MovingView {
+        MovingView {
+            block: self.block,
+            meta: self.meta as u8,
+            facing: self.facing as u8,
+            extending: self.extending,
+            head: self.head,
+            progress: self.progress,
+            last: self.last,
+        }
+    }
+}
+
+impl MovingView {
+    /// `TileEntityPiston.getProgress`
+    pub fn progress(&self, partial: f32) -> f32 {
+        let p = partial.min(1.0);
+        self.last + (self.progress - self.last) * p
+    }
+
+    /// `getRenderOffsetX/Y/Z`
+    pub fn offset(&self, partial: f32) -> [f32; 3] {
+        let d = self.facing as usize;
+        let k = if self.extending {
+            self.progress(partial) - 1.0
+        } else {
+            1.0 - self.progress(partial)
+        };
+        [k * FX[d] as f32, k * FY[d] as f32, k * FZ[d] as f32]
+    }
+
+    /// The collision box `BlockPistonMoving.getCollisionBoundingBoxFromPool`
+    /// gives at `pos`.
+    pub fn collision(&self, w: &dyn super::BlockView, pos: [i32; 3]) -> Option<Aabb6> {
+        let mut f = self.progress(0.0);
+        if self.extending {
+            f = 1.0 - f;
+        }
+        moving_shape(
+            w,
+            pos,
+            self.block,
+            self.meta as i32,
+            self.facing as usize,
+            f,
+        )
     }
 }
 
@@ -1308,24 +1664,36 @@ pub fn mobility(id: u8) -> i32 {
 }
 
 /// `BlockPistonBase.canPushBlock`
-fn pushable(id: u8, meta: i32, destroy_ok: bool) -> bool {
+fn pushable(w: &ServerWorld, id: u8, x: i32, y: i32, z: i32, destroy_ok: bool) -> bool {
     if id == OBSIDIAN {
         return false;
     }
     if id == PISTON || id == STICKY_PISTON {
-        return meta & 8 == 0;
-    }
-    if crate::item::hardness(id) < 0.0 || id == PISTON_HEAD {
-        return false;
-    }
-    match mobility(id) {
-        2 => return false,
-        1 => return destroy_ok,
-        _ => {}
+        if w.peek_meta(x, y, z) & 8 != 0 {
+            return false;
+        }
+    } else {
+        if crate::item::hardness(id) == -1.0 {
+            return false;
+        }
+        match mobility(id) {
+            2 => return false,
+            1 => return destroy_ok,
+            _ => {}
+        }
     }
     // ITileEntityProvider blocks
     !matches!(
         id,
-        CHEST | FURNACE | LIT_FURNACE | DISPENSER | MOB_SPAWNER | NOTEBLOCK | JUKEBOX | FLOWER_POT
+        CHEST
+            | FURNACE
+            | LIT_FURNACE
+            | DISPENSER
+            | MOB_SPAWNER
+            | NOTEBLOCK
+            | JUKEBOX
+            | FLOWER_POT
+            | PISTON_EXTENSION
+            | END_PORTAL
     )
 }

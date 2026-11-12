@@ -402,42 +402,6 @@ fn fill(mixer: &Mutex<Mixer>, out: &mut [f32], ch: usize) {
     }
 }
 
-/// `Block.stepSound`: name of the sound type of a block.
-pub fn step_sound(id: u8) -> (&'static str, f32) {
-    use crate::block::*;
-    let m = material(id);
-    match m {
-        Material::Wood => ("wood", 1.0),
-        Material::Grass
-        | Material::Leaves
-        | Material::Plants
-        | Material::Vine
-        | Material::Sponge
-        | Material::Tnt
-        | Material::Gourd
-        | Material::Cactus => ("grass", 1.0),
-        Material::Ground | Material::Clay => {
-            if id == GRAVEL {
-                ("gravel", 1.0)
-            } else {
-                ("gravel", 1.0)
-            }
-        }
-        Material::Sand => {
-            if id == GRAVEL {
-                ("gravel", 1.0)
-            } else {
-                ("sand", 1.0)
-            }
-        }
-        Material::Cloth | Material::Carpet => ("cloth", 1.0),
-        Material::Snow | Material::CraftedSnow => ("snow", 1.0),
-        Material::Iron => ("stone", 1.5),
-        Material::Circuits if id == LADDER => ("wood", 1.0),
-        _ => ("stone", 1.0),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     #[test]

@@ -125,6 +125,14 @@ pub enum Event {
     },
     /// Ticks spent in a Nether portal (`Entity.portalCounter`).
     Portal(i32),
+    /// Moving piston blocks (`TileEntityPiston`), sent while any exist and
+    /// once more when the last one stops.
+    Moving(Vec<([i32; 3], crate::world::redstone::MovingView)>),
+    /// The player picked these items up (`S0DPacketCollectItem`).
+    Collect(Vec<crate::play::ItemView>),
+    /// `TileEntityPiston.launchWithSlimeBlock` boxes and displacements, for
+    /// the player's own `moveEntity`.
+    Push(Vec<([f64; 3], [f64; 3], [f64; 3])>),
     /// Fireballs and thrown eyes: position, previous position, kind
     /// (0 large fireball, 1 small fireball, 2 eye of ender).
     Fireballs(Vec<([f64; 3], [f64; 3], u8)>),
@@ -232,6 +240,8 @@ pub struct Sim {
     centre: (i32, i32),
     view: i32,
     offsets: Vec<(i32, i32)>,
+    /// The last `Event::Moving` listed some blocks.
+    sent_moving: bool,
     /// Chunks the client currently holds, with the `ready` flag last sent.
     sent: std::collections::BTreeMap<(i32, i32), bool>,
     /// Chunks changed since they were last written to disk.
@@ -413,6 +423,7 @@ impl Sim {
             centre: (0, 0),
             view: cfg.view,
             offsets: spiral(cfg.view + 2),
+            sent_moving: false,
             sent: Default::default(),
             unsaved: Default::default(),
             world_time: cfg.start_time,
@@ -664,6 +675,7 @@ impl Sim {
                 }
                 self.player = Some((p, r, f));
                 self.play.player = (p, r[0]);
+                self.play.pitch = r[1];
             }
             Command::DimensionAck => self.await_ack = false,
             Command::UseAir => self.use_air(),
@@ -766,7 +778,7 @@ impl Sim {
                     play.close(&mut self.world);
                     for i in 0..crate::inventory::MAIN {
                         if let Some(st) = play.inv.main[i].take() {
-                            play.throw(st, &mut rnd);
+                            play.throw_with(st, true, &mut rnd);
                         }
                     }
                     self.world.rand = rnd;
@@ -945,6 +957,8 @@ impl Sim {
                     .update_blocks(self.centre.0 + dx, self.centre.1 + dz);
             }
         }
+        // WorldServer.func_147488_Z
+        self.world.run_block_events();
         if self.world.total_time % 40 == 0 {
             self.unload_far();
         }
@@ -1064,6 +1078,41 @@ impl Sim {
         }
         self.world.rand = rnd;
         self.tick_mobs(&mut play, events);
+        // World.updateEntities: tile entities after the entities.
+        self.world.tick_moving();
+        self.apply_pushes(&mut play, events);
+        {
+            use crate::entity::base::Fx;
+            let mut sounds = Vec::new();
+            let mut parts = Vec::new();
+            for f in play.fx.drain(..) {
+                match f {
+                    Fx::Sound(n, p, v, pi) => sounds.push((n, p, v, pi)),
+                    Fx::Particle(n, p, m) => parts.push((n, p, m)),
+                    _ => {}
+                }
+            }
+            parts.extend(self.world.particles.drain(..));
+            if !sounds.is_empty() {
+                events.push(Event::Sounds(sounds));
+            }
+            if !parts.is_empty() {
+                events.push(Event::Particles(parts));
+            }
+            if !play.collected.is_empty() {
+                events.push(Event::Collect(std::mem::take(&mut play.collected)));
+            }
+        }
+        let moving: Vec<([i32; 3], crate::world::redstone::MovingView)> = self
+            .world
+            .moving
+            .iter()
+            .map(|m| (m.pos, m.view()))
+            .collect();
+        if !moving.is_empty() || self.sent_moving {
+            self.sent_moving = !moving.is_empty();
+            events.push(Event::Moving(moving));
+        }
         self.play = play;
         if self.play.inv_dirty {
             self.play.inv_dirty = false;
@@ -1201,6 +1250,7 @@ impl Sim {
         mobs: &crate::entity::mob::Mobs,
         cx: i32,
         cz: i32,
+        dim: i32,
     ) -> (Vec<crate::world::anvil::Nbt>, Vec<crate::world::anvil::Nbt>) {
         let tiles = play.tiles_nbt(cx, cz);
         let mut entities: Vec<crate::world::anvil::Nbt> = mobs
@@ -1213,7 +1263,7 @@ impl Sim {
             })
             .map(crate::entity::mob::Mobs::to_nbt)
             .collect();
-        entities.extend(play.items_nbt(cx, cz));
+        entities.extend(play.items_nbt(cx, cz, dim));
         (tiles, entities)
     }
 
@@ -1243,12 +1293,13 @@ impl Sim {
         }
         for e in &play.items {
             keys.insert((
-                (e.pos[0].floor() as i32) >> 4,
-                (e.pos[2].floor() as i32) >> 4,
+                (e.e.pos[0].floor() as i32) >> 4,
+                (e.e.pos[2].floor() as i32) >> 4,
             ));
         }
+        let dim = world.provider.dim;
         for (cx, cz) in keys {
-            let lists = Self::chunk_lists(play, mobs, cx, cz);
+            let lists = Self::chunk_lists(play, mobs, cx, cz, dim);
             if world.chunks.contains_key(&(cx, cz)) {
                 world.write_anvil_chunk(&dir, cx, cz, Some(lists))?;
             } else if let Some(mut root) = anvil::read_region_chunk(&dir, cx, cz) {
@@ -2128,6 +2179,57 @@ impl Sim {
         events.push(Event::Fireballs(shots));
     }
 
+    /// `TileEntityPiston.launchWithSlimeBlock`: every entity in a moving
+    /// block's box is moved with it (`Entity.moveEntity`).
+    fn apply_pushes(&mut self, play: &mut Play, events: &mut Vec<Event>) {
+        let pushes = std::mem::take(&mut self.world.pushes);
+        if pushes.is_empty() {
+            return;
+        }
+        let mut to_player = Vec::new();
+        for (bb, d) in pushes {
+            let b = crate::entity::player::Aabb {
+                min: bb.min,
+                max: bb.max,
+            };
+            let (f, _) = play.player;
+            let pb = crate::entity::player::Aabb {
+                min: [f[0] - 0.3, f[1], f[2] - 0.3],
+                max: [f[0] + 0.3, f[1] + 1.8, f[2] + 0.3],
+            };
+            if !self.respawn_pending && pb.intersects(&b) {
+                to_player.push((bb.min, bb.max, d));
+            }
+            for m in self.mobs.list.iter_mut() {
+                if !m.dead && m.bb.intersects(&b) {
+                    m.push_move(&self.world, d[0], d[1], d[2]);
+                }
+            }
+            let mut fx = Vec::new();
+            for it in play.items.iter_mut() {
+                if !it.e.dead && it.e.bb.intersects(&b) {
+                    it.e.move_entity(
+                        &self.world as &dyn crate::world::BlockView,
+                        d[0],
+                        d[1],
+                        d[2],
+                        false,
+                        &[],
+                        &mut fx,
+                    );
+                }
+            }
+            for f in fx {
+                if let crate::entity::base::Fx::Sound(..) = f {
+                    play.fx.push(f);
+                }
+            }
+        }
+        if !to_player.is_empty() {
+            events.push(Event::Push(to_player));
+        }
+    }
+
     /// Order-independent digest of the whole simulation state.
     pub fn state_hash(&self) -> u64 {
         let mut h: u64 = 0xcbf2_9ce4_8422_2325;
@@ -2645,7 +2747,9 @@ mod tests {
         assert_eq!(sim.world.block(x + 2, y, z), block::LIT_REDSTONE_LAMP);
 
         // Piston facing east with cobblestone in front; a lever on the
-        // stone behind it powers it.
+        // stone behind it powers it. The block event runs at the end of the
+        // tick, then TileEntityPiston moves the blocks over two ticks and
+        // places them on the third.
         let w = &mut sim.world;
         let pz = z + 6;
         w.set_block(x, y, pz, block::PISTON, 5, 3);
@@ -2653,12 +2757,39 @@ mod tests {
         w.set_block(x - 1, y, pz, block::STONE, 0, 3);
         w.set_block(x - 1, y + 1, pz, block::LEVER, 5, 3);
         w.toggle_lever(x - 1, y + 1, pz);
+        assert_eq!(
+            w.meta(x, y, pz),
+            5,
+            "the event waits for the end of the tick"
+        );
+        steps(&mut sim, 1);
+        let w = &mut sim.world;
         assert_eq!(w.meta(x, y, pz), 13);
+        assert_eq!(w.block(x + 1, y, pz), block::PISTON_EXTENSION);
+        assert_eq!(w.block(x + 2, y, pz), block::PISTON_EXTENSION);
+        assert_eq!(w.moving.len(), 2);
+        assert_eq!(
+            w.moving_at([x + 2, y, pz]).unwrap().block,
+            block::COBBLESTONE
+        );
+        assert_eq!(w.moving_at([x + 2, y, pz]).unwrap().progress, 0.5);
+        steps(&mut sim, 2);
+        let w = &mut sim.world;
         assert_eq!(w.block(x + 1, y, pz), block::PISTON_HEAD);
         assert_eq!(w.block(x + 2, y, pz), block::COBBLESTONE);
+        assert!(w.moving.is_empty());
         w.toggle_lever(x - 1, y + 1, pz);
         assert_eq!(w.meta(x, y, pz), 5);
+        steps(&mut sim, 1);
+        let w = &mut sim.world;
+        // Retracting: the base becomes a moving block that turns back into
+        // the piston; the head is removed at once.
+        assert_eq!(w.block(x, y, pz), block::PISTON_EXTENSION);
         assert_eq!(w.block(x + 1, y, pz), block::AIR);
+        steps(&mut sim, 2);
+        let w = &mut sim.world;
+        assert_eq!(w.block(x, y, pz), block::PISTON);
+        assert_eq!(w.meta(x, y, pz), 5);
         assert_eq!(w.block(x + 2, y, pz), block::COBBLESTONE);
 
         // A sticky piston pulls the block back.
@@ -2668,10 +2799,44 @@ mod tests {
         w.set_block(x - 1, y, sz, block::STONE, 0, 3);
         w.set_block(x - 1, y + 1, sz, block::LEVER, 5, 3);
         w.toggle_lever(x - 1, y + 1, sz);
+        steps(&mut sim, 3);
+        let w = &mut sim.world;
         assert_eq!(w.block(x + 2, y, sz), block::COBBLESTONE);
+        assert_eq!(w.block(x + 1, y, sz), block::PISTON_HEAD);
         w.toggle_lever(x - 1, y + 1, sz);
-        assert_eq!(w.block(x + 1, y, sz), block::COBBLESTONE);
+        steps(&mut sim, 1);
+        let w = &mut sim.world;
+        assert_eq!(w.block(x + 1, y, sz), block::PISTON_EXTENSION);
         assert_eq!(w.block(x + 2, y, sz), block::AIR);
+        steps(&mut sim, 2);
+        let w = &mut sim.world;
+        assert_eq!(w.block(x + 1, y, sz), block::COBBLESTONE);
+        assert_eq!(w.block(x, y, sz), block::STICKY_PISTON);
+    }
+
+    /// TileEntityPiston.launchWithSlimeBlock moves an item lying in front.
+    #[test]
+    fn piston_pushes_items() {
+        let (mut sim, x, y, z) = redstone_sim();
+        let w = &mut sim.world;
+        w.set_block(x, y, z, block::PISTON, 5, 3);
+        w.set_block(x - 1, y, z, block::STONE, 0, 3);
+        w.set_block(x - 1, y + 1, z, block::LEVER, 5, 3);
+        let mut r = JavaRandom::new(1);
+        let mut it = crate::entity::item::ItemEntity::new(
+            999,
+            crate::item::Stack::new(crate::item::STICK, 0, 1),
+            [x as f64 + 1.5, y as f64 + 0.125, z as f64 + 0.5],
+            &mut r,
+        );
+        it.e.motion = [0.0; 3];
+        it.pickup_delay = 100;
+        sim.play.items.push(it);
+        let before = sim.play.items[0].e.pos[0];
+        sim.world.toggle_lever(x - 1, y + 1, z);
+        steps(&mut sim, 3);
+        let after = sim.play.items[0].e.pos[0];
+        assert!(after > before + 0.4, "pushed from {before} to {after}");
     }
 
     #[test]

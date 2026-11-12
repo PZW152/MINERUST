@@ -24,6 +24,7 @@ pub const REEDS_ITEM: ItemId = 338;
 pub const DYE: ItemId = 351;
 pub const MELON: ItemId = 360;
 pub const EMERALD: ItemId = 388;
+pub const NETHER_STAR: ItemId = 399;
 
 /// An inventory stack: item id, damage/metadata, count.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -169,6 +170,12 @@ pub fn max_stack(id: ItemId) -> u32 {
         return 64;
     }
     crate::item_table::get(id).map_or(64, |d| d.stack)
+}
+
+/// `Item.getHasSubtypes`: the damage value tells items apart. Damageable
+/// items use it as wear instead.
+pub fn has_subtypes(id: ItemId) -> bool {
+    max_damage(id) == 0
 }
 
 /// `Item.getMaxDamage`
@@ -485,7 +492,7 @@ pub fn hardness(id: u8) -> f32 {
         GRASS | GRAVEL | CLAY | MYCELIUM => 0.6,
         DIRT | SAND | ICE | PACKED_ICE => 0.5,
         COBBLESTONE | PLANKS | LOG | LOG2 | STONE_SLAB | MOSSY_COBBLESTONE => 2.0,
-        BEDROCK => -1.0,
+        BEDROCK | PISTON_EXTENSION => -1.0,
         FLOWING_WATER | WATER | FLOWING_LAVA | LAVA => 100.0,
         GOLD_ORE | IRON_ORE | COAL_ORE | LAPIS_ORE | DIAMOND_ORE | REDSTONE_ORE | EMERALD_ORE => {
             3.0

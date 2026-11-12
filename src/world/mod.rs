@@ -24,6 +24,14 @@ pub trait BlockView {
     fn peek_meta(&self, x: i32, y: i32, z: i32) -> u8;
     /// Whether the chunk containing column (x, z) is available.
     fn loaded(&self, x: i32, z: i32) -> bool;
+    /// `World.canLightningStrikeAt`: rain falls on this block.
+    fn lightning_at(&self, _x: i32, _y: i32, _z: i32) -> bool {
+        false
+    }
+    /// The tile entity of a `piston_extension` block.
+    fn moving(&self, _x: i32, _y: i32, _z: i32) -> Option<redstone::MovingView> {
+        None
+    }
 }
 
 impl BlockView for ServerWorld {
@@ -35,5 +43,11 @@ impl BlockView for ServerWorld {
     }
     fn loaded(&self, x: i32, z: i32) -> bool {
         ServerWorld::loaded(self, x, z)
+    }
+    fn lightning_at(&self, x: i32, y: i32, z: i32) -> bool {
+        ServerWorld::lightning_at(self, x, y, z)
+    }
+    fn moving(&self, x: i32, y: i32, z: i32) -> Option<redstone::MovingView> {
+        self.moving_at([x, y, z]).map(|m| m.view())
     }
 }

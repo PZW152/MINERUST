@@ -35,6 +35,9 @@ pub struct MeshChunk {
     pub height: Box<[i32; 256]>,
 }
 
+#[path = "rb.rs"]
+pub(crate) mod rb;
+
 const W: usize = 48;
 
 struct Region<'a> {
@@ -384,6 +387,8 @@ struct Ctx<'a> {
     r: Region<'a>,
     atlas: &'a Atlas,
     noise: &'a BiomeNoise,
+    /// `RenderBlocks.renderAllFaces`
+    all_faces: bool,
 }
 
 impl Ctx<'_> {
@@ -455,6 +460,7 @@ pub fn build(chunks: &[MeshChunk; 9], atlas: &Atlas, noise: &BiomeNoise) -> Chun
         r: Region::new(chunks),
         atlas,
         noise,
+        all_faces: false,
     };
     let r = &cx.r;
     let c = &chunks[4].data;
@@ -478,96 +484,7 @@ pub fn build(chunks: &[MeshChunk; 9], atlas: &Atlas, noise: &BiomeNoise) -> Chun
                     &mut opaque
                 };
                 let before = out.len();
-                match info.shape {
-                    Shape::Cube => cube(&cx, out, id, meta, x, y, z),
-                    Shape::Liquid => liquid(&cx, out, id, x, y, z),
-                    Shape::Cross => {
-                        let tint = match id {
-                            block::TALLGRASS if meta != 0 => cx.grass_color_at(x, y, z),
-                            block::REEDS => cx.grass_color_at(x, y, z),
-                            _ => [1.0; 3],
-                        };
-                        let (mut px, mut py, mut pz) = (lx as f64, y as f64, lz as f64);
-                        let h = pos_hash(r.ox + x, y, r.oz + z);
-                        if id == block::TALLGRASS {
-                            px += ((h >> 16 & 15) as f32 / 15.0f32) as f64 * 0.5 - 0.25;
-                            py += (((h >> 20 & 15) as f32 / 15.0f32) as f64 - 1.0) * 0.2;
-                            pz += ((h >> 24 & 15) as f32 / 15.0f32) as f64 * 0.5 - 0.25;
-                        } else if id == block::RED_FLOWER || id == block::YELLOW_FLOWER {
-                            px += (((h >> 16 & 15) as f32 / 15.0f32) as f64 - 0.5) * 0.3;
-                            pz += (((h >> 24 & 15) as f32 / 15.0f32) as f64 - 0.5) * 0.3;
-                        }
-                        if let Some(t) = cx.rect(id, meta, 0) {
-                            crossed(
-                                out,
-                                t,
-                                px,
-                                py,
-                                pz,
-                                col(tint[0], tint[1], tint[2]),
-                                light_bytes(r.bright(x, y, z)),
-                            );
-                        }
-                    }
-                    Shape::DoublePlant => double_plant(&cx, out, meta, x, y, z),
-                    Shape::Vine => vine(&cx, out, meta, x, y, z),
-                    Shape::LilyPad => lily_pad(&cx, out, x, y, z),
-                    Shape::Cactus => boxed(
-                        &cx,
-                        out,
-                        id,
-                        meta,
-                        x,
-                        y,
-                        z,
-                        [0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
-                        0.0625,
-                    ),
-                    Shape::SnowLayer => {
-                        let h = ((meta & 7) + 1) as f32 * 0.125;
-                        boxed(
-                            &cx,
-                            out,
-                            id,
-                            meta,
-                            x,
-                            y,
-                            z,
-                            [0.0, 0.0, 0.0, 1.0, h, 1.0],
-                            0.0,
-                        )
-                    }
-                    Shape::Slab => {
-                        let b = if meta & 8 != 0 {
-                            [0.0, 0.5, 0.0, 1.0, 1.0, 1.0]
-                        } else {
-                            [0.0, 0.0, 0.0, 1.0, 0.5, 1.0]
-                        };
-                        boxed(&cx, out, id, meta, x, y, z, b, 0.0)
-                    }
-                    Shape::Chest => boxed(
-                        &cx,
-                        out,
-                        id,
-                        meta,
-                        x,
-                        y,
-                        z,
-                        [0.0625, 0.0, 0.0625, 0.9375, 0.875, 0.9375],
-                        0.0,
-                    ),
-                    Shape::Torch => torch(&cx, out, id, meta, x, y, z),
-                    Shape::Stairs | Shape::Fence | Shape::Pane | Shape::Door | Shape::Boxes => {
-                        shaped(&cx, out, id, meta, x, y, z)
-                    }
-                    Shape::Ladder => ladder(&cx, out, meta, x, y, z),
-                    Shape::Rail => rail(&cx, out, id, meta, x, y, z),
-                    Shape::Crops => crops(&cx, out, id, meta, x, y, z),
-                    Shape::Wire => wire(&cx, out, meta, x, y, z),
-                    Shape::Fire => fire(&cx, out, x, y, z),
-                    Shape::Tripwire => tripwire(&cx, out, meta, x, y, z),
-                    Shape::Cocoa | Shape::None => {}
-                }
+                mesh_block(&cx, out, id, meta, x, y, z);
                 if out.len() != before {
                     max_y = max_y.max((y + 1) as f32);
                 }
@@ -581,6 +498,180 @@ pub fn build(chunks: &[MeshChunk; 9], atlas: &Atlas, noise: &BiomeNoise) -> Chun
         translucent,
         max_y,
     }
+}
+
+/// One block of the region (`RenderBlocks.renderBlockByRenderType`).
+fn mesh_block(cx: &Ctx, out: &mut Vec<Vertex>, id: u8, meta: i32, x: i32, y: i32, z: i32) {
+    let r = &cx.r;
+    let (lx, lz) = (x - 16, z - 16);
+    let info = block::info(id);
+    match info.shape {
+        Shape::Cube => {
+            let mut rb = rb::Rb::new(cx, out, id, meta);
+            match id {
+                // renderPistonBase (16), renderBlockLog (31), renderBlockQuartz (39)
+                block::PISTON | block::STICKY_PISTON => rb.render_piston_base(x, y, z, false),
+                block::LOG | block::LOG2 | block::HAY_BLOCK => rb.render_block_log(x, y, z),
+                block::QUARTZ_BLOCK => rb.render_block_quartz(x, y, z),
+                _ => rb.render_standard(x, y, z),
+            };
+        }
+        Shape::Boxes if id == block::PISTON_HEAD => {
+            // renderPistonExtension (17)
+            rb::Rb::new(cx, out, id, meta).render_piston_extension(x, y, z, true);
+        }
+        Shape::Liquid => liquid(&cx, out, id, x, y, z),
+        Shape::Cross => {
+            let tint = match id {
+                block::TALLGRASS if meta != 0 => cx.grass_color_at(x, y, z),
+                block::REEDS => cx.grass_color_at(x, y, z),
+                _ => [1.0; 3],
+            };
+            let (mut px, mut py, mut pz) = (lx as f64, y as f64, lz as f64);
+            let h = pos_hash(r.ox + x, y, r.oz + z);
+            if id == block::TALLGRASS {
+                px += ((h >> 16 & 15) as f32 / 15.0f32) as f64 * 0.5 - 0.25;
+                py += (((h >> 20 & 15) as f32 / 15.0f32) as f64 - 1.0) * 0.2;
+                pz += ((h >> 24 & 15) as f32 / 15.0f32) as f64 * 0.5 - 0.25;
+            } else if id == block::RED_FLOWER || id == block::YELLOW_FLOWER {
+                px += (((h >> 16 & 15) as f32 / 15.0f32) as f64 - 0.5) * 0.3;
+                pz += (((h >> 24 & 15) as f32 / 15.0f32) as f64 - 0.5) * 0.3;
+            }
+            if let Some(t) = cx.rect(id, meta, 0) {
+                crossed(
+                    out,
+                    t,
+                    px,
+                    py,
+                    pz,
+                    col(tint[0], tint[1], tint[2]),
+                    light_bytes(r.bright(x, y, z)),
+                );
+            }
+        }
+        Shape::DoublePlant => double_plant(&cx, out, meta, x, y, z),
+        Shape::Vine => vine(&cx, out, meta, x, y, z),
+        Shape::LilyPad => lily_pad(&cx, out, x, y, z),
+        Shape::Cactus => boxed(
+            &cx,
+            out,
+            id,
+            meta,
+            x,
+            y,
+            z,
+            [0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            0.0625,
+        ),
+        Shape::SnowLayer => {
+            let h = ((meta & 7) + 1) as f32 * 0.125;
+            boxed(
+                &cx,
+                out,
+                id,
+                meta,
+                x,
+                y,
+                z,
+                [0.0, 0.0, 0.0, 1.0, h, 1.0],
+                0.0,
+            )
+        }
+        Shape::Slab => {
+            let b = if meta & 8 != 0 {
+                [0.0, 0.5, 0.0, 1.0, 1.0, 1.0]
+            } else {
+                [0.0, 0.0, 0.0, 1.0, 0.5, 1.0]
+            };
+            boxed(&cx, out, id, meta, x, y, z, b, 0.0)
+        }
+        Shape::Chest => boxed(
+            &cx,
+            out,
+            id,
+            meta,
+            x,
+            y,
+            z,
+            [0.0625, 0.0, 0.0625, 0.9375, 0.875, 0.9375],
+            0.0,
+        ),
+        Shape::Torch => torch(&cx, out, id, meta, x, y, z),
+        Shape::Stairs | Shape::Fence | Shape::Pane | Shape::Door | Shape::Boxes => {
+            shaped(&cx, out, id, meta, x, y, z)
+        }
+        Shape::Ladder => ladder(&cx, out, meta, x, y, z),
+        Shape::Rail => rail(&cx, out, id, meta, x, y, z),
+        Shape::Crops => crops(&cx, out, id, meta, x, y, z),
+        Shape::Wire => wire(&cx, out, meta, x, y, z),
+        Shape::Fire => fire(&cx, out, x, y, z),
+        Shape::Tripwire => tripwire(&cx, out, meta, x, y, z),
+        Shape::Cocoa | Shape::None => {}
+    }
+}
+
+/// What `TileEntityRendererPiston` draws for one moving block.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum MovingDraw {
+    /// `renderBlockAllFaces`
+    Block,
+    /// `renderPistonExtensionAllFaces(piston_head, .., long)`; `sprite`
+    /// overrides the front face (`func_150086_a`) with the base's texture.
+    Head {
+        long: bool,
+        sticky_sprite: Option<bool>,
+    },
+    /// `renderPistonBaseAllFaces`
+    Base,
+}
+
+/// `TileEntityRendererPiston`: a block drawn with every face where it
+/// stands, lit by the world around it; the renderer adds the offset.
+/// Vertices are relative to the chunk holding `pos`.
+pub fn build_single(
+    chunks: &[MeshChunk; 9],
+    atlas: &Atlas,
+    noise: &BiomeNoise,
+    pos: [i32; 3],
+    id: u8,
+    meta: i32,
+    draw: MovingDraw,
+) -> Vec<Vertex> {
+    let mut cx = Ctx {
+        r: Region::new(chunks),
+        atlas,
+        noise,
+        all_faces: true,
+    };
+    let (x, y, z) = (pos[0] - cx.r.ox, pos[1], pos[2] - cx.r.oz);
+    let mut out = Vec::new();
+    if !(0..256).contains(&y) {
+        return out;
+    }
+    // The world holds piston_extension with the stored metadata here.
+    cx.r.blocks[idx(x, y, z)] = block::PISTON_EXTENSION;
+    cx.r.meta[idx(x, y, z)] = meta as u8;
+    match draw {
+        MovingDraw::Block => mesh_block(&cx, &mut out, id, meta, x, y, z),
+        MovingDraw::Head {
+            long,
+            sticky_sprite,
+        } => {
+            let mut rb = rb::Rb::new(&cx, &mut out, block::PISTON_HEAD, meta);
+            if let Some(st) = sticky_sprite {
+                rb.head_sprite = Some(rb::Icon::new(atlas.named(if st {
+                    "piston_top_sticky"
+                } else {
+                    "piston_top_normal"
+                })));
+            }
+            rb.render_piston_extension(x, y, z, long);
+        }
+        MovingDraw::Base => {
+            rb::Rb::new(&cx, &mut out, id, meta).render_piston_base(x, y, z, true);
+        }
+    }
+    out
 }
 
 /// `renderStandardBlockWithAmbientOcclusion`
@@ -602,7 +693,7 @@ fn cube(cx: &Ctx, out: &mut Vec<Vertex>, id: u8, meta: i32, x: i32, y: i32, z: i
             block::ICE | block::GLASS => nid != id && !block::info(nid).opaque,
             _ => !block::info(nid).opaque,
         };
-        if !visible {
+        if !visible && !cx.all_faces {
             continue;
         }
         let rect = if snowed && f >= 2 {
@@ -708,7 +799,7 @@ fn boxed(
         };
         let (qx, qy, qz) = (x + n[0], y + n[1], z + n[2]);
         let nid = r.block(qx, qy, qz);
-        if on_boundary && block::info(nid).opaque {
+        if on_boundary && block::info(nid).opaque && !cx.all_faces {
             continue;
         }
         if id == block::SNOW_LAYER && f >= 2 && nid == id && r.meta(qx, qy, qz) >= meta {
@@ -1215,7 +1306,7 @@ fn boxes(
                 b[axis] <= 0.0
             };
             let (qx, qy, qz) = (x + n[0], y + n[1], z + n[2]);
-            if on_boundary && block::info(r.block(qx, qy, qz)).opaque {
+            if on_boundary && block::info(r.block(qx, qy, qz)).opaque && !cx.all_faces {
                 continue;
             }
             let Some((rect, flip)) = tex(bi, f) else {

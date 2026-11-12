@@ -16,6 +16,8 @@ pub struct Atlas {
     /// `[u0, v0, u1, v1]` per tile.
     pub rects: Vec<[f32; 4]>,
     /// Tile for `(id, meta, face)`: index `(id * 16 + meta) * 6 + face`; `u16::MAX` if none.
+    /// Block texture name -> tile (`TextureMap.registerIcon`).
+    pub names: HashMap<&'static str, u16>,
     pub face_tile: Vec<u16>,
     pub grass_overlay: u16,
     pub grass_side_snowed: u16,
@@ -502,6 +504,7 @@ impl Atlas {
             mips: b.mips,
             rects: b.rects,
             face_tile,
+            names,
             grass_overlay,
             grass_side_snowed,
             sunflower_front,
@@ -521,6 +524,13 @@ impl Atlas {
             rect: self.rects[t as usize],
             size: cell as f32,
         })
+    }
+
+    /// A block texture by name.
+    pub fn named(&self, name: &str) -> [f32; 4] {
+        self.names
+            .get(name)
+            .map_or([0.0; 4], |&t| self.rects[t as usize])
     }
 
     #[inline]

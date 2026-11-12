@@ -23,6 +23,8 @@ use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
+type MovingKey = ([i32; 3], u8, u8, crate::render::mesher::MovingDraw);
+
 struct ClientChunk {
     mc: MeshChunk,
     /// Everything that can write into it has been populated.
@@ -33,6 +35,8 @@ struct ClientChunk {
 #[derive(Default)]
 pub struct ClientWorld {
     chunks: HashMap<(i32, i32), ClientChunk>,
+    /// `TileEntityPiston`s the server last listed.
+    pub moving: Vec<([i32; 3], crate::world::redstone::MovingView)>,
     /// Dimension of the chunks held (no rain outside the overworld).
     pub dim: i32,
 }
@@ -112,6 +116,9 @@ impl BlockView for ClientWorld {
     }
     fn loaded(&self, x: i32, z: i32) -> bool {
         self.chunks.contains_key(&(x >> 4, z >> 4))
+    }
+    fn moving(&self, x: i32, y: i32, z: i32) -> Option<crate::world::redstone::MovingView> {
+        self.moving.iter().find(|m| m.0 == [x, y, z]).map(|m| m.1)
     }
 }
 
@@ -204,6 +211,10 @@ pub struct Game {
     /// Server view of the inventory and open window.
     pub view: InvView,
     items: Vec<ItemView>,
+    /// `EntityPickupFX`: collected items flying to the player, with age.
+    pickups: Vec<(ItemView, i32)>,
+    /// `TileEntityRendererPiston` geometry by position, block, metadata and draw mode.
+    moving_mesh: HashMap<MovingKey, Vec<crate::render::mesher::Vertex>>,
     /// Sound output (absent when no asset directory or device was found).
     pub audio: Option<crate::audio::Audio>,
     weather: crate::sim::Weather,
@@ -449,6 +460,8 @@ impl Game {
                 furnace: None,
             },
             items: Vec::new(),
+            pickups: Vec::new(),
+            moving_mesh: HashMap::new(),
             audio: None,
             weather: Default::default(),
             rain_sound: 0,
@@ -536,6 +549,88 @@ impl Game {
         )
     }
 
+    /// `TileEntityRendererPiston.renderTileEntityAt` for every moving block.
+    fn render_moving(
+        &mut self,
+        out: &mut Vec<crate::render::mesher::Vertex>,
+        eye: [f64; 3],
+        partial: f32,
+    ) {
+        use crate::render::mesher::{build_single, MovingDraw};
+        let list = self.world.moving.clone();
+        for (pos, m) in list {
+            if block::material(m.block) == block::Material::Air || m.progress(partial) >= 1.0 {
+                continue;
+            }
+            let prog = m.progress(partial);
+            let off = m.offset(partial);
+            // (what to draw, whether the render offset applies)
+            let mut parts = Vec::new();
+            if m.block == block::PISTON_HEAD && prog < 0.5 {
+                parts.push((
+                    MovingDraw::Head {
+                        long: false,
+                        sticky_sprite: None,
+                    },
+                    true,
+                ));
+            } else if m.head && !m.extending {
+                parts.push((
+                    MovingDraw::Head {
+                        long: prog < 0.5,
+                        sticky_sprite: Some(m.block == block::STICKY_PISTON),
+                    },
+                    true,
+                ));
+                parts.push((MovingDraw::Base, false));
+            } else {
+                parts.push((MovingDraw::Block, true));
+            }
+            let (cx, cz) = (pos[0] >> 4, pos[2] >> 4);
+            for (draw, moves) in parts {
+                let key = (pos, m.block, m.meta, draw);
+                if !self.moving_mesh.contains_key(&key) {
+                    let mut v = Vec::with_capacity(9);
+                    for dz in -1..=1 {
+                        for dx in -1..=1 {
+                            if let Some(c) = self.world.chunks.get(&(cx + dx, cz + dz)) {
+                                v.push(c.mc.clone());
+                            }
+                        }
+                    }
+                    let Ok(nine) = <[MeshChunk; 9]>::try_from(v) else {
+                        continue;
+                    };
+                    let verts = build_single(
+                        &nine,
+                        &self.atlas,
+                        &self.noise,
+                        pos,
+                        m.block,
+                        m.meta as i32,
+                        draw,
+                    );
+                    self.moving_mesh.insert(key, verts);
+                }
+                let o = if moves { off } else { [0.0; 3] };
+                let base = [
+                    (cx * 16) as f64 - eye[0] + o[0] as f64,
+                    -eye[1] + o[1] as f64,
+                    (cz * 16) as f64 - eye[2] + o[2] as f64,
+                ];
+                for v in &self.moving_mesh[&key] {
+                    let mut w = *v;
+                    w.pos = [
+                        (v.pos[0] as f64 + base[0]) as f32,
+                        (v.pos[1] as f64 + base[1]) as f32,
+                        (v.pos[2] as f64 + base[2]) as f32,
+                    ];
+                    out.push(w);
+                }
+            }
+        }
+    }
+
     fn mesh_input(&self, cx: i32, cz: i32) -> Option<Box<[MeshChunk; 9]>> {
         if !self.world.chunks.get(&(cx, cz))?.ready {
             return None;
@@ -621,6 +716,25 @@ impl Game {
                     }
                 }
                 Event::Items(v) => self.items = v,
+                Event::Moving(v) => {
+                    self.world.moving = v;
+                    let live: HashSet<[i32; 3]> = self.world.moving.iter().map(|m| m.0).collect();
+                    self.moving_mesh.retain(|k, _| live.contains(&k.0));
+                }
+                Event::Collect(v) => {
+                    // NetHandlerPlayClient.handleCollectItem
+                    for it in v {
+                        self.pickups.push((it, 0));
+                    }
+                }
+                Event::Push(v) => {
+                    for (min, max, d) in v {
+                        let b = crate::entity::player::Aabb { min, max };
+                        if self.player.bb.intersects(&b) {
+                            self.player.push_move(&self.world, d[0], d[1], d[2]);
+                        }
+                    }
+                }
                 Event::Mobs(m, a) => {
                     // EntityLivingBase.onDeathUpdate: a puff of smoke when the body vanishes
                     for v in &m {
@@ -669,6 +783,11 @@ impl Game {
                         match kind {
                             "portal" => self.particles.portal(p, m),
                             "heart" => self.particles.heart(p, m),
+                            "bubble" => self.particles.bubble(p, m),
+                            "splash" => self.particles.splash(p, m),
+                            "reddust" => self
+                                .particles
+                                .reddust(p, [m[0] as f32, m[1] as f32, m[2] as f32]),
                             "smoke" => self.particles.smoke(p, m, false),
                             "slime" => {
                                 if let Some(r) = slime {
@@ -935,7 +1054,7 @@ impl Game {
                 );
                 let id = self.world.peek_block(x, y, z);
                 if id != crate::block::AIR {
-                    self.block_sound(id, [x, y, z], "step", 0.15, 1.0);
+                    self.block_sound(id, [x, y, z], "step");
                 }
             }
             if let Some(a) = self.audio.as_mut() {
@@ -1097,6 +1216,11 @@ impl Game {
     /// Per-tick particle spawning around the player.
     fn tick_particles(&mut self) {
         self.particles.tick(&self.world);
+        // EntityPickupFX.onUpdate: three ticks
+        for p in self.pickups.iter_mut() {
+            p.1 += 1;
+        }
+        self.pickups.retain(|p| p.1 < 3);
         // EntityEnderman.onLivingUpdate: two portal particles a tick.
         for v in &self.mobs {
             if v.kind == crate::entity::mob::Kind::Enderman && v.death_time == 0 {
@@ -1317,27 +1441,24 @@ impl Game {
         }
     }
 
-    /// `Block.stepSound` break sound at a block.
-    fn block_sound(&mut self, id: u8, pos: [i32; 3], kind: &str, vol: f32, pitch: f32) {
-        let (name, p) = crate::audio::step_sound(id);
-        let ev = if kind == "dig" && id == crate::block::GLASS
-            || id == crate::block::GLASS_PANE
-            || id == crate::block::ICE
-        {
-            if kind == "dig" {
-                "random.glass".to_string()
-            } else {
-                format!("{kind}.stone")
-            }
-        } else {
-            format!("{kind}.{name}")
+    /// `Block.stepSound` at a block: `dig` is the break sound
+    /// (`RenderGlobal.playAuxSFX` 2001), `hit` the mining tick
+    /// (`PlayerControllerMP.onPlayerDamageBlock`), `place` `ItemBlock`'s,
+    /// `step` `Entity.playStepSound`'s.
+    fn block_sound(&mut self, id: u8, pos: [i32; 3], kind: &str) {
+        let t = crate::block::step_sound(id);
+        let (name, vol, pitch) = match kind {
+            "dig" => (t.dig, (t.volume + 1.0) / 2.0, t.pitch * 0.8),
+            "hit" => (t.step, (t.volume + 1.0) / 8.0, t.pitch * 0.5),
+            "place" => (t.place, (t.volume + 1.0) / 2.0, t.pitch * 0.8),
+            _ => (t.step, t.volume * 0.15, t.pitch),
         };
         let c = [
             pos[0] as f64 + 0.5,
             pos[1] as f64 + 0.5,
             pos[2] as f64 + 0.5,
         ];
-        self.sound(&ev, Some(c), vol, pitch * p);
+        self.sound(name, Some(c), vol, pitch);
     }
 
     /// Damage, knockback and experience from mobs.
@@ -1531,14 +1652,14 @@ impl Game {
         let id = self.world.peek_block(pos[0], pos[1], pos[2]);
         if self.mode == GameMode::Creative {
             self.hit_delay = 5;
-            self.block_sound(id, pos, "dig", 1.0, 0.8);
+            self.block_sound(id, pos, "dig");
             let (dt, dti) = self.debris(pos);
             self.particles.destroy(pos, dt, dti);
             let _ = self.sim.commands.send(Command::Dig(pos));
             return;
         }
         if self.ticks % 4 == 0 {
-            self.block_sound(id, pos, "step", 0.25, 0.5);
+            self.block_sound(id, pos, "hit");
         }
         if let Some((_, side)) = self.selected {
             let (dt, dti) = self.debris(pos);
@@ -1551,7 +1672,7 @@ impl Game {
             Some(d) if d.pos == pos => {
                 let damage = d.damage + step;
                 if damage >= 1.0 {
-                    self.block_sound(id, pos, "dig", 1.0, 0.8);
+                    self.block_sound(id, pos, "dig");
                     let (dt, dti) = self.debris(pos);
                     self.particles.destroy(pos, dt, dti);
                     let _ = self.sim.commands.send(Command::Dig(pos));
@@ -1564,7 +1685,7 @@ impl Game {
             }
             _ => {
                 if step >= 1.0 {
-                    self.block_sound(id, pos, "dig", 1.0, 0.8);
+                    self.block_sound(id, pos, "dig");
                     let (dt, dti) = self.debris(pos);
                     self.particles.destroy(pos, dt, dti);
                     let _ = self.sim.commands.send(Command::Dig(pos));
@@ -1584,7 +1705,7 @@ impl Game {
                     let p = [b[0] + n[0], b[1] + n[1], b[2] + n[2]];
                     if crate::block::material(self.world.peek_block(p[0], p[1], p[2])).replaceable()
                     {
-                        self.block_sound(id, p, "dig", 1.0, 0.8);
+                        self.block_sound(id, p, "place");
                     }
                 }
                 let _ = self.sim.commands.send(Command::Use {
@@ -2319,6 +2440,48 @@ impl Game {
                 ],
                 fuse,
                 partial,
+                light,
+            );
+        }
+        // TileEntityRendererPiston
+        self.render_moving(&mut dynamic, eye, partial);
+        // EntityPickupFX.renderParticle
+        for (it, age) in &self.pickups {
+            let mut f = (*age as f32 + partial) / 3.0;
+            f *= f;
+            let t = partial as f64;
+            let d = it.pos;
+            let pl = [
+                self.player.prev_pos[0] + (self.player.pos[0] - self.player.prev_pos[0]) * t,
+                self.player.prev_pos[1] + (self.player.pos[1] - self.player.prev_pos[1]) * t - 0.5,
+                self.player.prev_pos[2] + (self.player.pos[2] - self.player.prev_pos[2]) * t,
+            ];
+            let p = [
+                d[0] + (pl[0] - d[0]) * f as f64,
+                d[1] + (pl[1] - d[1]) * f as f64,
+                d[2] + (pl[2] - d[2]) * f as f64,
+            ];
+            let (lx, ly, lz) = (
+                math::floor_double(p[0]),
+                math::floor_double(p[1]),
+                math::floor_double(p[2]),
+            );
+            let light = (
+                self.world.light(true, lx, ly, lz),
+                self.world.light(false, lx, ly, lz),
+            );
+            entities::item_entity(
+                &mut dynamic,
+                &self.atlas,
+                &it.stack,
+                [
+                    (p[0] - eye[0]) as f32,
+                    (p[1] - eye[1]) as f32 - 0.125,
+                    (p[2] - eye[2]) as f32,
+                ],
+                it.age as f32 + partial,
+                it.hover,
+                self.player.yaw,
                 light,
             );
         }

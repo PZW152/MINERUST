@@ -730,6 +730,11 @@ impl Mob {
     }
 
     /// `Entity.moveEntity` (no sneaking).
+    /// `Entity.moveEntity` from outside the mob's own update (pistons).
+    pub fn push_move(&mut self, w: &ServerWorld, dx: f64, dy: f64, dz: f64) {
+        self.move_entity(w, dx, dy, dz, false);
+    }
+
     fn move_entity(&mut self, w: &ServerWorld, mut dx: f64, mut dy: f64, mut dz: f64, web: bool) {
         if web {
             dx *= 0.25;

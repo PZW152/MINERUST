@@ -55,6 +55,8 @@ enum Kind {
     Note,
     Portal,
     Heart,
+    Bubble,
+    Reddust,
 }
 
 pub struct Particles {
@@ -371,6 +373,59 @@ impl Particles {
         self.add(p);
     }
 
+    /// `EntityBubbleFX`
+    pub fn bubble(&mut self, pos: [f64; 3], m: [f64; 3]) {
+        let mut p = self.moving(pos, m);
+        p.color = [1.0, 1.0, 1.0, 1.0];
+        p.sprite = Sprite::Index(32);
+        p.scale *= self.r.next_float() * 0.6 + 0.2;
+        p.base_scale = p.scale;
+        p.motion = [
+            m[0] * 0.2f32 as f64 + ((self.rnd() * 2.0 - 1.0) as f32 * 0.02) as f64,
+            m[1] * 0.2f32 as f64 + ((self.rnd() * 2.0 - 1.0) as f32 * 0.02) as f64,
+            m[2] * 0.2f32 as f64 + ((self.rnd() * 2.0 - 1.0) as f32 * 0.02) as f64,
+        ];
+        p.max_age = (8.0 / (self.rnd() * 0.8 + 0.2)) as i32;
+        p.kind = Kind::Bubble;
+        self.add(p);
+    }
+
+    /// `EntitySplashFX` (an `EntityRainFX` with gravity 0.04)
+    pub fn splash(&mut self, pos: [f64; 3], m: [f64; 3]) {
+        let mut p = self.base(pos);
+        p.motion = [p.motion[0] * 0.3, self.rnd() * 0.2 + 0.1, p.motion[2] * 0.3];
+        p.gravity = 0.04;
+        p.sprite = Sprite::Index(19 + self.r.next_int_n(4) + 1);
+        p.max_age = (8.0 / (self.rnd() * 0.8 + 0.2)) as i32;
+        if m[1] == 0.0 && (m[0] != 0.0 || m[2] != 0.0) {
+            p.motion = [m[0], m[1] + 0.1, m[2]];
+        }
+        p.kind = Kind::Rain;
+        self.add(p);
+    }
+
+    /// `EntityReddustFX` (red by default)
+    pub fn reddust(&mut self, pos: [f64; 3], rgb: [f32; 3]) {
+        let mut p = self.moving(pos, [0.0; 3]);
+        for v in &mut p.motion {
+            *v *= 0.1f32 as f64;
+        }
+        let r = if rgb[0] == 0.0 { 1.0 } else { rgb[0] };
+        let f = self.rnd() as f32 * 0.4 + 0.6;
+        p.color = [
+            ((self.rnd() * 0.2f32 as f64) as f32 + 0.8) * r * f,
+            ((self.rnd() * 0.2f32 as f64) as f32 + 0.8) * rgb[1] * f,
+            ((self.rnd() * 0.2f32 as f64) as f32 + 0.8) * rgb[2] * f,
+            1.0,
+        ];
+        p.scale *= 0.75;
+        p.base_scale = p.scale;
+        p.max_age = (8.0 / (self.rnd() * 0.8 + 0.2)) as i32;
+        p.kind = Kind::Reddust;
+        p.sprite = Sprite::Index(7);
+        self.add(p);
+    }
+
     /// `EntityDropParticleFX` (water or lava drip from a ceiling)
     pub fn drip(&mut self, pos: [f64; 3], lava: bool) {
         let mut p = self.base(pos);
@@ -428,7 +483,24 @@ impl Particles {
                 p.pos[1] += 1.0 - f;
                 return true;
             }
+            if p.kind == Kind::Bubble {
+                // EntityBubbleFX.onUpdate (the age was counted above)
+                p.motion[1] += 0.002;
+                move_particle(p, w);
+                for v in &mut p.motion {
+                    *v *= 0.85f32 as f64;
+                }
+                let b = w.peek_block(
+                    math::floor_double(p.pos[0]),
+                    math::floor_double(p.pos[1]),
+                    math::floor_double(p.pos[2]),
+                );
+                return block::material(b) == block::Material::Water;
+            }
             match p.kind {
+                Kind::Reddust => {
+                    p.sprite = Sprite::Index(7 - p.age * 8 / p.max_age);
+                }
                 Kind::Smoke => {
                     p.sprite = Sprite::Index(7 - p.age * 8 / p.max_age);
                     p.motion[1] += 0.004;
@@ -457,7 +529,7 @@ impl Particles {
                 move_particle(p, w);
             }
             let damp = match p.kind {
-                Kind::Smoke | Kind::Explode => 0.96,
+                Kind::Smoke | Kind::Explode | Kind::Reddust => 0.96,
                 Kind::Flame => 0.96,
                 Kind::Lava => 0.999,
                 Kind::Crit => 0.7,
@@ -478,7 +550,7 @@ impl Particles {
             }
             if matches!(
                 p.kind,
-                Kind::Smoke | Kind::Explode | Kind::Note | Kind::Heart
+                Kind::Smoke | Kind::Explode | Kind::Note | Kind::Heart | Kind::Reddust
             ) && p.pos[1] == p.prev[1]
             {
                 p.motion[0] *= 1.1;

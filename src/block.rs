@@ -77,6 +77,7 @@ pub const STICKY_PISTON: u8 = 29;
 pub const WEB: u8 = 30;
 pub const PISTON: u8 = 33;
 pub const PISTON_HEAD: u8 = 34;
+pub const PISTON_EXTENSION: u8 = 36;
 pub const TRAPDOOR: u8 = 96;
 pub const PORTAL: u8 = 90;
 pub const NETHER_BRICK_FENCE: u8 = 113;
@@ -556,6 +557,8 @@ fn build() -> [BlockInfo; 256] {
     t[LIT_REDSTONE_LAMP as usize] = cube(M::Iron);
     t[LIT_REDSTONE_LAMP as usize].light_value = 15;
     t[PISTON_HEAD as usize] = base(Shape::Boxes, M::Piston, false);
+    // BlockPistonMoving: render type -1, drawn by TileEntityRendererPiston.
+    t[PISTON_EXTENSION as usize] = base(Shape::None, M::Piston, false);
     // BlockPortal: a thin translucent pane that glows.
     let mut portal = base(Shape::Boxes, M::Portal, false);
     portal.light_value = 11;
@@ -1329,3 +1332,264 @@ pub const WOOL_COLORS: [&str; 16] = [
 
 /// Extra textures that are not a direct face of any block.
 pub const EXTRA_TEXTURES: [&str; 3] = ["grass_side_overlay", "water_flow", "lava_flow"];
+
+/// `Block$SoundType` (`Block.soundType*`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum StepSound {
+    Stone,
+    Wood,
+    Gravel,
+    Grass,
+    Piston,
+    Metal,
+    Glass,
+    Cloth,
+    Sand,
+    Snow,
+    Ladder,
+    Anvil,
+}
+
+/// The fields and overridden methods of a `Block$SoundType`.
+pub struct SoundType {
+    pub name: &'static str,
+    pub volume: f32,
+    pub pitch: f32,
+    /// `getBreakSound`
+    pub dig: &'static str,
+    /// `getStepResourcePath`
+    pub step: &'static str,
+    /// `getPlaceSound`
+    pub place: &'static str,
+}
+
+impl StepSound {
+    pub fn get(self) -> SoundType {
+        use StepSound::*;
+        let (name, volume, pitch) = match self {
+            Stone | Piston => ("stone", 1.0, 1.0),
+            Wood => ("wood", 1.0, 1.0),
+            Gravel => ("gravel", 1.0, 1.0),
+            Grass => ("grass", 1.0, 1.0),
+            Metal => ("stone", 1.0, 1.5),
+            Glass => ("stone", 1.0, 1.0),
+            Cloth => ("cloth", 1.0, 1.0),
+            Sand => ("sand", 1.0, 1.0),
+            Snow => ("snow", 1.0, 1.0),
+            Ladder => ("ladder", 1.0, 1.0),
+            Anvil => ("anvil", 0.3, 1.0),
+        };
+        let leak = |p: &str| -> &'static str {
+            match (p, name) {
+                ("dig", "stone") => "dig.stone",
+                ("dig", "wood") => "dig.wood",
+                ("dig", "gravel") => "dig.gravel",
+                ("dig", "grass") => "dig.grass",
+                ("dig", "cloth") => "dig.cloth",
+                ("dig", "sand") => "dig.sand",
+                ("dig", "snow") => "dig.snow",
+                ("dig", "ladder") => "dig.ladder",
+                ("dig", "anvil") => "dig.anvil",
+                ("step", "stone") => "step.stone",
+                ("step", "wood") => "step.wood",
+                ("step", "gravel") => "step.gravel",
+                ("step", "grass") => "step.grass",
+                ("step", "cloth") => "step.cloth",
+                ("step", "sand") => "step.sand",
+                ("step", "snow") => "step.snow",
+                ("step", "ladder") => "step.ladder",
+                _ => "step.anvil",
+            }
+        };
+        let dig = match self {
+            Glass => "dig.glass",
+            Ladder => "dig.wood",
+            Anvil => "dig.stone",
+            _ => leak("dig"),
+        };
+        let place = match self {
+            Glass => "step.stone",
+            Anvil => "random.anvil_land",
+            _ => dig,
+        };
+        SoundType {
+            name,
+            volume,
+            pitch,
+            dig,
+            step: leak("step"),
+            place,
+        }
+    }
+}
+
+/// `Block.stepSound` of every block, from `Block.registerBlocks`.
+pub static STEP_SOUND: [StepSound; 256] = {
+    use StepSound::*;
+    let mut t = [Stone; 256];
+    t[1] = Piston; // stone
+    t[2] = Grass; // grass
+    t[3] = Gravel; // dirt
+    t[4] = Piston; // cobblestone
+    t[5] = Wood; // planks
+    t[6] = Grass; // sapling
+    t[7] = Piston; // bedrock
+    t[12] = Sand; // sand
+    t[13] = Gravel; // gravel
+    t[14] = Piston; // gold_ore
+    t[15] = Piston; // iron_ore
+    t[16] = Piston; // coal_ore
+    t[17] = Wood; // log
+    t[18] = Grass; // leaves
+    t[19] = Grass; // sponge
+    t[20] = Glass; // glass
+    t[21] = Piston; // lapis_ore
+    t[22] = Piston; // lapis_block
+    t[23] = Piston; // dispenser
+    t[24] = Piston; // sandstone
+    t[27] = Metal; // golden_rail
+    t[28] = Metal; // detector_rail
+    t[29] = Piston; // sticky_piston
+    t[31] = Grass; // tallgrass
+    t[32] = Grass; // deadbush
+    t[33] = Piston; // piston
+    t[34] = Piston; // piston_head
+    t[35] = Cloth; // wool
+    t[37] = Grass; // yellow_flower
+    t[38] = Grass; // red_flower
+    t[39] = Grass; // brown_mushroom
+    t[40] = Grass; // red_mushroom
+    t[41] = Metal; // gold_block
+    t[42] = Metal; // iron_block
+    t[43] = Piston; // double_stone_slab
+    t[44] = Piston; // stone_slab
+    t[45] = Piston; // brick_block
+    t[46] = Grass; // tnt
+    t[47] = Wood; // bookshelf
+    t[48] = Piston; // mossy_cobblestone
+    t[49] = Piston; // obsidian
+    t[50] = Wood; // torch
+    t[51] = Wood; // fire
+    t[52] = Metal; // mob_spawner
+    t[53] = Wood; // oak_stairs
+    t[54] = Wood; // chest
+    t[56] = Piston; // diamond_ore
+    t[57] = Metal; // diamond_block
+    t[58] = Wood; // crafting_table
+    t[59] = Grass; // wheat
+    t[60] = Gravel; // farmland
+    t[61] = Piston; // furnace
+    t[62] = Piston; // lit_furnace
+    t[63] = Wood; // standing_sign
+    t[64] = Wood; // wooden_door
+    t[65] = Ladder; // ladder
+    t[66] = Metal; // rail
+    t[67] = Piston; // stone_stairs
+    t[68] = Wood; // wall_sign
+    t[69] = Wood; // lever
+    t[70] = Piston; // stone_pressure_plate
+    t[71] = Metal; // iron_door
+    t[72] = Wood; // wooden_pressure_plate
+    t[73] = Piston; // redstone_ore
+    t[74] = Piston; // lit_redstone_ore
+    t[75] = Wood; // unlit_redstone_torch
+    t[76] = Wood; // redstone_torch
+    t[77] = Piston; // stone_button
+    t[78] = Snow; // snow_layer
+    t[79] = Glass; // ice
+    t[80] = Snow; // snow
+    t[81] = Cloth; // cactus
+    t[82] = Gravel; // clay
+    t[83] = Grass; // reeds
+    t[84] = Piston; // jukebox
+    t[85] = Wood; // fence
+    t[86] = Wood; // pumpkin
+    t[87] = Piston; // netherrack
+    t[88] = Sand; // soul_sand
+    t[89] = Glass; // glowstone
+    t[90] = Glass; // portal
+    t[91] = Wood; // lit_pumpkin
+    t[92] = Cloth; // cake
+    t[93] = Wood; // unpowered_repeater
+    t[94] = Wood; // powered_repeater
+    t[95] = Glass; // stained_glass
+    t[96] = Wood; // trapdoor
+    t[98] = Piston; // stonebrick
+    t[99] = Wood; // brown_mushroom_block
+    t[100] = Wood; // red_mushroom_block
+    t[101] = Metal; // iron_bars
+    t[102] = Glass; // glass_pane
+    t[103] = Wood; // melon_block
+    t[104] = Wood; // pumpkin_stem
+    t[105] = Wood; // melon_stem
+    t[106] = Grass; // vine
+    t[107] = Wood; // fence_gate
+    t[108] = Piston; // brick_stairs
+    t[109] = Piston; // stone_brick_stairs
+    t[110] = Grass; // mycelium
+    t[111] = Grass; // waterlily
+    t[112] = Piston; // nether_brick
+    t[113] = Piston; // nether_brick_fence
+    t[114] = Piston; // nether_brick_stairs
+    t[120] = Glass; // end_portal_frame
+    t[121] = Piston; // end_stone
+    t[122] = Piston; // dragon_egg
+    t[123] = Glass; // redstone_lamp
+    t[124] = Glass; // lit_redstone_lamp
+    t[125] = Wood; // double_wooden_slab
+    t[126] = Wood; // wooden_slab
+    t[127] = Wood; // cocoa
+    t[128] = Piston; // sandstone_stairs
+    t[129] = Piston; // emerald_ore
+    t[130] = Piston; // ender_chest
+    t[133] = Metal; // emerald_block
+    t[134] = Wood; // spruce_stairs
+    t[135] = Wood; // birch_stairs
+    t[136] = Wood; // jungle_stairs
+    t[141] = Grass; // carrots
+    t[142] = Grass; // potatoes
+    t[143] = Wood; // wooden_button
+    t[144] = Piston; // skull
+    t[145] = Anvil; // anvil
+    t[146] = Wood; // trapped_chest
+    t[147] = Wood; // light_weighted_pressure_plate
+    t[148] = Wood; // heavy_weighted_pressure_plate
+    t[149] = Wood; // unpowered_comparator
+    t[150] = Wood; // powered_comparator
+    t[151] = Wood; // daylight_detector
+    t[152] = Metal; // redstone_block
+    t[153] = Piston; // quartz_ore
+    t[154] = Wood; // hopper
+    t[155] = Piston; // quartz_block
+    t[156] = Piston; // quartz_stairs
+    t[157] = Metal; // activator_rail
+    t[158] = Piston; // dropper
+    t[159] = Piston; // stained_hardened_clay
+    t[160] = Glass; // stained_glass_pane
+    t[161] = Grass; // leaves2
+    t[162] = Wood; // log2
+    t[163] = Wood; // acacia_stairs
+    t[164] = Wood; // dark_oak_stairs
+    t[170] = Grass; // hay_block
+    t[171] = Cloth; // carpet
+    t[172] = Piston; // hardened_clay
+    t[173] = Piston; // coal_block
+    t[174] = Glass; // packed_ice
+    t[175] = Grass; // double_plant
+    t
+};
+
+/// `Block.stepSound`
+pub fn step_sound(id: u8) -> SoundType {
+    STEP_SOUND[id as usize].get()
+}
+
+/// `Block.getRenderType` for the shapes entity code asks about.
+pub fn render_type(id: u8) -> Option<i32> {
+    match id {
+        FENCE | NETHER_BRICK_FENCE => Some(11),
+        139 => Some(32),
+        107 => Some(21),
+        _ => None,
+    }
+}

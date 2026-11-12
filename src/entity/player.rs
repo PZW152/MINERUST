@@ -94,6 +94,22 @@ pub fn colliding_boxes(world: &dyn BlockView, bb: &Aabb) -> Vec<Aabb> {
                 if id == 0 {
                     continue;
                 }
+                if id == crate::block::PISTON_EXTENSION {
+                    // BlockPistonMoving.getCollisionBoundingBoxFromPool
+                    if let Some(c) = world
+                        .moving(x, y, z)
+                        .and_then(|m| m.collision(world, [x, y, z]))
+                    {
+                        let b = Aabb {
+                            min: c.min,
+                            max: c.max,
+                        };
+                        if b.intersects(bb) {
+                            out.push(b);
+                        }
+                    }
+                    continue;
+                }
                 boxes.clear();
                 crate::shapes::collision(&get, id, world.peek_meta(x, y, z), x, y, z, &mut boxes);
                 for c in &boxes {
@@ -258,7 +274,13 @@ impl Player {
     }
 
     /// `BlockLiquid.getFlowVector`
-    fn flow_vector(world: &dyn BlockView, m: Material, x: i32, y: i32, z: i32) -> [f64; 3] {
+    pub(crate) fn flow_vector(
+        world: &dyn BlockView,
+        m: Material,
+        x: i32,
+        y: i32,
+        z: i32,
+    ) -> [f64; 3] {
         let decay = |x: i32, y: i32, z: i32| -> i32 {
             if block::material(world.peek_block(x, y, z)) != m {
                 return -1;
@@ -423,6 +445,11 @@ impl Player {
             self.motion[0] += (strafe * f5 - forward * f4) as f64;
             self.motion[2] += (forward * f5 + strafe * f4) as f64;
         }
+    }
+
+    /// `Entity.moveEntity` from outside (a piston pushing the player).
+    pub fn push_move(&mut self, world: &dyn BlockView, dx: f64, dy: f64, dz: f64) {
+        self.move_entity(world, dx, dy, dz);
     }
 
     fn move_entity(&mut self, world: &dyn BlockView, mut dx: f64, mut dy: f64, mut dz: f64) {

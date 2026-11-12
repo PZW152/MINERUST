@@ -535,6 +535,15 @@ pub struct ServerWorld {
     pub note_pitch: FastMap<(i32, i32, i32), i32>,
     /// Sounds, notes, dispenser shots and primed TNT for the game state.
     pub redstone_effects: Vec<super::redstone::Effect>,
+    /// `TileEntityPiston`s, in `loadedTileEntityList` order.
+    pub moving: Vec<super::redstone::Moving>,
+    /// `WorldServer.field_147490_S`: queued `addBlockEvent` calls.
+    pub block_events: Vec<super::redstone::BlockEvent>,
+    /// Boxes and displacements of `TileEntityPiston.launchWithSlimeBlock`
+    /// this tick, for the entity owners to apply.
+    pub pushes: Vec<(super::redstone::Aabb6, [f64; 3])>,
+    /// Particles the world spawned this tick (`World.spawnParticle`).
+    pub particles: Vec<(&'static str, [f64; 3], [f64; 3])>,
     /// Bounding boxes of the entities this tick (pressure plates, tripwire).
     pub occupants: Vec<super::redstone::Occupant>,
     /// Scheduled updates being run this tick (`pendingTickListEntriesThisTick`).
@@ -580,6 +589,10 @@ impl ServerWorld {
             note_powered: FastMap::default(),
             note_pitch: FastMap::default(),
             redstone_effects: Vec::new(),
+            moving: Vec::new(),
+            block_events: Vec::new(),
+            pushes: Vec::new(),
+            particles: Vec::new(),
             occupants: Vec::new(),
             ticking_now: Vec::new(),
         }
@@ -1020,6 +1033,41 @@ impl ServerWorld {
         self.material(x, y, z) == Material::Air
     }
 
+    /// `World.canLightningStrikeAt` without touching the precipitation cache.
+    pub fn lightning_at(&self, x: i32, y: i32, z: i32) -> bool {
+        if !self.raining {
+            return false;
+        }
+        let Some(c) = self.ch(x >> 4, z >> 4) else {
+            return false;
+        };
+        let (lx, lz) = (x & 15, z & 15);
+        if !c.can_see_sky(lx, y, lz) {
+            return false;
+        }
+        let mut py = c.top_filled_segment() + 15;
+        let mut h = -1;
+        while py > 0 && h == -1 {
+            let m = block::material(c.block(lx, py, lz));
+            if !m.blocks_movement() && !m.is_liquid() {
+                py -= 1;
+            } else {
+                h = py + 1;
+            }
+        }
+        if h > y {
+            return false;
+        }
+        let b = biome::get_or_ocean(c.data.biomes[(lz << 4 | lx) as usize] as i32);
+        if b.enable_snow {
+            return false;
+        }
+        if b.float_temperature(&self.provider.terrain.noise, x, y, z) <= 0.15 {
+            return false;
+        }
+        b.enable_rain
+    }
+
     /// `World.getBiomeGenForCoords`
     pub fn biome(&mut self, x: i32, z: i32) -> &'static Biome {
         match self.ch(x >> 4, z >> 4) {
@@ -1136,6 +1184,9 @@ impl ServerWorld {
             0
         };
         let before = trace_pos().map(|t| self.saved_light(true, t[0], t[1], t[2]));
+        if !self.moving.is_empty() && self.peek_block(x, y, z) == block::PISTON_EXTENSION {
+            self.moving.retain(|m| m.pos != [x, y, z]);
+        }
         let changed = self.chunk_set_block(x, y, z, id, meta);
         let mid = trace_pos().map(|t| self.saved_light(true, t[0], t[1], t[2]));
         self.update_all_light(x, y, z);
@@ -1150,9 +1201,79 @@ impl ServerWorld {
             self.mark_dirty(x, z);
             if flags & 1 != 0 {
                 self.notify_neighbours(x, y, z, old);
+                if has_comparator_input_override(id) {
+                    self.update_neighbors_about_output(x, y, z, id);
+                }
             }
         }
         changed
+    }
+
+    /// `World.updateNeighborsAboutBlockChange`: comparators reading this
+    /// block, directly or through a solid block, re-check their input.
+    pub fn update_neighbors_about_output(&mut self, x: i32, y: i32, z: i32, src: u8) {
+        const DX: [i32; 4] = [0, -1, 0, 1];
+        const DZ: [i32; 4] = [1, 0, -1, 0];
+        for d in 0..4 {
+            let (mut nx, mut nz) = (x + DX[d], z + DZ[d]);
+            let b = self.block(nx, y, nz);
+            if is_comparator(b) {
+                self.notify_one(nx, y, nz, src);
+            } else if block::info(b).normal_cube() {
+                nx += DX[d];
+                nz += DZ[d];
+                if is_comparator(self.block(nx, y, nz)) {
+                    self.notify_one(nx, y, nz, src);
+                }
+            }
+        }
+    }
+
+    /// `BlockRedstoneOre.lightUp`
+    pub fn redstone_ore_light_up(&mut self, x: i32, y: i32, z: i32) {
+        self.redstone_ore_particles(x, y, z);
+        if self.block(x, y, z) == block::REDSTONE_ORE {
+            self.set_block(x, y, z, block::LIT_REDSTONE_ORE, 0, 3);
+        }
+    }
+
+    /// `BlockRedstoneOre.addParticles` (`World.rand`)
+    pub fn redstone_ore_particles(&mut self, x: i32, y: i32, z: i32) {
+        let d = 0.0625;
+        for i in 0..6 {
+            let mut px = x as f64 + self.rand.next_float() as f64;
+            let mut py = y as f64 + self.rand.next_float() as f64;
+            let mut pz = z as f64 + self.rand.next_float() as f64;
+            let opaque =
+                |w: &mut Self, x: i32, y: i32, z: i32| block::info(w.block(x, y, z)).opaque;
+            if i == 0 && !opaque(self, x, y + 1, z) {
+                py = (y + 1) as f64 + d;
+            }
+            if i == 1 && !opaque(self, x, y - 1, z) {
+                py = y as f64 - d;
+            }
+            if i == 2 && !opaque(self, x, y, z + 1) {
+                pz = (z + 1) as f64 + d;
+            }
+            if i == 3 && !opaque(self, x, y, z - 1) {
+                pz = z as f64 - d;
+            }
+            if i == 4 && !opaque(self, x + 1, y, z) {
+                px = (x + 1) as f64 + d;
+            }
+            if i == 5 && !opaque(self, x - 1, y, z) {
+                px = x as f64 - d;
+            }
+            if px < x as f64
+                || px > (x + 1) as f64
+                || py < 0.0
+                || py > (y + 1) as f64
+                || pz < z as f64
+                || pz > (z + 1) as f64
+            {
+                self.particles.push(("reddust", [px, py, pz], [0.0; 3]));
+            }
+        }
     }
 
     pub fn set_air(&mut self, x: i32, y: i32, z: i32) -> bool {
@@ -1177,6 +1298,9 @@ impl ServerWorld {
         self.mark_dirty(x, z);
         if flags & 1 != 0 {
             self.notify_neighbours(x, y, z, id);
+            if has_comparator_input_override(id) {
+                self.update_neighbors_about_output(x, y, z, id);
+            }
         }
         true
     }
@@ -2591,4 +2715,29 @@ fn liquid_tick_rate(id: u8) -> i32 {
     } else {
         30
     }
+}
+
+/// `Block.hasComparatorInputOverride`
+pub fn has_comparator_input_override(id: u8) -> bool {
+    matches!(
+        id,
+        117 | block::CAULDRON
+            | block::CHEST
+            | 137
+            | block::DISPENSER
+            | 158
+            | block::END_PORTAL_FRAME
+            | block::FURNACE
+            | block::LIT_FURNACE
+            | 154
+            | block::JUKEBOX
+            | block::DETECTOR_RAIL
+            | 146
+            | 92
+    )
+}
+
+/// `BlockRedstoneComparator.isAssociated`
+pub fn is_comparator(id: u8) -> bool {
+    id == 149 || id == 150
 }

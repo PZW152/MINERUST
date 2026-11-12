@@ -1,25 +1,23 @@
 //! `EntityItem`: dropped item stacks.
 
-use super::player::{colliding_boxes, Aabb};
-use crate::block;
+use super::base::{Ent, Fx, Source};
+use super::player::Aabb;
+use crate::block::{self, Material};
 use crate::item::Stack;
 use crate::java::JavaRandom;
 use crate::util::math;
 use crate::world::BlockView;
 
-const SIZE: f64 = 0.25;
-
 #[derive(Clone, Debug)]
 pub struct ItemEntity {
     pub id: u32,
     pub stack: Stack,
-    pub pos: [f64; 3],
-    pub prev: [f64; 3],
-    pub motion: [f64; 3],
-    pub on_ground: bool,
+    pub e: Ent,
     pub age: i32,
     /// `delayBeforeCanPickup`
     pub pickup_delay: i32,
+    /// `EntityItem.health`
+    pub health: i32,
     /// `hoverStart`: random phase of the bobbing animation.
     pub hover: f32,
 }
@@ -38,141 +36,230 @@ impl ItemEntity {
         let dx = (r.next_float() * f) as f64 + (1.0 - f) as f64 * 0.5;
         let dy = (r.next_float() * f) as f64 + (1.0 - f) as f64 * 0.5;
         let dz = (r.next_float() * f) as f64 + (1.0 - f) as f64 * 0.5;
-        Self::new(id, stack, [x as f64 + dx, y as f64 + dy, z as f64 + dz], r)
+        let mut e = Self::new(id, stack, [x as f64 + dx, y as f64 + dy, z as f64 + dz], r);
+        e.pickup_delay = 10;
+        e
     }
 
-    /// `new EntityItem(world, x, y, z, stack)`
+    /// `new EntityItem(world, x, y, z, stack)`. `Math.random()` comes from
+    /// `r` so runs are reproducible.
     pub fn new(id: u32, stack: Stack, pos: [f64; 3], r: &mut JavaRandom) -> ItemEntity {
-        // The motion uses Math.random(); a world-owned generator keeps it deterministic.
-        let _yaw = r.next_double();
-        let mx = (r.next_double() * 0.2 - 0.1) as f32 as f64;
-        let mz = (r.next_double() * 0.2 - 0.1) as f32 as f64;
         let hover = (r.next_double() * std::f64::consts::PI * 2.0) as f32;
+        let mut e = Ent::new(0.25, 0.25, entity_seed(id));
+        e.y_offset = e.height / 2.0;
+        e.can_trigger_walking = false;
+        e.set_position(pos[0], pos[1], pos[2]);
+        e.yaw = (r.next_double() * 360.0) as f32;
+        e.motion = [
+            (r.next_double() * 0.2f32 as f64 - 0.1f32 as f64) as f32 as f64,
+            0.2f32 as f64,
+            (r.next_double() * 0.2f32 as f64 - 0.1f32 as f64) as f32 as f64,
+        ];
+        e.prev = e.pos;
+        e.last_tick = e.pos;
         ItemEntity {
             id,
             stack,
-            pos,
-            prev: pos,
-            motion: [mx, 0.2f32 as f64, mz],
-            on_ground: false,
+            e,
             age: 0,
-            pickup_delay: 10,
+            pickup_delay: 0,
+            health: 5,
             hover,
         }
     }
 
-    pub fn bb(&self) -> Aabb {
-        let h = SIZE / 2.0;
-        // yOffset = height / 2: the box is centred on the position.
-        Aabb {
-            min: [self.pos[0] - h, self.pos[1] - h, self.pos[2] - h],
-            max: [self.pos[0] + h, self.pos[1] + h, self.pos[2] + h],
-        }
+    pub fn pos(&self) -> [f64; 3] {
+        self.e.pos
     }
 
-    /// `Entity.func_145771_j`: pushes an item that is inside a solid block
-    /// towards the nearest open side.
-    fn push_out(&mut self, world: &dyn BlockView) {
-        let (x, y, z) = (
-            math::floor_double(self.pos[0]),
-            math::floor_double(self.pos[1]),
-            math::floor_double(self.pos[2]),
-        );
-        let solid = |x: i32, y: i32, z: i32| block::info(world.peek_block(x, y, z)).normal_cube();
-        if !solid(x, y, z) {
+    pub fn bb(&self) -> Aabb {
+        self.e.bb
+    }
+
+    /// `EntityItem.attackEntityFrom`
+    pub fn attack(&mut self, src: Option<Source>, explosion: bool, amount: f32) {
+        let _ = src;
+        if self.stack.id == crate::item::NETHER_STAR && explosion {
             return;
         }
-        let (fx, fy, fz) = (
-            self.pos[0] - x as f64,
-            self.pos[1] - y as f64,
-            self.pos[2] - z as f64,
-        );
-        let options = [
-            (!solid(x - 1, y, z), fx, 0usize, -1.0),
-            (!solid(x + 1, y, z), 1.0 - fx, 0, 1.0),
-            (!solid(x, y - 1, z), fy, 1, -1.0),
-            (!solid(x, y + 1, z), 1.0 - fy, 1, 1.0),
-            (!solid(x, y, z - 1), fz, 2, -1.0),
-            (!solid(x, y, z + 1), 1.0 - fz, 2, 1.0),
-        ];
-        let mut best = 9999.0;
-        let mut pick = (1usize, 1.0f64);
-        for (open, d, axis, dir) in options {
-            if open && d < best {
-                best = d;
-                pick = (axis, dir);
+        self.health = (self.health as f32 - amount) as i32;
+        if self.health <= 0 {
+            self.e.dead = true;
+        }
+    }
+
+    fn handle(&mut self, w: &mut crate::world::ServerWorld, fx: Vec<Fx>, out: &mut Vec<Fx>) {
+        for f in fx {
+            match f {
+                Fx::Damage(s, a) => self.attack(Some(s), false, a),
+                Fx::Kill => self.e.dead = true,
+                Fx::Collide(x, y, z, id) => {
+                    if let Some((s, a)) = super::collide::collided(w, &mut self.e, x, y, z, id) {
+                        self.attack(Some(s), false, a);
+                    }
+                }
+                Fx::Sound(..) | Fx::Particle(..) => out.push(f),
+                Fx::Fall(_) | Fx::Walk(..) => {}
             }
         }
-        // Vanilla uses `rand.nextFloat() * 0.2F + 0.1F`; the mean keeps the
-        // outcome independent of the per-entity generator.
-        self.motion[pick.0] = pick.1 * 0.2;
     }
 
-    fn move_by(&mut self, world: &dyn BlockView) {
-        let mut bb = self.bb();
-        let (ox, oy, oz) = (self.motion[0], self.motion[1], self.motion[2]);
-        let (mut dx, mut dy, mut dz) = (ox, oy, oz);
-        let list = colliding_boxes(world, &bb.add_coord(dx, dy, dz));
-        for b in &list {
-            dy = b.calc_offset(&bb, 1, dy);
+    /// `EntityItem.onUpdate` up to `searchForOtherItemsNearby`; returns
+    /// whether that search runs this tick.
+    fn update(&mut self, w: &mut crate::world::ServerWorld, out: &mut Vec<Fx>) -> bool {
+        self.e.ticks_existed += 1;
+        let mut fx = Vec::new();
+        // Entity.onUpdate -> onEntityUpdate; EntityItem.handleWaterMovement
+        // only applies the current (inWater stays false).
+        {
+            let e = &mut self.e;
+            e.prev_dist_walked_mod = e.dist_walked_mod;
+            e.prev = e.pos;
+            e.prev_pitch = e.pitch;
+            e.prev_yaw = e.yaw;
+            let bb = e.bb;
+            e.handle_material_acceleration(&*w as &dyn BlockView, &bb, Material::Water);
+            if e.fire > 0 {
+                if e.fire % 20 == 0 {
+                    fx.push(Fx::Damage(Source::OnFire, 1.0));
+                }
+                e.fire -= 1;
+            }
+            if e.handle_lava_movement(&*w as &dyn BlockView) {
+                fx.push(Fx::Damage(Source::Lava, 4.0));
+                e.set_fire(15);
+                e.fall_distance *= 0.5;
+            }
+            if e.pos[1] < -64.0 {
+                fx.push(Fx::Kill);
+            }
+            e.first_update = false;
         }
-        bb.offset(0.0, dy, 0.0);
-        for b in &list {
-            dx = b.calc_offset(&bb, 0, dx);
-        }
-        bb.offset(dx, 0.0, 0.0);
-        for b in &list {
-            dz = b.calc_offset(&bb, 2, dz);
-        }
-        bb.offset(0.0, 0.0, dz);
-        self.pos = [
-            (bb.min[0] + bb.max[0]) / 2.0,
-            bb.min[1] + SIZE / 2.0,
-            (bb.min[2] + bb.max[2]) / 2.0,
-        ];
-        self.on_ground = oy != dy && oy < 0.0;
-        if ox != dx {
-            self.motion[0] = 0.0;
-        }
-        if oy != dy {
-            self.motion[1] = 0.0;
-        }
-        if oz != dz {
-            self.motion[2] = 0.0;
-        }
-    }
-
-    /// `EntityItem.onUpdate`. Returns false once the item should despawn.
-    pub fn tick(&mut self, world: &dyn BlockView) -> bool {
-        self.prev = self.pos;
+        self.handle(w, std::mem::take(&mut fx), out);
         if self.pickup_delay > 0 {
             self.pickup_delay -= 1;
         }
-        self.motion[1] -= 0.04f32 as f64;
-        self.push_out(world);
-        // Lava makes items jump and fizz.
-        let (bx, by, bz) = (
-            math::floor_double(self.pos[0]),
-            math::floor_double(self.pos[1]),
-            math::floor_double(self.pos[2]),
-        );
-        if block::material(world.peek_block(bx, by, bz)) == block::Material::Lava {
-            self.motion[1] = 0.2f32 as f64;
-            return false;
+        let e = &mut self.e;
+        e.prev = e.pos;
+        e.motion[1] -= 0.04f32 as f64;
+        let cy = (e.bb.min[1] + e.bb.max[1]) / 2.0;
+        let (px, pz) = (e.pos[0], e.pos[2]);
+        e.no_clip = e.push_out_of_blocks(&*w as &dyn BlockView, px, cy, pz);
+        let m = e.motion;
+        e.move_entity(&*w as &dyn BlockView, m[0], m[1], m[2], false, &[], &mut fx);
+        self.handle(w, std::mem::take(&mut fx), out);
+        let e = &mut self.e;
+        let moved = e.prev[0] as i32 != e.pos[0] as i32
+            || e.prev[1] as i32 != e.pos[1] as i32
+            || e.prev[2] as i32 != e.pos[2] as i32;
+        let search = moved || e.ticks_existed % 25 == 0;
+        if search {
+            let (bx, by, bz) = (
+                math::floor_double(e.pos[0]),
+                math::floor_double(e.pos[1]),
+                math::floor_double(e.pos[2]),
+            );
+            if block::material(w.peek_block(bx, by, bz)) == Material::Lava {
+                e.motion[1] = 0.2f32 as f64;
+                e.motion[0] = ((e.rand.next_float() - e.rand.next_float()) * 0.2) as f64;
+                e.motion[2] = ((e.rand.next_float() - e.rand.next_float()) * 0.2) as f64;
+                let p = 2.0 + e.rand.next_float() * 0.4;
+                out.push(Fx::Sound("random.fizz", e.pos, 0.4, p));
+            }
         }
-        self.move_by(world);
+        search
+    }
+
+    /// The rest of `EntityItem.onUpdate` after the merge search.
+    fn finish(&mut self, w: &dyn BlockView) {
+        let e = &mut self.e;
         let mut f = 0.98f32;
-        if self.on_ground {
-            let below = world.peek_block(bx, math::floor_double(self.bb().min[1]) - 1, bz);
-            f = block::info(below).slipperiness * 0.98f32;
+        if e.on_ground {
+            let below = w.peek_block(
+                math::floor_double(e.pos[0]),
+                math::floor_double(e.bb.min[1]) - 1,
+                math::floor_double(e.pos[2]),
+            );
+            f = block::info(below).slipperiness * 0.98;
         }
-        self.motion[0] *= f as f64;
-        self.motion[1] *= 0.98f32 as f64;
-        self.motion[2] *= f as f64;
-        if self.on_ground {
-            self.motion[1] *= -0.5;
+        e.motion[0] *= f as f64;
+        e.motion[1] *= 0.98f32 as f64;
+        e.motion[2] *= f as f64;
+        if e.on_ground {
+            e.motion[1] *= -0.5;
         }
         self.age += 1;
-        self.age < 6000 && self.pos[1] > -64.0
+        if self.age >= 6000 {
+            e.dead = true;
+        }
     }
+}
+
+/// `new Random()` for an entity, reproducible from its id.
+pub fn entity_seed(id: u32) -> i64 {
+    (id as i64)
+        .wrapping_mul(0x5DEECE66D)
+        .wrapping_add(0x2545F491)
+}
+
+/// `EntityItem.combineItems`: `i` tries to merge into `j`.
+fn combine(items: &mut [ItemEntity], i: usize, j: usize) -> bool {
+    if i == j || items[i].e.dead || items[j].e.dead {
+        return false;
+    }
+    let (a, b) = (items[i].stack, items[j].stack);
+    if b.id != a.id || b.ench != a.ench {
+        return false;
+    }
+    if crate::item::has_subtypes(b.id) && b.meta != a.meta {
+        return false;
+    }
+    if b.count < a.count {
+        return combine(items, j, i);
+    }
+    if b.count + a.count > crate::item::max_stack(b.id) {
+        return false;
+    }
+    items[j].stack.count = b.count + a.count;
+    items[j].pickup_delay = items[j].pickup_delay.max(items[i].pickup_delay);
+    items[j].age = items[j].age.min(items[i].age);
+    items[i].e.dead = true;
+    true
+}
+
+/// `World.updateEntities` for the dropped items: each one's `onUpdate`, the
+/// merge search included, in list order. Items in unloaded chunks wait.
+pub fn tick_all(items: &mut Vec<ItemEntity>, w: &mut crate::world::ServerWorld, out: &mut Vec<Fx>) {
+    for i in 0..items.len() {
+        if items[i].e.dead {
+            continue;
+        }
+        let p = items[i].e.pos;
+        let (bx, bz) = (math::floor_double(p[0]), math::floor_double(p[2]));
+        // updateEntityWithOptionalForce: a 32-block margin must be loaded.
+        if !super::base::chunks_exist(
+            &*w as &dyn BlockView,
+            bx - 32,
+            0,
+            bz - 32,
+            bx + 32,
+            0,
+            bz + 32,
+        ) {
+            continue;
+        }
+        if items[i].update(w, out) {
+            // searchForOtherItemsNearby: bb.expand(0.5, 0, 0.5)
+            let bb = Ent::expand(&items[i].e.bb, 0.5, 0.0, 0.5);
+            for j in 0..items.len() {
+                if !items[j].e.dead && items[j].e.bb.intersects(&bb) {
+                    combine(items, i, j);
+                }
+            }
+        }
+        if !items[i].e.dead {
+            items[i].finish(&*w as &dyn BlockView);
+        }
+    }
+    items.retain(|e| !e.e.dead);
 }

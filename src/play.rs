@@ -69,6 +69,16 @@ pub struct Play {
     pub mode: GameMode,
     pub items: Vec<ItemEntity>,
     next_item: u32,
+    /// Sounds and particles of the item entities this tick.
+    pub fx: Vec<crate::entity::base::Fx>,
+    /// Items picked up this tick (`S0DPacketCollectItem`).
+    pub collected: Vec<ItemView>,
+    /// The player is alive (`getHealth() > 0`).
+    pub alive: bool,
+    /// `rotationPitch` of the player.
+    pub pitch: f32,
+    /// `EntityPlayer.rand`
+    pub prand: JavaRandom,
     pub tiles: BTreeMap<Pos, Tile>,
     /// Feet position and yaw of the player.
     pub player: ([f64; 3], f32),
@@ -296,6 +306,11 @@ impl Play {
             mode,
             items: Vec::new(),
             next_item: 1,
+            pitch: 0.0,
+            fx: Vec::new(),
+            collected: Vec::new(),
+            alive: true,
+            prand: JavaRandom::new(0x706C6179),
             tiles: BTreeMap::new(),
             player: ([0.0; 3], 0.0),
             inv_dirty: true,
@@ -392,22 +407,46 @@ impl Play {
         }
     }
 
-    /// `EntityPlayer.dropPlayerItemWithRandomChoice`: thrown in front of the player.
-    pub fn throw(&mut self, s: Stack, r: &mut JavaRandom) {
+    /// `EntityPlayer.dropItem(stack, randomChoice, false)`: thrown from the
+    /// player's eyes, or scattered (`randomChoice`, on death).
+    pub fn throw_with(&mut self, s: Stack, random_choice: bool, r: &mut JavaRandom) {
+        if s.count == 0 {
+            return;
+        }
         let ([x, y, z], yaw) = self.player;
+        let pitch = self.pitch;
         let id = self.next_item;
         self.next_item += 1;
-        let mut e = ItemEntity::new(id, s, [x, y + 1.62 - 0.3, z], r);
-        let pitch = 0.0f32;
-        let f = 0.3f32;
-        let yr = yaw / 180.0 * std::f32::consts::PI;
-        e.motion = [
-            (-yr.sin() * pitch.cos() * f) as f64,
-            (-pitch.sin() * f + 0.1) as f64,
-            (yr.cos() * pitch.cos() * f) as f64,
-        ];
+        // posY is the eye position; getEyeHeight() is 0.12.
+        let eye = y + 1.62f32 as f64;
+        let mut e = ItemEntity::new(id, s, [x, eye - 0.3f32 as f64 + 0.12f32 as f64, z], r);
         e.pickup_delay = 40;
+        let pr = &mut self.prand;
+        if random_choice {
+            let f6 = pr.next_float() * 0.5;
+            let f7 = pr.next_float() * std::f32::consts::PI * 2.0;
+            e.e.motion[0] = (-crate::util::math::sin(f7) * f6) as f64;
+            e.e.motion[2] = (crate::util::math::cos(f7) * f6) as f64;
+            e.e.motion[1] = 0.2f32 as f64;
+        } else {
+            use crate::util::math::{cos, sin};
+            let pi = std::f32::consts::PI;
+            let f = 0.3f32;
+            e.e.motion[0] = (-sin(yaw / 180.0 * pi) * cos(pitch / 180.0 * pi) * f) as f64;
+            e.e.motion[2] = (cos(yaw / 180.0 * pi) * cos(pitch / 180.0 * pi) * f) as f64;
+            e.e.motion[1] = (-sin(pitch / 180.0 * pi) * f + 0.1) as f64;
+            let mut f = 0.02f32;
+            let f11 = pr.next_float() * pi * 2.0;
+            f *= pr.next_float();
+            e.e.motion[0] += (f11 as f64).cos() * f as f64;
+            e.e.motion[1] += ((pr.next_float() - pr.next_float()) * 0.1) as f64;
+            e.e.motion[2] += (f11 as f64).sin() * f as f64;
+        }
         self.spawn(e);
+    }
+
+    pub fn throw(&mut self, s: Stack, r: &mut JavaRandom) {
+        self.throw_with(s, false, r);
     }
 
     pub fn drop_at_block(&mut self, s: Stack, p: Pos, r: &mut JavaRandom) {
@@ -980,8 +1019,8 @@ impl Play {
         self.next_item += 1;
         let mut e = ItemEntity::new(id, one, at, r);
         let d3 = r.next_double() * 0.1 + 0.2;
-        e.motion = [dir[0] * d3, 0.20000000298023224, dir[2] * d3];
-        for v in &mut e.motion {
+        e.e.motion = [dir[0] * d3, 0.20000000298023224, dir[2] * d3];
+        for v in &mut e.e.motion {
             *v += r.next_gaussian() * 0.007499999832361937 * 6.0;
         }
         self.spawn(e);
@@ -1280,65 +1319,59 @@ impl Play {
             }
         }
 
-        // EntityItem.onUpdate, merging, pickup.
-        let mut alive = Vec::with_capacity(self.items.len());
-        for mut e in std::mem::take(&mut self.items) {
-            if !w.chunk_exists(
-                crate::util::math::floor_double(e.pos[0]) >> 4,
-                crate::util::math::floor_double(e.pos[2]) >> 4,
-            ) {
-                alive.push(e);
-                continue;
-            }
-            if e.tick(&*w as &dyn BlockView) {
-                alive.push(e);
-            }
-        }
-        // searchForOtherItemsNearby every 25 ticks of age.
-        let n = alive.len();
-        for i in 0..n {
-            if alive[i].stack.count == 0 || alive[i].age % 25 != 0 {
-                continue;
-            }
-            for j in 0..n {
-                if i == j || alive[j].stack.count == 0 {
+        // EntityItem.onUpdate (merging included), then the player's
+        // EntityPlayer.onLivingUpdate pickup of the items in reach.
+        let mut items = std::mem::take(&mut self.items);
+        crate::entity::item::tick_all(&mut items, w, &mut self.fx);
+        if self.alive {
+            let ([px, py, pz], _) = self.player;
+            // bb.expand(1.0, 0.5, 1.0)
+            let reach = Aabb {
+                min: [px - 0.3 - 1.0, py - 0.5, pz - 0.3 - 1.0],
+                max: [px + 0.3 + 1.0, py + 1.8 + 0.5, pz + 0.3 + 1.0],
+            };
+            for e in items.iter_mut() {
+                if e.e.dead || !e.bb().intersects(&reach) {
                     continue;
                 }
-                let (a, b) = (alive[i].clone(), alive[j].clone());
-                let near = (a.pos[0] - b.pos[0]).abs() < 0.5 + 0.25
-                    && (a.pos[1] - b.pos[1]).abs() < 0.25
-                    && (a.pos[2] - b.pos[2]).abs() < 0.5 + 0.25;
-                if near
-                    && a.stack.same_item(&b.stack)
-                    && a.stack.meta == b.stack.meta
-                    && a.stack.count + b.stack.count <= max_stack(a.stack.id)
-                    && item::tool(a.stack.id).is_none()
-                {
-                    alive[j].stack.count += a.stack.count;
-                    alive[j].pickup_delay = alive[j].pickup_delay.max(a.pickup_delay);
-                    alive[j].age = alive[j].age.min(a.age);
-                    alive[i].stack.count = 0;
-                    break;
+                // EntityItem.onCollideWithPlayer
+                if e.pickup_delay != 0 {
+                    continue;
+                }
+                let before = e.stack.count;
+                let creative = self.mode == GameMode::Creative;
+                let (added, rest) = match self.inv.add(e.stack) {
+                    None => (true, 0),
+                    Some(r) if r.count < before => (true, r.count),
+                    Some(_) if creative => (true, 0),
+                    Some(r) => (false, r.count),
+                };
+                if added {
+                    let p = ((e.e.rand.next_float() - e.e.rand.next_float()) * 0.7 + 1.0) * 2.0;
+                    self.fx.push(crate::entity::base::Fx::Sound(
+                        "random.pop",
+                        [px, py + 1.62, pz],
+                        0.2,
+                        p,
+                    ));
+                    self.collected.push(ItemView {
+                        id: e.id,
+                        stack: e.stack,
+                        pos: e.e.pos,
+                        prev: e.e.prev,
+                        age: e.age,
+                        hover: e.hover,
+                    });
+                    e.stack.count = rest;
+                    if rest == 0 {
+                        e.e.dead = true;
+                    }
+                    self.inv_dirty = true;
                 }
             }
+            items.retain(|e| !e.e.dead);
         }
-        alive.retain(|e| e.stack.count > 0);
-        let ([px, py, pz], _) = self.player;
-        let reach = Aabb {
-            min: [px - 0.3 - 1.0, py - 0.5, pz - 0.3 - 1.0],
-            max: [px + 0.3 + 1.0, py + 1.8 + 0.5, pz + 0.3 + 1.0],
-        };
-        for e in alive.iter_mut() {
-            if e.pickup_delay == 0 && e.bb().intersects(&reach) {
-                match self.inv.add(e.stack) {
-                    None => e.stack.count = 0,
-                    Some(rest) => e.stack = rest,
-                }
-                self.inv_dirty = true;
-            }
-        }
-        alive.retain(|e| e.stack.count > 0);
-        self.items = alive;
+        self.items = items;
     }
 
     pub fn item_views(&self) -> Vec<ItemView> {
@@ -1347,8 +1380,8 @@ impl Play {
             .map(|e| ItemView {
                 id: e.id,
                 stack: e.stack,
-                pos: e.pos,
-                prev: e.prev,
+                pos: e.e.pos,
+                prev: e.e.prev,
                 age: e.age,
                 hover: e.hover,
             })
@@ -1461,36 +1494,22 @@ impl Play {
         self.tiles.insert(pos, tile);
     }
 
-    /// Dropped items in one chunk as `EntityItem` NBT.
-    pub fn items_nbt(&self, cx: i32, cz: i32) -> Vec<crate::world::anvil::Nbt> {
-        use crate::world::anvil::{compound, item_nbt, list, Nbt};
+    /// Dropped items in one chunk as `EntityItem` NBT (`Entity.writeToNBT`
+    /// + `EntityItem.writeEntityToNBT`).
+    pub fn items_nbt(&self, cx: i32, cz: i32, dim: i32) -> Vec<crate::world::anvil::Nbt> {
+        use crate::world::anvil::{compound, item_nbt, Nbt};
         self.items
             .iter()
             .filter(|e| {
-                (e.pos[0].floor() as i32) >> 4 == cx && (e.pos[2].floor() as i32) >> 4 == cz
+                (e.e.pos[0].floor() as i32) >> 4 == cx && (e.e.pos[2].floor() as i32) >> 4 == cz
             })
             .map(|e| {
-                compound(vec![
-                    ("id", Nbt::String("Item".into())),
-                    (
-                        "Pos",
-                        list(vec![
-                            Nbt::Double(e.pos[0]),
-                            Nbt::Double(e.pos[1]),
-                            Nbt::Double(e.pos[2]),
-                        ]),
-                    ),
-                    (
-                        "Motion",
-                        list(vec![
-                            Nbt::Double(e.motion[0]),
-                            Nbt::Double(e.motion[1]),
-                            Nbt::Double(e.motion[2]),
-                        ]),
-                    ),
-                    ("Age", Nbt::Short(e.age as i16)),
-                    ("Item", item_nbt(None, &e.stack)),
-                ])
+                let mut v = vec![("id", Nbt::String("Item".into()))];
+                v.extend(e.e.nbt_fields(dim, e.id));
+                v.push(("Health", Nbt::Short(e.health as u8 as i16)));
+                v.push(("Age", Nbt::Short(e.age as i16)));
+                v.push(("Item", item_nbt(None, &e.stack)));
+                compound(v)
             })
             .collect()
     }
@@ -1509,8 +1528,16 @@ impl Play {
         let id = self.next_item;
         self.next_item += 1;
         let mut e = ItemEntity::new(id, stack, [p(0), p(1), p(2)], r);
-        e.motion = [0.0; 3];
+        let mo = t.list("Motion");
+        let m = |i: usize| match mo.get(i) {
+            Some(Nbt::Double(v)) => *v,
+            _ => 0.0,
+        };
+        e.e.motion = [m(0), m(1), m(2)];
+        e.e.fall_distance = t.float("FallDistance").unwrap_or(0.0) as f32;
+        e.e.fire = t.int("Fire").unwrap_or(0) as i32;
         e.age = t.int("Age").unwrap_or(0) as i32;
+        e.health = (t.int("Health").unwrap_or(5) & 255) as i32;
         e.pickup_delay = 0;
         self.spawn(e);
     }
