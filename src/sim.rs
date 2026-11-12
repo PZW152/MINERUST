@@ -9,7 +9,7 @@
 
 use crate::block::{self, Material};
 use crate::entity::survival::GameMode;
-use crate::inventory::{Inventory, Slot};
+use crate::inventory::Inventory;
 use crate::java::JavaRandom;
 use crate::play::{InvView, ItemView, Open, Play};
 use crate::render::mesher::MeshChunk;
@@ -56,11 +56,12 @@ pub enum Command {
         sneaking: bool,
     },
     Select(usize),
-    Click {
-        slot: Slot,
-        tile: Option<usize>,
-        right: bool,
-        shift: bool,
+    /// `C0EPacketClickWindow`: container slot number (-999 outside),
+    /// mouse button or hotbar key, click mode.
+    WindowClick {
+        slot: i32,
+        button: i32,
+        mode: i32,
     },
     OpenInventory,
     CloseWindow,
@@ -906,17 +907,10 @@ impl Sim {
                     self.play.inv_dirty = true;
                 }
             }
-            Command::Click {
-                slot,
-                tile,
-                right,
-                shift,
-            } => {
-                if self.play.open != Open::None {
-                    let mut play = std::mem::replace(&mut self.play, Play::new(GameMode::Survival));
-                    play.click(&mut self.world, slot, tile, right, shift);
-                    self.play = play;
-                }
+            Command::WindowClick { slot, button, mode } => {
+                let mut play = std::mem::replace(&mut self.play, Play::new(GameMode::Survival));
+                play.window_click(&mut self.world, slot, button, mode);
+                self.play = play;
             }
             Command::OpenInventory => {
                 self.play.open = Open::Inventory;
@@ -1481,6 +1475,9 @@ impl Sim {
                 if (0..36).contains(&k) {
                     self.play.inv.main[k as usize] = Some(st);
                 }
+                if (100..104).contains(&k) {
+                    self.play.inv.armor[k as usize - 100] = Some(st);
+                }
             }
             if let Some(ab) = p.get("abilities") {
                 flying = ab.int("flying").unwrap_or(0) != 0;
@@ -1633,7 +1630,8 @@ impl Sim {
             d.set("generatorVersion", Nbt::Int(1));
             d.set("MapFeatures", Nbt::Byte(1));
         }
-        let inv: Vec<Nbt> = self
+        // InventoryPlayer.writeToNBT: main slots, then armour as 100..104
+        let mut inv: Vec<Nbt> = self
             .play
             .inv
             .main
@@ -1641,6 +1639,11 @@ impl Sim {
             .enumerate()
             .filter_map(|(i, s)| s.as_ref().map(|s| item_nbt(Some(i as i8), s)))
             .collect();
+        for (i, s) in self.play.inv.armor.iter().enumerate() {
+            if let Some(s) = s {
+                inv.push(item_nbt(Some(100 + i as i8), s));
+            }
+        }
         let mut player = d.get("Player").cloned().unwrap_or_else(|| compound(vec![]));
         player.set(
             "Pos",
@@ -3644,23 +3647,25 @@ mod tests {
             .unwrap();
         sim.step(
             &[
-                Command::Click {
-                    slot: Slot::Main(log_slot),
-                    tile: None,
-                    right: false,
-                    shift: false,
+                // ContainerPlayer: hotbar slots are 36..45, the grid 1..5
+                Command::WindowClick {
+                    slot: if log_slot < 9 {
+                        36 + log_slot
+                    } else {
+                        log_slot
+                    } as i32,
+                    button: 0,
+                    mode: 0,
                 },
-                Command::Click {
-                    slot: Slot::Craft(0),
-                    tile: None,
-                    right: false,
-                    shift: false,
+                Command::WindowClick {
+                    slot: 1,
+                    button: 0,
+                    mode: 0,
                 },
-                Command::Click {
-                    slot: Slot::Result,
-                    tile: None,
-                    right: false,
-                    shift: true,
+                Command::WindowClick {
+                    slot: 0,
+                    button: 0,
+                    mode: 1,
                 },
                 Command::CloseWindow,
             ],

@@ -2,10 +2,11 @@
 //! furnaces and chests, and what happens when blocks are dug or used.
 
 use crate::block;
+use crate::container::{self, Ctx, Drag, Window};
 use crate::entity::item::ItemEntity;
 use crate::entity::player::Aabb;
 use crate::entity::survival::GameMode;
-use crate::inventory::{Inventory, Slot, MAIN};
+use crate::inventory::Inventory;
 use crate::item::{self, max_stack, ItemId, Stack};
 use crate::java::JavaRandom;
 use crate::world::{BlockView, ServerWorld};
@@ -137,6 +138,21 @@ pub enum Open {
     Chest(Vec<Pos>),
     /// An `EntityMinecartChest` (`displayGUIChest`).
     Cart(u32),
+    /// A dispenser or dropper (`TileEntityDispenser`).
+    Dispenser(Pos),
+}
+
+/// The `Container` class an open window uses.
+pub fn window_of(o: &Open) -> Window {
+    match o {
+        Open::None | Open::Inventory => Window::Player,
+        Open::Workbench(_) => Window::Workbench,
+        Open::Furnace(_) => Window::Furnace,
+        Open::Brewing(_) => Window::Brewing,
+        Open::Chest(ps) => Window::Chest(ps.len() * 3),
+        Open::Cart(_) => Window::Chest(3),
+        Open::Dispenser(_) => Window::Dispenser,
+    }
 }
 
 /// What the client needs to draw the inventory and an open window.
@@ -149,6 +165,9 @@ pub struct InvView {
     pub tile_slots: Vec<Option<Stack>>,
     /// Furnace progress: `(burn scaled 0..13, cook scaled 0..24)`.
     pub furnace: Option<(i32, i32)>,
+    /// How many `WindowClick`s the server had handled: the client drops
+    /// views older than its own predicted clicks.
+    pub clicks: u32,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -187,6 +206,10 @@ pub struct Play {
     /// Feet position and yaw of the player.
     pub player: ([f64; 3], f32),
     pub inv_dirty: bool,
+    /// The open container's drag-splitting state.
+    pub drag: Drag,
+    /// `WindowClick`s handled so far.
+    pub clicks: u32,
     /// Generated entities (villagers, witches, chest minecarts).
     pub pending: Vec<crate::world::server::GenEntity>,
 }
@@ -323,86 +346,6 @@ fn merge_slot(slot: &mut Option<Stack>, add: Stack) -> bool {
     }
 }
 
-/// Left/right click on a plain slot (`Container.slotClick` mode 0).
-fn click_slot(
-    target: &mut Option<Stack>,
-    cursor: &mut Option<Stack>,
-    right: bool,
-    accepts: bool,
-    take_only: bool,
-) {
-    match (*target, *cursor) {
-        (Some(s), None) => {
-            if right && !take_only {
-                let take = (s.count + 1) / 2;
-                *cursor = Some(Stack { count: take, ..s });
-                *target = if s.count > take {
-                    Some(Stack {
-                        count: s.count - take,
-                        ..s
-                    })
-                } else {
-                    None
-                };
-            } else {
-                *cursor = Some(s);
-                *target = None;
-            }
-        }
-        (None, Some(c)) if accepts && !take_only => {
-            let n = if right {
-                1
-            } else {
-                c.count.min(max_stack(c.id))
-            };
-            *target = Some(Stack { count: n, ..c });
-            *cursor = if c.count > n {
-                Some(Stack {
-                    count: c.count - n,
-                    ..c
-                })
-            } else {
-                None
-            };
-        }
-        (Some(s), Some(c)) if s.same_item(&c) && s.meta == c.meta => {
-            if take_only {
-                if s.count + c.count <= max_stack(c.id) {
-                    *cursor = Some(Stack {
-                        count: s.count + c.count,
-                        ..c
-                    });
-                    *target = None;
-                }
-            } else {
-                let room = max_stack(s.id).saturating_sub(s.count);
-                let n = if right {
-                    room.min(1)
-                } else {
-                    room.min(c.count)
-                };
-                *target = Some(Stack {
-                    count: s.count + n,
-                    ..s
-                });
-                *cursor = if c.count > n {
-                    Some(Stack {
-                        count: c.count - n,
-                        ..c
-                    })
-                } else {
-                    None
-                };
-            }
-        }
-        (Some(s), Some(c)) if accepts && !take_only => {
-            *target = Some(c);
-            *cursor = Some(s);
-        }
-        _ => {}
-    }
-}
-
 /// `BlockChest` / `BlockFurnace` facing from the placer's yaw.
 /// `ItemEnderEye.onItemUse`: with all twelve eyes in place, the 3x3 inside
 /// of the ring becomes an End portal.
@@ -488,54 +431,42 @@ impl Play {
             tiles: BTreeMap::new(),
             player: ([0.0; 3], 0.0),
             inv_dirty: true,
+            drag: Drag::default(),
+            clicks: 0,
             pending: Vec::new(),
         }
     }
 
     pub fn view(&self) -> InvView {
-        let (tile_slots, furnace) = match &self.open {
+        let furnace = match &self.open {
             Open::Furnace(p) => match self.tiles.get(p) {
                 Some(Tile::Furnace {
-                    slots,
                     burn,
                     item_burn,
                     cook,
+                    ..
                 }) => {
                     let ib = if *item_burn == 0 { 200 } else { *item_burn };
-                    (slots.to_vec(), Some((burn * 13 / ib, cook * 24 / 200)))
+                    Some((burn * 13 / ib, cook * 24 / 200))
                 }
-                _ => (Vec::new(), None),
+                _ => None,
             },
             Open::Brewing(p) => match self.tiles.get(p) {
-                Some(Tile::Brewing {
-                    slots, brew_time, ..
-                }) => (slots.to_vec(), Some((*brew_time, -1))),
-                _ => (Vec::new(), None),
+                Some(Tile::Brewing { brew_time, .. }) => Some((*brew_time, -1)),
+                _ => None,
             },
-            Open::Chest(ps) => {
-                let mut v = Vec::new();
-                for p in ps {
-                    if let Some(Tile::Chest { slots }) = self.tiles.get(p) {
-                        v.extend_from_slice(slots);
-                    }
-                }
-                (v, None)
-            }
-            Open::Cart(id) => match self.vehicles.iter().find(|b| b.v.id() == *id) {
-                Some(crate::entity::vehicle::Tracked {
-                    v: crate::entity::vehicle::Vehicle::Cart(c),
-                    ..
-                }) => (c.slots.clone(), None),
-                _ => (Vec::new(), None),
-            },
-            _ => (Vec::new(), None),
+            _ => None,
         };
+        let mut inv = self.inv.clone();
+        let mut tile = self.tile_vec();
+        let result = Ctx::new(&mut inv, &mut tile, self.window(), false).result();
         InvView {
             inv: self.inv.clone(),
             open: self.open.clone(),
-            result: self.inv.result(),
-            tile_slots,
+            result,
+            tile_slots: self.tile_vec(),
             furnace,
+            clicks: self.clicks,
         }
     }
 
@@ -1291,316 +1222,138 @@ impl Play {
         None
     }
 
-    /// A click inside the open window. `Slot::Main` and the crafting slots
-    /// go to the inventory; `tile` indexes the chest or furnace slots.
-    pub fn click(
-        &mut self,
-        w: &mut ServerWorld,
-        slot: Slot,
-        tile: Option<usize>,
-        right: bool,
-        shift: bool,
-    ) {
-        self.inv_dirty = true;
-        let mut rnd = std::mem::replace(&mut w.rand, JavaRandom::new(0));
-        if let Some(t) = tile {
-            // SlotFurnace.onPickupFromSlot: experience for what was taken
-            let furnace_out = match (&self.open, t) {
-                (Open::Furnace(fp), 2) => match self.tiles.get(fp) {
-                    Some(Tile::Furnace { slots, .. }) => slots[2],
-                    _ => None,
-                },
-                _ => None,
-            };
-            self.click_tile(t, right, shift);
-            if let (Some(before), Open::Furnace(fp)) = (furnace_out, &self.open) {
-                let now = match self.tiles.get(fp) {
-                    Some(Tile::Furnace { slots, .. }) => slots[2].map_or(0, |s| s.count),
-                    _ => 0,
-                };
-                let taken = before.count as i32 - now as i32;
-                if taken > 0 {
-                    let mut pr = std::mem::replace(&mut self.prand, JavaRandom::new(0));
-                    let xp = furnace_xp(&before, taken, &mut pr);
-                    self.prand = pr;
-                    if xp > 0 {
-                        let (f, _) = self.player;
-                        self.orbs.push(([f[0], f[1] + 0.5, f[2] + 0.5], xp));
-                    }
-                }
-            }
-        } else if let (Slot::Main(i), true, Open::Brewing(_)) = (slot, shift, &self.open) {
-            self.shift_into_brewing(i);
-        } else if let (Slot::Main(i), true, Open::Chest(_) | Open::Furnace(_) | Open::Cart(_)) =
-            (slot, shift, &self.open)
-        {
-            self.shift_into_tile(i);
-        } else {
-            for s in self.inv.click(slot, right, shift) {
-                self.throw(s, &mut rnd);
-            }
-        }
-        w.rand = rnd;
+    /// The `Container` of the open window.
+    pub fn window(&self) -> Window {
+        window_of(&self.open)
     }
 
-    fn tile_slots_mut(&mut self) -> Vec<&mut Option<Stack>> {
+    /// The tile entity (or minecart) slots behind the open window.
+    pub fn tile_vec(&self) -> Vec<Option<Stack>> {
         match &self.open {
-            Open::Furnace(p) => match self.tiles.get_mut(p) {
-                Some(Tile::Furnace { slots, .. }) => slots.iter_mut().collect(),
+            Open::Furnace(p) => match self.tiles.get(p) {
+                Some(Tile::Furnace { slots, .. }) => slots.to_vec(),
                 _ => Vec::new(),
             },
-            Open::Brewing(p) => match self.tiles.get_mut(p) {
-                Some(Tile::Brewing { slots, .. }) => slots.iter_mut().collect(),
+            Open::Brewing(p) => match self.tiles.get(p) {
+                Some(Tile::Brewing { slots, .. }) => slots.to_vec(),
+                _ => Vec::new(),
+            },
+            Open::Dispenser(p) => match self.tiles.get(p) {
+                Some(Tile::Dispenser { slots }) => slots.to_vec(),
                 _ => Vec::new(),
             },
             Open::Chest(ps) => {
-                let ps = ps.clone();
-                let mut out: Vec<&mut Option<Stack>> = Vec::new();
-                // Split borrows: collect raw pointers to each half's slots.
-                let mut ptrs: Vec<*mut [Option<Stack>; 27]> = Vec::new();
-                for p in &ps {
-                    if let Some(Tile::Chest { slots }) = self.tiles.get_mut(p) {
-                        ptrs.push(slots as *mut _);
+                let mut v = Vec::new();
+                for p in ps {
+                    if let Some(Tile::Chest { slots }) = self.tiles.get(p) {
+                        v.extend_from_slice(slots);
                     }
                 }
-                for ptr in ptrs {
-                    // SAFETY: distinct map entries, alive for the borrow of self.
-                    out.extend(unsafe { (*ptr).iter_mut() });
-                }
-                out
+                v
             }
-            Open::Cart(id) => {
-                let id = *id;
-                match self.vehicles.iter_mut().find(|b| b.v.id() == id) {
-                    Some(crate::entity::vehicle::Tracked {
-                        v: crate::entity::vehicle::Vehicle::Cart(c),
-                        ..
-                    }) => c.slots.iter_mut().collect(),
-                    _ => Vec::new(),
-                }
-            }
+            Open::Cart(id) => match self.vehicles.iter().find(|b| b.v.id() == *id) {
+                Some(crate::entity::vehicle::Tracked {
+                    v: crate::entity::vehicle::Vehicle::Cart(c),
+                    ..
+                }) => c.slots.clone(),
+                _ => Vec::new(),
+            },
             _ => Vec::new(),
         }
     }
 
-    fn click_tile(&mut self, t: usize, right: bool, shift: bool) {
-        let furnace = matches!(self.open, Open::Furnace(_));
-        let brewing = matches!(self.open, Open::Brewing(_));
-        let mut cursor = self.inv.cursor;
-        if brewing && !shift {
-            // ContainerBrewingStand$Potion (bottles, one per slot) and
-            // $Ingredient: Slot.isItemValid
-            let valid = |s: &Stack| {
-                if t < 3 {
-                    s.id == 373 || s.id == 374
-                } else {
-                    is_potion_ingredient(s)
+    fn store_tile_vec(&mut self, v: &[Option<Stack>]) {
+        let copy = |d: &mut [Option<Stack>], v: &[Option<Stack>]| {
+            for (a, b) in d.iter_mut().zip(v) {
+                *a = *b;
+            }
+        };
+        match self.open.clone() {
+            Open::Furnace(p) => {
+                if let Some(Tile::Furnace { slots, .. }) = self.tiles.get_mut(&p) {
+                    copy(slots, v);
                 }
-            };
-            let limit = if t < 3 { 1 } else { 64 };
-            let mut slots = self.tile_slots_mut();
-            let Some(slot) = slots.get_mut(t) else { return };
-            match (cursor, **slot) {
-                (Some(c), None) if valid(&c) => {
-                    let n = if right { 1 } else { c.count.min(limit) };
-                    **slot = Some(Stack { count: n, ..c });
-                    cursor = if c.count > n {
-                        Some(Stack {
-                            count: c.count - n,
-                            ..c
-                        })
-                    } else {
-                        None
-                    };
+            }
+            Open::Brewing(p) => {
+                if let Some(Tile::Brewing { slots, .. }) = self.tiles.get_mut(&p) {
+                    copy(slots, v);
                 }
-                (Some(c), Some(st)) if valid(&c) => {
-                    if c.same_item(&st) && c.meta == st.meta && c.ench == st.ench {
-                        let room = limit.min(max_stack(st.id)).saturating_sub(st.count);
-                        let n = if right {
-                            1.min(room).min(c.count)
-                        } else {
-                            room.min(c.count)
-                        };
-                        **slot = Some(Stack {
-                            count: st.count + n,
-                            ..st
-                        });
-                        cursor = if c.count > n {
-                            Some(Stack {
-                                count: c.count - n,
-                                ..c
-                            })
-                        } else {
-                            None
-                        };
-                    } else if c.count <= limit {
-                        **slot = Some(c);
-                        cursor = Some(st);
+            }
+            Open::Dispenser(p) => {
+                if let Some(Tile::Dispenser { slots }) = self.tiles.get_mut(&p) {
+                    copy(slots, v);
+                }
+            }
+            Open::Chest(ps) => {
+                for (k, p) in ps.iter().enumerate() {
+                    if let Some(Tile::Chest { slots }) = self.tiles.get_mut(p) {
+                        copy(slots, &v[(k * 27).min(v.len())..]);
                     }
                 }
-                (Some(_), _) => {}
-                (None, _) => {
-                    click_slot(slot, &mut cursor, right, true, false);
+            }
+            Open::Cart(id) => {
+                if let Some(crate::entity::vehicle::Tracked {
+                    v: crate::entity::vehicle::Vehicle::Cart(c),
+                    ..
+                }) = self.vehicles.iter_mut().find(|b| b.v.id() == id)
+                {
+                    copy(&mut c.slots, v);
                 }
             }
-            drop(slots);
-            self.inv.cursor = cursor;
-            return;
+            _ => {}
         }
-        if shift {
-            let s = {
-                let mut slots = self.tile_slots_mut();
-                match slots.get_mut(t) {
-                    Some(slot) => slot.take(),
-                    None => None,
-                }
-            };
-            if let Some(s) = s {
-                let rest = {
-                    let mut tmp = self.inv.clone();
-                    let r = merge_back(&mut tmp, s);
-                    self.inv = tmp;
-                    r
-                };
-                if let Some(r) = rest {
-                    let mut slots = self.tile_slots_mut();
-                    *slots[t] = Some(r);
-                }
-            }
-            return;
-        }
-        {
-            let mut slots = self.tile_slots_mut();
-            let Some(slot) = slots.get_mut(t) else { return };
-            // SlotFurnace: the output only gives items out; fuel and input accept.
-            let take_only = furnace && t == 2;
-            click_slot(slot, &mut cursor, right, true, take_only);
-        }
-        self.inv.cursor = cursor;
     }
 
-    /// `ContainerBrewingStand.transferStackInSlot` from the inventory.
-    fn shift_into_brewing(&mut self, i: usize) {
-        let Some(s) = self.inv.main[i] else { return };
-        let ing_empty = { self.tile_slots_mut()[3].is_none() };
-        if ing_empty && is_potion_ingredient(&s) {
-            self.inv.main[i] = None;
-            *self.tile_slots_mut()[3] = Some(s);
-        } else if s.id == 373 || s.id == 374 {
-            // mergeItemStack(0, 3): bottles go one per empty slot
-            let mut left = s.count;
-            {
-                let mut slots = self.tile_slots_mut();
-                for k in 0..3 {
-                    if left > 0 && slots[k].is_none() {
-                        *slots[k] = Some(Stack { count: 1, ..s });
-                        left -= 1;
-                    }
-                }
-            }
-            self.inv.main[i] = if left > 0 {
-                Some(Stack { count: left, ..s })
-            } else {
-                None
-            };
-        } else {
-            // between the main inventory (9..36) and the hotbar (0..9)
-            self.inv.main[i] = None;
-            let range: Vec<usize> = if i >= 9 {
-                (0..9).collect()
-            } else {
-                (9..36).collect()
-            };
-            let mut left = s;
-            for k in range.clone() {
-                if let Some(t) = &mut self.inv.main[k] {
-                    if t.same_item(&left) && t.meta == left.meta && t.ench == left.ench {
-                        let n = (max_stack(t.id) - t.count).min(left.count);
-                        t.count += n;
-                        left.count -= n;
-                    }
-                }
-            }
-            if left.count > 0 {
-                for k in range {
-                    if self.inv.main[k].is_none() {
-                        self.inv.main[k] = Some(left);
-                        left.count = 0;
-                        break;
-                    }
-                }
-            }
-            if left.count > 0 {
-                self.inv.main[i] = Some(left);
-            }
+    /// `C0EPacketClickWindow`: `Container.slotClick` on the open window.
+    pub fn window_click(&mut self, w: &mut ServerWorld, slot: i32, button: i32, mode: i32) {
+        self.clicks = self.clicks.wrapping_add(1);
+        if self.open == Open::None {
+            return;
         }
         self.inv_dirty = true;
-    }
-
-    /// Shift-click from the player inventory into the open container.
-    fn shift_into_tile(&mut self, i: usize) {
-        let Some(s) = self.inv.main[i].take() else {
-            return;
+        let window = self.window();
+        let mut tile = self.tile_vec();
+        let creative = self.mode == GameMode::Creative;
+        let mut drag = std::mem::take(&mut self.drag);
+        let fx = {
+            let mut c = Ctx::new(&mut self.inv, &mut tile, window, creative);
+            container::slot_click(&mut c, &mut drag, slot, button, mode);
+            c.fx
         };
-        let furnace = matches!(self.open, Open::Furnace(_));
-        let mut rest = Some(s);
-        {
-            let mut slots = self.tile_slots_mut();
-            if furnace {
-                let target = if smelt(&s).is_some() {
-                    Some(0)
-                } else if burn_time(&s) > 0 {
-                    Some(1)
-                } else {
-                    None
-                };
-                if let Some(ti) = target {
-                    if merge_slot(&mut *slots[ti], s) {
-                        rest = None;
-                    }
-                }
-            } else {
-                let mut left = s;
-                for slot in slots.iter_mut() {
-                    if let Some(t) = slot {
-                        if t.same_item(&left) && t.meta == left.meta {
-                            let n = (max_stack(t.id) - t.count).min(left.count);
-                            t.count += n;
-                            left.count -= n;
-                        }
-                    }
-                    if left.count == 0 {
-                        break;
-                    }
-                }
-                if left.count > 0 {
-                    for slot in slots.iter_mut() {
-                        if slot.is_none() {
-                            **slot = Some(left);
-                            left.count = 0;
-                            break;
-                        }
-                    }
-                }
-                rest = if left.count > 0 { Some(left) } else { None };
+        self.drag = drag;
+        self.store_tile_vec(&tile);
+        let mut rnd = std::mem::replace(&mut w.rand, JavaRandom::new(0));
+        // dropPlayerItemWithRandomChoice(stack, flag) never scatters
+        for (s, _) in fx.drops {
+            self.throw(s, &mut rnd);
+        }
+        w.rand = rnd;
+        for (out, n) in fx.smelted {
+            // SlotFurnace.onCrafting: experience for what was taken
+            let mut pr = std::mem::replace(&mut self.prand, JavaRandom::new(0));
+            let mut xp = furnace_xp(&out, n as i32, &mut pr);
+            self.prand = pr;
+            let (f, _) = self.player;
+            while xp > 0 {
+                let k = crate::entity::xp_orb::xp_split(xp);
+                xp -= k;
+                self.orbs.push(([f[0], f[1] + 0.5, f[2] + 0.5], k));
             }
         }
-        if furnace && rest.is_some() {
-            // Not smeltable or fuel: hotbar <-> main.
-            self.inv.main[i] = rest;
-            self.inv.click(Slot::Main(i), false, true);
-            return;
-        }
-        self.inv.main[i] = rest;
     }
 
+    /// `closeScreen` / `C0DPacketCloseWindow`: `onContainerClosed` throws
+    /// out the cursor stack and the crafting grid.
     pub fn close(&mut self, w: &mut ServerWorld) {
+        let window = self.window();
         let mut rnd = std::mem::replace(&mut w.rand, JavaRandom::new(0));
-        for s in self.inv.close() {
+        for (s, _) in container::close(&mut self.inv, window) {
             self.throw(s, &mut rnd);
         }
         w.rand = rnd;
         self.open = Open::None;
+        self.drag = Drag::default();
+        self.inv.grid_size = 2;
         self.inv_dirty = true;
     }
 
@@ -1817,14 +1570,16 @@ impl Play {
                 if e.pickup_delay != 0 {
                     continue;
                 }
-                let before = e.stack.count;
                 let creative = self.mode == GameMode::Creative;
-                let (added, rest) = match self.inv.add(e.stack) {
-                    None => (true, 0),
-                    Some(r) if r.count < before => (true, r.count),
-                    Some(_) if creative => (true, 0),
-                    Some(r) => (false, r.count),
-                };
+                let mut st = e.stack;
+                let added = self.inv.add_stack(&mut st, creative);
+                let rest = st.count;
+                let shown = e.stack;
+                if rest != e.stack.count {
+                    // the entity's own stack is what was stored from
+                    e.stack.count = rest;
+                    self.inv_dirty = true;
+                }
                 if added {
                     let p = ((e.e.rand.next_float() - e.e.rand.next_float()) * 0.7 + 1.0) * 2.0;
                     self.fx.push(crate::entity::base::Fx::Sound(
@@ -1835,13 +1590,12 @@ impl Play {
                     ));
                     self.collected.push(ItemView {
                         id: e.id,
-                        stack: e.stack,
+                        stack: shown,
                         pos: e.e.pos,
                         prev: e.e.prev,
                         age: e.age,
                         hover: e.hover,
                     });
-                    e.stack.count = rest;
                     if rest == 0 {
                         e.e.dead = true;
                     }
@@ -2303,30 +2057,6 @@ impl Play {
         }
         Some(())
     }
-}
-
-/// Shift-click from a container into the player inventory (hotbar last).
-fn merge_back(inv: &mut Inventory, s: Stack) -> Option<Stack> {
-    let mut left = s;
-    for i in (0..MAIN).rev() {
-        if let Some(t) = &mut inv.main[i] {
-            if t.same_item(&left) && t.meta == left.meta && t.count < max_stack(t.id) {
-                let n = (max_stack(t.id) - t.count).min(left.count);
-                t.count += n;
-                left.count -= n;
-                if left.count == 0 {
-                    return None;
-                }
-            }
-        }
-    }
-    for i in (0..MAIN).rev() {
-        if inv.main[i].is_none() {
-            inv.main[i] = Some(left);
-            return None;
-        }
-    }
-    Some(left)
 }
 
 #[cfg(test)]

@@ -505,6 +505,17 @@ impl Atlas {
                 items.insert((id, meta), b.add(crop(&img, 0, 0, 16), 16));
             }
         }
+        // ItemArmor.getBackgroundIcon: the empty armour slot outlines
+        for name in [
+            "empty_armor_slot_helmet",
+            "empty_armor_slot_chestplate",
+            "empty_armor_slot_leggings",
+            "empty_armor_slot_boots",
+        ] {
+            let img = read_png(jar, &format!("assets/minecraft/textures/items/{name}.png"))?;
+            let t = b.add(crop(&img, 0, 0, 16), 16);
+            names.insert(name, t);
+        }
         let potion_overlay = {
             let img = read_png(jar, "assets/minecraft/textures/items/potion_overlay.png")?;
             b.add(crop(&img, 0, 0, 16), 16)

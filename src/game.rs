@@ -4,7 +4,6 @@
 use crate::block::{self, Material};
 use crate::entity::player::{Input, Player};
 use crate::entity::survival::{GameMode, Stats};
-use crate::inventory::Slot;
 use crate::item::Stack;
 use crate::java::JavaRandom;
 use crate::play::{InvView, ItemView, Open};
@@ -225,6 +224,13 @@ pub struct Game {
     cloud_cell: Option<(i32, i32)>,
     /// Server view of the inventory and open window.
     pub view: InvView,
+    /// `GuiContainer` of the open window.
+    gui: crate::gui_container::GuiContainer,
+    /// `WindowClick`s sent (and predicted) so far.
+    sent_clicks: u32,
+    /// The client container's drag state (`PlayerControllerMP.windowClick`
+    /// runs `slotClick` locally too).
+    client_drag: crate::container::Drag,
     items: Vec<ItemView>,
     /// `en_US.lang`
     pub lang: crate::lang::Lang,
@@ -496,7 +502,11 @@ impl Game {
                 result: None,
                 tile_slots: Vec::new(),
                 furnace: None,
+                clicks: 0,
             },
+            gui: Default::default(),
+            sent_clicks: 0,
+            client_drag: Default::default(),
             items: Vec::new(),
             pickups: Vec::new(),
             orb_pickups: Vec::new(),
@@ -587,6 +597,20 @@ impl Game {
                 self.renderer.extent.width as f32 / 2.0 + 40.0,
                 self.renderer.extent.height as f32 / 2.0 - 10.0,
             );
+        }
+        // MINERUST_CLICKS=slot:button:mode,...  window clicks for captures
+        if let Ok(list) = std::env::var("MINERUST_CLICKS") {
+            for part in list.split(',') {
+                let f: Vec<i32> = part.split(':').filter_map(|x| x.parse().ok()).collect();
+                if f.len() == 3 {
+                    self.sent_clicks = self.sent_clicks.wrapping_add(1);
+                    let _ = self.sim.commands.send(Command::WindowClick {
+                        slot: f[0],
+                        button: f[1],
+                        mode: f[2],
+                    });
+                }
+            }
         }
     }
 
@@ -858,7 +882,17 @@ impl Game {
                     }
                 }
                 Event::Inventory(v) => {
+                    // a view from before the clicks the client predicted
+                    let behind = self.sent_clicks.wrapping_sub(v.clicks);
+                    if behind > 0 && behind < 1 << 16 {
+                        continue;
+                    }
+                    self.sent_clicks = v.clicks;
                     let was_open = self.view.open != Open::None;
+                    if v.open != self.view.open {
+                        self.gui = Default::default();
+                        self.client_drag = Default::default();
+                    }
                     self.view = *v;
                     if self.view.open != Open::None && !was_open && self.screen == Screen::Playing {
                         self.screen = Screen::Window;
@@ -2035,19 +2069,101 @@ impl Game {
         self.right_delay = 4;
     }
 
-    fn open_window_hit(&self) -> (bool, Option<screens::SlotHit>) {
-        let (w, h) = self.gui_size();
-        let (left, top, xs, ys, slots) =
-            screens::layout_with(&self.view, w, h, !self.stats.effects.is_empty());
-        let (mx, my) = self.gui_mouse();
-        let inside = mx >= left && my >= top && mx < left + xs && my < top + ys;
-        let hit = slots.into_iter().find(|s| {
-            mx >= left + s.x - 1.0
-                && mx < left + s.x + 17.0
-                && my >= top + s.y - 1.0
-                && my < top + s.y + 17.0
+    /// The mouse in scaled GUI pixels (`Mouse.getX() * width / displayWidth`).
+    fn gui_mouse_i(&self) -> (i32, i32) {
+        (
+            (self.mouse_px.0 / self.gui_scale).floor() as i32,
+            (self.mouse_px.1 / self.gui_scale).floor() as i32,
+        )
+    }
+
+    fn container_keys(&self) -> crate::gui_container::Keys {
+        let b = |d: &str| {
+            self.shell.as_ref().map_or_else(
+                || crate::settings::GameSettings::default().key(d),
+                |s| s.settings.key(d),
+            )
+        };
+        let mut hotbar = [0; 9];
+        for (i, h) in hotbar.iter_mut().enumerate() {
+            *h = b(&format!("key.hotbar.{}", i + 1));
+        }
+        crate::gui_container::Keys {
+            inventory: b("key.inventory"),
+            drop: b("key.drop"),
+            pick: b("key.pickItem"),
+            hotbar,
+        }
+    }
+
+    /// `PlayerControllerMP.windowClick`: `slotClick` on the client's copy,
+    /// then `C0EPacketClickWindow`.
+    fn window_click(&mut self, c: crate::gui_container::Click) -> InvView {
+        let creative = self.mode == GameMode::Creative;
+        let window = crate::play::window_of(&self.view.open);
+        let mut tile = std::mem::take(&mut self.view.tile_slots);
+        {
+            let mut ctx =
+                crate::container::Ctx::new(&mut self.view.inv, &mut tile, window, creative);
+            crate::container::slot_click(&mut ctx, &mut self.client_drag, c.slot, c.button, c.mode);
+            let r = ctx.result();
+            self.view.result = r;
+        }
+        self.view.tile_slots = tile;
+        self.sent_clicks = self.sent_clicks.wrapping_add(1);
+        let _ = self.sim.commands.send(Command::WindowClick {
+            slot: c.slot,
+            button: c.button,
+            mode: c.mode,
         });
-        (inside, hit)
+        self.view.clone()
+    }
+
+    /// Runs a `GuiContainer` handler with the click sink.
+    fn with_container<R>(
+        &mut self,
+        f: impl FnOnce(
+            &mut crate::gui_container::GuiContainer,
+            &crate::gui_container::Frame,
+            &crate::gui_container::Keys,
+            &mut dyn FnMut(crate::gui_container::Click) -> InvView,
+        ) -> R,
+    ) -> R {
+        let (w, h) = self.gui_size();
+        let view = self.view.clone();
+        let frame = crate::gui_container::Frame {
+            view: &view,
+            w: w as i32,
+            h: h as i32,
+            effects: !self.stats.effects.is_empty(),
+            mouse: self.gui_mouse_i(),
+        };
+        let keys = self.container_keys();
+        let mut gui = std::mem::take(&mut self.gui);
+        let r = f(&mut gui, &frame, &keys, &mut |c| self.window_click(c));
+        self.gui = gui;
+        r
+    }
+
+    /// `GuiScreen.handleMouseInput` move events: `mouseClickMove`.
+    pub fn mouse_moved(&mut self) {
+        if self.screen == Screen::Window {
+            self.with_container(|g, f, _, _| g.mouse_dragged(f));
+        }
+    }
+
+    /// `closeScreen` from a container.
+    fn close_window(&mut self) -> Request {
+        let _ = self.sim.commands.send(Command::CloseWindow);
+        // the client's onContainerClosed: the cursor and grid leave
+        self.view.inv.cursor = None;
+        self.view.inv.grid = [None; 9];
+        self.view.result = None;
+        self.view.open = Open::None;
+        self.gui = Default::default();
+        self.client_drag = Default::default();
+        self.screen = Screen::Playing;
+        Request::Grab
     }
 
     fn menu_hit(&mut self) -> Option<MenuAction> {
@@ -2067,6 +2183,17 @@ impl Game {
             0 => self.left_down = pressed,
             1 => self.right_down = pressed,
             _ => {}
+        }
+        if self.screen == Screen::Window {
+            let now = self.started.elapsed().as_millis() as u64;
+            self.with_container(|g, f, k, send| {
+                if pressed {
+                    g.mouse_clicked(f, button as i32, shift, now, k, send);
+                } else {
+                    g.mouse_released(f, button as i32, shift, k, send);
+                }
+            });
+            return Request::None;
         }
         if !pressed {
             if button == 0 {
@@ -2105,31 +2232,7 @@ impl Game {
                 }
                 Request::None
             }
-            Screen::Window => {
-                let (inside, hit) = self.open_window_hit();
-                if button <= 1 {
-                    match hit {
-                        Some(s) => {
-                            let _ = self.sim.commands.send(Command::Click {
-                                slot: s.slot,
-                                tile: s.tile,
-                                right: button == 1,
-                                shift,
-                            });
-                        }
-                        None if !inside => {
-                            let _ = self.sim.commands.send(Command::Click {
-                                slot: Slot::Outside,
-                                tile: None,
-                                right: button == 1,
-                                shift: false,
-                            });
-                        }
-                        None => {}
-                    }
-                }
-                Request::None
-            }
+            Screen::Window => Request::None,
             Screen::Paused => self.menu_mouse(button, true),
             Screen::Dead => match self.menu_hit() {
                 Some(MenuAction::BackToGame) => {
@@ -2171,10 +2274,14 @@ impl Game {
                 self.input = Input::default();
                 Request::Release
             }
-            (Screen::Window, K::KeyE | K::Escape) => {
-                let _ = self.sim.commands.send(Command::CloseWindow);
-                self.screen = Screen::Playing;
-                Request::Grab
+            (Screen::Window, _) => {
+                let lw = crate::settings::lwjgl_code(code);
+                let close = self.with_container(|g, f, k, send| g.key_typed(f, lw, ctrl, k, send));
+                if close {
+                    self.close_window()
+                } else {
+                    Request::None
+                }
             }
             (Screen::Playing, K::KeyQ) => {
                 let _ = self.sim.commands.send(Command::DropHeld { all: ctrl });
@@ -3193,6 +3300,16 @@ impl Game {
             ];
             crate::gui::debug_overlay(&mut ui, &left, &right);
         }
+        if let Some((x, y)) = std::env::var("MINERUST_MOUSE")
+            .ok()
+            .and_then(|v| {
+                v.split_once(',')
+                    .map(|(a, b)| (a.parse::<f32>(), b.parse::<f32>()))
+            })
+            .and_then(|(a, b)| Some((a.ok()?, b.ok()?)))
+        {
+            self.mouse_px = (x * scale as f32, y * scale as f32);
+        }
         let m = (
             self.mouse_px.0 / scale as f32,
             self.mouse_px.1 / scale as f32,
@@ -3200,7 +3317,14 @@ impl Game {
         match self.screen {
             Screen::Window => {
                 let lines = self.effect_lines();
-                screens::container(&mut ui, &self.view, m, &lines);
+                let frame = crate::gui_container::Frame {
+                    view: &self.view,
+                    w: ui.w as i32,
+                    h: ui.h as i32,
+                    effects: !lines.is_empty(),
+                    mouse: (m.0.floor() as i32, m.1.floor() as i32),
+                };
+                self.gui.draw(&mut ui, &frame, &self.lang, &lines);
             }
             Screen::Paused => {
                 self.draw_menu(&mut ui, partial);

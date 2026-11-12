@@ -83,6 +83,45 @@ impl<'a> Ui<'a> {
         );
     }
 
+    /// `Gui.drawGradientRect`: vertical blend of two ARGB colours.
+    pub fn gradient_rect(&mut self, x: f32, y: f32, w: f32, h: f32, top: u32, bottom: u32) {
+        let c = |v: u32| {
+            [
+                (v >> 16 & 255) as u8,
+                (v >> 8 & 255) as u8,
+                (v & 255) as u8,
+                (v >> 24 & 255) as u8,
+            ]
+        };
+        let (t, b) = (c(top), c(bottom));
+        let vert = |p: [f32; 2], col: [u8; 4]| Vertex {
+            pos: [p[0], p[1], 0.0],
+            uv: [0.0; 2],
+            color: col,
+            light: [PLAIN, 0, 0, 0],
+        };
+        let q = [
+            vert([x, y], t),
+            vert([x, y + h], b),
+            vert([x + w, y + h], b),
+            vert([x + w, y], t),
+        ];
+        self.v
+            .extend_from_slice(&[q[0], q[1], q[2], q[0], q[2], q[3]]);
+    }
+
+    /// A 16x16 icon from the block/item atlas by texture name
+    /// (`drawTexturedModelRectFromIcon`).
+    pub fn named_icon(&mut self, name: &str, x: f32, y: f32) {
+        let t = self.atlas.named(name);
+        self.quad(
+            [[x, y], [x, y + 16.0], [x + 16.0, y + 16.0], [x + 16.0, y]],
+            [[t[0], t[1]], [t[0], t[3]], [t[2], t[3]], [t[2], t[1]]],
+            [255; 4],
+            BLOCKS,
+        );
+    }
+
     /// `drawTexturedModalRect` from the GUI sheet; `(u, v)` in sheet pixels.
     pub fn sheet(&mut self, x: f32, y: f32, u: f32, v: f32, w: f32, h: f32) {
         let s = UI_SIZE as f32;

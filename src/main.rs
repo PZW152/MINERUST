@@ -6,14 +6,19 @@ mod assets;
 mod audio;
 mod block;
 mod compat;
+mod container;
+mod crafting;
 mod dimension;
 mod entity;
 mod front;
 mod game;
 mod gui;
+mod gui_container;
 mod inventory;
 mod item;
+mod item_data;
 mod item_table;
+mod item_text;
 mod item_use;
 mod java;
 mod lang;
@@ -890,6 +895,7 @@ impl ApplicationHandler for App {
             WindowEvent::CursorMoved { position, .. } => {
                 if let Some(g) = &mut self.game {
                     g.mouse_px = (position.x as f32, position.y as f32);
+                    g.mouse_moved();
                 }
                 if let Some(f) = &mut self.front {
                     f.mouse_px = (position.x as f32, position.y as f32);

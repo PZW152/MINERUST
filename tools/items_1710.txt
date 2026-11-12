@@ -1,0 +1,1774 @@
+N 1 0 0 tile.stone common 0.0|Stone
+N 2 0 0 tile.grass common 0.0|Grass Block
+N 3 0 0 tile.dirt.default common 0.0|Dirt
+N 3 2 0 tile.dirt.podzol common 0.0|Podzol
+N 4 0 0 tile.stonebrick common 0.0|Cobblestone
+N 5 0 0 tile.wood.oak common 0.0|Oak Wood Planks
+N 5 1 0 tile.wood.spruce common 0.0|Spruce Wood Planks
+N 5 2 0 tile.wood.birch common 0.0|Birch Wood Planks
+N 5 3 0 tile.wood.jungle common 0.0|Jungle Wood Planks
+N 5 4 0 tile.wood.acacia common 0.0|Acacia Wood Planks
+N 5 5 0 tile.wood.big_oak common 0.0|Dark Oak Wood Planks
+N 6 0 1 tile.sapling.oak common 0.0|Oak Sapling
+N 6 1 1 tile.sapling.spruce common 0.0|Spruce Sapling
+N 6 2 1 tile.sapling.birch common 0.0|Birch Sapling
+N 6 3 1 tile.sapling.jungle common 0.0|Jungle Sapling
+N 6 4 1 tile.sapling.acacia common 0.0|Acacia Sapling
+N 6 5 1 tile.sapling.roofed_oak common 0.0|Dark Oak Sapling
+N 7 0 0 tile.bedrock common 0.0|Bedrock
+N 8 0 -1 tile.water common 0.0|Water
+N 9 0 -1 tile.water common 0.0|Water
+N 10 0 -1 tile.lava common 0.0|Lava
+N 11 0 -1 tile.lava common 0.0|Lava
+N 12 0 0 tile.sand.default common 0.0|Sand
+N 12 1 0 tile.sand.red common 0.0|Red Sand
+N 13 0 0 tile.gravel common 0.0|Gravel
+N 14 0 0 tile.oreGold common 0.0|Gold Ore
+N 15 0 0 tile.oreIron common 0.0|Iron Ore
+N 16 0 0 tile.oreCoal common 0.0|Coal Ore
+N 17 0 0 tile.log.oak common 0.0|Oak Wood
+N 17 1 0 tile.log.spruce common 0.0|Spruce Wood
+N 17 2 0 tile.log.birch common 0.0|Birch Wood
+N 17 3 0 tile.log.jungle common 0.0|Jungle Wood
+N 18 0 1 tile.leaves.oak common 0.0|Oak Leaves
+N 18 1 1 tile.leaves.spruce common 0.0|Spruce Leaves
+N 18 2 1 tile.leaves.birch common 0.0|Birch Leaves
+N 18 3 1 tile.leaves.jungle common 0.0|Jungle Leaves
+N 19 0 0 tile.sponge common 0.0|Sponge
+N 20 0 0 tile.glass common 0.0|Glass
+N 21 0 0 tile.oreLapis common 0.0|Lapis Lazuli Ore
+N 22 0 0 tile.blockLapis common 0.0|Lapis Lazuli Block
+N 23 0 2 tile.dispenser common 0.0|Dispenser
+N 24 0 0 tile.sandStone.default common 0.0|Sandstone
+N 24 1 0 tile.sandStone.chiseled common 0.0|Chiseled Sandstone
+N 24 2 0 tile.sandStone.smooth common 0.0|Smooth Sandstone
+N 25 0 2 tile.musicBlock common 0.0|Note Block
+N 27 0 3 tile.goldenRail common 0.0|Powered Rail
+N 28 0 3 tile.detectorRail common 0.0|Detector Rail
+N 29 0 2 tile.pistonStickyBase common 0.0|Sticky Piston
+N 30 0 1 tile.web common 0.0|Cobweb
+N 31 1 1 tile.tallgrass.grass common 0.0|Grass
+N 31 2 1 tile.tallgrass.fern common 0.0|Fern
+N 32 0 1 tile.deadbush common 0.0|Dead Bush
+N 33 0 2 tile.pistonBase common 0.0|Piston
+N 35 0 0 tile.cloth.white common 0.0|Wool
+N 35 1 0 tile.cloth.orange common 0.0|Orange Wool
+N 35 2 0 tile.cloth.magenta common 0.0|Magenta Wool
+N 35 3 0 tile.cloth.lightBlue common 0.0|Light Blue Wool
+N 35 4 0 tile.cloth.yellow common 0.0|Yellow Wool
+N 35 5 0 tile.cloth.lime common 0.0|Lime Wool
+N 35 6 0 tile.cloth.pink common 0.0|Pink Wool
+N 35 7 0 tile.cloth.gray common 0.0|Gray Wool
+N 35 8 0 tile.cloth.silver common 0.0|Light Gray Wool
+N 35 9 0 tile.cloth.cyan common 0.0|Cyan Wool
+N 35 10 0 tile.cloth.purple common 0.0|Purple Wool
+N 35 11 0 tile.cloth.blue common 0.0|Blue Wool
+N 35 12 0 tile.cloth.brown common 0.0|Brown Wool
+N 35 13 0 tile.cloth.green common 0.0|Green Wool
+N 35 14 0 tile.cloth.red common 0.0|Red Wool
+N 35 15 0 tile.cloth.black common 0.0|Black Wool
+N 37 0 1 tile.flower1.dandelion common 0.0|Dandelion
+N 38 0 1 tile.flower2.poppy common 0.0|Poppy
+N 38 1 1 tile.flower2.blueOrchid common 0.0|Blue Orchid
+N 38 2 1 tile.flower2.allium common 0.0|Allium
+N 38 3 1 tile.flower2.houstonia common 0.0|Azure Bluet
+N 38 4 1 tile.flower2.tulipRed common 0.0|Red Tulip
+N 38 5 1 tile.flower2.tulipOrange common 0.0|Orange Tulip
+N 38 6 1 tile.flower2.tulipWhite common 0.0|White Tulip
+N 38 7 1 tile.flower2.tulipPink common 0.0|Pink Tulip
+N 38 8 1 tile.flower2.oxeyeDaisy common 0.0|Oxeye Daisy
+N 39 0 1 tile.mushroom common 0.0|Mushroom
+N 40 0 1 tile.mushroom common 0.0|Mushroom
+N 41 0 0 tile.blockGold common 0.0|Block of Gold
+N 42 0 0 tile.blockIron common 0.0|Block of Iron
+N 43 0 0 tile.stoneSlab.stone common 0.0|Stone Slab
+N 44 0 0 tile.stoneSlab.stone common 0.0|Stone Slab
+N 44 1 0 tile.stoneSlab.sand common 0.0|Sandstone Slab
+N 44 3 0 tile.stoneSlab.cobble common 0.0|Cobblestone Slab
+N 44 4 0 tile.stoneSlab.brick common 0.0|Bricks Slab
+N 44 5 0 tile.stoneSlab.smoothStoneBrick common 0.0|Stone Bricks Slab
+N 44 6 0 tile.stoneSlab.netherBrick common 0.0|Nether Brick Slab
+N 44 7 0 tile.stoneSlab.quartz common 0.0|Quartz Slab
+N 45 0 0 tile.brick common 0.0|Bricks
+N 46 0 2 tile.tnt common 0.0|TNT
+N 47 0 0 tile.bookshelf common 0.0|Bookshelf
+N 48 0 0 tile.stoneMoss common 0.0|Moss Stone
+N 49 0 0 tile.obsidian common 0.0|Obsidian
+N 50 0 1 tile.torch common 0.0|Torch
+N 51 0 -1 tile.fire common 0.0|Fire
+N 52 0 -1 tile.mobSpawner common 0.0|Monster Spawner
+N 53 0 0 tile.stairsWood common 0.0|Oak Wood Stairs
+N 54 0 1 tile.chest common 0.0|Chest
+N 56 0 0 tile.oreDiamond common 0.0|Diamond Ore
+N 57 0 0 tile.blockDiamond common 0.0|Block of Diamond
+N 58 0 1 tile.workbench common 0.0|Crafting Table
+N 60 0 -1 tile.farmland common 0.0|Farmland
+N 61 0 1 tile.furnace common 0.0|Furnace
+N 62 0 -1 tile.furnace common 0.0|Furnace
+N 65 0 1 tile.ladder common 0.0|Ladder
+N 66 0 3 tile.rail common 0.0|Rail
+N 67 0 0 tile.stairsStone common 0.0|Stone Stairs
+N 69 0 2 tile.lever common 0.0|Lever
+N 70 0 2 tile.pressurePlate common 0.0|Pressure Plate
+N 72 0 2 tile.pressurePlate common 0.0|Pressure Plate
+N 73 0 0 tile.oreRedstone common 0.0|Redstone Ore
+N 76 0 2 tile.notGate common 0.0|Redstone Torch
+N 77 0 2 tile.button common 0.0|Button
+N 78 0 1 tile.snow common 0.0|Snow
+N 79 0 0 tile.ice common 0.0|Ice
+N 80 0 0 tile.snow common 0.0|Snow
+N 81 0 1 tile.cactus common 0.0|Cactus
+N 82 0 0 tile.clay common 0.0|Clay
+N 84 0 1 tile.jukebox common 0.0|Jukebox
+N 85 0 1 tile.fence common 0.0|Fence
+N 86 0 0 tile.pumpkin common 0.0|Pumpkin
+N 87 0 0 tile.hellrock common 0.0|Netherrack
+N 88 0 0 tile.hellsand common 0.0|Soul Sand
+N 89 0 0 tile.lightgem common 0.0|Glowstone
+N 90 0 -1 tile.portal common 0.0|Portal
+N 91 0 0 tile.litpumpkin common 0.0|Jack o'Lantern
+N 95 0 0 tile.stainedGlass.white common 0.0|White Stained Glass
+N 95 1 0 tile.stainedGlass.orange common 0.0|Orange Stained Glass
+N 95 2 0 tile.stainedGlass.magenta common 0.0|Magenta Stained Glass
+N 95 3 0 tile.stainedGlass.lightBlue common 0.0|Light Blue Stained Glass
+N 95 4 0 tile.stainedGlass.yellow common 0.0|Yellow Stained Glass
+N 95 5 0 tile.stainedGlass.lime common 0.0|Lime Stained Glass
+N 95 6 0 tile.stainedGlass.pink common 0.0|Pink Stained Glass
+N 95 7 0 tile.stainedGlass.gray common 0.0|Gray Stained Glass
+N 95 8 0 tile.stainedGlass.silver common 0.0|Light Gray Stained Glass
+N 95 9 0 tile.stainedGlass.cyan common 0.0|Cyan Stained Glass
+N 95 10 0 tile.stainedGlass.purple common 0.0|Purple Stained Glass
+N 95 11 0 tile.stainedGlass.blue common 0.0|Blue Stained Glass
+N 95 12 0 tile.stainedGlass.brown common 0.0|Brown Stained Glass
+N 95 13 0 tile.stainedGlass.green common 0.0|Green Stained Glass
+N 95 14 0 tile.stainedGlass.red common 0.0|Red Stained Glass
+N 95 15 0 tile.stainedGlass.black common 0.0|Black Stained Glass
+N 96 0 2 tile.trapdoor common 0.0|Trapdoor
+N 97 0 1 tile.monsterStoneEgg.stone common 0.0|Stone Monster Egg
+N 97 1 1 tile.monsterStoneEgg.cobble common 0.0|Cobblestone Monster Egg
+N 97 2 1 tile.monsterStoneEgg.brick common 0.0|Stone Brick Monster Egg
+N 97 3 1 tile.monsterStoneEgg.mossybrick common 0.0|Mossy Stone Brick Monster Egg
+N 97 4 1 tile.monsterStoneEgg.crackedbrick common 0.0|Cracked Stone Brick Monster Egg
+N 97 5 1 tile.monsterStoneEgg.chiseledbrick common 0.0|Chiseled Stone Brick Monster Egg
+N 98 0 0 tile.stonebricksmooth.default common 0.0|Stone Bricks
+N 98 1 0 tile.stonebricksmooth.mossy common 0.0|Mossy Stone Bricks
+N 98 2 0 tile.stonebricksmooth.cracked common 0.0|Cracked Stone Bricks
+N 98 3 0 tile.stonebricksmooth.chiseled common 0.0|Chiseled Stone Bricks
+N 99 0 -1 tile.mushroom common 0.0|Mushroom
+N 100 0 -1 tile.mushroom common 0.0|Mushroom
+N 101 0 1 tile.fenceIron common 0.0|Iron Bars
+N 102 0 1 tile.thinGlass common 0.0|Glass Pane
+N 103 0 0 tile.melon common 0.0|Melon
+N 106 0 1 tile.vine common 0.0|Vines
+N 107 0 2 tile.fenceGate common 0.0|Fence Gate
+N 108 0 0 tile.stairsBrick common 0.0|Brick Stairs
+N 109 0 0 tile.stairsStoneBrickSmooth common 0.0|Stone Brick Stairs
+N 110 0 0 tile.mycel common 0.0|Mycelium
+N 111 0 1 tile.waterlily common 0.0|Lily Pad
+N 112 0 0 tile.netherBrick common 0.0|Nether Brick
+N 113 0 1 tile.netherFence common 0.0|Nether Brick Fence
+N 114 0 0 tile.stairsNetherBrick common 0.0|Nether Brick Stairs
+N 116 0 1 tile.enchantmentTable common 0.0|Enchantment Table
+N 119 0 -1 tile.null common 0.0|tile.null.name
+N 120 0 1 tile.endPortalFrame common 0.0|End Portal
+N 121 0 0 tile.whiteStone common 0.0|End Stone
+N 122 0 -1 tile.dragonEgg common 0.0|Dragon Egg
+N 123 0 2 tile.redstoneLight common 0.0|Redstone Lamp
+N 125 0 0 tile.woodSlab.oak common 0.0|Oak Wood Slab
+N 126 0 0 tile.woodSlab.oak common 0.0|Oak Wood Slab
+N 126 1 0 tile.woodSlab.spruce common 0.0|Spruce Wood Slab
+N 126 2 0 tile.woodSlab.birch common 0.0|Birch Wood Slab
+N 126 3 0 tile.woodSlab.jungle common 0.0|Jungle Wood Slab
+N 126 4 0 tile.woodSlab.acacia common 0.0|Acacia Wood Slab
+N 126 5 0 tile.woodSlab.big_oak common 0.0|Dark Oak Wood Slab
+N 127 0 -1 tile.cocoa common 0.0|Cocoa
+N 128 0 0 tile.stairsSandStone common 0.0|Sandstone Stairs
+N 129 0 0 tile.oreEmerald common 0.0|Emerald Ore
+N 130 0 1 tile.enderChest common 0.0|Ender Chest
+N 131 0 2 tile.tripWireSource common 0.0|Tripwire Hook
+N 133 0 0 tile.blockEmerald common 0.0|Block of Emerald
+N 134 0 0 tile.stairsWoodSpruce common 0.0|Spruce Wood Stairs
+N 135 0 0 tile.stairsWoodBirch common 0.0|Birch Wood Stairs
+N 136 0 0 tile.stairsWoodJungle common 0.0|Jungle Wood Stairs
+N 137 0 -1 tile.commandBlock common 0.0|Command Block
+N 138 0 4 tile.beacon common 0.0|Beacon
+N 139 0 0 tile.cobbleWall.normal common 0.0|Cobblestone Wall
+N 139 1 0 tile.cobbleWall.mossy common 0.0|Mossy Cobblestone Wall
+N 141 0 -1 tile.carrots common 0.0|Carrots
+N 142 0 -1 tile.potatoes common 0.0|Potatoes
+N 143 0 2 tile.button common 0.0|Button
+N 145 0 1 tile.anvil.intact common 0.0|Anvil
+N 145 1 1 tile.anvil.slightlyDamaged common 0.0|Slightly Damaged Anvil
+N 145 2 1 tile.anvil.veryDamaged common 0.0|Very Damaged Anvil
+N 146 0 1 tile.chestTrap common 0.0|Trapped Chest
+N 147 0 2 tile.weightedPlate_light common 0.0|Weighted Pressure Plate (Light)
+N 148 0 2 tile.weightedPlate_heavy common 0.0|Weighted Pressure Plate (Heavy)
+N 151 0 2 tile.daylightDetector common 0.0|Daylight Sensor
+N 152 0 2 tile.blockRedstone common 0.0|Block of Redstone
+N 153 0 0 tile.netherquartz common 0.0|Nether Quartz Ore
+N 154 0 2 tile.hopper common 0.0|Hopper
+N 155 0 0 tile.quartzBlock.default common 0.0|Block of Quartz
+N 155 1 0 tile.quartzBlock.chiseled common 0.0|Chiseled Quartz Block
+N 155 2 0 tile.quartzBlock.lines common 0.0|Pillar Quartz Block
+N 156 0 0 tile.stairsQuartz common 0.0|Quartz Stairs
+N 157 0 3 tile.activatorRail common 0.0|Activator Rail
+N 158 0 2 tile.dropper common 0.0|Dropper
+N 159 0 0 tile.clayHardenedStained.white common 0.0|White Stained Clay
+N 159 1 0 tile.clayHardenedStained.orange common 0.0|Orange Stained Clay
+N 159 2 0 tile.clayHardenedStained.magenta common 0.0|Magenta Stained Clay
+N 159 3 0 tile.clayHardenedStained.lightBlue common 0.0|Light Blue Stained Clay
+N 159 4 0 tile.clayHardenedStained.yellow common 0.0|Yellow Stained Clay
+N 159 5 0 tile.clayHardenedStained.lime common 0.0|Lime Stained Clay
+N 159 6 0 tile.clayHardenedStained.pink common 0.0|Pink Stained Clay
+N 159 7 0 tile.clayHardenedStained.gray common 0.0|Gray Stained Clay
+N 159 8 0 tile.clayHardenedStained.silver common 0.0|Light Gray Stained Clay
+N 159 9 0 tile.clayHardenedStained.cyan common 0.0|Cyan Stained Clay
+N 159 10 0 tile.clayHardenedStained.purple common 0.0|Purple Stained Clay
+N 159 11 0 tile.clayHardenedStained.blue common 0.0|Blue Stained Clay
+N 159 12 0 tile.clayHardenedStained.brown common 0.0|Brown Stained Clay
+N 159 13 0 tile.clayHardenedStained.green common 0.0|Green Stained Clay
+N 159 14 0 tile.clayHardenedStained.red common 0.0|Red Stained Clay
+N 159 15 0 tile.clayHardenedStained.black common 0.0|Black Stained Clay
+N 160 0 1 tile.thinStainedGlass.white common 0.0|White Stained Glass Pane
+N 160 1 1 tile.thinStainedGlass.orange common 0.0|Orange Stained Glass Pane
+N 160 2 1 tile.thinStainedGlass.magenta common 0.0|Magenta Stained Glass Pane
+N 160 3 1 tile.thinStainedGlass.lightBlue common 0.0|Light Blue Stained Glass Pane
+N 160 4 1 tile.thinStainedGlass.yellow common 0.0|Yellow Stained Glass Pane
+N 160 5 1 tile.thinStainedGlass.lime common 0.0|Lime Stained Glass Pane
+N 160 6 1 tile.thinStainedGlass.pink common 0.0|Pink Stained Glass Pane
+N 160 7 1 tile.thinStainedGlass.gray common 0.0|Gray Stained Glass Pane
+N 160 8 1 tile.thinStainedGlass.silver common 0.0|Light Gray Stained Glass Pane
+N 160 9 1 tile.thinStainedGlass.cyan common 0.0|Cyan Stained Glass Pane
+N 160 10 1 tile.thinStainedGlass.purple common 0.0|Purple Stained Glass Pane
+N 160 11 1 tile.thinStainedGlass.blue common 0.0|Blue Stained Glass Pane
+N 160 12 1 tile.thinStainedGlass.brown common 0.0|Brown Stained Glass Pane
+N 160 13 1 tile.thinStainedGlass.green common 0.0|Green Stained Glass Pane
+N 160 14 1 tile.thinStainedGlass.red common 0.0|Red Stained Glass Pane
+N 160 15 1 tile.thinStainedGlass.black common 0.0|Black Stained Glass Pane
+N 161 0 1 tile.leaves.acacia common 0.0|Acacia Leaves
+N 161 1 1 tile.leaves.big_oak common 0.0|Dark Oak Leaves
+N 162 0 0 tile.log.acacia common 0.0|Acacia Wood
+N 162 1 0 tile.log.big_oak common 0.0|Dark Oak Wood
+N 163 0 0 tile.stairsWoodAcacia common 0.0|Acacia Wood Stairs
+N 164 0 0 tile.stairsWoodDarkOak common 0.0|Dark Oak Wood Stairs
+N 170 0 0 tile.hayBlock common 0.0|Hay Bale
+N 171 0 1 tile.woolCarpet.white common 0.0|Carpet
+N 171 1 1 tile.woolCarpet.orange common 0.0|Orange Carpet
+N 171 2 1 tile.woolCarpet.magenta common 0.0|Magenta Carpet
+N 171 3 1 tile.woolCarpet.lightBlue common 0.0|Light Blue Carpet
+N 171 4 1 tile.woolCarpet.yellow common 0.0|Yellow Carpet
+N 171 5 1 tile.woolCarpet.lime common 0.0|Lime Carpet
+N 171 6 1 tile.woolCarpet.pink common 0.0|Pink Carpet
+N 171 7 1 tile.woolCarpet.gray common 0.0|Gray Carpet
+N 171 8 1 tile.woolCarpet.silver common 0.0|Light Gray Carpet
+N 171 9 1 tile.woolCarpet.cyan common 0.0|Cyan Carpet
+N 171 10 1 tile.woolCarpet.purple common 0.0|Purple Carpet
+N 171 11 1 tile.woolCarpet.blue common 0.0|Blue Carpet
+N 171 12 1 tile.woolCarpet.brown common 0.0|Brown Carpet
+N 171 13 1 tile.woolCarpet.green common 0.0|Green Carpet
+N 171 14 1 tile.woolCarpet.red common 0.0|Red Carpet
+N 171 15 1 tile.woolCarpet.black common 0.0|Black Carpet
+N 172 0 0 tile.clayHardened common 0.0|Hardened Clay
+N 173 0 0 tile.blockCoal common 0.0|Block of Coal
+N 174 0 0 tile.icePacked common 0.0|Packed Ice
+N 175 0 1 tile.doublePlant.sunflower common 0.0|Sunflower
+N 175 1 1 tile.doublePlant.syringa common 0.0|Lilac
+N 175 2 1 tile.doublePlant.grass common 0.0|Double Tallgrass
+N 175 3 1 tile.doublePlant.fern common 0.0|Large Fern
+N 175 4 1 tile.doublePlant.rose common 0.0|Rose Bush
+N 175 5 1 tile.doublePlant.paeonia common 0.0|Peony
+N 256 0 7 item.shovelIron common 3.0|Iron Shovel
+N 257 0 7 item.pickaxeIron common 4.0|Iron Pickaxe
+N 258 0 7 item.hatchetIron common 5.0|Iron Axe
+N 259 0 7 item.flintAndSteel common 0.0|Flint and Steel
+N 260 0 6 item.apple common 0.0|Apple
+N 261 0 8 item.bow common 0.0|Bow
+N 262 0 8 item.arrow common 0.0|Arrow
+N 263 0 10 item.coal common 0.0|Coal
+N 263 1 10 item.charcoal common 0.0|Charcoal
+N 264 0 10 item.diamond common 0.0|Diamond
+N 265 0 10 item.ingotIron common 0.0|Iron Ingot
+N 266 0 10 item.ingotGold common 0.0|Gold Ingot
+N 267 0 8 item.swordIron common 6.0|Iron Sword
+N 268 0 8 item.swordWood common 4.0|Wooden Sword
+N 269 0 7 item.shovelWood common 1.0|Wooden Shovel
+N 270 0 7 item.pickaxeWood common 2.0|Wooden Pickaxe
+N 271 0 7 item.hatchetWood common 3.0|Wooden Axe
+N 272 0 8 item.swordStone common 5.0|Stone Sword
+N 273 0 7 item.shovelStone common 2.0|Stone Shovel
+N 274 0 7 item.pickaxeStone common 3.0|Stone Pickaxe
+N 275 0 7 item.hatchetStone common 4.0|Stone Axe
+N 276 0 8 item.swordDiamond common 7.0|Diamond Sword
+N 277 0 7 item.shovelDiamond common 4.0|Diamond Shovel
+N 278 0 7 item.pickaxeDiamond common 5.0|Diamond Pickaxe
+N 279 0 7 item.hatchetDiamond common 6.0|Diamond Axe
+N 280 0 10 item.stick common 0.0|Stick
+N 281 0 10 item.bowl common 0.0|Bowl
+N 282 0 6 item.mushroomStew common 0.0|Mushroom Stew
+N 283 0 8 item.swordGold common 4.0|Golden Sword
+N 284 0 7 item.shovelGold common 1.0|Golden Shovel
+N 285 0 7 item.pickaxeGold common 2.0|Golden Pickaxe
+N 286 0 7 item.hatchetGold common 3.0|Golden Axe
+N 287 0 10 item.string common 0.0|String
+N 288 0 10 item.feather common 0.0|Feather
+N 289 0 10 item.sulphur common 0.0|Gunpowder
+N 290 0 7 item.hoeWood common 0.0|Wooden Hoe
+N 291 0 7 item.hoeStone common 0.0|Stone Hoe
+N 292 0 7 item.hoeIron common 0.0|Iron Hoe
+N 293 0 7 item.hoeDiamond common 0.0|Diamond Hoe
+N 294 0 7 item.hoeGold common 0.0|Golden Hoe
+N 295 0 10 item.seeds common 0.0|Seeds
+N 296 0 10 item.wheat common 0.0|Wheat
+N 297 0 6 item.bread common 0.0|Bread
+N 298 0 8 item.helmetCloth common 0.0|Leather Cap
+N 299 0 8 item.chestplateCloth common 0.0|Leather Tunic
+N 300 0 8 item.leggingsCloth common 0.0|Leather Pants
+N 301 0 8 item.bootsCloth common 0.0|Leather Boots
+N 302 0 8 item.helmetChain common 0.0|Chain Helmet
+N 303 0 8 item.chestplateChain common 0.0|Chain Chestplate
+N 304 0 8 item.leggingsChain common 0.0|Chain Leggings
+N 305 0 8 item.bootsChain common 0.0|Chain Boots
+N 306 0 8 item.helmetIron common 0.0|Iron Helmet
+N 307 0 8 item.chestplateIron common 0.0|Iron Chestplate
+N 308 0 8 item.leggingsIron common 0.0|Iron Leggings
+N 309 0 8 item.bootsIron common 0.0|Iron Boots
+N 310 0 8 item.helmetDiamond common 0.0|Diamond Helmet
+N 311 0 8 item.chestplateDiamond common 0.0|Diamond Chestplate
+N 312 0 8 item.leggingsDiamond common 0.0|Diamond Leggings
+N 313 0 8 item.bootsDiamond common 0.0|Diamond Boots
+N 314 0 8 item.helmetGold common 0.0|Golden Helmet
+N 315 0 8 item.chestplateGold common 0.0|Golden Chestplate
+N 316 0 8 item.leggingsGold common 0.0|Golden Leggings
+N 317 0 8 item.bootsGold common 0.0|Golden Boots
+N 318 0 10 item.flint common 0.0|Flint
+N 319 0 6 item.porkchopRaw common 0.0|Raw Porkchop
+N 320 0 6 item.porkchopCooked common 0.0|Cooked Porkchop
+N 321 0 1 item.painting common 0.0|Painting
+N 322 0 6 item.appleGold rare 0.0|Golden Apple
+N 322 1 6 item.appleGold epic 0.0|Golden Apple
+N 323 0 1 item.sign common 0.0|Sign
+N 324 0 2 item.doorWood common 0.0|Wooden Door
+N 325 0 4 item.bucket common 0.0|Bucket
+N 326 0 4 item.bucketWater common 0.0|Water Bucket
+N 327 0 4 item.bucketLava common 0.0|Lava Bucket
+N 328 0 3 item.minecart common 0.0|Minecart
+N 329 0 3 item.saddle common 0.0|Saddle
+N 330 0 2 item.doorIron common 0.0|Iron Door
+N 331 0 2 item.redstone common 0.0|Redstone
+N 332 0 4 item.snowball common 0.0|Snowball
+N 333 0 3 item.boat common 0.0|Boat
+N 334 0 10 item.leather common 0.0|Leather
+N 335 0 4 item.milk common 0.0|Milk
+N 336 0 10 item.brick common 0.0|Brick
+N 337 0 10 item.clay common 0.0|Clay
+N 338 0 10 item.reeds common 0.0|Sugar Canes
+N 339 0 4 item.paper common 0.0|Paper
+N 340 0 4 item.book common 0.0|Book
+N 341 0 4 item.slimeball common 0.0|Slimeball
+N 342 0 3 item.minecartChest common 0.0|Minecart with Chest
+N 343 0 3 item.minecartFurnace common 0.0|Minecart with Furnace
+N 344 0 10 item.egg common 0.0|Egg
+N 345 0 7 item.compass common 0.0|Compass
+N 346 0 7 item.fishingRod common 0.0|Fishing Rod
+N 347 0 7 item.clock common 0.0|Clock
+N 348 0 10 item.yellowDust common 0.0|Glowstone Dust
+N 349 0 6 item.fish.cod.raw common 0.0|Raw Fish
+N 349 1 6 item.fish.salmon.raw common 0.0|Raw Salmon
+N 349 2 6 item.fish.clownfish.raw common 0.0|Clownfish
+N 349 3 6 item.fish.pufferfish.raw common 0.0|Pufferfish
+N 350 0 6 item.fish.cod.cooked common 0.0|Cooked Fish
+N 350 1 6 item.fish.salmon.cooked common 0.0|Cooked Salmon
+N 351 0 10 item.dyePowder.black common 0.0|Ink Sac
+N 351 1 10 item.dyePowder.red common 0.0|Rose Red
+N 351 2 10 item.dyePowder.green common 0.0|Cactus Green
+N 351 3 10 item.dyePowder.brown common 0.0|Cocoa Beans
+N 351 4 10 item.dyePowder.blue common 0.0|Lapis Lazuli
+N 351 5 10 item.dyePowder.purple common 0.0|Purple Dye
+N 351 6 10 item.dyePowder.cyan common 0.0|Cyan Dye
+N 351 7 10 item.dyePowder.silver common 0.0|Light Gray Dye
+N 351 8 10 item.dyePowder.gray common 0.0|Gray Dye
+N 351 9 10 item.dyePowder.pink common 0.0|Pink Dye
+N 351 10 10 item.dyePowder.lime common 0.0|Lime Dye
+N 351 11 10 item.dyePowder.yellow common 0.0|Dandelion Yellow
+N 351 12 10 item.dyePowder.lightBlue common 0.0|Light Blue Dye
+N 351 13 10 item.dyePowder.magenta common 0.0|Magenta Dye
+N 351 14 10 item.dyePowder.orange common 0.0|Orange Dye
+N 351 15 10 item.dyePowder.white common 0.0|Bone Meal
+N 352 0 4 item.bone common 0.0|Bone
+N 353 0 10 item.sugar common 0.0|Sugar
+N 354 0 6 item.cake common 0.0|Cake
+N 355 0 1 item.bed common 0.0|Bed
+N 356 0 2 item.diode common 0.0|Redstone Repeater
+N 357 0 6 item.cookie common 0.0|Cookie
+N 358 0 -1 item.map common 0.0|Map
+N 359 0 7 item.shears common 0.0|Shears
+N 360 0 6 item.melon common 0.0|Melon
+N 361 0 10 item.seeds_pumpkin common 0.0|Pumpkin Seeds
+N 362 0 10 item.seeds_melon common 0.0|Melon Seeds
+N 363 0 6 item.beefRaw common 0.0|Raw Beef
+N 364 0 6 item.beefCooked common 0.0|Steak
+N 365 0 6 item.chickenRaw common 0.0|Raw Chicken
+N 366 0 6 item.chickenCooked common 0.0|Cooked Chicken
+N 367 0 6 item.rottenFlesh common 0.0|Rotten Flesh
+N 368 0 4 item.enderPearl common 0.0|Ender Pearl
+N 369 0 10 item.blazeRod common 0.0|Blaze Rod
+N 370 0 9 item.ghastTear common 0.0|Ghast Tear
+N 371 0 10 item.goldNugget common 0.0|Gold Nugget
+N 372 0 10 item.netherStalkSeeds common 0.0|Nether Wart
+N 373 0 9 item.potion common 0.0|Water Bottle
+N 373 8193 9 item.potion common 0.0|Potion of Regeneration
+N 373 8225 9 item.potion common 0.0|Potion of Regeneration
+N 373 8257 9 item.potion common 0.0|Potion of Regeneration
+N 373 16385 9 item.potion common 0.0|Splash Potion of Regeneration
+N 373 16417 9 item.potion common 0.0|Splash Potion of Regeneration
+N 373 16449 9 item.potion common 0.0|Splash Potion of Regeneration
+N 373 8194 9 item.potion common 0.0|Potion of Swiftness
+N 373 8226 9 item.potion common 0.0|Potion of Swiftness
+N 373 8258 9 item.potion common 0.0|Potion of Swiftness
+N 373 16386 9 item.potion common 0.0|Splash Potion of Swiftness
+N 373 16418 9 item.potion common 0.0|Splash Potion of Swiftness
+N 373 16450 9 item.potion common 0.0|Splash Potion of Swiftness
+N 373 8227 9 item.potion common 0.0|Potion of Fire Resistance
+N 373 8259 9 item.potion common 0.0|Potion of Fire Resistance
+N 373 16419 9 item.potion common 0.0|Splash Potion of Fire Resistance
+N 373 16451 9 item.potion common 0.0|Splash Potion of Fire Resistance
+N 373 8196 9 item.potion common 0.0|Potion of Poison
+N 373 8228 9 item.potion common 0.0|Potion of Poison
+N 373 8260 9 item.potion common 0.0|Potion of Poison
+N 373 16388 9 item.potion common 0.0|Splash Potion of Poison
+N 373 16420 9 item.potion common 0.0|Splash Potion of Poison
+N 373 16452 9 item.potion common 0.0|Splash Potion of Poison
+N 373 8261 9 item.potion common 0.0|Potion of Healing
+N 373 8229 9 item.potion common 0.0|Potion of Healing
+N 373 16453 9 item.potion common 0.0|Splash Potion of Healing
+N 373 16421 9 item.potion common 0.0|Splash Potion of Healing
+N 373 8230 9 item.potion common 0.0|Potion of Night Vision
+N 373 8262 9 item.potion common 0.0|Potion of Night Vision
+N 373 16422 9 item.potion common 0.0|Splash Potion of Night Vision
+N 373 16454 9 item.potion common 0.0|Splash Potion of Night Vision
+N 373 8232 9 item.potion common 0.0|Potion of Weakness
+N 373 8264 9 item.potion common 0.0|Potion of Weakness
+N 373 16424 9 item.potion common 0.0|Splash Potion of Weakness
+N 373 16456 9 item.potion common 0.0|Splash Potion of Weakness
+N 373 8201 9 item.potion common 0.0|Potion of Strength
+N 373 8233 9 item.potion common 0.0|Potion of Strength
+N 373 8265 9 item.potion common 0.0|Potion of Strength
+N 373 16393 9 item.potion common 0.0|Splash Potion of Strength
+N 373 16425 9 item.potion common 0.0|Splash Potion of Strength
+N 373 16457 9 item.potion common 0.0|Splash Potion of Strength
+N 373 8234 9 item.potion common 0.0|Potion of Slowness
+N 373 8266 9 item.potion common 0.0|Potion of Slowness
+N 373 16426 9 item.potion common 0.0|Splash Potion of Slowness
+N 373 16458 9 item.potion common 0.0|Splash Potion of Slowness
+N 373 8268 9 item.potion common 0.0|Potion of Harming
+N 373 8236 9 item.potion common 0.0|Potion of Harming
+N 373 16460 9 item.potion common 0.0|Splash Potion of Harming
+N 373 16428 9 item.potion common 0.0|Splash Potion of Harming
+N 373 8237 9 item.potion common 0.0|Potion of Water Breathing
+N 373 8269 9 item.potion common 0.0|Potion of Water Breathing
+N 373 16429 9 item.potion common 0.0|Splash Potion of Water Breathing
+N 373 16461 9 item.potion common 0.0|Splash Potion of Water Breathing
+N 373 8238 9 item.potion common 0.0|Potion of Invisibility
+N 373 8270 9 item.potion common 0.0|Potion of Invisibility
+N 373 16430 9 item.potion common 0.0|Splash Potion of Invisibility
+N 373 16462 9 item.potion common 0.0|Splash Potion of Invisibility
+N 374 0 9 item.glassBottle common 0.0|Glass Bottle
+N 375 0 6 item.spiderEye common 0.0|Spider Eye
+N 376 0 9 item.fermentedSpiderEye common 0.0|Fermented Spider Eye
+N 377 0 9 item.blazePowder common 0.0|Blaze Powder
+N 378 0 9 item.magmaCream common 0.0|Magma Cream
+N 379 0 9 item.brewingStand common 0.0|Brewing Stand
+N 380 0 9 item.cauldron common 0.0|Cauldron
+N 381 0 4 item.eyeOfEnder common 0.0|Eye of Ender
+N 382 0 9 item.speckledMelon common 0.0|Glistering Melon
+N 383 50 4 item.monsterPlacer common 0.0|Spawn Creeper
+N 383 51 4 item.monsterPlacer common 0.0|Spawn Skeleton
+N 383 52 4 item.monsterPlacer common 0.0|Spawn Spider
+N 383 54 4 item.monsterPlacer common 0.0|Spawn Zombie
+N 383 55 4 item.monsterPlacer common 0.0|Spawn Slime
+N 383 56 4 item.monsterPlacer common 0.0|Spawn Ghast
+N 383 57 4 item.monsterPlacer common 0.0|Spawn Zombie Pigman
+N 383 58 4 item.monsterPlacer common 0.0|Spawn Enderman
+N 383 59 4 item.monsterPlacer common 0.0|Spawn Cave Spider
+N 383 60 4 item.monsterPlacer common 0.0|Spawn Silverfish
+N 383 61 4 item.monsterPlacer common 0.0|Spawn Blaze
+N 383 62 4 item.monsterPlacer common 0.0|Spawn Magma Cube
+N 383 65 4 item.monsterPlacer common 0.0|Spawn Bat
+N 383 66 4 item.monsterPlacer common 0.0|Spawn Witch
+N 383 90 4 item.monsterPlacer common 0.0|Spawn Pig
+N 383 91 4 item.monsterPlacer common 0.0|Spawn Sheep
+N 383 92 4 item.monsterPlacer common 0.0|Spawn Cow
+N 383 93 4 item.monsterPlacer common 0.0|Spawn Chicken
+N 383 94 4 item.monsterPlacer common 0.0|Spawn Squid
+N 383 95 4 item.monsterPlacer common 0.0|Spawn Wolf
+N 383 96 4 item.monsterPlacer common 0.0|Spawn Mooshroom
+N 383 98 4 item.monsterPlacer common 0.0|Spawn Ocelot
+N 383 100 4 item.monsterPlacer common 0.0|Spawn Horse
+N 383 120 4 item.monsterPlacer common 0.0|Spawn Villager
+N 384 0 4 item.expBottle common 0.0|Bottle o' Enchanting
+N 385 0 4 item.fireball common 0.0|Fire Charge
+N 386 0 4 item.writingBook common 0.0|Book and Quill
+N 387 0 -1 item.writtenBook common 0.0|Written Book
+N 388 0 10 item.emerald common 0.0|Emerald
+N 389 0 1 item.frame common 0.0|Item Frame
+N 390 0 1 item.flowerPot common 0.0|Flower Pot
+N 391 0 6 item.carrots common 0.0|Carrot
+N 392 0 6 item.potato common 0.0|Potato
+N 393 0 6 item.potatoBaked common 0.0|Baked Potato
+N 394 0 6 item.potatoPoisonous common 0.0|Poisonous Potato
+N 395 0 4 item.emptyMap common 0.0|Empty Map
+N 396 0 6 item.carrotGolden common 0.0|Golden Carrot
+N 397 0 1 item.skull.skeleton common 0.0|Skeleton Skull
+N 397 1 1 item.skull.wither common 0.0|Wither Skeleton Skull
+N 397 2 1 item.skull.zombie common 0.0|Zombie Head
+N 397 3 1 item.skull.char common 0.0|Head
+N 397 4 1 item.skull.creeper common 0.0|Creeper Head
+N 398 0 3 item.carrotOnAStick common 0.0|Carrot on a Stick
+N 399 0 10 item.netherStar common 0.0|Nether Star
+N 400 0 6 item.pumpkinPie common 0.0|Pumpkin Pie
+N 401 0 -1 item.fireworks common 0.0|Firework Rocket
+N 402 0 4 item.fireworksCharge common 0.0|Firework Star
+N 403 0 -1 item.enchantedBook common 0.0|Enchanted Book
+N 404 0 2 item.comparator common 0.0|Redstone Comparator
+N 405 0 10 item.netherbrick common 0.0|Nether Brick
+N 406 0 10 item.netherquartz common 0.0|Nether Quartz
+N 407 0 3 item.minecartTnt common 0.0|Minecart with TNT
+N 408 0 3 item.minecartHopper common 0.0|Minecart with Hopper
+N 417 0 4 item.horsearmormetal common 0.0|Iron Horse Armor
+N 418 0 4 item.horsearmorgold common 0.0|Gold Horse Armor
+N 419 0 4 item.horsearmordiamond common 0.0|Diamond Horse Armor
+N 420 0 7 item.leash common 0.0|Lead
+N 421 0 7 item.nameTag common 0.0|Name Tag
+N 422 0 -1 item.minecartCommandBlock common 0.0|Minecart with Command Block
+N 2256 0 4 item.record rare 0.0|Music Disc
+N 2257 0 4 item.record rare 0.0|Music Disc
+N 2258 0 4 item.record rare 0.0|Music Disc
+N 2259 0 4 item.record rare 0.0|Music Disc
+N 2260 0 4 item.record rare 0.0|Music Disc
+N 2261 0 4 item.record rare 0.0|Music Disc
+N 2262 0 4 item.record rare 0.0|Music Disc
+N 2263 0 4 item.record rare 0.0|Music Disc
+N 2264 0 4 item.record rare 0.0|Music Disc
+N 2265 0 4 item.record rare 0.0|Music Disc
+N 2266 0 4 item.record rare 0.0|Music Disc
+N 2267 0 4 item.record rare 0.0|Music Disc
+T 0 buildingBlocks
+C 0 1 0 1
+C 0 2 0 1
+C 0 3 0 1
+C 0 3 2 1
+C 0 4 0 1
+C 0 5 0 1
+C 0 5 1 1
+C 0 5 2 1
+C 0 5 3 1
+C 0 5 4 1
+C 0 5 5 1
+C 0 7 0 1
+C 0 12 0 1
+C 0 12 1 1
+C 0 13 0 1
+C 0 14 0 1
+C 0 15 0 1
+C 0 16 0 1
+C 0 17 0 1
+C 0 17 1 1
+C 0 17 2 1
+C 0 17 3 1
+C 0 19 0 1
+C 0 20 0 1
+C 0 21 0 1
+C 0 22 0 1
+C 0 24 0 1
+C 0 24 1 1
+C 0 24 2 1
+C 0 35 0 1
+C 0 35 1 1
+C 0 35 2 1
+C 0 35 3 1
+C 0 35 4 1
+C 0 35 5 1
+C 0 35 6 1
+C 0 35 7 1
+C 0 35 8 1
+C 0 35 9 1
+C 0 35 10 1
+C 0 35 11 1
+C 0 35 12 1
+C 0 35 13 1
+C 0 35 14 1
+C 0 35 15 1
+C 0 41 0 1
+C 0 42 0 1
+C 0 44 0 1
+C 0 44 1 1
+C 0 44 3 1
+C 0 44 4 1
+C 0 44 5 1
+C 0 44 6 1
+C 0 44 7 1
+C 0 45 0 1
+C 0 47 0 1
+C 0 48 0 1
+C 0 49 0 1
+C 0 53 0 1
+C 0 56 0 1
+C 0 57 0 1
+C 0 67 0 1
+C 0 73 0 1
+C 0 79 0 1
+C 0 80 0 1
+C 0 82 0 1
+C 0 86 0 1
+C 0 87 0 1
+C 0 88 0 1
+C 0 89 0 1
+C 0 91 0 1
+C 0 95 0 1
+C 0 95 1 1
+C 0 95 2 1
+C 0 95 3 1
+C 0 95 4 1
+C 0 95 5 1
+C 0 95 6 1
+C 0 95 7 1
+C 0 95 8 1
+C 0 95 9 1
+C 0 95 10 1
+C 0 95 11 1
+C 0 95 12 1
+C 0 95 13 1
+C 0 95 14 1
+C 0 95 15 1
+C 0 98 0 1
+C 0 98 1 1
+C 0 98 2 1
+C 0 98 3 1
+C 0 103 0 1
+C 0 108 0 1
+C 0 109 0 1
+C 0 110 0 1
+C 0 112 0 1
+C 0 114 0 1
+C 0 121 0 1
+C 0 126 0 1
+C 0 126 1 1
+C 0 126 2 1
+C 0 126 3 1
+C 0 126 4 1
+C 0 126 5 1
+C 0 128 0 1
+C 0 129 0 1
+C 0 133 0 1
+C 0 134 0 1
+C 0 135 0 1
+C 0 136 0 1
+C 0 139 0 1
+C 0 139 1 1
+C 0 153 0 1
+C 0 155 0 1
+C 0 155 1 1
+C 0 155 2 1
+C 0 156 0 1
+C 0 159 0 1
+C 0 159 1 1
+C 0 159 2 1
+C 0 159 3 1
+C 0 159 4 1
+C 0 159 5 1
+C 0 159 6 1
+C 0 159 7 1
+C 0 159 8 1
+C 0 159 9 1
+C 0 159 10 1
+C 0 159 11 1
+C 0 159 12 1
+C 0 159 13 1
+C 0 159 14 1
+C 0 159 15 1
+C 0 162 0 1
+C 0 162 1 1
+C 0 163 0 1
+C 0 164 0 1
+C 0 170 0 1
+C 0 172 0 1
+C 0 173 0 1
+C 0 174 0 1
+T 1 decorations
+C 1 6 0 1
+C 1 6 1 1
+C 1 6 2 1
+C 1 6 3 1
+C 1 6 4 1
+C 1 6 5 1
+C 1 18 0 1
+C 1 18 1 1
+C 1 18 2 1
+C 1 18 3 1
+C 1 30 0 1
+C 1 31 1 1
+C 1 31 2 1
+C 1 32 0 1
+C 1 37 0 1
+C 1 38 0 1
+C 1 38 1 1
+C 1 38 2 1
+C 1 38 3 1
+C 1 38 4 1
+C 1 38 5 1
+C 1 38 6 1
+C 1 38 7 1
+C 1 38 8 1
+C 1 39 0 1
+C 1 40 0 1
+C 1 50 0 1
+C 1 54 0 1
+C 1 58 0 1
+C 1 61 0 1
+C 1 65 0 1
+C 1 78 0 1
+C 1 81 0 1
+C 1 84 0 1
+C 1 85 0 1
+C 1 97 0 1
+C 1 97 1 1
+C 1 97 2 1
+C 1 97 3 1
+C 1 97 4 1
+C 1 97 5 1
+C 1 101 0 1
+C 1 102 0 1
+C 1 106 0 1
+C 1 111 0 1
+C 1 113 0 1
+C 1 116 0 1
+C 1 120 0 1
+C 1 130 0 1
+C 1 145 0 1
+C 1 145 1 1
+C 1 145 2 1
+C 1 146 0 1
+C 1 160 0 1
+C 1 160 1 1
+C 1 160 2 1
+C 1 160 3 1
+C 1 160 4 1
+C 1 160 5 1
+C 1 160 6 1
+C 1 160 7 1
+C 1 160 8 1
+C 1 160 9 1
+C 1 160 10 1
+C 1 160 11 1
+C 1 160 12 1
+C 1 160 13 1
+C 1 160 14 1
+C 1 160 15 1
+C 1 161 0 1
+C 1 161 1 1
+C 1 171 0 1
+C 1 171 1 1
+C 1 171 2 1
+C 1 171 3 1
+C 1 171 4 1
+C 1 171 5 1
+C 1 171 6 1
+C 1 171 7 1
+C 1 171 8 1
+C 1 171 9 1
+C 1 171 10 1
+C 1 171 11 1
+C 1 171 12 1
+C 1 171 13 1
+C 1 171 14 1
+C 1 171 15 1
+C 1 175 0 1
+C 1 175 1 1
+C 1 175 2 1
+C 1 175 3 1
+C 1 175 4 1
+C 1 175 5 1
+C 1 321 0 1
+C 1 323 0 1
+C 1 355 0 1
+C 1 389 0 1
+C 1 390 0 1
+C 1 397 0 1
+C 1 397 1 1
+C 1 397 2 1
+C 1 397 3 1
+C 1 397 4 1
+T 2 redstone
+C 2 23 0 1
+C 2 25 0 1
+C 2 29 0 1
+C 2 33 0 1
+C 2 46 0 1
+C 2 69 0 1
+C 2 70 0 1
+C 2 72 0 1
+C 2 76 0 1
+C 2 77 0 1
+C 2 96 0 1
+C 2 107 0 1
+C 2 123 0 1
+C 2 131 0 1
+C 2 143 0 1
+C 2 147 0 1
+C 2 148 0 1
+C 2 151 0 1
+C 2 152 0 1
+C 2 154 0 1
+C 2 158 0 1
+C 2 324 0 1
+C 2 330 0 1
+C 2 331 0 1
+C 2 356 0 1
+C 2 404 0 1
+T 3 transportation
+C 3 27 0 1
+C 3 28 0 1
+C 3 66 0 1
+C 3 157 0 1
+C 3 328 0 1
+C 3 329 0 1
+C 3 333 0 1
+C 3 342 0 1
+C 3 343 0 1
+C 3 398 0 1
+C 3 407 0 1
+C 3 408 0 1
+T 4 misc
+C 4 138 0 1
+C 4 325 0 1
+C 4 326 0 1
+C 4 327 0 1
+C 4 332 0 1
+C 4 335 0 1
+C 4 339 0 1
+C 4 340 0 1
+C 4 341 0 1
+C 4 352 0 1
+C 4 368 0 1
+C 4 381 0 1
+C 4 383 50 1
+C 4 383 51 1
+C 4 383 52 1
+C 4 383 54 1
+C 4 383 55 1
+C 4 383 56 1
+C 4 383 57 1
+C 4 383 58 1
+C 4 383 59 1
+C 4 383 60 1
+C 4 383 61 1
+C 4 383 62 1
+C 4 383 65 1
+C 4 383 66 1
+C 4 383 90 1
+C 4 383 91 1
+C 4 383 92 1
+C 4 383 93 1
+C 4 383 94 1
+C 4 383 95 1
+C 4 383 96 1
+C 4 383 98 1
+C 4 383 100 1
+C 4 383 120 1
+C 4 384 0 1
+C 4 385 0 1
+C 4 386 0 1
+C 4 395 0 1
+C 4 402 0 1
+C 4 417 0 1
+C 4 418 0 1
+C 4 419 0 1
+C 4 2256 0 1
+C 4 2257 0 1
+C 4 2258 0 1
+C 4 2259 0 1
+C 4 2260 0 1
+C 4 2261 0 1
+C 4 2262 0 1
+C 4 2263 0 1
+C 4 2264 0 1
+C 4 2265 0 1
+C 4 2266 0 1
+C 4 2267 0 1
+T 5 search
+T 6 food
+C 6 260 0 1
+C 6 282 0 1
+C 6 297 0 1
+C 6 319 0 1
+C 6 320 0 1
+C 6 322 0 1
+C 6 322 1 1
+C 6 349 0 1
+C 6 349 1 1
+C 6 349 2 1
+C 6 349 3 1
+C 6 350 0 1
+C 6 350 1 1
+C 6 354 0 1
+C 6 357 0 1
+C 6 360 0 1
+C 6 363 0 1
+C 6 364 0 1
+C 6 365 0 1
+C 6 366 0 1
+C 6 367 0 1
+C 6 375 0 1
+C 6 391 0 1
+C 6 392 0 1
+C 6 393 0 1
+C 6 394 0 1
+C 6 396 0 1
+C 6 400 0 1
+T 7 tools
+C 7 256 0 1
+C 7 257 0 1
+C 7 258 0 1
+C 7 259 0 1
+C 7 269 0 1
+C 7 270 0 1
+C 7 271 0 1
+C 7 273 0 1
+C 7 274 0 1
+C 7 275 0 1
+C 7 277 0 1
+C 7 278 0 1
+C 7 279 0 1
+C 7 284 0 1
+C 7 285 0 1
+C 7 286 0 1
+C 7 290 0 1
+C 7 291 0 1
+C 7 292 0 1
+C 7 293 0 1
+C 7 294 0 1
+C 7 345 0 1
+C 7 346 0 1
+C 7 347 0 1
+C 7 359 0 1
+C 7 420 0 1
+C 7 421 0 1
+C 7 403 0 1 32:5
+C 7 403 0 1 33:1
+C 7 403 0 1 34:3
+C 7 403 0 1 35:3
+C 7 403 0 1 61:3
+C 7 403 0 1 62:3
+T 8 combat
+C 8 261 0 1
+C 8 262 0 1
+C 8 267 0 1
+C 8 268 0 1
+C 8 272 0 1
+C 8 276 0 1
+C 8 283 0 1
+C 8 298 0 1
+C 8 299 0 1
+C 8 300 0 1
+C 8 301 0 1
+C 8 302 0 1
+C 8 303 0 1
+C 8 304 0 1
+C 8 305 0 1
+C 8 306 0 1
+C 8 307 0 1
+C 8 308 0 1
+C 8 309 0 1
+C 8 310 0 1
+C 8 311 0 1
+C 8 312 0 1
+C 8 313 0 1
+C 8 314 0 1
+C 8 315 0 1
+C 8 316 0 1
+C 8 317 0 1
+C 8 403 0 1 0:4
+C 8 403 0 1 1:4
+C 8 403 0 1 2:4
+C 8 403 0 1 3:4
+C 8 403 0 1 4:4
+C 8 403 0 1 5:3
+C 8 403 0 1 6:1
+C 8 403 0 1 7:3
+C 8 403 0 1 16:5
+C 8 403 0 1 17:5
+C 8 403 0 1 18:5
+C 8 403 0 1 19:2
+C 8 403 0 1 20:2
+C 8 403 0 1 21:3
+C 8 403 0 1 48:5
+C 8 403 0 1 49:2
+C 8 403 0 1 50:1
+C 8 403 0 1 51:1
+T 9 brewing
+C 9 370 0 1
+C 9 373 0 1
+C 9 373 8193 1
+C 9 373 8225 1
+C 9 373 8257 1
+C 9 373 16385 1
+C 9 373 16417 1
+C 9 373 16449 1
+C 9 373 8194 1
+C 9 373 8226 1
+C 9 373 8258 1
+C 9 373 16386 1
+C 9 373 16418 1
+C 9 373 16450 1
+C 9 373 8227 1
+C 9 373 8259 1
+C 9 373 16419 1
+C 9 373 16451 1
+C 9 373 8196 1
+C 9 373 8228 1
+C 9 373 8260 1
+C 9 373 16388 1
+C 9 373 16420 1
+C 9 373 16452 1
+C 9 373 8261 1
+C 9 373 8229 1
+C 9 373 16453 1
+C 9 373 16421 1
+C 9 373 8230 1
+C 9 373 8262 1
+C 9 373 16422 1
+C 9 373 16454 1
+C 9 373 8232 1
+C 9 373 8264 1
+C 9 373 16424 1
+C 9 373 16456 1
+C 9 373 8201 1
+C 9 373 8233 1
+C 9 373 8265 1
+C 9 373 16393 1
+C 9 373 16425 1
+C 9 373 16457 1
+C 9 373 8234 1
+C 9 373 8266 1
+C 9 373 16426 1
+C 9 373 16458 1
+C 9 373 8268 1
+C 9 373 8236 1
+C 9 373 16460 1
+C 9 373 16428 1
+C 9 373 8237 1
+C 9 373 8269 1
+C 9 373 16429 1
+C 9 373 16461 1
+C 9 373 8238 1
+C 9 373 8270 1
+C 9 373 16430 1
+C 9 373 16462 1
+C 9 374 0 1
+C 9 376 0 1
+C 9 377 0 1
+C 9 378 0 1
+C 9 379 0 1
+C 9 380 0 1
+C 9 382 0 1
+T 10 materials
+C 10 263 0 1
+C 10 263 1 1
+C 10 264 0 1
+C 10 265 0 1
+C 10 266 0 1
+C 10 280 0 1
+C 10 281 0 1
+C 10 287 0 1
+C 10 288 0 1
+C 10 289 0 1
+C 10 295 0 1
+C 10 296 0 1
+C 10 318 0 1
+C 10 334 0 1
+C 10 336 0 1
+C 10 337 0 1
+C 10 338 0 1
+C 10 344 0 1
+C 10 348 0 1
+C 10 351 0 1
+C 10 351 1 1
+C 10 351 2 1
+C 10 351 3 1
+C 10 351 4 1
+C 10 351 5 1
+C 10 351 6 1
+C 10 351 7 1
+C 10 351 8 1
+C 10 351 9 1
+C 10 351 10 1
+C 10 351 11 1
+C 10 351 12 1
+C 10 351 13 1
+C 10 351 14 1
+C 10 351 15 1
+C 10 353 0 1
+C 10 361 0 1
+C 10 362 0 1
+C 10 369 0 1
+C 10 371 0 1
+C 10 372 0 1
+C 10 388 0 1
+C 10 399 0 1
+C 10 405 0 1
+C 10 406 0 1
+T 11 inventory
+S 1 0 1
+S 2 0 1
+S 3 0 1
+S 3 2 1
+S 4 0 1
+S 5 0 1
+S 5 1 1
+S 5 2 1
+S 5 3 1
+S 5 4 1
+S 5 5 1
+S 6 0 1
+S 6 1 1
+S 6 2 1
+S 6 3 1
+S 6 4 1
+S 6 5 1
+S 7 0 1
+S 12 0 1
+S 12 1 1
+S 13 0 1
+S 14 0 1
+S 15 0 1
+S 16 0 1
+S 17 0 1
+S 17 1 1
+S 17 2 1
+S 17 3 1
+S 18 0 1
+S 18 1 1
+S 18 2 1
+S 18 3 1
+S 19 0 1
+S 20 0 1
+S 21 0 1
+S 22 0 1
+S 23 0 1
+S 24 0 1
+S 24 1 1
+S 24 2 1
+S 25 0 1
+S 27 0 1
+S 28 0 1
+S 29 0 1
+S 30 0 1
+S 31 1 1
+S 31 2 1
+S 32 0 1
+S 33 0 1
+S 35 0 1
+S 35 1 1
+S 35 2 1
+S 35 3 1
+S 35 4 1
+S 35 5 1
+S 35 6 1
+S 35 7 1
+S 35 8 1
+S 35 9 1
+S 35 10 1
+S 35 11 1
+S 35 12 1
+S 35 13 1
+S 35 14 1
+S 35 15 1
+S 37 0 1
+S 38 0 1
+S 38 1 1
+S 38 2 1
+S 38 3 1
+S 38 4 1
+S 38 5 1
+S 38 6 1
+S 38 7 1
+S 38 8 1
+S 39 0 1
+S 40 0 1
+S 41 0 1
+S 42 0 1
+S 44 0 1
+S 44 1 1
+S 44 3 1
+S 44 4 1
+S 44 5 1
+S 44 6 1
+S 44 7 1
+S 45 0 1
+S 46 0 1
+S 47 0 1
+S 48 0 1
+S 49 0 1
+S 50 0 1
+S 53 0 1
+S 54 0 1
+S 56 0 1
+S 57 0 1
+S 58 0 1
+S 61 0 1
+S 65 0 1
+S 66 0 1
+S 67 0 1
+S 69 0 1
+S 70 0 1
+S 72 0 1
+S 73 0 1
+S 76 0 1
+S 77 0 1
+S 78 0 1
+S 79 0 1
+S 80 0 1
+S 81 0 1
+S 82 0 1
+S 84 0 1
+S 85 0 1
+S 86 0 1
+S 87 0 1
+S 88 0 1
+S 89 0 1
+S 91 0 1
+S 95 0 1
+S 95 1 1
+S 95 2 1
+S 95 3 1
+S 95 4 1
+S 95 5 1
+S 95 6 1
+S 95 7 1
+S 95 8 1
+S 95 9 1
+S 95 10 1
+S 95 11 1
+S 95 12 1
+S 95 13 1
+S 95 14 1
+S 95 15 1
+S 96 0 1
+S 97 0 1
+S 97 1 1
+S 97 2 1
+S 97 3 1
+S 97 4 1
+S 97 5 1
+S 98 0 1
+S 98 1 1
+S 98 2 1
+S 98 3 1
+S 101 0 1
+S 102 0 1
+S 103 0 1
+S 106 0 1
+S 107 0 1
+S 108 0 1
+S 109 0 1
+S 110 0 1
+S 111 0 1
+S 112 0 1
+S 113 0 1
+S 114 0 1
+S 116 0 1
+S 120 0 1
+S 121 0 1
+S 123 0 1
+S 126 0 1
+S 126 1 1
+S 126 2 1
+S 126 3 1
+S 126 4 1
+S 126 5 1
+S 128 0 1
+S 129 0 1
+S 130 0 1
+S 131 0 1
+S 133 0 1
+S 134 0 1
+S 135 0 1
+S 136 0 1
+S 138 0 1
+S 139 0 1
+S 139 1 1
+S 143 0 1
+S 145 0 1
+S 145 1 1
+S 145 2 1
+S 146 0 1
+S 147 0 1
+S 148 0 1
+S 151 0 1
+S 152 0 1
+S 153 0 1
+S 154 0 1
+S 155 0 1
+S 155 1 1
+S 155 2 1
+S 156 0 1
+S 157 0 1
+S 158 0 1
+S 159 0 1
+S 159 1 1
+S 159 2 1
+S 159 3 1
+S 159 4 1
+S 159 5 1
+S 159 6 1
+S 159 7 1
+S 159 8 1
+S 159 9 1
+S 159 10 1
+S 159 11 1
+S 159 12 1
+S 159 13 1
+S 159 14 1
+S 159 15 1
+S 160 0 1
+S 160 1 1
+S 160 2 1
+S 160 3 1
+S 160 4 1
+S 160 5 1
+S 160 6 1
+S 160 7 1
+S 160 8 1
+S 160 9 1
+S 160 10 1
+S 160 11 1
+S 160 12 1
+S 160 13 1
+S 160 14 1
+S 160 15 1
+S 161 0 1
+S 161 1 1
+S 162 0 1
+S 162 1 1
+S 163 0 1
+S 164 0 1
+S 170 0 1
+S 171 0 1
+S 171 1 1
+S 171 2 1
+S 171 3 1
+S 171 4 1
+S 171 5 1
+S 171 6 1
+S 171 7 1
+S 171 8 1
+S 171 9 1
+S 171 10 1
+S 171 11 1
+S 171 12 1
+S 171 13 1
+S 171 14 1
+S 171 15 1
+S 172 0 1
+S 173 0 1
+S 174 0 1
+S 175 0 1
+S 175 1 1
+S 175 2 1
+S 175 3 1
+S 175 4 1
+S 175 5 1
+S 256 0 1
+S 257 0 1
+S 258 0 1
+S 259 0 1
+S 260 0 1
+S 261 0 1
+S 262 0 1
+S 263 0 1
+S 263 1 1
+S 264 0 1
+S 265 0 1
+S 266 0 1
+S 267 0 1
+S 268 0 1
+S 269 0 1
+S 270 0 1
+S 271 0 1
+S 272 0 1
+S 273 0 1
+S 274 0 1
+S 275 0 1
+S 276 0 1
+S 277 0 1
+S 278 0 1
+S 279 0 1
+S 280 0 1
+S 281 0 1
+S 282 0 1
+S 283 0 1
+S 284 0 1
+S 285 0 1
+S 286 0 1
+S 287 0 1
+S 288 0 1
+S 289 0 1
+S 290 0 1
+S 291 0 1
+S 292 0 1
+S 293 0 1
+S 294 0 1
+S 295 0 1
+S 296 0 1
+S 297 0 1
+S 298 0 1
+S 299 0 1
+S 300 0 1
+S 301 0 1
+S 302 0 1
+S 303 0 1
+S 304 0 1
+S 305 0 1
+S 306 0 1
+S 307 0 1
+S 308 0 1
+S 309 0 1
+S 310 0 1
+S 311 0 1
+S 312 0 1
+S 313 0 1
+S 314 0 1
+S 315 0 1
+S 316 0 1
+S 317 0 1
+S 318 0 1
+S 319 0 1
+S 320 0 1
+S 321 0 1
+S 322 0 1
+S 322 1 1
+S 323 0 1
+S 324 0 1
+S 325 0 1
+S 326 0 1
+S 327 0 1
+S 328 0 1
+S 329 0 1
+S 330 0 1
+S 331 0 1
+S 332 0 1
+S 333 0 1
+S 334 0 1
+S 335 0 1
+S 336 0 1
+S 337 0 1
+S 338 0 1
+S 339 0 1
+S 340 0 1
+S 341 0 1
+S 342 0 1
+S 343 0 1
+S 344 0 1
+S 345 0 1
+S 346 0 1
+S 347 0 1
+S 348 0 1
+S 349 0 1
+S 349 1 1
+S 349 2 1
+S 349 3 1
+S 350 0 1
+S 350 1 1
+S 351 0 1
+S 351 1 1
+S 351 2 1
+S 351 3 1
+S 351 4 1
+S 351 5 1
+S 351 6 1
+S 351 7 1
+S 351 8 1
+S 351 9 1
+S 351 10 1
+S 351 11 1
+S 351 12 1
+S 351 13 1
+S 351 14 1
+S 351 15 1
+S 352 0 1
+S 353 0 1
+S 354 0 1
+S 355 0 1
+S 356 0 1
+S 357 0 1
+S 359 0 1
+S 360 0 1
+S 361 0 1
+S 362 0 1
+S 363 0 1
+S 364 0 1
+S 365 0 1
+S 366 0 1
+S 367 0 1
+S 368 0 1
+S 369 0 1
+S 370 0 1
+S 371 0 1
+S 372 0 1
+S 373 0 1
+S 373 8193 1
+S 373 8225 1
+S 373 8257 1
+S 373 16385 1
+S 373 16417 1
+S 373 16449 1
+S 373 8194 1
+S 373 8226 1
+S 373 8258 1
+S 373 16386 1
+S 373 16418 1
+S 373 16450 1
+S 373 8227 1
+S 373 8259 1
+S 373 16419 1
+S 373 16451 1
+S 373 8196 1
+S 373 8228 1
+S 373 8260 1
+S 373 16388 1
+S 373 16420 1
+S 373 16452 1
+S 373 8261 1
+S 373 8229 1
+S 373 16453 1
+S 373 16421 1
+S 373 8230 1
+S 373 8262 1
+S 373 16422 1
+S 373 16454 1
+S 373 8232 1
+S 373 8264 1
+S 373 16424 1
+S 373 16456 1
+S 373 8201 1
+S 373 8233 1
+S 373 8265 1
+S 373 16393 1
+S 373 16425 1
+S 373 16457 1
+S 373 8234 1
+S 373 8266 1
+S 373 16426 1
+S 373 16458 1
+S 373 8268 1
+S 373 8236 1
+S 373 16460 1
+S 373 16428 1
+S 373 8237 1
+S 373 8269 1
+S 373 16429 1
+S 373 16461 1
+S 373 8238 1
+S 373 8270 1
+S 373 16430 1
+S 373 16462 1
+S 374 0 1
+S 375 0 1
+S 376 0 1
+S 377 0 1
+S 378 0 1
+S 379 0 1
+S 380 0 1
+S 381 0 1
+S 382 0 1
+S 383 50 1
+S 383 51 1
+S 383 52 1
+S 383 54 1
+S 383 55 1
+S 383 56 1
+S 383 57 1
+S 383 58 1
+S 383 59 1
+S 383 60 1
+S 383 61 1
+S 383 62 1
+S 383 65 1
+S 383 66 1
+S 383 90 1
+S 383 91 1
+S 383 92 1
+S 383 93 1
+S 383 94 1
+S 383 95 1
+S 383 96 1
+S 383 98 1
+S 383 100 1
+S 383 120 1
+S 384 0 1
+S 385 0 1
+S 386 0 1
+S 388 0 1
+S 389 0 1
+S 390 0 1
+S 391 0 1
+S 392 0 1
+S 393 0 1
+S 394 0 1
+S 395 0 1
+S 396 0 1
+S 397 0 1
+S 397 1 1
+S 397 2 1
+S 397 3 1
+S 397 4 1
+S 398 0 1
+S 399 0 1
+S 400 0 1
+S 402 0 1
+S 404 0 1
+S 405 0 1
+S 406 0 1
+S 407 0 1
+S 408 0 1
+S 417 0 1
+S 418 0 1
+S 419 0 1
+S 420 0 1
+S 421 0 1
+S 2256 0 1
+S 2257 0 1
+S 2258 0 1
+S 2259 0 1
+S 2260 0 1
+S 2261 0 1
+S 2262 0 1
+S 2263 0 1
+S 2264 0 1
+S 2265 0 1
+S 2266 0 1
+S 2267 0 1
+S 403 0 1 0:1
+S 403 0 1 0:2
+S 403 0 1 0:3
+S 403 0 1 0:4
+S 403 0 1 1:1
+S 403 0 1 1:2
+S 403 0 1 1:3
+S 403 0 1 1:4
+S 403 0 1 2:1
+S 403 0 1 2:2
+S 403 0 1 2:3
+S 403 0 1 2:4
+S 403 0 1 3:1
+S 403 0 1 3:2
+S 403 0 1 3:3
+S 403 0 1 3:4
+S 403 0 1 4:1
+S 403 0 1 4:2
+S 403 0 1 4:3
+S 403 0 1 4:4
+S 403 0 1 5:1
+S 403 0 1 5:2
+S 403 0 1 5:3
+S 403 0 1 6:1
+S 403 0 1 7:1
+S 403 0 1 7:2
+S 403 0 1 7:3
+S 403 0 1 16:1
+S 403 0 1 16:2
+S 403 0 1 16:3
+S 403 0 1 16:4
+S 403 0 1 16:5
+S 403 0 1 17:1
+S 403 0 1 17:2
+S 403 0 1 17:3
+S 403 0 1 17:4
+S 403 0 1 17:5
+S 403 0 1 18:1
+S 403 0 1 18:2
+S 403 0 1 18:3
+S 403 0 1 18:4
+S 403 0 1 18:5
+S 403 0 1 19:1
+S 403 0 1 19:2
+S 403 0 1 20:1
+S 403 0 1 20:2
+S 403 0 1 21:1
+S 403 0 1 21:2
+S 403 0 1 21:3
+S 403 0 1 32:1
+S 403 0 1 32:2
+S 403 0 1 32:3
+S 403 0 1 32:4
+S 403 0 1 32:5
+S 403 0 1 33:1
+S 403 0 1 34:1
+S 403 0 1 34:2
+S 403 0 1 34:3
+S 403 0 1 35:1
+S 403 0 1 35:2
+S 403 0 1 35:3
+S 403 0 1 48:1
+S 403 0 1 48:2
+S 403 0 1 48:3
+S 403 0 1 48:4
+S 403 0 1 48:5
+S 403 0 1 49:1
+S 403 0 1 49:2
+S 403 0 1 50:1
+S 403 0 1 51:1
+S 403 0 1 61:1
+S 403 0 1 61:2
+S 403 0 1 61:3
+S 403 0 1 62:1
+S 403 0 1 62:2
+S 403 0 1 62:3
+X 0 enchantment.protect.all 4
+X 1 enchantment.protect.fire 4
+X 2 enchantment.protect.fall 4
+X 3 enchantment.protect.explosion 4
+X 4 enchantment.protect.projectile 4
+X 5 enchantment.oxygen 3
+X 6 enchantment.waterWorker 1
+X 7 enchantment.thorns 3
+X 16 enchantment.damage.all 5
+X 17 enchantment.damage.undead 5
+X 18 enchantment.damage.arthropods 5
+X 19 enchantment.knockback 2
+X 20 enchantment.fire 2
+X 21 enchantment.lootBonus 3
+X 32 enchantment.digging 5
+X 33 enchantment.untouching 1
+X 34 enchantment.durability 3
+X 35 enchantment.lootBonusDigger 3
+X 48 enchantment.arrowDamage 5
+X 49 enchantment.arrowKnockback 2
+X 50 enchantment.arrowFire 1
+X 51 enchantment.arrowInfinite 1
+X 61 enchantment.lootBonusFishing 3
+X 62 enchantment.fishingSpeed 3
+E 50 Creeper
+E 51 Skeleton
+E 52 Spider
+E 54 Zombie
+E 55 Slime
+E 56 Ghast
+E 57 PigZombie
+E 58 Enderman
+E 59 CaveSpider
+E 60 Silverfish
+E 61 Blaze
+E 62 LavaSlime
+E 65 Bat
+E 66 Witch
+E 90 Pig
+E 91 Sheep
+E 92 Cow
+E 93 Chicken
+E 94 Squid
+E 95 Wolf
+E 96 MushroomCow
+E 98 Ozelot
+E 100 EntityHorse
+E 120 Villager
