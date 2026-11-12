@@ -168,6 +168,8 @@ pub struct Play {
     pub items: Vec<ItemEntity>,
     /// `EntityFallingBlock`s
     pub falling: Vec<crate::entity::falling::FallingBlock>,
+    /// Experience orbs to spawn (`dropXpOnBlockBreak`, `SlotFurnace`).
+    pub orbs: Vec<([f64; 3], i32)>,
     /// Boats and minecarts with their trackers.
     pub vehicles: Vec<crate::entity::vehicle::Tracked>,
     pub next_item: u32,
@@ -217,23 +219,90 @@ pub fn burn_time(s: &Stack) -> i32 {
 
 /// `FurnaceRecipes.getSmeltingResult`
 pub fn smelt(s: &Stack) -> Option<Stack> {
+    smelting(s).map(|r| r.0)
+}
+
+/// `FurnaceRecipes`: the result and `func_151398_b`'s experience.
+pub fn smelting(s: &Stack) -> Option<(Stack, f32)> {
     let b = |id: u8| id as ItemId;
     Some(match s.id {
-        x if x == b(block::IRON_ORE) => Stack::new(item::IRON_INGOT, 0, 1),
-        x if x == b(block::GOLD_ORE) => Stack::new(item::GOLD_INGOT, 0, 1),
-        x if x == b(block::DIAMOND_ORE) => Stack::new(item::DIAMOND, 0, 1),
-        x if x == b(block::EMERALD_ORE) => Stack::new(item::EMERALD, 0, 1),
-        x if x == b(block::COAL_ORE) => Stack::new(item::COAL, 0, 1),
-        x if x == b(block::REDSTONE_ORE) => Stack::new(item::REDSTONE, 0, 1),
-        x if x == b(block::LAPIS_ORE) => Stack::new(item::DYE, 4, 1),
-        x if x == b(block::SAND) => Stack::new(b(block::GLASS), 0, 1),
-        x if x == b(block::COBBLESTONE) => Stack::new(b(block::STONE), 0, 1),
-        x if x == b(block::LOG) || x == b(block::LOG2) => Stack::new(item::COAL, 1, 1),
-        x if x == b(block::CACTUS) => Stack::new(item::DYE, 2, 1),
-        x if x == b(block::CLAY) => Stack::new(b(block::HARDENED_CLAY), 0, 1),
-        item::CLAY_BALL => Stack::new(item::BRICK, 0, 1),
+        x if x == b(block::IRON_ORE) => (Stack::new(item::IRON_INGOT, 0, 1), 0.7),
+        x if x == b(block::GOLD_ORE) => (Stack::new(item::GOLD_INGOT, 0, 1), 1.0),
+        x if x == b(block::DIAMOND_ORE) => (Stack::new(item::DIAMOND, 0, 1), 1.0),
+        x if x == b(block::SAND) => (Stack::new(b(block::GLASS), 0, 1), 0.1),
+        319 => (Stack::new(320, 0, 1), 0.35),
+        363 => (Stack::new(364, 0, 1), 0.35),
+        365 => (Stack::new(366, 0, 1), 0.35),
+        x if x == b(block::COBBLESTONE) => (Stack::new(b(block::STONE), 0, 1), 0.1),
+        item::CLAY_BALL => (Stack::new(item::BRICK, 0, 1), 0.3),
+        x if x == b(block::CLAY) => (Stack::new(b(block::HARDENED_CLAY), 0, 1), 0.35),
+        x if x == b(block::CACTUS) => (Stack::new(item::DYE, 2, 1), 0.2),
+        x if x == b(block::LOG) || x == b(block::LOG2) => (Stack::new(item::COAL, 1, 1), 0.15),
+        x if x == b(block::EMERALD_ORE) => (Stack::new(item::EMERALD, 0, 1), 1.0),
+        392 => (Stack::new(393, 0, 1), 0.35),
+        87 => (Stack::new(405, 0, 1), 0.1),
+        // ItemFishFood.FishType cod and salmon
+        349 if s.meta == 0 || s.meta == 1 => (Stack::new(350, s.meta, 1), 0.35),
+        x if x == b(block::COAL_ORE) => (Stack::new(item::COAL, 0, 1), 0.1),
+        x if x == b(block::REDSTONE_ORE) => (Stack::new(item::REDSTONE, 0, 1), 0.7),
+        x if x == b(block::LAPIS_ORE) => (Stack::new(item::DYE, 4, 1), 0.2),
+        153 => (Stack::new(406, 0, 1), 0.2),
         _ => return None,
     })
+}
+
+/// `FurnaceRecipes.func_151398_b`: the experience of a smelted output.
+pub fn smelting_xp(out: &Stack) -> f32 {
+    // the first entry of experienceList whose output matches
+    let inputs: [(u16, i32); 21] = [
+        (15, 0),
+        (14, 0),
+        (56, 0),
+        (12, 0),
+        (319, 0),
+        (363, 0),
+        (365, 0),
+        (4, 0),
+        (337, 0),
+        (82, 0),
+        (81, 0),
+        (17, 0),
+        (129, 0),
+        (392, 0),
+        (87, 0),
+        (349, 0),
+        (349, 1),
+        (16, 0),
+        (73, 0),
+        (21, 0),
+        (153, 0),
+    ];
+    for (id, meta) in inputs {
+        if let Some((r, xp)) = smelting(&Stack::new(id, meta, 1)) {
+            if r.id == out.id && r.meta == out.meta {
+                return xp;
+            }
+        }
+    }
+    0.0
+}
+
+/// `SlotFurnace.onCrafting`: the experience for `n` items taken;
+/// `math_random` stands for `Math.random()`.
+pub fn furnace_xp(out: &Stack, n: i32, math_random: &mut JavaRandom) -> i32 {
+    let f = smelting_xp(out);
+    if f == 0.0 {
+        return 0;
+    }
+    if f < 1.0 {
+        let v = n as f32 * f;
+        let mut k = crate::util::math::floor_float(v);
+        if (k as f32) < v.ceil() && (math_random.next_double() as f32) < v - k as f32 {
+            k += 1;
+        }
+        return k;
+    }
+    n
 }
 
 fn merge_slot(slot: &mut Option<Stack>, add: Stack) -> bool {
@@ -409,6 +478,7 @@ impl Play {
             items: Vec::new(),
             falling: Vec::new(),
             vehicles: Vec::new(),
+            orbs: Vec::new(),
             next_item: 1,
             pitch: 0.0,
             fx: Vec::new(),
@@ -658,6 +728,26 @@ impl Play {
             if item::can_harvest(held, id) {
                 for s in item::drops(id, meta, &mut rnd) {
                     self.drop_at_block(s, p, &mut rnd);
+                }
+                // BlockOre / BlockRedstoneOre.dropBlockAsItemWithChance:
+                // dropXpOnBlockBreak
+                let range = |r: &mut JavaRandom, a: i32, b: i32| {
+                    if a >= b {
+                        a
+                    } else {
+                        r.next_int_n(b - a + 1) + a
+                    }
+                };
+                let xp = match id {
+                    block::COAL_ORE => range(&mut rnd, 0, 2),
+                    block::DIAMOND_ORE | block::EMERALD_ORE => range(&mut rnd, 3, 7),
+                    block::LAPIS_ORE | 153 => range(&mut rnd, 2, 5),
+                    block::REDSTONE_ORE | block::LIT_REDSTONE_ORE => 1 + rnd.next_int_n(5),
+                    _ => 0,
+                };
+                if xp > 0 {
+                    let c = [p[0] as f64 + 0.5, p[1] as f64 + 0.5, p[2] as f64 + 0.5];
+                    self.orbs.push((c, xp));
                 }
             }
             w.rand = rnd;
@@ -1214,7 +1304,31 @@ impl Play {
         self.inv_dirty = true;
         let mut rnd = std::mem::replace(&mut w.rand, JavaRandom::new(0));
         if let Some(t) = tile {
+            // SlotFurnace.onPickupFromSlot: experience for what was taken
+            let furnace_out = match (&self.open, t) {
+                (Open::Furnace(fp), 2) => match self.tiles.get(fp) {
+                    Some(Tile::Furnace { slots, .. }) => slots[2],
+                    _ => None,
+                },
+                _ => None,
+            };
             self.click_tile(t, right, shift);
+            if let (Some(before), Open::Furnace(fp)) = (furnace_out, &self.open) {
+                let now = match self.tiles.get(fp) {
+                    Some(Tile::Furnace { slots, .. }) => slots[2].map_or(0, |s| s.count),
+                    _ => 0,
+                };
+                let taken = before.count as i32 - now as i32;
+                if taken > 0 {
+                    let mut pr = std::mem::replace(&mut self.prand, JavaRandom::new(0));
+                    let xp = furnace_xp(&before, taken, &mut pr);
+                    self.prand = pr;
+                    if xp > 0 {
+                        let (f, _) = self.player;
+                        self.orbs.push(([f[0], f[1] + 0.5, f[2] + 0.5], xp));
+                    }
+                }
+            }
         } else if let (Slot::Main(i), true, Open::Brewing(_)) = (slot, shift, &self.open) {
             self.shift_into_brewing(i);
         } else if let (Slot::Main(i), true, Open::Chest(_) | Open::Furnace(_) | Open::Cart(_)) =

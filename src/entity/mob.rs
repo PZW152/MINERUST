@@ -1455,17 +1455,18 @@ impl Mob {
         v
     }
 
-    fn xp(&mut self) -> i32 {
+    /// `getExperiencePoints`: animals and squid draw from the world's random.
+    fn xp(&mut self, world_rand: &mut JavaRandom) -> i32 {
         match self.kind {
             Kind::Slime | Kind::MagmaCube => return self.variant,
             Kind::Blaze => return 10,
             Kind::EnderCrystal | Kind::EnderDragon => return 0,
-            Kind::Squid => return 1 + self.rand.next_int_n(3),
+            Kind::Squid => return 1 + world_rand.next_int_n(3),
             Kind::Bat | Kind::IronGolem => return 0,
             _ => {}
         }
         if self.kind.animal() {
-            1 + self.rand.next_int_n(3)
+            1 + world_rand.next_int_n(3)
         } else if self.kind.hostile() {
             5
         } else {
@@ -1576,6 +1577,8 @@ pub struct Outcome {
     /// Throwables spawned this tick (the witch's potions).
     pub thrown: Vec<super::throwable::Throwable>,
     pub hits: Vec<Hit>,
+    /// Experience to drop as `EntityXPOrb`s (position, amount).
+    pub orbs: Vec<([f64; 3], i32)>,
     pub drops: Vec<([f64; 3], Stack)>,
     pub sounds: Vec<(&'static str, [f64; 3], f32, f32)>,
     /// Explosions (centre, size) for particles and sound.
@@ -1732,6 +1735,10 @@ impl Mobs {
                         }
                     }
                     Impact::Teleport(p) => out.hits.push(Hit::Teleport(p)),
+                    Impact::Xp(p, xp) => {
+                        self.splashes.push((p, 0));
+                        out.orbs.push((p, xp));
+                    }
                     Impact::Splash(p, meta, hits) => {
                         let effects = crate::potion::effects_of(meta, false);
                         for (tg, k) in hits {
@@ -1994,12 +2001,6 @@ impl Mobs {
                 for s in m.drops(by_player) {
                     out.drops.push(([m.pos[0], m.pos[1] + 0.0, m.pos[2]], s));
                 }
-                if by_player {
-                    let xp = m.xp();
-                    if xp > 0 {
-                        out.hits.push(Hit::Xp(xp));
-                    }
-                }
                 let s = mob_sound(m, true);
                 if !s.is_empty() {
                     out.sounds.push((s, m.pos, 1.0, 1.0));
@@ -2036,6 +2037,16 @@ impl Mobs {
                     }
                     _ => {
                         m.death_time += 1;
+                        if m.death_time == 20 {
+                            // EntityLivingBase.onDeathUpdate: the experience,
+                            // unless a child (func_146066_aG)
+                            if m.recently_hit > 0 && m.growing_age >= 0 {
+                                let xp = m.xp(&mut w.rand);
+                                if xp > 0 {
+                                    out.orbs.push((m.pos, xp));
+                                }
+                            }
+                        }
                         if m.death_time >= 20 {
                             m.dead = true;
                         }

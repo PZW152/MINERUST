@@ -130,6 +130,8 @@ pub enum Event {
     Hits(Vec<crate::entity::mob::Hit>),
     /// Sounds: name, position, volume, pitch.
     Sounds(Vec<(&'static str, [f64; 3], f32, f32)>),
+    /// `S0DPacketCollectItem` for an experience orb the player took.
+    CollectOrb(u32),
     /// `S27PacketExplosion`s
     Explosions(Vec<crate::world::explosion::View>),
     Weather(Weather),
@@ -1738,6 +1740,8 @@ impl Sim {
                 // ItemEnderPearl: not in creative
                 368 if !creative => Some(TK::EnderPearl),
                 373 if crate::item_use::is_splash(held.meta) => Some(TK::Potion(held.meta)),
+                // ItemExpBottle
+                384 => Some(TK::ExpBottle),
                 _ => None,
             };
             if let Some(k) = kind {
@@ -2348,6 +2352,19 @@ impl Sim {
                 }
                 continue;
             }
+            if name == "XPOrb" {
+                let v: i32 = parts.next().and_then(|t| t.parse().ok()).unwrap_or(7);
+                let dist: f64 = std::env::var("MINERUST_SUMMON_DIST")
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(3.0);
+                let x = feet[0] + fwd[0] * dist + side[0] * off;
+                let z = feet[2] + fwd[1] * dist + side[1] * off;
+                let mut play = std::mem::replace(&mut self.play, Play::new(GameMode::Survival));
+                self.spawn_orbs(&mut play, [x, feet[1] + 1.0, z], v);
+                self.play = play;
+                continue;
+            }
             if name == "Boat" {
                 // CommandSummon: EntityList.createEntityByName + setLocationAndAngles
                 let dist = 4.0;
@@ -2581,6 +2598,7 @@ impl Sim {
                     match &mut play.vehicles[i].v {
                         Vehicle::Boat(boat) => broke = boat.attack(b.damage, false),
                         Vehicle::Cart(c) => c.attack(b.damage, false, true, false, &mut outs),
+                        Vehicle::Orb(o) => o.attack(b.damage),
                     }
                     {
                         let e = play.vehicles[i].v.e_mut();
@@ -2758,6 +2776,12 @@ impl Sim {
             hits.extend(o.hits);
             sounds.extend(o.sounds);
             explosions.extend(o.explosions);
+            for (p, xp) in o.orbs {
+                self.spawn_orbs(play, p, xp);
+            }
+        }
+        for (p, xp) in std::mem::take(&mut play.orbs) {
+            self.spawn_orbs(play, p, xp);
         }
         self.world.rand = rnd;
         self.apply_player_hits(hits);
@@ -3919,6 +3943,56 @@ mod tests {
         };
         let e = crate::potion::effects_of(slots[0].unwrap().meta, false);
         assert_eq!(e[0].id, crate::potion::MOVE_SPEED);
+    }
+
+    /// EntityExpBottle breaks into 3..11 experience; the EntityXPOrbs fly
+    /// to the player and onCollideWithPlayer adds them, one per xpCooldown.
+    #[test]
+    fn experience_orbs_are_collected() {
+        use crate::entity::vehicle::Vehicle;
+        let (mut sim, x, y, z) = redstone_sim();
+        sim.play.mode = GameMode::Survival;
+        let feet = [x as f64 + 3.5, y as f64, z as f64 + 3.5];
+        for _ in 0..2 {
+            sim.step(
+                &[Command::Player(feet, [0.0, 90.0], false)],
+                &mut Vec::new(),
+            );
+        }
+        let before = sim.splayer.xp_total;
+        let sel = sim.play.inv.selected;
+        sim.play.inv.main[sel] = Some(crate::item::Stack::new(384, 0, 1));
+        let mut ev0 = Vec::new();
+        sim.step(&[Command::UseAir], &mut ev0);
+        let mut seen = 0;
+        let mut collected = ev0
+            .iter()
+            .filter(|e| matches!(e, Event::CollectOrb(_)))
+            .count();
+        for _ in 0..100 {
+            let mut ev = Vec::new();
+            sim.step(&[Command::Player(feet, [0.0, 90.0], false)], &mut ev);
+            let n = sim
+                .play
+                .vehicles
+                .iter()
+                .filter(|v| matches!(v.v, Vehicle::Orb(_)))
+                .count();
+            seen = seen.max(n);
+            collected += ev
+                .iter()
+                .filter(|e| matches!(e, Event::CollectOrb(_)))
+                .count();
+        }
+        let _ = seen;
+        assert!(collected >= 1, "orbs were picked up");
+        let gained = sim.splayer.xp_total - before;
+        assert!((3..=11).contains(&gained), "gained {gained}");
+        assert!(!sim
+            .play
+            .vehicles
+            .iter()
+            .any(|v| matches!(v.v, Vehicle::Orb(_))));
     }
 
     /// Explosion.doExplosionA: World.getBlockDensity shields a player

@@ -15,3 +15,4 @@ pub mod survival;
 pub mod throwable;
 pub mod tracker;
 pub mod vehicle;
+pub mod xp_orb;

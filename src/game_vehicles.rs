@@ -141,7 +141,12 @@ impl Game {
                     if let Some(c) = self.boats.iter_mut().find(|c| c.v.id() == id) {
                         let (yaw, pitch) = (c.v.e().yaw, c.v.e().pitch);
                         if let Some((at, y, pi)) = c.sp.apply(&p, yaw, pitch) {
-                            c.v.set_position_and_rotation2(at, y, pi, 3);
+                            match &mut c.v {
+                                Vehicle::Orb(o) => {
+                                    o.set_position_and_rotation2(&self.world, at, y, pi)
+                                }
+                                v => v.set_position_and_rotation2(at, y, pi, 3),
+                            }
                         }
                     }
                 }
@@ -260,6 +265,13 @@ impl Game {
                         let mut out = Vec::new();
                         c.tick(&mut world, true, rider, &others, &mut fx, &mut out);
                     }
+                    Vehicle::Orb(o) => {
+                        // the client player's posY is its eyes; getEyeHeight 0.12
+                        let p = self.player.pos;
+                        let target =
+                            (!self.stats.dead).then(|| [p[0], p[1] + 0.12f32 as f64, p[2]]);
+                        o.tick(&world, target, &mut fx);
+                    }
                 }
                 self.world = world;
             }
@@ -333,6 +345,8 @@ impl Game {
             let blk = self.world.light(false, lx, ly, lz);
             let light = [(blk << 4) as u8, (sky << 4) as u8, 0, 0];
             match &c.v {
+                // drawn with the translucent entities
+                Vehicle::Orb(_) => {}
                 Vehicle::Boat(b) => {
                     if let Some(t) = boat_tex {
                         crate::render::vehicles::boat(
@@ -410,6 +424,86 @@ impl Game {
                     self.world.set_local(x, y, z, block::AIR, 0);
                 }
             }
+        }
+    }
+
+    /// `handleCollectItem` for an orb: `random.orb` at it and the
+    /// `EntityPickupFX` flying it to the player.
+    pub(super) fn collect_orb(&mut self, id: u32) {
+        let Some(i) = self.boats.iter().position(|c| c.v.id() == id) else {
+            return;
+        };
+        let c = self.boats.remove(i);
+        if let Vehicle::Orb(o) = c.v {
+            let r = &mut self.particle_rand;
+            let pitch = ((r.next_float() - r.next_float()) * 0.7 + 1.0) * 2.0;
+            self.sound("random.orb", Some(o.e.pos), 0.2, pitch);
+            self.orb_pickups.push((o, 0));
+        }
+    }
+
+    /// `RenderXPOrb` for the orbs and the ones being picked up.
+    pub(super) fn draw_orbs(&self, out: &mut Vec<Vertex>, eye: [f64; 3], partial: f32) {
+        let Some(t) = self.atlas.mob_tex("experience_orb") else {
+            return;
+        };
+        let tp = partial as f64;
+        let mut draw = |o: &crate::entity::xp_orb::XpOrb, p: [f64; 3]| {
+            let e = &o.e;
+            let ly =
+                math::floor_double(p[1] - e.y_offset as f64 + (e.bb.max[1] - e.bb.min[1]) * 0.66);
+            let (lx, lz) = (math::floor_double(p[0]), math::floor_double(p[2]));
+            let sky = self.world.light(true, lx, ly, lz);
+            let blk = self.world.light(false, lx, ly, lz);
+            // getBrightnessForRender: + 0.5 * 15 * 16 block light, at most 240
+            let b = ((blk << 4) + 120).min(240);
+            let light = [b as u8, (sky << 4) as u8, 0, 0];
+            let rel = [
+                (p[0] - eye[0]) as f32,
+                (p[1] - eye[1]) as f32,
+                (p[2] - eye[2]) as f32,
+            ];
+            crate::render::vehicles::xp_orb(
+                out,
+                t,
+                rel,
+                o.value,
+                o.color,
+                partial,
+                self.player.yaw,
+                self.player.pitch,
+                light,
+            );
+        };
+        for c in &self.boats {
+            if let Vehicle::Orb(o) = &c.v {
+                let e = &o.e;
+                let p = [
+                    e.last_tick[0] + (e.pos[0] - e.last_tick[0]) * tp,
+                    e.last_tick[1] + (e.pos[1] - e.last_tick[1]) * tp,
+                    e.last_tick[2] + (e.pos[2] - e.last_tick[2]) * tp,
+                ];
+                draw(o, p);
+            }
+        }
+        // EntityPickupFX.renderParticle
+        for (o, age) in &self.orb_pickups {
+            let mut f = (*age as f32 + partial) / 3.0;
+            f *= f;
+            let d = o.e.pos;
+            let pp = self.player.prev_pos;
+            let pn = self.player.pos;
+            let pl = [
+                pp[0] + (pn[0] - pp[0]) * tp,
+                pp[1] + (pn[1] - pp[1]) * tp - 0.5,
+                pp[2] + (pn[2] - pp[2]) * tp,
+            ];
+            let p = [
+                d[0] + (pl[0] - d[0]) * f as f64,
+                d[1] + (pl[1] - d[1]) * f as f64,
+                d[2] + (pl[2] - d[2]) * f as f64,
+            ];
+            draw(o, p);
         }
     }
 }

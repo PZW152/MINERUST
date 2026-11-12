@@ -6,6 +6,7 @@ use super::boat::Boat;
 use super::minecart::{CartKind, CartMeta, Minecart};
 use super::player::Aabb;
 use super::tracker::Tracker;
+use super::xp_orb::XpOrb;
 
 /// Ids of vehicles, apart from mobs' (`Mobs::next_id`).
 pub const VEHICLE_ID: u32 = 0x4000_0000;
@@ -14,13 +15,21 @@ pub const VEHICLE_ID: u32 = 0x4000_0000;
 pub enum Vehicle {
     Boat(Boat),
     Cart(Minecart),
+    /// `EntityXPOrb`, tracked the same way
+    Orb(XpOrb),
 }
 
 /// The data watcher of either.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum VMeta {
-    Boat { hit: i32, forward: i32, damage: f32 },
+    Boat {
+        hit: i32,
+        forward: i32,
+        damage: f32,
+    },
     Cart(CartMeta),
+    /// No data watcher entries of its own
+    None,
 }
 
 impl Vehicle {
@@ -28,18 +37,21 @@ impl Vehicle {
         match self {
             Vehicle::Boat(b) => b.id,
             Vehicle::Cart(c) => c.id,
+            Vehicle::Orb(o) => o.id,
         }
     }
     pub fn e(&self) -> &Ent {
         match self {
             Vehicle::Boat(b) => &b.e,
             Vehicle::Cart(c) => &c.e,
+            Vehicle::Orb(o) => &o.e,
         }
     }
     pub fn e_mut(&mut self) -> &mut Ent {
         match self {
             Vehicle::Boat(b) => &mut b.e,
             Vehicle::Cart(c) => &mut c.e,
+            Vehicle::Orb(o) => &mut o.e,
         }
     }
     pub fn dead(&self) -> bool {
@@ -49,18 +61,21 @@ impl Vehicle {
         match self {
             Vehicle::Boat(b) => b.ridden,
             Vehicle::Cart(c) => c.ridden,
+            Vehicle::Orb(_) => false,
         }
     }
     pub fn set_ridden(&mut self, v: bool) {
         match self {
             Vehicle::Boat(b) => b.ridden = v,
             Vehicle::Cart(c) => c.ridden = v,
+            Vehicle::Orb(_) => {}
         }
     }
     pub fn velocity_changed(&mut self) -> &mut bool {
         match self {
             Vehicle::Boat(b) => &mut b.velocity_changed,
             Vehicle::Cart(c) => &mut c.velocity_changed,
+            Vehicle::Orb(o) => &mut o.velocity_changed,
         }
     }
     /// `updateRiderPosition`
@@ -68,13 +83,14 @@ impl Vehicle {
         match self {
             Vehicle::Boat(b) => b.rider_position(rider_y_offset),
             Vehicle::Cart(c) => c.rider_position(rider_y_offset),
+            Vehicle::Orb(o) => o.e.pos,
         }
     }
     /// `getBoundingBox`: solid to other entities (boats only).
     pub fn bounding_box(&self) -> Option<Aabb> {
         match self {
             Vehicle::Boat(b) => Some(b.bounding_box()),
-            Vehicle::Cart(_) => None,
+            _ => None,
         }
     }
     pub fn meta(&self) -> VMeta {
@@ -85,6 +101,7 @@ impl Vehicle {
                 damage: b.damage,
             },
             Vehicle::Cart(c) => VMeta::Cart(c.meta()),
+            Vehicle::Orb(_) => VMeta::None,
         }
     }
     pub fn set_meta(&mut self, m: VMeta) {
@@ -109,12 +126,15 @@ impl Vehicle {
         match self {
             Vehicle::Boat(b) => b.set_position_and_rotation2(p, yaw, pitch, inc),
             Vehicle::Cart(c) => c.set_position_and_rotation2(p, yaw, pitch, inc),
+            // the client calls XpOrb::set_position_and_rotation2 with its world
+            Vehicle::Orb(o) => o.e.set_position(p[0], p[1], p[2]),
         }
     }
     pub fn set_velocity(&mut self, v: [f64; 3]) {
         match self {
             Vehicle::Boat(b) => b.set_velocity(v),
             Vehicle::Cart(c) => c.set_velocity(v),
+            Vehicle::Orb(o) => o.e.motion = v,
         }
     }
     /// `S0EPacketSpawnObject`'s type and data.
@@ -122,12 +142,22 @@ impl Vehicle {
         match self {
             Vehicle::Boat(_) => (1, 0),
             Vehicle::Cart(c) => (10, c.kind.type_id()),
+            // S11PacketSpawnExperienceOrb
+            Vehicle::Orb(o) => (2, o.value),
         }
     }
     /// `NetHandlerPlayClient.handleSpawnObject`: the client's entity.
     pub fn from_spawn(object: i32, data: i32, id: u32, p: [f64; 3], seed: i64) -> Option<Vehicle> {
         match object {
             1 => Some(Vehicle::Boat(Boat::at(id, p[0], p[1], p[2], seed))),
+            2 => {
+                // handleSpawnExperienceOrb: rotation 0 after the constructor
+                let mut r = crate::java::JavaRandom::new(seed ^ 0x5DEECE66D);
+                let mut o = XpOrb::new(id, p[0], p[1], p[2], data, &mut r, seed);
+                o.e.yaw = 0.0;
+                o.e.pitch = 0.0;
+                Some(Vehicle::Orb(o))
+            }
             10 => Some(Vehicle::Cart(Minecart::at(
                 id,
                 CartKind::from_type(data),
@@ -156,7 +186,11 @@ impl Tracked {
     /// `EntityTracker.addEntityToTracker(entity, 80, 3, true)`
     pub fn new(v: Vehicle) -> Tracked {
         let (object, data) = v.spawn_type();
-        let t = Tracker::new(v.e(), 80, 3, true, object, data);
+        let t = match v {
+            // EntityTracker: orbs 160 blocks, every 20 ticks
+            Vehicle::Orb(_) => Tracker::new(v.e(), 160, 20, true, object, data),
+            _ => Tracker::new(v.e(), 80, 3, true, object, data),
+        };
         let sent = v.meta();
         Tracked {
             v,
@@ -184,6 +218,14 @@ impl Tracked {
             Vehicle::Boat(b) => {
                 let mut v = vec![("id", Nbt::String("Boat".into()))];
                 v.extend(b.e.nbt_fields(dim, b.id));
+                compound(v)
+            }
+            Vehicle::Orb(o) => {
+                let mut v = vec![("id", Nbt::String("XPOrb".into()))];
+                v.extend(o.e.nbt_fields(dim, o.id));
+                v.push(("Health", Nbt::Short(o.health as u8 as i16)));
+                v.push(("Age", Nbt::Short(o.age as i16)));
+                v.push(("Value", Nbt::Short(o.value as i16)));
                 compound(v)
             }
             Vehicle::Cart(c) => {
@@ -233,6 +275,17 @@ impl Tracked {
         let name = t.string("id")?;
         let mut v = if name == "Boat" {
             Vehicle::Boat(Boat::new(id, seed))
+        } else if name == "XPOrb" {
+            // new EntityXPOrb(world): 0.25 by 0.25 until loaded
+            let mut r = crate::java::JavaRandom::new(seed);
+            let mut o = XpOrb::new(id, 0.0, 0.0, 0.0, 0, &mut r, seed);
+            o.e.width = 0.25;
+            o.e.height = 0.25;
+            o.e.y_offset = o.e.height / 2.0;
+            o.health = (t.int("Health").unwrap_or(5) & 255) as i32;
+            o.age = t.int("Age").unwrap_or(0) as i16 as i32;
+            o.value = t.int("Value").unwrap_or(0) as i16 as i32;
+            Vehicle::Orb(o)
         } else {
             Vehicle::Cart(Minecart::new(id, CartKind::from_entity_id(name)?, seed))
         };

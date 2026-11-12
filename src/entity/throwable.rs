@@ -16,6 +16,8 @@ pub enum Kind {
     EnderPearl,
     /// `EntityPotion` with its potion damage value
     Potion(i32),
+    /// `EntityExpBottle`
+    ExpBottle,
 }
 
 impl Kind {
@@ -23,6 +25,7 @@ impl Kind {
     fn gravity(self) -> f32 {
         match self {
             Kind::Potion(_) => 0.05,
+            Kind::ExpBottle => 0.07,
             _ => 0.03,
         }
     }
@@ -30,6 +33,7 @@ impl Kind {
     fn velocity(self) -> (f32, f32) {
         match self {
             Kind::Potion(_) => (0.5, -20.0),
+            Kind::ExpBottle => (0.7, -20.0),
             _ => (1.5, 0.0),
         }
     }
@@ -40,6 +44,7 @@ impl Kind {
             Kind::Egg => (344, 0),
             Kind::EnderPearl => (368, 0),
             Kind::Potion(m) => (373, m),
+            Kind::ExpBottle => (384, 0),
         }
     }
 }
@@ -56,6 +61,8 @@ pub enum Impact {
     /// `EntityPotion`: the effects at this position (for `playAuxSFX(2002)`)
     /// and every living entity within 4 blocks with its strength.
     Splash([f64; 3], i32, Vec<(Target, f64)>),
+    /// `EntityExpBottle`: `playAuxSFX(2002, 0)` and this much experience.
+    Xp([f64; 3], i32),
 }
 
 #[derive(Clone, Debug)]
@@ -288,6 +295,11 @@ impl Throwable {
                     v.push(Impact::Teleport(p));
                 }
                 v
+            }
+            Kind::ExpBottle => {
+                let r = &mut self.e.rand;
+                let xp = 3 + r.next_int_n(5) + r.next_int_n(5);
+                vec![Impact::Xp(p, xp)]
             }
             Kind::Potion(meta) => {
                 let effects = crate::potion::effects_of(meta, false);

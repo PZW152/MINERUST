@@ -323,6 +323,7 @@ impl Sim {
         let creative = self.play.mode == GameMode::Creative;
         let held = self.play.inv.held();
         match &mut self.play.vehicles[i].v {
+            Vehicle::Orb(_) => {}
             Vehicle::Boat(_) => self.mount(id),
             Vehicle::Cart(c) => match c.kind {
                 CartKind::Empty => {
@@ -364,6 +365,11 @@ impl Sim {
         match &mut play.vehicles[i].v {
             Vehicle::Boat(b) => broke = b.attack(damage, creative),
             Vehicle::Cart(c) => c.attack(damage, creative, false, false, &mut outs),
+            // canAttackWithItem: false
+            Vehicle::Orb(_) => {
+                self.play = play;
+                return;
+            }
         }
         if knockback > 0 {
             let r = std::f32::consts::PI;
@@ -389,6 +395,19 @@ impl Sim {
         }
         self.cart_outs(&mut play, i, outs);
         self.play = play;
+    }
+
+    /// `new EntityXPOrb(world, x, y, z, value)` for each split of `xp`.
+    pub(super) fn spawn_orbs(&mut self, play: &mut Play, pos: [f64; 3], xp: i32) {
+        for v in crate::entity::xp_orb::splits(xp) {
+            let id = VEHICLE_ID | play.next_item;
+            play.next_item += 1;
+            let seed = self.mobs.rand.next_long();
+            let mut r = std::mem::replace(&mut play.prand, JavaRandom::new(0));
+            let o = crate::entity::xp_orb::XpOrb::new(id, pos[0], pos[1], pos[2], v, &mut r, seed);
+            play.prand = r;
+            play.vehicles.push(Tracked::new(Vehicle::Orb(o)));
+        }
     }
 
     /// `cart_outs` for the rest of the sim.
@@ -445,7 +464,8 @@ impl Sim {
             let pb = Self::player_box(feet);
             let near = crate::entity::base::Ent::expand(&pb, 0.2f32 as f64, 0.0, 0.2f32 as f64);
             for b in play.vehicles.iter_mut() {
-                if b.v.dead() {
+                // canBePushed: not orbs
+                if b.v.dead() || matches!(b.v, Vehicle::Orb(_)) {
                     continue;
                 }
                 let own = self.riding == Some(b.v.id());
@@ -457,6 +477,7 @@ impl Sim {
                             .push_entity(feet, false, self.riding.is_some())
                             .1
                             .map(|p| p.0),
+                        Vehicle::Orb(_) => None,
                     };
                     if let Some(a) = push {
                         for k in 0..3 {
@@ -480,6 +501,7 @@ impl Sim {
                             let golem = m.kind == crate::entity::mob::Kind::IronGolem;
                             c.push_entity(m.pos, !golem, m.riding.is_some())
                         }
+                        Vehicle::Orb(_) => (false, None),
                     };
                     if seat {
                         // var1.mountEntity(this)
@@ -526,7 +548,12 @@ impl Sim {
                 })
             };
             let boat = matches!(play.vehicles[i].v, Vehicle::Boat(_));
-            let others = self.entity_boxes_in(play, Some(id), !boat);
+            let orb = matches!(play.vehicles[i].v, Vehicle::Orb(_));
+            let others = if orb {
+                Vec::new()
+            } else {
+                self.entity_boxes_in(play, Some(id), !boat)
+            };
             let mut fx = Vec::new();
             {
                 // updateEntityWithOptionalForce
@@ -538,6 +565,28 @@ impl Sim {
             }
             let mut fell = None;
             match &mut play.vehicles[i].v {
+                Vehicle::Orb(o) => {
+                    // getClosestPlayerToEntity: posY is the feet, getEyeHeight 0.12
+                    let feet = play.player.0;
+                    let target = (!self.splayer.dead && !self.respawn_pending)
+                        .then(|| [feet[0], feet[1] + 0.12f32 as f64, feet[2]]);
+                    o.tick(&self.world, target, &mut fx);
+                    // EntityPlayer.onLivingUpdate: onCollideWithPlayer
+                    if !o.e.dead
+                        && target.is_some()
+                        && o.touches(&Self::player_box(feet))
+                        && o.pickup_delay == 0
+                        && self.splayer.xp_cooldown == 0
+                    {
+                        self.splayer.xp_cooldown = 2;
+                        let pitch = o.pickup_pitch();
+                        sounds.push(("random.orb", feet, 0.1, pitch));
+                        // onItemPickup: S0DPacketCollectItem
+                        self.vehicle_events.push(Event::CollectOrb(o.id));
+                        self.splayer.add_xp(o.value);
+                        o.e.dead = true;
+                    }
+                }
                 Vehicle::Boat(b) => {
                     let outs = b.tick(&mut self.world, false, rider, &others, &mut fx);
                     let pos = b.e.pos;

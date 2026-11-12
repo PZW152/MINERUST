@@ -117,6 +117,8 @@ pub struct ServerPlayer {
     have_pos: bool,
     on_ground: bool,
     pub last_sent: Option<PlayerStatsView>,
+    /// `xpCooldown`: ticks before the next orb can be picked up.
+    pub xp_cooldown: i32,
     /// Ticks since the last attack from an entity (`entityAge`).
     pub entity_age: i32,
     /// `itemInUse` / `itemInUseCount`: the hotbar slot, the stack as it was
@@ -155,6 +157,7 @@ impl ServerPlayer {
             velocity: None,
             hurt_anim: false,
             feet: [0.0; 3],
+            xp_cooldown: 0,
             have_pos: false,
             on_ground: false,
             last_sent: None,
@@ -650,6 +653,10 @@ impl ServerPlayer {
         }
         self.e.ticks_existed += 1;
         self.entity_age += 1;
+        // EntityPlayer.onUpdate
+        if self.xp_cooldown > 0 {
+            self.xp_cooldown -= 1;
+        }
         let wv = &*w as &dyn BlockView;
         let mut fx = Vec::new();
         // Entity.onEntityUpdate

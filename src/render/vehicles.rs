@@ -5,7 +5,7 @@ use super::mesher::Vertex;
 use super::model::{render, Draw, Part, Tex, PI};
 use super::{mul, rot_x, rot_y, translate};
 
-pub const TEXTURES: [&str; 1] = ["boat"];
+pub const TEXTURES: [&str; 2] = ["boat", "experience_orb"];
 
 /// `ModelBoat.boatSides`
 fn boat_sides() -> Vec<Part> {
@@ -195,4 +195,61 @@ pub fn minecart(
     for p in minecart_sides() {
         render(&mut d, &m, &p);
     }
+}
+
+/// `RenderXPOrb.doRender`: a camera-facing quad from the 4x4 sheet, its
+/// colour cycling with `xpColor`, alpha 128, lit at least half block light.
+#[allow(clippy::too_many_arguments)]
+pub fn xp_orb(
+    out: &mut Vec<Vertex>,
+    tex: Tex,
+    rel: [f32; 3],
+    value: i32,
+    color: i32,
+    partial: f32,
+    view_yaw: f32,
+    view_pitch: f32,
+    light: [u8; 4],
+) {
+    let i = crate::entity::xp_orb::texture_index(value);
+    let u0 = (i % 4 * 16) as f32 / 64.0;
+    let u1 = (i % 4 * 16 + 16) as f32 / 64.0;
+    let v0 = (i / 4 * 16) as f32 / 64.0;
+    let v1 = (i / 4 * 16 + 16) as f32 / 64.0;
+    let k = (color as f32 + partial) / 2.0;
+    let sin = crate::util::math::sin;
+    let r = ((sin(k + 0.0) + 1.0) * 0.5 * 255.0) as i32;
+    let g = 255;
+    let b = ((sin(k + (std::f64::consts::PI * 4.0 / 3.0) as f32) + 1.0) * 0.1 * 255.0) as i32;
+    let col = [r.clamp(0, 255) as u8, g as u8, b.clamp(0, 255) as u8, 128];
+    let mut m = translate(rel[0], rel[1], rel[2]);
+    m = mul(&m, &rot_y(180.0 - view_yaw));
+    m = mul(&m, &rot_x(-view_pitch));
+    m = mul(&m, &scale(0.3, 0.3, 0.3));
+    let uv = |u: f32, v: f32| {
+        [
+            tex.rect[0] + (tex.rect[2] - tex.rect[0]) * u * 64.0 / tex.size,
+            tex.rect[1] + (tex.rect[3] - tex.rect[1]) * v * 64.0 / tex.size,
+        ]
+    };
+    let corners = [
+        ([-0.5f32, -0.25f32], uv(u0, v1)),
+        ([0.5, -0.25], uv(u1, v1)),
+        ([0.5, 0.75], uv(u1, v0)),
+        ([-0.5, 0.75], uv(u0, v0)),
+    ];
+    let vs: Vec<Vertex> = corners
+        .iter()
+        .map(|(p, t)| {
+            let q = super::transform(&m, [p[0], p[1], 0.0, 1.0]);
+            Vertex {
+                pos: [q[0], q[1], q[2]],
+                uv: *t,
+                color: col,
+                light,
+            }
+        })
+        .collect();
+    out.extend_from_slice(&vs);
+    out.extend_from_slice(&[vs[3], vs[2], vs[1], vs[0]]);
 }

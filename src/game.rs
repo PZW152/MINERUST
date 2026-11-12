@@ -229,6 +229,8 @@ pub struct Game {
     using: Option<(crate::item::Stack, i32)>,
     /// `EntityPickupFX`: collected items flying to the player, with age.
     pickups: Vec<(ItemView, i32)>,
+    /// `EntityPickupFX` of experience orbs.
+    orb_pickups: Vec<(crate::entity::xp_orb::XpOrb, i32)>,
     /// Throwables: position, previous position, item, damage.
     throwables: Vec<([f64; 3], [f64; 3], u16, i32)>,
     /// `EntityBoat`s in the client's world.
@@ -489,6 +491,7 @@ impl Game {
             },
             items: Vec::new(),
             pickups: Vec::new(),
+            orb_pickups: Vec::new(),
             lang: crate::lang::Lang::default(),
             using: None,
             falling: Vec::new(),
@@ -918,6 +921,7 @@ impl Game {
                     let live: HashSet<[i32; 3]> = self.world.moving.iter().map(|m| m.0).collect();
                     self.moving_mesh.retain(|k, _| live.contains(&k.0));
                 }
+                Event::CollectOrb(id) => self.collect_orb(id),
                 Event::Collect(v) => {
                     // NetHandlerPlayClient.handleCollectItem
                     for it in v {
@@ -1491,6 +1495,10 @@ impl Game {
             p.1 += 1;
         }
         self.pickups.retain(|p| p.1 < 3);
+        for p in self.orb_pickups.iter_mut() {
+            p.1 += 1;
+        }
+        self.orb_pickups.retain(|p| p.1 < 3);
         // EntityEnderman.onLivingUpdate: two portal particles a tick.
         for v in &self.mobs {
             if v.kind == crate::entity::mob::Kind::Enderman && v.death_time == 0 {
@@ -2702,6 +2710,7 @@ impl Game {
             );
         }
         self.draw_boats(&mut dynamic, eye, partial);
+        self.draw_orbs(&mut translucent, eye, partial);
         if let Some(at) = self.atlas.mob_tex("arrow") {
             for a in &self.arrows {
                 let t = partial as f64;

@@ -355,7 +355,7 @@ pub fn dragon_dying(m: &mut Mob, w: &mut ServerWorld, out: &mut Outcome) -> bool
         out.particles.push(("hugeexplosion", p, [0.0; 3]));
     }
     if t > 150 && t % 5 == 0 {
-        out.hits.push(Hit::Xp(1000));
+        out.orbs.push((m.pos, 1000));
     }
     if t == 1 {
         out.sounds.push(("mob.enderdragon.end", m.pos, 5.0, 1.0));
@@ -365,7 +365,7 @@ pub fn dragon_dying(m: &mut Mob, w: &mut ServerWorld, out: &mut Outcome) -> bool
     m.yaw += 20.0;
     m.body_yaw = m.yaw;
     if t == 200 {
-        out.hits.push(Hit::Xp(2000));
+        out.orbs.push((m.pos, 2000));
         exit_portal(
             w,
             math::floor_double(m.pos[0]),
