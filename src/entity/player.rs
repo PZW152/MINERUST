@@ -78,6 +78,23 @@ impl Aabb {
 
 /// `World.getCollidingBoundingBoxes` (blocks only).
 pub fn colliding_boxes(world: &dyn BlockView, bb: &Aabb) -> Vec<Aabb> {
+    colliding_boxes_except(world, bb, None)
+}
+
+/// `World.getCollidingBoundingBoxes(entity, bb)`: the blocks' boxes, then
+/// the `getBoundingBox` of every other entity that has one (boats).
+pub fn colliding_boxes_except(world: &dyn BlockView, bb: &Aabb, except: Option<u32>) -> Vec<Aabb> {
+    let mut out = blocks_colliding(world, bb);
+    for (id, b) in world.solid_entities() {
+        if Some(*id) != except && b.intersects(bb) {
+            out.push(*b);
+        }
+    }
+    out
+}
+
+/// `World.getCollisionBoxes`: blocks only.
+pub fn blocks_colliding(world: &dyn BlockView, bb: &Aabb) -> Vec<Aabb> {
     let mut out = Vec::new();
     let get = |x: i32, y: i32, z: i32| (world.peek_block(x, y, z), world.peek_meta(x, y, z));
     let mut boxes = Vec::new();
@@ -158,8 +175,11 @@ pub struct Player {
     sprint_toggle_timer: i32,
     fly_toggle_timer: i32,
     prev_jump: bool,
-    move_strafe: f32,
-    move_forward: f32,
+    /// `moveStrafing` / `moveForward`
+    pub move_strafe: f32,
+    pub move_forward: f32,
+    /// `ridingEntity != null`
+    pub riding: bool,
     ai_move_speed: f32,
     /// `movementSpeed` attribute without the sprint modifier (from the server).
     pub speed_attr: f64,
@@ -213,6 +233,7 @@ impl Player {
             prev_jump: false,
             move_strafe: 0.0,
             move_forward: 0.0,
+            riding: false,
             ai_move_speed: 0.1,
             speed_attr: 0.10000000149011612,
             jump_boost: None,
@@ -239,6 +260,17 @@ impl Player {
             max: [x + f, feet_y + HEIGHT as f64, z + f],
         };
         self.pos = [x, feet_y + Y_OFFSET as f64 - self.y_size as f64, z];
+    }
+
+    /// `Entity.setPosition` with `posY` itself (the eyes).
+    pub fn set_eye_position(&mut self, x: f64, y: f64, z: f64) {
+        let f = (WIDTH / 2.0f32) as f64;
+        let min_y = y - Y_OFFSET as f64 + self.y_size as f64;
+        self.bb = Aabb {
+            min: [x - f, min_y, z - f],
+            max: [x + f, min_y + HEIGHT as f64, z + f],
+        };
+        self.pos = [x, y, z];
     }
 
     /// `Entity.setAngles` with the default mouse sensitivity already applied.
@@ -596,7 +628,7 @@ impl Player {
         if oz != dz {
             self.motion[2] = 0.0;
         }
-        if !sneak {
+        if !sneak && !self.riding {
             let ddx = self.pos[0] - start[0];
             let ddz = self.pos[2] - start[2];
             self.distance_walked = (self.distance_walked as f64

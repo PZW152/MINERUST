@@ -541,6 +541,11 @@ pub struct ServerWorld {
     pub note_pitch: FastMap<(i32, i32, i32), i32>,
     /// Sounds, notes, dispenser shots and primed TNT for the game state.
     pub redstone_effects: Vec<super::redstone::Effect>,
+    /// Boats' boxes, which every moving entity collides with.
+    pub solid_entities: Vec<(u32, crate::entity::player::Aabb)>,
+    /// `playAuxSFX(2001)` from blocks the world broke (`func_147480_a`):
+    /// position, block, metadata.
+    pub destroyed: Vec<([i32; 3], u8, i32)>,
     /// `TileEntityPiston`s, in `loadedTileEntityList` order.
     pub moving: Vec<super::redstone::Moving>,
     /// `WorldServer.field_147490_S`: queued `addBlockEvent` calls.
@@ -595,6 +600,8 @@ impl ServerWorld {
             note_powered: FastMap::default(),
             note_pitch: FastMap::default(),
             redstone_effects: Vec::new(),
+            solid_entities: Vec::new(),
+            destroyed: Vec::new(),
             moving: Vec::new(),
             block_events: Vec::new(),
             pushes: Vec::new(),

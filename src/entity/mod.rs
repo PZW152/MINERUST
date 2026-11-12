@@ -1,5 +1,6 @@
 pub mod arrow;
 pub mod base;
+pub mod boat;
 pub mod collide;
 pub mod falling;
 pub mod item;
@@ -11,3 +12,4 @@ pub mod raytrace;
 pub mod server_player;
 pub mod survival;
 pub mod throwable;
+pub mod tracker;

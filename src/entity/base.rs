@@ -5,7 +5,7 @@
 //! entries in call order; the owning entity handles them right after the
 //! call that produced them.
 
-use super::player::{colliding_boxes, Aabb, Player};
+use super::player::{Aabb, Player};
 use crate::block::{self, Material};
 use crate::java::JavaRandom;
 use crate::util::math;
@@ -89,6 +89,9 @@ pub struct Ent {
     pub pushed_by_water: bool,
     pub riding: Option<u32>,
     pub ridden_by: Option<u32>,
+    /// The id of an entity whose `getBoundingBox` others collide with
+    /// (boats), so its own moves leave it out.
+    pub solid_id: Option<u32>,
     pub rand: JavaRandom,
 }
 
@@ -143,6 +146,7 @@ impl Ent {
             pushed_by_water: true,
             riding: None,
             ridden_by: None,
+            solid_id: None,
             rand: JavaRandom::new(seed),
         }
     }
@@ -462,7 +466,9 @@ impl Ent {
             math::floor_double(z),
         );
         let (fx, fy, fz) = (x - bx as f64, y - by as f64, z - bz as f64);
-        if colliding_boxes(w, &self.bb).is_empty() && !full_cube(w, bx, by, bz) {
+        if super::player::colliding_boxes_except(w, &self.bb, self.solid_id).is_empty()
+            && !full_cube(w, bx, by, bz)
+        {
             return false;
         }
         let xn = !full_cube(w, bx - 1, by, bz);
@@ -538,7 +544,7 @@ impl Ent {
         let (mut ox, oy, mut oz) = (dx, dy, dz);
         let orig = self.bb;
         let boxes = |bb: &Aabb| -> Vec<Aabb> {
-            let mut v = colliding_boxes(w, bb);
+            let mut v = super::player::colliding_boxes_except(w, bb, self.solid_id);
             v.extend(extra.iter().filter(|b| b.intersects(bb)).copied());
             v
         };
@@ -746,6 +752,37 @@ fn shrink(d: f64, step: f64) -> f64 {
 }
 
 /// `BlockLiquid.getLiquidHeightPercent`
+/// `Entity.applyEntityCollision(other)` on an entity at `this` with
+/// `entityCollisionReduction` `reduction`: the velocity added to it and to
+/// the other (`addVelocity`).
+pub fn collision_push(
+    this: [f64; 3],
+    reduction: f32,
+    other: [f64; 3],
+) -> Option<([f64; 3], [f64; 3])> {
+    let mut dx = other[0] - this[0];
+    let mut dz = other[2] - this[2];
+    // MathHelper.abs_max
+    let mut d = dx.abs().max(dz.abs());
+    if d < 0.01f32 as f64 {
+        return None;
+    }
+    d = math::sqrt_double(d) as f64;
+    dx /= d;
+    dz /= d;
+    let mut k = 1.0 / d;
+    if k > 1.0 {
+        k = 1.0;
+    }
+    dx *= k;
+    dz *= k;
+    dx *= 0.05f32 as f64;
+    dz *= 0.05f32 as f64;
+    dx *= (1.0 - reduction) as f64;
+    dz *= (1.0 - reduction) as f64;
+    Some(([-dx, 0.0, -dz], [dx, 0.0, dz]))
+}
+
 pub fn liquid_height_percent(meta: i32) -> f32 {
     let m = if meta >= 8 { 0 } else { meta };
     (m + 1) as f32 / 9.0

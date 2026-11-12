@@ -202,6 +202,11 @@ impl<'a> Ui<'a> {
         }
     }
 
+    /// `FontRenderer.drawString` with the alpha in the colour's top byte.
+    pub fn text_alpha(&mut self, s: &str, x: f32, y: f32, color: u32, alpha: f32) {
+        self.glyphs(s, x, y, rgba(color, alpha));
+    }
+
     /// `FontRenderer.drawString`, optionally with the drop shadow.
     pub fn text(&mut self, s: &str, x: f32, y: f32, color: u32, shadow: bool) {
         if shadow {
@@ -425,4 +430,32 @@ pub fn debug_overlay(ui: &mut Ui, left: &[String], right: &[String]) {
         let w = ui.text_width(l);
         ui.text(l, ui.w - w - 2.0, 2.0 + i as f32 * 10.0, 0xE0E0E0, true);
     }
+}
+
+/// `java.awt.Color.HSBtoRGB`
+pub fn hsb_to_rgb(hue: f32, saturation: f32, brightness: f32) -> u32 {
+    let (mut r, mut g, mut b) = (0u32, 0u32, 0u32);
+    if saturation == 0.0 {
+        let v = (brightness * 255.0 + 0.5) as u32;
+        r = v;
+        g = v;
+        b = v;
+    } else {
+        let h = (hue - hue.floor()) * 6.0;
+        let f = h - h.floor();
+        let p = brightness * (1.0 - saturation);
+        let q = brightness * (1.0 - saturation * f);
+        let t = brightness * (1.0 - saturation * (1.0 - f));
+        let c = |v: f32| (v * 255.0 + 0.5) as u32;
+        match h as i32 {
+            0 => (r, g, b) = (c(brightness), c(t), c(p)),
+            1 => (r, g, b) = (c(q), c(brightness), c(p)),
+            2 => (r, g, b) = (c(p), c(brightness), c(t)),
+            3 => (r, g, b) = (c(p), c(q), c(brightness)),
+            4 => (r, g, b) = (c(t), c(p), c(brightness)),
+            5 => (r, g, b) = (c(brightness), c(p), c(q)),
+            _ => {}
+        }
+    }
+    0xFF000000 | (r << 16) | (g << 8) | b
 }

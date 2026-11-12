@@ -33,6 +33,9 @@ struct ClientChunk {
     ready: bool,
 }
 
+#[path = "game_vehicles.rs"]
+mod vehicles;
+
 /// The client's copy of the world: the chunk snapshots the server last sent.
 #[derive(Default)]
 pub struct ClientWorld {
@@ -41,6 +44,10 @@ pub struct ClientWorld {
     pub moving: Vec<([i32; 3], crate::world::redstone::MovingView)>,
     /// Dimension of the chunks held (no rain outside the overworld).
     pub dim: i32,
+    /// The client's boats' boxes, solid to every moving entity.
+    pub solid_entities: Vec<(u32, crate::entity::player::Aabb)>,
+    /// `playAuxSFX(2001)` from blocks the client broke itself.
+    pub destroyed: Vec<([i32; 3], u8, i32)>,
 }
 
 impl ClientWorld {
@@ -121,6 +128,9 @@ impl BlockView for ClientWorld {
     }
     fn moving(&self, x: i32, y: i32, z: i32) -> Option<crate::world::redstone::MovingView> {
         self.moving.iter().find(|m| m.0 == [x, y, z]).map(|m| m.1)
+    }
+    fn solid_entities(&self) -> &[(u32, crate::entity::player::Aabb)] {
+        &self.solid_entities
     }
 }
 
@@ -221,6 +231,12 @@ pub struct Game {
     pickups: Vec<(ItemView, i32)>,
     /// Throwables: position, previous position, item, damage.
     throwables: Vec<([f64; 3], [f64; 3], u16, i32)>,
+    /// `EntityBoat`s in the client's world.
+    boats: Vec<vehicles::ClientBoat>,
+    /// The player's `ridingEntity`.
+    riding: Option<u32>,
+    /// `GuiIngame.recordPlaying`, `recordPlayingUpFor`, `recordIsPlaying`.
+    record: Option<(String, i32, bool)>,
     /// `EntityFallingBlock`s from the server.
     falling: Vec<crate::entity::falling::FallingView>,
     /// Origin of `Minecraft.getSystemTime`.
@@ -477,6 +493,9 @@ impl Game {
             using: None,
             falling: Vec::new(),
             throwables: Vec::new(),
+            boats: Vec::new(),
+            riding: None,
+            record: None,
             started: Instant::now(),
             moving_mesh: HashMap::new(),
             audio: None,
@@ -834,6 +853,10 @@ impl Game {
                 Event::Items(v) => self.items = v,
                 Event::Falling(v) => self.falling = v,
                 Event::Throwables(v) => self.throwables = v,
+                Event::Vehicles(v) => self.vehicle_packets(v),
+                Event::VehicleMeta(v) => self.vehicle_meta(v),
+                Event::Mount(v) => self.mounted(v),
+                Event::Destroyed(v) => self.destroyed_fx(v),
                 Event::Teleport(p) => {
                     self.player.set_position(p[0], p[1], p[2]);
                     self.player.prev_pos = self.player.pos;
@@ -1000,48 +1023,8 @@ impl Game {
                 Event::Tnt(list) => self.tnt = list,
                 Event::Fireballs(list) => self.fireballs = list,
                 Event::Particles(list) => {
-                    let slime = self
-                        .atlas
-                        .items
-                        .get(&(341, 0))
-                        .map(|&t| self.atlas.rects[t as usize]);
                     for (kind, p, m) in list {
-                        match kind {
-                            "portal" => self.particles.portal(p, m),
-                            "heart" => self.particles.heart(p, m),
-                            "bubble" => self.particles.bubble(p, m),
-                            "mobSpell" => self.particles.spell(
-                                p,
-                                [0.0; 3],
-                                128,
-                                [m[0] as f32, m[1] as f32, m[2] as f32],
-                                1.0,
-                            ),
-                            "mobSpellAmbient" => self.particles.spell(
-                                p,
-                                [0.0; 3],
-                                128,
-                                [m[0] as f32, m[1] as f32, m[2] as f32],
-                                0.15,
-                            ),
-                            "snowballpoof" => {
-                                if let Some(&t) = self.atlas.items.get(&(332, 0)) {
-                                    let rect = self.atlas.rects[t as usize];
-                                    self.particles.item_break(p, rect);
-                                }
-                            }
-                            "splash" => self.particles.splash(p, m),
-                            "reddust" => self
-                                .particles
-                                .reddust(p, [m[0] as f32, m[1] as f32, m[2] as f32]),
-                            "smoke" => self.particles.smoke(p, m, false),
-                            "slime" => {
-                                if let Some(r) = slime {
-                                    self.particles.item_break(p, r);
-                                }
-                            }
-                            _ => {}
-                        }
+                        self.named_particle(kind, p, m);
                     }
                 }
                 Event::Notes(list) => {
@@ -1280,15 +1263,32 @@ impl Game {
             self.player.bb.min[1],
             self.player.pos[2],
         ];
+        // GuiIngame.updateTick
+        if let Some(r) = &mut self.record {
+            r.1 -= 1;
+            if r.1 <= 0 {
+                self.record = None;
+            }
+        }
+        // World.updateEntities: a rider is updated right after its vehicle.
+        if self.riding.is_some() {
+            self.tick_boats();
+        }
         if self.world.loaded(pcx << 4, pcz << 4) && !self.stats.dead {
             let input = if self.screen == Screen::Playing {
                 self.input
             } else {
                 Input::default()
             };
+            if self.riding.is_some() {
+                // Entity.updateRidden
+                self.player.motion = [0.0; 3];
+            }
             self.player.tick(&self.world, &input);
+            self.update_rider();
             // Entity.moveEntity: a step sound per block walked.
-            if self.player.on_ground
+            if self.riding.is_none()
+                && self.player.on_ground
                 && !self.player.sneaking
                 && self.player.distance_walked > self.next_step
             {
@@ -1338,6 +1338,9 @@ impl Game {
         } else {
             self.player.prev_pos = self.player.pos;
         }
+        if self.riding.is_none() {
+            self.tick_boats();
+        }
         let after = [
             self.player.pos[0],
             self.player.bb.min[1],
@@ -1360,6 +1363,20 @@ impl Game {
                 .sim
                 .commands
                 .send(Command::Player(after, [p.yaw, p.pitch], p.flying));
+            if self.riding.is_some() {
+                // EntityClientPlayerMP.onUpdate: C0CPacketInput
+                let i = if self.screen == Screen::Playing {
+                    self.input
+                } else {
+                    Input::default()
+                };
+                let _ = self.sim.commands.send(Command::Input {
+                    strafe: p.move_strafe,
+                    forward: p.move_forward,
+                    jump: i.jump,
+                    sneak: i.sneak,
+                });
+            }
         }
         // EntityPlayer.onUpdate: the item in use (client side)
         if let Some((st, n)) = self.using {
@@ -1448,6 +1465,10 @@ impl Game {
     fn debris(&self, pos: [i32; 3]) -> (Option<[f32; 4]>, [f32; 3]) {
         let id = self.world.peek_block(pos[0], pos[1], pos[2]);
         let meta = self.world.peek_meta(pos[0], pos[1], pos[2]);
+        self.debris_of(id, meta)
+    }
+
+    fn debris_of(&self, id: u8, meta: u8) -> (Option<[f32; 4]>, [f32; 3]) {
         let face = if id == block::GRASS {
             0
         } else if id == block::LOG || id == block::LOG2 {
@@ -1688,7 +1709,52 @@ impl Game {
         out
     }
 
-    fn sound(&mut self, name: &str, pos: Option<[f64; 3]>, vol: f32, pitch: f32) {
+    /// `RenderGlobal.doSpawnParticle` for the names the world uses.
+    pub(super) fn named_particle(&mut self, kind: &str, p: [f64; 3], m: [f64; 3]) {
+        let slime = self
+            .atlas
+            .items
+            .get(&(341, 0))
+            .map(|&t| self.atlas.rects[t as usize]);
+        match kind {
+            "portal" => self.particles.portal(p, m),
+            "heart" => self.particles.heart(p, m),
+            "bubble" => self.particles.bubble(p, m),
+            "mobSpell" => self.particles.spell(
+                p,
+                [0.0; 3],
+                128,
+                [m[0] as f32, m[1] as f32, m[2] as f32],
+                1.0,
+            ),
+            "mobSpellAmbient" => self.particles.spell(
+                p,
+                [0.0; 3],
+                128,
+                [m[0] as f32, m[1] as f32, m[2] as f32],
+                0.15,
+            ),
+            "snowballpoof" => {
+                if let Some(&t) = self.atlas.items.get(&(332, 0)) {
+                    let rect = self.atlas.rects[t as usize];
+                    self.particles.item_break(p, rect);
+                }
+            }
+            "splash" => self.particles.splash(p, m),
+            "reddust" => self
+                .particles
+                .reddust(p, [m[0] as f32, m[1] as f32, m[2] as f32]),
+            "smoke" => self.particles.smoke(p, m, false),
+            "slime" => {
+                if let Some(r) = slime {
+                    self.particles.item_break(p, r);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    pub(super) fn sound(&mut self, name: &str, pos: Option<[f64; 3]>, vol: f32, pitch: f32) {
         if let Some(a) = self.audio.as_mut() {
             a.play(name, pos, vol, pitch);
         }
@@ -1739,8 +1805,22 @@ impl Game {
                 dmg += base + mat;
             }
         }
-        let crit =
-            self.stats.fall_distance > 0.0 && !self.player.on_ground && !self.player.in_water;
+        let vehicle = id & crate::entity::boat::VEHICLE_ID != 0;
+        let crit = self.stats.fall_distance > 0.0
+            && !self.player.on_ground
+            && !self.player.in_water
+            && self.riding.is_none()
+            && !vehicle;
+        if vehicle && self.player.sprinting {
+            // the client's own attackTargetEntityWithCurrentItem knocks its boat
+            let r = std::f32::consts::PI;
+            let yaw = self.player.yaw;
+            if let Some(c) = self.boats.iter_mut().find(|c| c.b.id == id) {
+                c.b.e.motion[0] += (-math::sin(yaw * r / 180.0) * 0.5) as f64;
+                c.b.e.motion[1] += 0.1;
+                c.b.e.motion[2] += (math::cos(yaw * r / 180.0) * 0.5) as f64;
+            }
+        }
         let knockback = if self.player.sprinting { 1 } else { 0 };
         if knockback > 0 {
             self.player.motion[0] *= 0.6;
@@ -2208,6 +2288,22 @@ impl Game {
                     }
                 }
             }
+            for c in &self.boats {
+                // canBeCollidedWith: !isDead; getCollisionBorderSize 0.1
+                let b = &c.b.e.bb;
+                let bb = crate::entity::player::Aabb {
+                    min: [b.min[0] - 0.1, b.min[1] - 0.1, b.min[2] - 0.1],
+                    max: [b.max[0] + 0.1, b.max[1] + 0.1, b.max[2] + 0.1],
+                };
+                if let Some(t) = crate::entity::mob::ray_box(eye, look, &bb) {
+                    if t <= reach
+                        && block_d.map_or(true, |d| t < d)
+                        && self.target_mob.map_or(true, |x| t < x.1)
+                    {
+                        self.target_mob = Some((c.b.id, t));
+                    }
+                }
+            }
             if self.target_mob.is_some() {
                 self.selected = None;
             }
@@ -2605,6 +2701,7 @@ impl Game {
                 self.atlas.mob_tex("explosion"),
             );
         }
+        self.draw_boats(&mut dynamic, eye, partial);
         if let Some(at) = self.atlas.mob_tex("arrow") {
             for a in &self.arrows {
                 let t = partial as f64;
@@ -2971,6 +3068,22 @@ impl Game {
                     a = a * 0.8 + 0.2;
                 }
                 ui.atlas_rect(0.0, 0.0, ui.w, ui.h, t, 0xFFFFFF, a);
+            }
+        }
+        // GuiIngame: recordPlaying
+        if let Some((text, up_for, playing)) = &self.record {
+            let f = *up_for as f32 - partial;
+            let a = ((f * 255.0 / 20.0) as i32).min(255);
+            if a > 8 {
+                let color = if *playing {
+                    crate::gui::hsb_to_rgb(f / 50.0, 0.7, 0.6) & 0xFFFFFF
+                } else {
+                    0xFFFFFF
+                };
+                let w = ui.text_width(text);
+                let x = (ui.w / 2.0).floor() - (w as i32 / 2) as f32;
+                let y = ui.h - 68.0 - 4.0;
+                ui.text_alpha(text, x, y, color, a as f32 / 255.0);
             }
         }
         screens::hotbar(&mut ui, &self.view.inv);

@@ -166,7 +166,9 @@ pub struct Play {
     pub items: Vec<ItemEntity>,
     /// `EntityFallingBlock`s
     pub falling: Vec<crate::entity::falling::FallingBlock>,
-    next_item: u32,
+    /// `EntityBoat`s with their trackers.
+    pub boats: Vec<crate::entity::boat::Tracked>,
+    pub next_item: u32,
     /// Sounds and particles of the item entities this tick.
     pub fx: Vec<crate::entity::base::Fx>,
     /// Items picked up this tick (`S0DPacketCollectItem`).
@@ -404,6 +406,7 @@ impl Play {
             mode,
             items: Vec::new(),
             falling: Vec::new(),
+            boats: Vec::new(),
             next_item: 1,
             pitch: 0.0,
             fx: Vec::new(),
@@ -655,7 +658,16 @@ impl Play {
     }
 
     /// Right click on `target` with `face` the side that was hit.
-    pub fn use_block(&mut self, w: &mut ServerWorld, target: Pos, face: [i32; 3], sneaking: bool) {
+    /// `PlayerControllerMP.onPlayerRightClick`: false when neither the block
+    /// nor the item (`Item.onItemUse`) took the click, and the client goes on
+    /// to `sendUseItem` (`onItemRightClick`).
+    pub fn use_block(
+        &mut self,
+        w: &mut ServerWorld,
+        target: Pos,
+        face: [i32; 3],
+        sneaking: bool,
+    ) -> bool {
         let tid = w.block(target[0], target[1], target[2]);
         if !sneaking || self.inv.held().is_none() {
             match tid {
@@ -663,7 +675,7 @@ impl Play {
                     self.open = Open::Workbench(target);
                     self.inv.grid_size = 3;
                     self.inv_dirty = true;
-                    return;
+                    return true;
                 }
                 block::FURNACE | block::LIT_FURNACE => {
                     self.tiles.entry(target).or_insert(Tile::Furnace {
@@ -674,7 +686,7 @@ impl Play {
                     });
                     self.open = Open::Furnace(target);
                     self.inv_dirty = true;
-                    return;
+                    return true;
                 }
                 block::CHEST => {
                     // BlockChest.func_149951_m: the north/west half comes first.
@@ -694,7 +706,7 @@ impl Play {
                         .iter()
                         .any(|q| block::info(w.block(q[0], q[1] + 1, q[2])).normal_cube())
                     {
-                        return;
+                        return true;
                     }
                     for q in &halves {
                         self.tiles
@@ -703,7 +715,7 @@ impl Play {
                     }
                     self.open = Open::Chest(halves);
                     self.inv_dirty = true;
-                    return;
+                    return true;
                 }
                 block::BREWING_STAND => {
                     self.tiles.entry(target).or_insert(Tile::Brewing {
@@ -714,26 +726,26 @@ impl Play {
                     });
                     self.open = Open::Brewing(target);
                     self.inv_dirty = true;
-                    return;
+                    return true;
                 }
                 block::LEVER => {
                     w.toggle_lever(target[0], target[1], target[2]);
-                    return;
+                    return true;
                 }
                 block::STONE_BUTTON | block::WOODEN_BUTTON => {
                     w.press_button(tid, target[0], target[1], target[2]);
-                    return;
+                    return true;
                 }
                 block::UNPOWERED_REPEATER | block::POWERED_REPEATER => {
                     // BlockRedstoneRepeater.onBlockActivated: next delay.
                     let m = w.meta(target[0], target[1], target[2]);
                     let d = (((m & 12) >> 2) + 1) << 2 & 12;
                     w.set_meta(target[0], target[1], target[2], d | (m & 3), 3);
-                    return;
+                    return true;
                 }
                 block::NOTEBLOCK => {
                     w.note_click(target[0], target[1], target[2]);
-                    return;
+                    return true;
                 }
                 block::WOODEN_DOOR => {
                     // BlockDoor.onBlockActivated
@@ -742,20 +754,20 @@ impl Play {
                     let m = w.meta(x, ly, z);
                     w.set_meta(x, ly, z, (m & 7) ^ 4, 2);
                     w.door_sound(x, y, z);
-                    return;
+                    return true;
                 }
                 block::TRAPDOOR => {
                     let [x, y, z] = target;
                     let m = w.meta(x, y, z);
                     w.set_meta(x, y, z, m ^ 4, 2);
                     w.door_sound(x, y, z);
-                    return;
+                    return true;
                 }
                 block::DISPENSER => {
                     self.tiles
                         .entry(target)
                         .or_insert(Tile::Dispenser { slots: [None; 9] });
-                    return;
+                    return true;
                 }
                 block::END_PORTAL_FRAME if self.inv.held().map(|s| s.id) == Some(381) => {
                     let [x, y, z] = target;
@@ -768,21 +780,23 @@ impl Play {
                         }
                         fill_end_portal(w, x, y, z, m & 3);
                     }
-                    return;
+                    return true;
                 }
                 block::TNT if self.inv.held().map(|s| s.id) == Some(259) => {
                     // BlockTNT.onBlockActivated with flint and steel.
                     w.prime_tnt(target[0], target[1], target[2], 80);
                     self.damage_held(1);
-                    return;
+                    return true;
                 }
                 _ => {}
             }
         }
-        let Some(held) = self.inv.held() else { return };
+        let Some(held) = self.inv.held() else {
+            return false;
+        };
         if held.id == 324 || held.id == 330 {
             self.place_door(w, target, face, held.id);
-            return;
+            return true;
         }
         if held.id == 259 {
             // ItemFlintAndSteel.onItemUse: fire on the clicked side.
@@ -803,7 +817,7 @@ impl Play {
                 w.set_block(p[0], p[1], p[2], block::FIRE, 0, 3);
             }
             self.damage_held(1);
-            return;
+            return true;
         }
         let id = match held.id {
             331 => block::REDSTONE_WIRE,
@@ -813,7 +827,7 @@ impl Play {
             380 => block::CAULDRON,
             _ => match held.block() {
                 Some(id) => id,
-                None => return,
+                None => return false,
             },
         };
         // ItemBlock.onItemUse: replaceable targets are replaced in place.
@@ -834,10 +848,10 @@ impl Play {
             ]
         };
         if !(0..256).contains(&p[1]) {
-            return;
+            return false;
         }
         if !w.material(p[0], p[1], p[2]).replaceable() {
-            return;
+            return false;
         }
         let mut meta = held.meta;
         let side = match face {
@@ -862,7 +876,7 @@ impl Play {
                     3 if nc(w, p[0], p[1], p[2] - 1) => 3,
                     4 if nc(w, p[0] + 1, p[1], p[2]) => 2,
                     5 if nc(w, p[0] - 1, p[1], p[2]) => 1,
-                    _ => return,
+                    _ => return false,
                 };
                 meta = match k {
                     5 if yaw4 & 1 != 0 => 6,
@@ -876,7 +890,7 @@ impl Play {
                     3 if nc(w, p[0], p[1], p[2] - 1) => 3,
                     4 if nc(w, p[0] + 1, p[1], p[2]) => 2,
                     5 if nc(w, p[0] - 1, p[1], p[2]) => 1,
-                    _ => return,
+                    _ => return false,
                 };
             }
             block::TRAPDOOR => {
@@ -885,14 +899,14 @@ impl Play {
                     3 if nc(w, p[0], p[1], p[2] - 1) => 1,
                     4 if nc(w, p[0] + 1, p[1], p[2]) => 2,
                     5 if nc(w, p[0] - 1, p[1], p[2]) => 3,
-                    _ => return,
+                    _ => return false,
                 };
             }
             block::STONE_PRESSURE_PLATE | block::WOODEN_PRESSURE_PLATE => {
                 if !w.solid_top_surface(p[0], p[1] - 1, p[2])
                     && w.block(p[0], p[1] - 1, p[2]) != block::FENCE
                 {
-                    return;
+                    return false;
                 }
                 meta = 0;
             }
@@ -900,13 +914,13 @@ impl Play {
                 if !w.solid_top_surface(p[0], p[1] - 1, p[2])
                     && w.block(p[0], p[1] - 1, p[2]) != block::GLOWSTONE
                 {
-                    return;
+                    return false;
                 }
                 meta = 0;
             }
             block::UNPOWERED_REPEATER => {
                 if !w.solid_top_surface(p[0], p[1] - 1, p[2]) {
-                    return;
+                    return false;
                 }
                 meta = (yaw4 + 2) % 4;
             }
@@ -935,7 +949,7 @@ impl Play {
                     _ => false,
                 };
                 if !support {
-                    return;
+                    return false;
                 }
             }
             block::FURNACE | block::CHEST => meta = facing_meta(self.player.1),
@@ -958,7 +972,7 @@ impl Play {
             _ => {}
         }
         if !w.can_place_block_at(id, p[0], p[1], p[2]) {
-            return;
+            return false;
         }
         let needs_support = matches!(
             block::info(id).material,
@@ -969,7 +983,7 @@ impl Play {
             && id != block::VINE
             && !w.can_block_stay(id, p[0], p[1], p[2])
         {
-            return;
+            return false;
         }
         // Never place a solid block inside the player.
         let ([px, py, pz], _) = self.player;
@@ -982,11 +996,11 @@ impl Play {
             max: [p[0] as f64 + 1.0, p[1] as f64 + 1.0, p[2] as f64 + 1.0],
         };
         if block::collision_box(id, meta as u8).is_some() && bb.intersects(&pbb) {
-            return;
+            return false;
         }
         if id == block::DOUBLE_PLANT {
             if !w.is_air(p[0], p[1] + 1, p[2]) {
-                return;
+                return false;
             }
             w.set_block(p[0], p[1], p[2], id, meta & 7, 3);
             w.set_block(p[0], p[1] + 1, p[2], id, 8, 3);
@@ -1005,6 +1019,7 @@ impl Play {
             self.inv.consume_held();
             self.inv_dirty = true;
         }
+        true
     }
 
     /// `BlockPistonBase.determineOrientation`
@@ -1847,6 +1862,7 @@ impl Play {
     pub fn drops_nbt(
         items: &[ItemEntity],
         falling: &[crate::entity::falling::FallingBlock],
+        boats: &[crate::entity::boat::Tracked],
         dim: i32,
     ) -> Vec<u8> {
         use crate::world::anvil::{compound, Nbt};
@@ -1871,6 +1887,7 @@ impl Play {
             list.extend(tmp.items_nbt(cx, cz, dim));
             list.extend(tmp.falling_nbt(cx, cz, dim));
         }
+        list.extend(boats.iter().map(|b| b.to_nbt(dim)));
         crate::world::anvil::write_nbt(&compound(vec![("Entities", Nbt::List(10, list))]))
     }
 
@@ -1883,9 +1900,30 @@ impl Play {
             match e.string("id") {
                 Some("Item") => self.item_from_nbt(e, r),
                 Some("FallingSand") => self.falling_from_nbt(e),
+                Some("Boat") => self.boat_from_nbt(e),
                 _ => {}
             }
         }
+    }
+
+    /// The boats of a chunk.
+    pub fn boats_nbt(&self, cx: i32, cz: i32, dim: i32) -> Vec<crate::world::anvil::Nbt> {
+        self.boats
+            .iter()
+            .filter(|b| {
+                (b.b.e.pos[0].floor() as i32) >> 4 == cx && (b.b.e.pos[2].floor() as i32) >> 4 == cz
+            })
+            .map(|b| b.to_nbt(dim))
+            .collect()
+    }
+
+    /// An `EntityBoat` from a save.
+    pub fn boat_from_nbt(&mut self, t: &crate::world::anvil::Nbt) {
+        let id = crate::entity::boat::VEHICLE_ID | self.next_item;
+        self.next_item += 1;
+        let seed = self.prand.next_long();
+        self.boats
+            .push(crate::entity::boat::Tracked::from_nbt(t, id, seed));
     }
 
     /// `EntityFallingBlock.writeEntityToNBT` for the falling blocks of a chunk.

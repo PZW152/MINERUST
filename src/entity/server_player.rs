@@ -268,6 +268,19 @@ impl ServerPlayer {
         }
     }
 
+    /// The server placed the player (riding, dismounting): feet.
+    pub fn place(&mut self, feet: [f64; 3]) {
+        self.feet = feet;
+        self.e.set_position(feet[0], feet[1] + 1.62, feet[2]);
+    }
+
+    /// `Entity.fall` passed on by a vehicle (`riddenByEntity.fall`).
+    pub fn fall_from(&mut self, w: &ServerWorld, distance: f32) {
+        if !self.dead {
+            self.fall(w, distance);
+        }
+    }
+
     /// `EntityPlayer.addMovementStat` (the exhaustion part)
     fn add_movement_stat(&mut self, w: &ServerWorld, d: [f64; 3]) {
         let wv = &*w as &dyn BlockView;

@@ -32,6 +32,10 @@ pub trait BlockView {
     fn moving(&self, _x: i32, _y: i32, _z: i32) -> Option<redstone::MovingView> {
         None
     }
+    /// Entities whose `getBoundingBox` is solid to others (boats): id, box.
+    fn solid_entities(&self) -> &[(u32, crate::entity::player::Aabb)] {
+        &[]
+    }
 }
 
 impl BlockView for ServerWorld {
@@ -49,5 +53,8 @@ impl BlockView for ServerWorld {
     }
     fn moving(&self, x: i32, y: i32, z: i32) -> Option<redstone::MovingView> {
         self.moving_at([x, y, z]).map(|m| m.view())
+    }
+    fn solid_entities(&self) -> &[(u32, crate::entity::player::Aabb)] {
+        &self.solid_entities
     }
 }

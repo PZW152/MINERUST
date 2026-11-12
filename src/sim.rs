@@ -25,6 +25,9 @@ const LOADS_PER_TICK: usize = 8;
 /// `MinecraftServer` autosave interval.
 const AUTOSAVE_TICKS: i64 = 900;
 
+#[path = "sim_vehicles.rs"]
+mod vehicles;
+
 #[derive(Clone, Debug)]
 pub enum Command {
     /// The player's chunk; loading is centred on it.
@@ -92,6 +95,14 @@ pub enum Command {
     DimensionAck,
     /// Right click with nothing targeted (`Item.onItemRightClick`).
     UseAir,
+    /// `C0CPacketInput`: `moveStrafing`, `moveForward`, jump and sneak
+    /// while riding.
+    Input {
+        strafe: f32,
+        forward: f32,
+        jump: bool,
+        sneak: bool,
+    },
     /// The use key was let go while using an item
     /// (`C07PacketPlayerDigging` 5, `onPlayerStoppedUsing`).
     StopUsing,
@@ -161,6 +172,15 @@ pub enum Event {
     /// Snowballs, eggs, pearls and potions in flight: position, previous
     /// position, item and damage.
     Throwables(Vec<([f64; 3], [f64; 3], u16, i32)>),
+    /// `EntityTrackerEntry` packets about vehicles: id and packet.
+    Vehicles(Vec<(u32, crate::entity::tracker::Packet)>),
+    /// `S1CPacketEntityMetadata` of boats: id, time since hit, forward
+    /// direction, damage taken.
+    VehicleMeta(Vec<(u32, i32, i32, f32)>),
+    /// `S1BPacketEntityAttach` for the player: the vehicle, or none.
+    Mount(Option<u32>),
+    /// `playAuxSFX(2001)` of blocks the world broke: position, block, meta.
+    Destroyed(Vec<([i32; 3], u8, i32)>),
     /// Falling blocks near the player, sent each tick.
     Falling(Vec<crate::entity::falling::FallingView>),
     /// The player picked these items up (`S0DPacketCollectItem`).
@@ -193,7 +213,17 @@ struct Parked {
     tiles: std::collections::BTreeMap<[i32; 3], crate::play::Tile>,
     items: Vec<crate::entity::item::ItemEntity>,
     falling: Vec<crate::entity::falling::FallingBlock>,
+    boats: Vec<crate::entity::boat::Tracked>,
     teleport_rand: JavaRandom,
+}
+
+/// `C0CPacketInput` while riding.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct RideInput {
+    pub strafe: f32,
+    pub forward: f32,
+    pub jump: bool,
+    pub sneak: bool,
 }
 
 /// What the client draws of a mob.
@@ -280,6 +310,14 @@ pub struct Sim {
     sent_moving: bool,
     /// An ender pearl landed: the player is moved there.
     teleport_to: Option<[f64; 3]>,
+    /// Events from commands, sent with the tick's.
+    vehicle_events: Vec<Event>,
+    /// `ridingEntity` of the player: a boat's id.
+    riding: Option<u32>,
+    /// The last `C0CPacketInput`.
+    ride: RideInput,
+    /// Where the player's tracker entry last re-checked the watchers.
+    track_check: Option<[f64; 3]>,
     /// The item in use started or stopped this tick.
     using_changed: bool,
     /// `S27PacketExplosion` pushes for the client this tick.
@@ -478,6 +516,10 @@ impl Sim {
             push_add: [0.0; 3],
             using_changed: false,
             teleport_to: None,
+            vehicle_events: Vec::new(),
+            riding: None,
+            ride: RideInput::default(),
+            track_check: None,
             sent: Default::default(),
             unsaved: Default::default(),
             world_time: cfg.start_time,
@@ -639,6 +681,7 @@ impl Sim {
                 tiles: std::mem::replace(&mut sim.play.tiles, next.tiles),
                 items: std::mem::replace(&mut sim.play.items, next.items),
                 falling: std::mem::replace(&mut sim.play.falling, next.falling),
+                boats: std::mem::replace(&mut sim.play.boats, next.boats),
                 teleport_rand: std::mem::replace(&mut sim.teleport_rand, next.teleport_rand),
             };
             sim.world.total_time = old.world.total_time;
@@ -740,6 +783,17 @@ impl Sim {
                 if self.await_ack {
                     return;
                 }
+                if self.riding.is_some() {
+                    // NetHandlerPlayServer.processPlayer, riding: only the look
+                    // and onGround; the boat places the player.
+                    let feet = self.play.player.0;
+                    self.player = Some((feet, r, f));
+                    self.play.player.1 = r[0];
+                    self.play.pitch = r[1];
+                    self.splayer.e.on_ground = self.motion_flags.0;
+                    let _ = p;
+                    return;
+                }
                 let (g, sn, sp) = self.motion_flags;
                 self.splayer.moved(&self.world, p, g, f, sn, sp);
                 self.player = Some((p, r, f));
@@ -811,8 +865,12 @@ impl Sim {
                 sneaking,
             } => {
                 let mut play = std::mem::replace(&mut self.play, Play::new(GameMode::Survival));
-                play.use_block(&mut self.world, target, face, sneaking);
+                let used = play.use_block(&mut self.world, target, face, sneaking);
                 self.play = play;
+                if !used {
+                    // Minecraft.func_147121_ag: sendUseItem
+                    self.use_air();
+                }
             }
             Command::Select(i) => {
                 if i < 9 && self.play.inv.selected != i {
@@ -890,6 +948,29 @@ impl Sim {
 
     fn apply_more(&mut self, cmd: &Command) {
         match *cmd {
+            Command::Attack {
+                id,
+                damage,
+                knockback,
+                ..
+            } if id & crate::entity::boat::VEHICLE_ID != 0 => {
+                // attackTargetEntityWithCurrentItem: addExhaustion(0.3)
+                self.splayer.food.add_exhaustion(0.3);
+                let mut ev = Vec::new();
+                self.attack_vehicle(id, damage, knockback, &mut ev);
+                self.vehicle_events.extend(ev);
+            }
+            Command::Interact { id } if id & crate::entity::boat::VEHICLE_ID != 0 => {
+                let mut ev = Vec::new();
+                self.interact_vehicle(id, &mut ev);
+                self.vehicle_events.extend(ev);
+            }
+            Command::Input {
+                strafe,
+                forward,
+                jump,
+                sneak,
+            } => self.ride_input(strafe, forward, jump, sneak),
             Command::Attack {
                 id,
                 damage,
@@ -1187,6 +1268,7 @@ impl Sim {
         }
         self.world.rand = rnd;
         self.tick_mobs(&mut play, events);
+        self.tick_boats(&mut play, events);
         // World.updateEntities: tile entities after the entities.
         self.world.tick_moving();
         self.apply_pushes(&mut play, events);
@@ -1389,6 +1471,7 @@ impl Sim {
             .collect();
         entities.extend(play.items_nbt(cx, cz, dim));
         entities.extend(play.falling_nbt(cx, cz, dim));
+        entities.extend(play.boats_nbt(cx, cz, dim));
         (tiles, entities)
     }
 
@@ -1606,6 +1689,8 @@ impl Sim {
                     self.play.item_from_nbt(e, &mut rnd);
                 } else if e.string("id") == Some("FallingSand") {
                     self.play.falling_from_nbt(e);
+                } else if e.string("id") == Some("Boat") {
+                    self.play.boat_from_nbt(e);
                 } else {
                     let _ = self.mobs.from_nbt(e);
                 }
@@ -1619,6 +1704,11 @@ impl Sim {
         let Some(held) = self.play.inv.held() else {
             return;
         };
+        // ItemBoat
+        if held.id == 333 {
+            self.place_boat();
+            return;
+        }
         // ItemSnowball, ItemEgg, ItemEnderPearl, ItemPotion (splash)
         {
             use crate::entity::throwable::Kind as TK;
@@ -2028,6 +2118,7 @@ impl Sim {
             tiles,
             items: drops.items,
             falling: drops.falling,
+            boats: drops.boats,
             teleport_rand: JavaRandom::new(seed),
         }
     }
@@ -2049,6 +2140,7 @@ impl Sim {
             tiles: std::mem::replace(&mut self.play.tiles, next.tiles),
             items: std::mem::replace(&mut self.play.items, next.items),
             falling: std::mem::replace(&mut self.play.falling, next.falling),
+            boats: std::mem::replace(&mut self.play.boats, next.boats),
             teleport_rand: std::mem::replace(&mut self.teleport_rand, next.teleport_rand),
         };
         // Unloaded chunks of the old dimension go to disk now.
@@ -2194,10 +2286,37 @@ impl Sim {
         let mut rnd = std::mem::replace(&mut self.world.rand, JavaRandom::new(0));
         for (i, item) in items.iter().enumerate() {
             let mut parts = item.split(':');
-            let Some(kind) = parts.next().and_then(crate::entity::mob::Kind::from_id) else {
+            let name = parts.next().unwrap_or("");
+            let off = (i as f64 - (n - 1.0) / 2.0) * 2.2;
+            if name == "Boat" {
+                // CommandSummon: EntityList.createEntityByName + setLocationAndAngles
+                let dist = 4.0;
+                let x = feet[0] + fwd[0] * dist + side[0] * off;
+                let z = feet[2] + fwd[1] * dist + side[1] * off;
+                let (bx, bz) = (x.floor() as i32, z.floor() as i32);
+                let mut y = feet[1].floor() as i32 + 3;
+                while y > 1 && {
+                    let m = self.world.material(bx, y - 1, bz);
+                    !m.blocks_movement() && !m.is_liquid()
+                } {
+                    y -= 1;
+                }
+                let id = self.alloc_vehicle_id();
+                let seed = self.mobs.rand.next_long();
+                let mut b = crate::entity::boat::Boat::new(id, seed);
+                b.e.set_location_and_angles(x, y as f64, z, yaw + 90.0, 0.0);
+                self.world.solid_entities.push((id, b.bounding_box()));
+                self.play.boats.push(crate::entity::boat::Tracked::new(b));
+                if parts.any(|p| p == "ride") {
+                    let mut ev = Vec::new();
+                    self.interact_vehicle(id, &mut ev);
+                    self.vehicle_events.extend(ev);
+                }
+                continue;
+            }
+            let Some(kind) = crate::entity::mob::Kind::from_id(name) else {
                 continue;
             };
-            let off = (i as f64 - (n - 1.0) / 2.0) * 2.2;
             let dist: f64 = std::env::var("MINERUST_SUMMON_DIST")
                 .ok()
                 .and_then(|v| v.parse().ok())
@@ -2270,7 +2389,7 @@ impl Sim {
             )?;
             save::write_atomic(
                 &data.join("drops.dat"),
-                &Play::drops_nbt(&p.items, &p.falling, p.dim),
+                &Play::drops_nbt(&p.items, &p.falling, &p.boats, p.dim),
             )?;
             if p.dim != 0 {
                 let mut tmp = Play::new(GameMode::Survival);
@@ -2356,7 +2475,12 @@ impl Sim {
             )?;
             save::write_atomic(
                 &data.join("drops.dat"),
-                &Play::drops_nbt(&self.play.items, &self.play.falling, self.dim),
+                &Play::drops_nbt(
+                    &self.play.items,
+                    &self.play.falling,
+                    &self.play.boats,
+                    self.dim,
+                ),
             )?;
         }
         save::write_level(&base, &level)
@@ -3524,7 +3648,7 @@ mod tests {
             [x as f64 + 0.5, y as f64 + 1.0, z as f64 + 0.5],
             &mut r,
         );
-        let bytes = Play::drops_nbt(&[it], &[], 0);
+        let bytes = Play::drops_nbt(&[it], &[], &[], 0);
         let mut back = Play::new(GameMode::Survival);
         back.load_drops(&bytes, &mut r);
         assert_eq!(back.items.len(), 1);
@@ -3624,6 +3748,152 @@ mod tests {
         };
         let e = crate::potion::effects_of(slots[0].unwrap().meta, false);
         assert_eq!(e[0].id, crate::potion::MOVE_SPEED);
+    }
+
+    /// EntityBoat.onUpdate: running into a wall faster than 0.2 breaks the
+    /// boat into three planks and two sticks; the rider is let go.
+    #[test]
+    fn boats_wreck_on_walls() {
+        let (mut sim, x, y, z) = redstone_sim();
+        for dx in 0..13 {
+            for dz in 0..15 {
+                let edge = dx == 0 || dx == 12 || dz == 0 || dz == 14;
+                let id = if edge { block::STONE } else { block::WATER };
+                sim.world.set_block(x + dx, y, z + dz, id, 0, 3);
+            }
+        }
+        let feet = [x as f64 + 6.5, (y + 1) as f64, z as f64 + 0.5];
+        for _ in 0..2 {
+            sim.step(
+                &[Command::Player(feet, [0.0, 45.0], false)],
+                &mut Vec::new(),
+            );
+        }
+        sim.play.inv.main[sim.play.inv.selected] = Some(crate::item::Stack::new(333, 0, 1));
+        sim.step(&[Command::UseAir], &mut Vec::new());
+        let id = sim.play.boats[0].b.id;
+        sim.step(&[Command::Interact { id }], &mut Vec::new());
+        assert_eq!(sim.riding, Some(id));
+        for _ in 0..80 {
+            sim.step(
+                &[
+                    Command::Player(feet, [0.0, 0.0], false),
+                    Command::Input {
+                        strafe: 0.0,
+                        forward: 1.0,
+                        jump: false,
+                        sneak: false,
+                    },
+                ],
+                &mut Vec::new(),
+            );
+        }
+        assert!(sim.play.boats.is_empty(), "wrecked");
+        assert_eq!(sim.riding, None);
+        let n = |id: u16| -> u32 {
+            sim.play
+                .items
+                .iter()
+                .filter(|i| i.stack.id == id)
+                .map(|i| i.stack.count as u32)
+                .sum()
+        };
+        assert_eq!(n(block::PLANKS as u16), 3);
+        assert_eq!(n(280), 2);
+    }
+
+    /// ItemBoat places a boat on water; interactFirst mounts it, the
+    /// rider paddles it with C0CPacketInput, sneaking dismounts, and five
+    /// fist hits break it into a boat item.
+    #[test]
+    fn boats_place_ride_and_break() {
+        let (mut sim, x, y, z) = redstone_sim();
+        // a pool: stone walls on the platform, water inside
+        for dx in 0..13 {
+            for dz in 0..15 {
+                let edge = dx == 0 || dx == 12 || dz == 0 || dz == 14;
+                let id = if edge { block::STONE } else { block::WATER };
+                sim.world.set_block(x + dx, y, z + dz, id, 0, 3);
+            }
+        }
+        let feet = [x as f64 + 6.5, (y + 1) as f64, z as f64 + 0.5];
+        let mut ev = Vec::new();
+        for _ in 0..2 {
+            sim.step(&[Command::Player(feet, [0.0, 45.0], false)], &mut ev);
+        }
+        sim.play.inv.selected = 0;
+        sim.play.inv.main[0] = Some(crate::item::Stack::new(333, 0, 1));
+        sim.step(&[Command::UseAir], &mut ev);
+        assert_eq!(sim.play.boats.len(), 1, "placed on the water");
+        let b0 = sim.play.boats[0].b.e.pos;
+        assert_eq!(b0[0], x as f64 + 6.5);
+        assert!(b0[2] > feet[2] + 1.0);
+        let id = sim.play.boats[0].b.id;
+        // it settles in the water
+        for _ in 0..40 {
+            sim.step(&[Command::Player(feet, [0.0, 45.0], false)], &mut ev);
+        }
+        let mut ev = Vec::new();
+        sim.step(&[Command::Interact { id }], &mut ev);
+        assert_eq!(sim.riding, Some(id));
+        assert!(ev
+            .iter()
+            .any(|e| matches!(e, Event::Mount(Some(i)) if *i == id)));
+        let start = sim.play.boats[0].b.e.pos;
+        // paddle south
+        for _ in 0..25 {
+            sim.step(
+                &[
+                    Command::Player(feet, [0.0, 0.0], false),
+                    Command::Input {
+                        strafe: 0.0,
+                        forward: 1.0,
+                        jump: false,
+                        sneak: false,
+                    },
+                ],
+                &mut Vec::new(),
+            );
+        }
+        let now = sim.play.boats[0].b.e.pos;
+        assert!(
+            now[2] > start[2] + 1.0,
+            "moved south: {:?} -> {:?}",
+            start,
+            now
+        );
+        // the rider sits on the boat (updateRiderPosition)
+        let r = sim.play.boats[0].b.rider_position(-0.5f32 as f64);
+        assert!((sim.play.player.0[2] - r[2]).abs() < 1.0);
+        // sneak: off
+        let mut ev = Vec::new();
+        sim.step(
+            &[Command::Input {
+                strafe: 0.0,
+                forward: 0.0,
+                jump: false,
+                sneak: true,
+            }],
+            &mut ev,
+        );
+        assert_eq!(sim.riding, None);
+        assert!(ev.iter().any(|e| matches!(e, Event::Mount(None))));
+        assert!(ev.iter().any(|e| matches!(e, Event::Teleport(_))));
+        // five fist hits in survival
+        sim.play.mode = GameMode::Survival;
+        for _ in 0..5 {
+            sim.step(
+                &[Command::Attack {
+                    id,
+                    damage: 1.0,
+                    crit: false,
+                    knockback: 0,
+                }],
+                &mut Vec::new(),
+            );
+        }
+        assert!(sim.play.boats.is_empty(), "broken");
+        assert!(sim.play.items.iter().any(|i| i.stack.id == 333));
     }
 
     /// EntityEnderPearl moves the thrower and costs 5 health; a splash

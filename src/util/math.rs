@@ -111,6 +111,18 @@ pub fn wrap_angle_180(mut a: f32) -> f32 {
     a
 }
 
+/// `MathHelper.wrapAngleTo180_double`
+pub fn wrap_angle_to_180_double(mut a: f64) -> f64 {
+    a %= 360.0;
+    if a >= 180.0 {
+        a -= 360.0;
+    }
+    if a < -180.0 {
+        a += 360.0;
+    }
+    a
+}
+
 /// Java `Math.round(double)`: floor(x + 0.5) as long.
 #[inline]
 pub fn java_round(d: f64) -> i64 {

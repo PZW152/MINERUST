@@ -1386,7 +1386,7 @@ impl ServerWorld {
     }
 
     /// `Block.dropBlockAsItem` for blocks a piston breaks.
-    fn drop_block_as_item(&mut self, b: u8, bm: i32, x: i32, y: i32, z: i32) {
+    pub(crate) fn drop_block_as_item(&mut self, b: u8, bm: i32, x: i32, y: i32, z: i32) {
         let mut r = std::mem::replace(&mut self.rand, JavaRandom::new(0));
         let drops = crate::item::drops(b, bm, &mut r);
         self.rand = r;
