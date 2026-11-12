@@ -14,7 +14,7 @@ pub struct Loot {
     pub ench: u64,
 }
 
-const fn l(item: ItemId, meta: i32, min: i32, max: i32, weight: i32) -> Loot {
+pub const fn l(item: ItemId, meta: i32, min: i32, max: i32, weight: i32) -> Loot {
     Loot {
         item,
         meta,

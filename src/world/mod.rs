@@ -1,5 +1,6 @@
 pub mod biome;
 pub mod features;
+pub mod fire;
 pub mod gen;
 pub mod loot;
 pub mod populate;

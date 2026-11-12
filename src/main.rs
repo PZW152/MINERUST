@@ -5,6 +5,7 @@
 mod audio;
 mod block;
 mod compat;
+mod dimension;
 mod entity;
 mod game;
 mod gui;
@@ -135,7 +136,11 @@ fn dump_pop(args: &[String]) {
         args[2].parse().unwrap(),
         args[3].parse().unwrap(),
     );
-    let mut w = world::server::ServerWorld::new(Arc::new(world::ChunkProvider::new(seed)));
+    let dim: i32 = std::env::var("DIM")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
+    let mut w = world::server::ServerWorld::new(Arc::new(world::ChunkProvider::new_dim(seed, dim)));
     w.map_features = std::env::var_os("NO_FEATURES").is_none();
     for cx in -r..=r {
         for cz in -r..=r {
@@ -290,7 +295,11 @@ fn compare_pop(args: &[String]) {
 fn locate(args: &[String]) {
     let seed: i64 = args[0].parse().unwrap();
     let r: i32 = args[1].parse().unwrap();
-    let provider = world::ChunkProvider::new(seed);
+    let dim: i32 = std::env::var("DIM")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
+    let provider = world::ChunkProvider::new_dim(seed, dim);
     let mut s = world::structure::Structures::new(&provider);
     let mut rand = java::JavaRandom::new(0);
     let mut x = -r;
@@ -465,6 +474,10 @@ fn parse_args() -> Options {
                 i += 1;
             }
             "--debug" => std::env::set_var("MINERUST_F3", "1"),
+            "--dim" if i + 1 < args.len() => {
+                std::env::set_var("MINERUST_DIM", &args[i + 1]);
+                i += 1;
+            }
             "--summon" if i + 1 < args.len() => {
                 std::env::set_var("MINERUST_SUMMON", &args[i + 1]);
                 i += 1;

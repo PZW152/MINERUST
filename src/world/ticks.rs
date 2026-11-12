@@ -26,6 +26,7 @@ pub fn ticks_randomly(id: u8) -> bool {
             | block::BROWN_MUSHROOM
             | block::RED_MUSHROOM
             | block::VINE
+            | block::FIRE
     )
 }
 
@@ -96,6 +97,7 @@ impl ServerWorld {
                 }
             }
             block::LEAVES | block::LEAVES2 => self.leaf_decay(x, y, z),
+            block::FIRE => self.fire_tick(x, y, z, r),
             block::ICE => {
                 if self.saved_light(false, x, y, z) > 11 - 3 {
                     self.set_block(x, y, z, block::WATER, 0, 3);

@@ -424,6 +424,12 @@ pub fn display_name(s: &Stack) -> String {
             POTATOES => "Potatoes".into(),
             REDSTONE_BLOCK => "Block of Redstone".into(),
             TRAPDOOR => "Trapdoor".into(),
+            PORTAL => "Portal".into(),
+            NETHER_BRICK_FENCE => "Nether Brick Fence".into(),
+            NETHER_WART => "Nether Wart".into(),
+            END_PORTAL => "End Portal".into(),
+            DRAGON_EGG => "Dragon Egg".into(),
+            QUARTZ_ORE => "Nether Quartz Ore".into(),
             REDSTONE_LAMP | LIT_REDSTONE_LAMP => "Redstone Lamp".into(),
             QUARTZ_BLOCK => "Block of Quartz".into(),
             HAY_BLOCK => "Hay Bale".into(),
@@ -523,6 +529,10 @@ pub fn hardness(id: u8) -> f32 {
         CARPET => 0.1,
         REDSTONE_LAMP | LIT_REDSTONE_LAMP => 0.3,
         TRAPDOOR => 3.0,
+        PORTAL | END_PORTAL => -1.0,
+        NETHER_BRICK_FENCE => 2.0,
+        DRAGON_EGG => 3.0,
+        QUARTZ_ORE => 3.0,
         PISTON_HEAD => 0.5,
         _ => 0.0,
     }
@@ -769,7 +779,13 @@ pub fn drops(id: u8, meta: i32, r: &mut JavaRandom) -> Vec<Stack> {
         UNPOWERED_REPEATER | POWERED_REPEATER => one(356, 0),
         CAULDRON => one(380, 0),
         REDSTONE_LAMP | LIT_REDSTONE_LAMP => one(REDSTONE_LAMP as ItemId, 0),
-        PISTON_HEAD => Vec::new(),
+        PISTON_HEAD | PORTAL | END_PORTAL => Vec::new(),
+        QUARTZ_ORE => one(406, 0),
+        NETHER_WART => {
+            // BlockNetherWart.getDrops: 1, or 2-4 when ripe
+            let n = if meta >= 3 { 2 + r.next_int_n(3) } else { 1 };
+            vec![Stack::new(372, 0, n as u32)]
+        }
         FLOWER_POT => one(390, 0),
         BOOKSHELF => vec![Stack::new(340, 0, 3)],
         GLOWSTONE => vec![Stack::new(348, 0, 2 + r.next_int_n(3) as u32)],

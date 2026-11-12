@@ -436,9 +436,8 @@ fn ore1(
     }
 }
 
-/// `BiomeDecorator.genDecorations(biome)` with settings `d`.
-fn gen_decorations(w: &mut ServerWorld, r: &mut JavaRandom, biome: u8, d: &Deco, cx: i32, cz: i32) {
-    // generateOres
+/// `BiomeDecorator.generateOres`
+pub fn generate_ores(w: &mut ServerWorld, r: &mut JavaRandom, cx: i32, cz: i32) {
     ore1(w, r, cx, cz, 20, block::DIRT, 32, 0, 256);
     ore1(w, r, cx, cz, 10, block::GRAVEL, 32, 0, 256);
     ore1(w, r, cx, cz, 20, block::COAL_ORE, 16, 0, 128);
@@ -446,12 +445,15 @@ fn gen_decorations(w: &mut ServerWorld, r: &mut JavaRandom, biome: u8, d: &Deco,
     ore1(w, r, cx, cz, 2, block::GOLD_ORE, 8, 0, 32);
     ore1(w, r, cx, cz, 8, block::REDSTONE_ORE, 7, 0, 16);
     ore1(w, r, cx, cz, 1, block::DIAMOND_ORE, 7, 0, 16);
-    {
-        let x = cx + r.next_int_n(16);
-        let y = r.next_int_n(16) + r.next_int_n(16) + (16 - 16);
-        let z = cz + r.next_int_n(16);
-        misc::minable(w, r, x, y, z, block::LAPIS_ORE, 6, block::STONE);
-    }
+    let x = cx + r.next_int_n(16);
+    let y = r.next_int_n(16) + r.next_int_n(16) + (16 - 16);
+    let z = cz + r.next_int_n(16);
+    misc::minable(w, r, x, y, z, block::LAPIS_ORE, 6, block::STONE);
+}
+
+/// `BiomeDecorator.genDecorations(biome)` with settings `d`.
+fn gen_decorations(w: &mut ServerWorld, r: &mut JavaRandom, biome: u8, d: &Deco, cx: i32, cz: i32) {
+    generate_ores(w, r, cx, cz);
 
     let xz = |r: &mut JavaRandom| {
         let x = cx + r.next_int_n(16) + 8;

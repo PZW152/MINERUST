@@ -157,6 +157,7 @@ pub fn minable(
     let y0 = (y + r.next_int_n(3) - 2) as f64;
     let y1 = (y + r.next_int_n(3) - 2) as f64;
     for i in 0..=count {
+        crate::world::gen::hell::sync_rng(w, r);
         let cx = x0 + (x1 - x0) * i as f64 / count as f64;
         let cy = y0 + (y1 - y0) * i as f64 / count as f64;
         let cz = z0 + (z1 - z0) * i as f64 / count as f64;
@@ -269,6 +270,7 @@ pub fn flowers(
     meta: i32,
 ) -> bool {
     for _ in 0..64 {
+        crate::world::gen::hell::sync_rng(w, r);
         let bx = x + r.next_int_n(8) - r.next_int_n(8);
         let by = y + r.next_int_n(4) - r.next_int_n(4);
         let bz = z + r.next_int_n(8) - r.next_int_n(8);

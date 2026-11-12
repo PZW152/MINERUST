@@ -395,6 +395,9 @@ impl Atlas {
             ("lava_still", names["lava_still"], 16),
             ("water_flow", water_flow, 32),
             ("lava_flow", lava_flow, 32),
+            ("portal", names["portal"], 16),
+            ("fire_layer_0", names["fire_layer_0"], 16),
+            ("fire_layer_1", names["fire_layer_1"], 16),
         ] {
             let img = read_png(jar, &format!("assets/minecraft/textures/blocks/{name}.png"))?;
             let count = (img.h / size).max(1) as usize;

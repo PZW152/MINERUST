@@ -163,7 +163,9 @@ pub fn stairs(get: Get, x: i32, y: i32, z: i32, meta: u8) -> Vec<Bx> {
 /// `BlockFence.canConnectFenceTo`
 pub fn fence_connects(id: u8) -> bool {
     let b = block::info(id);
-    id == block::FENCE || (b.material.is_opaque() && b.normal && b.material != Material::Gourd)
+    id == block::FENCE
+        || id == block::NETHER_BRICK_FENCE
+        || (b.material.is_opaque() && b.normal && b.material != Material::Gourd)
 }
 
 fn fence_links(get: Get, x: i32, y: i32, z: i32) -> [bool; 4] {
@@ -450,6 +452,16 @@ pub fn static_boxes(id: u8, meta: u8) -> Vec<Bx> {
         block::CARPET => vec![[0.0, 0.0, 0.0, 1.0, 0.0625, 1.0]],
         block::CAULDRON => vec![FULL],
         block::TRAPDOOR => vec![trapdoor(meta)],
+        // BlockPortal.setBlockBoundsBasedOnState: axis 1 spans x, 2 spans z
+        block::PORTAL => {
+            if meta & 3 == 2 {
+                vec![[0.375, 0.0, 0.0, 0.625, 1.0, 1.0]]
+            } else {
+                vec![[0.0, 0.0, 0.375, 1.0, 1.0, 0.625]]
+            }
+        }
+        block::END_PORTAL => vec![[0.0, 0.0, 0.0, 1.0, 0.75, 1.0]],
+        block::DRAGON_EGG => vec![[0.0625, 0.0, 0.0625, 0.9375, 1.0, 0.9375]],
         block::PISTON_HEAD => piston_head(meta),
         _ => vec![FULL],
     }
@@ -473,7 +485,8 @@ pub fn collision(get: Get, id: u8, meta: u8, x: i32, y: i32, z: i32, out: &mut V
             block::UNPOWERED_REPEATER | block::POWERED_REPEATER => {
                 out.push([0.0, 0.0, 0.0, 1.0, 0.125, 1.0])
             }
-            block::END_PORTAL_FRAME | block::TRAPDOOR | block::PISTON_HEAD => {
+            block::PORTAL | block::END_PORTAL => {}
+            block::END_PORTAL_FRAME | block::TRAPDOOR | block::PISTON_HEAD | block::DRAGON_EGG => {
                 out.extend(static_boxes(id, meta))
             }
             block::FLOWER_POT => out.push([0.3125, 0.0, 0.3125, 0.6875, 0.375, 0.6875]),

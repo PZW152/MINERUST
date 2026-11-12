@@ -81,6 +81,8 @@ pub enum Command {
     Interact {
         id: u32,
     },
+    /// The client has switched to the dimension it was sent.
+    DimensionAck,
     Shutdown,
 }
 
@@ -113,6 +115,25 @@ pub enum Event {
     Notes(Vec<([i32; 3], &'static str, i32)>),
     /// Particles from mobs: kind, position, motion.
     Particles(Vec<crate::entity::mob::Puff>),
+    /// The player moved to another dimension: drop every chunk and stand here.
+    Dimension {
+        dim: i32,
+        pos: [f64; 3],
+        yaw: f32,
+    },
+    /// Ticks spent in a Nether portal (`Entity.portalCounter`).
+    Portal(i32),
+}
+
+/// A dimension the player is not in, kept loaded and saved with the rest.
+struct Parked {
+    dim: i32,
+    world: ServerWorld,
+    mobs: crate::entity::mob::Mobs,
+    unsaved: std::collections::BTreeSet<(i32, i32)>,
+    tiles: std::collections::BTreeMap<[i32; 3], crate::play::Tile>,
+    items: Vec<crate::entity::item::ItemEntity>,
+    teleport_rand: JavaRandom,
 }
 
 /// What the client draws of a mob.
@@ -211,10 +232,34 @@ pub struct Sim {
     player_attackable: bool,
     pending_out: Vec<crate::entity::mob::Outcome>,
     pub weather: Weather,
+    /// `EntityPlayer.dimension`
+    pub dim: i32,
+    parked: Vec<Parked>,
+    /// `Teleporter.random` of the current dimension.
+    teleport_rand: JavaRandom,
+    /// `Entity.portalCounter` and `timeUntilPortal`.
+    portal_ticks: i32,
+    portal_cooldown: i32,
+    /// Player positions are stale until the client confirms a dimension change.
+    await_ack: bool,
+    /// The world directory (the overworld's).
+    base_dir: Option<PathBuf>,
+    /// A dimension change asked for by a command (respawning out of the Nether).
+    pending_travel: Option<i32>,
+    /// Tell the client on the first tick which dimension the save is in.
+    announce_dim: bool,
 }
 
 /// Level keys owned by the gameplay state (kept out of `unknown`).
-const PLAY_KEYS: [&str; 6] = ["inventory", "mode", "tile", "spawn", "stats", "weather"];
+const PLAY_KEYS: [&str; 7] = [
+    "inventory",
+    "mode",
+    "tile",
+    "spawn",
+    "stats",
+    "weather",
+    "dim",
+];
 
 /// `WorldInfo` rain and thunder state and `World.updateWeather`.
 #[derive(Clone, Copy, Debug, Default)]
@@ -345,6 +390,15 @@ impl Sim {
             player_attackable: true,
             pending_out: Vec::new(),
             weather: Weather::default(),
+            dim: 0,
+            parked: Vec::new(),
+            teleport_rand: JavaRandom::new(seed),
+            portal_ticks: 0,
+            portal_cooldown: 0,
+            await_ack: false,
+            base_dir: cfg.save_dir.clone(),
+            pending_travel: None,
+            announce_dim: false,
         };
         if let Some(d) = &cfg.save_dir {
             if let Ok(text) = std::fs::read_to_string(d.join("data").join("entities.txt")) {
@@ -353,6 +407,7 @@ impl Sim {
                 }
             }
         }
+        let mut saved_dim = 0;
         let start = match level {
             Some(l) => {
                 sim.world.total_time = l.total_time;
@@ -369,6 +424,7 @@ impl Sim {
                 let mut spawn = None;
                 for (k, v) in &l.unknown {
                     match k.as_str() {
+                        "dim" => saved_dim = v.parse().unwrap_or(0),
                         "inventory" => {
                             if let Some(inv) = Inventory::decode(v) {
                                 sim.play.inv = inv;
@@ -444,6 +500,31 @@ impl Sim {
             sim.weather.prev_thunder = sim.weather.thunder;
         }
         sim.play.player = (start.pos, start.rot[0]);
+        if let Some(d) = std::env::var("MINERUST_DIM")
+            .ok()
+            .and_then(|v| v.parse::<i32>().ok())
+        {
+            if d != saved_dim {
+                sim.pending_travel = Some(d);
+            }
+        }
+        if saved_dim != 0 {
+            // the player was saved in the Nether or the End
+            let next = sim.take_world(saved_dim);
+            let old = Parked {
+                dim: 0,
+                world: std::mem::replace(&mut sim.world, next.world),
+                mobs: std::mem::replace(&mut sim.mobs, next.mobs),
+                unsaved: std::mem::replace(&mut sim.unsaved, next.unsaved),
+                tiles: std::mem::replace(&mut sim.play.tiles, next.tiles),
+                items: std::mem::replace(&mut sim.play.items, next.items),
+                teleport_rand: std::mem::replace(&mut sim.teleport_rand, next.teleport_rand),
+            };
+            sim.world.total_time = old.world.total_time;
+            sim.parked.push(old);
+            sim.dim = saved_dim;
+            sim.announce_dim = true;
+        }
         sim.centre = (
             (start.pos[0].floor() as i32) >> 4,
             (start.pos[2].floor() as i32) >> 4,
@@ -530,9 +611,13 @@ impl Sim {
         match *cmd {
             Command::Center(x, z) => self.centre = (x, z),
             Command::Player(p, r, f) => {
+                if self.await_ack {
+                    return;
+                }
                 self.player = Some((p, r, f));
                 self.play.player = (p, r[0]);
             }
+            Command::DimensionAck => self.await_ack = false,
             Command::Break(p) => {
                 let id = self.world.block(p[0], p[1], p[2]);
                 if id != block::AIR && id != block::BEDROCK && !block::material(id).is_liquid() {
@@ -640,7 +725,12 @@ impl Sim {
                 }
                 self.play = play;
             }
-            Command::Respawn => self.respawn_pending = true,
+            Command::Respawn => {
+                self.respawn_pending = true;
+                if self.dim != 0 {
+                    self.pending_travel = Some(0);
+                }
+            }
             Command::Attack {
                 id,
                 damage,
@@ -691,6 +781,14 @@ impl Sim {
             }
         }
         if wanted.is_empty() {
+            return;
+        }
+        if self.world.provider.dim == -1 {
+            // ChunkProviderHell shares one generator between provideChunk and
+            // populate, so the order of generation matters: one at a time.
+            for key in wanted {
+                self.world.load_chunk(key.0, key.1);
+            }
             return;
         }
         // Generate the new ones in parallel; the terrain of a chunk depends
@@ -763,11 +861,28 @@ impl Sim {
             let mut r = std::mem::replace(&mut self.world.rand, JavaRandom::new(0));
             self.weather.update(&mut r);
             self.world.rand = r;
-            self.world.raining = self.weather.rain > 0.2;
+            self.world.raining = self.dim == 0 && self.weather.rain > 0.2;
         }
-        self.world.skylight_subtracted =
-            skylight_subtracted_weather(self.world_time, self.weather.rain, self.weather.thunder);
-        events.push(Event::Weather(self.weather));
+        self.world.skylight_subtracted = match self.dim {
+            // WorldProviderHell.calculateCelestialAngle is always 0.5 (midnight),
+            // WorldProviderEnd's always 0.0 (noon).
+            -1 => 11,
+            1 => 0,
+            _ => skylight_subtracted_weather(
+                self.world_time,
+                self.weather.rain,
+                self.weather.thunder,
+            ),
+        };
+        let mut shown = self.weather;
+        if self.dim != 0 {
+            shown.rain = 0.0;
+            shown.prev_rain = 0.0;
+            shown.thunder = 0.0;
+            shown.prev_thunder = 0.0;
+        }
+        events.push(Event::Weather(shown));
+        self.tick_portal(events);
         self.world.tick();
         let radius = self.view.min(7);
         for dx in -radius..=radius {
@@ -942,6 +1057,222 @@ impl Sim {
         }
     }
 
+    /// The directory of a dimension's chunks and data (`DIM-1`, `DIM1`).
+    fn dim_dir(&self, dim: i32) -> Option<PathBuf> {
+        self.base_dir.as_ref().map(|b| {
+            if dim == 0 {
+                b.clone()
+            } else {
+                b.join(format!("DIM{dim}"))
+            }
+        })
+    }
+
+    /// `Entity.onEntityUpdate` portal handling for the player.
+    fn tick_portal(&mut self, events: &mut Vec<Event>) {
+        if self.announce_dim {
+            self.announce_dim = false;
+            let (pos, yaw) = self.play.player;
+            for key in std::mem::take(&mut self.sent).into_keys() {
+                events.push(Event::Unload(key));
+            }
+            self.await_ack = true;
+            events.push(Event::Dimension {
+                dim: self.dim,
+                pos,
+                yaw,
+            });
+            return;
+        }
+        if let Some(to) = self.pending_travel.take() {
+            self.travel(to, events);
+            return;
+        }
+        if self.await_ack {
+            return;
+        }
+        let (feet, _) = self.play.player;
+        let contact = crate::dimension::portal_contact(&mut self.world, feet);
+        match contact {
+            Some(block::END_PORTAL) => {
+                // BlockEndPortal.onEntityCollidedWithBlock
+                let to = if self.dim == 1 { 0 } else { 1 };
+                self.travel(to, events);
+            }
+            Some(_) => {
+                // setInPortal / the portal counter
+                if self.portal_cooldown > 0 {
+                    self.portal_cooldown = 10;
+                } else {
+                    let max = if self.play.mode == GameMode::Creative {
+                        0
+                    } else {
+                        80
+                    };
+                    let n = self.portal_ticks;
+                    self.portal_ticks += 1;
+                    if n >= max && self.dim != 1 {
+                        self.portal_ticks = max;
+                        self.portal_cooldown = 10;
+                        let to = if self.dim == -1 { 0 } else { -1 };
+                        self.travel(to, events);
+                    }
+                }
+            }
+            None => {
+                if self.portal_ticks > 0 {
+                    self.portal_ticks = (self.portal_ticks - 4).max(0);
+                }
+            }
+        }
+        if self.portal_cooldown > 0 && contact.is_none() {
+            self.portal_cooldown -= 1;
+        }
+        events.push(Event::Portal(self.portal_ticks));
+    }
+
+    /// Creates the world of a dimension (or fetches it from the parked ones).
+    fn take_world(&mut self, dim: i32) -> Parked {
+        if let Some(i) = self.parked.iter().position(|p| p.dim == dim) {
+            return self.parked.remove(i);
+        }
+        let seed = self.world.seed();
+        let provider = Arc::new(ChunkProvider::new_dim(seed, dim));
+        let mut world = ServerWorld::new(provider);
+        world.save_dir = self.dim_dir(dim);
+        world.total_time = self.world.total_time;
+        let mut mobs = crate::entity::mob::Mobs::default();
+        let mut tiles = std::collections::BTreeMap::new();
+        if let Some(d) = &world.save_dir {
+            if let Ok(text) = std::fs::read_to_string(d.join("data").join("structures.txt")) {
+                if let Some(st) = world.structures.as_mut() {
+                    let _ = st.load(text.trim());
+                }
+            }
+            if let Ok(text) = std::fs::read_to_string(d.join("data").join("entities.txt")) {
+                for line in text.lines() {
+                    let _ = mobs.decode(line);
+                }
+            }
+            if let Ok(text) = std::fs::read_to_string(d.join("data").join("tiles.txt")) {
+                let mut tmp = Play::new(GameMode::Survival);
+                for line in text.lines() {
+                    let _ = tmp.decode_tile(line);
+                }
+                tiles = tmp.tiles;
+            }
+        }
+        Parked {
+            dim,
+            world,
+            mobs,
+            unsaved: Default::default(),
+            tiles,
+            items: Vec::new(),
+            teleport_rand: JavaRandom::new(seed),
+        }
+    }
+
+    /// `ServerConfigurationManager.transferPlayerToDimension`
+    fn travel(&mut self, to: i32, events: &mut Vec<Event>) {
+        if to == self.dim {
+            return;
+        }
+        let (feet, yaw) = self.play.player;
+        let from = self.dim;
+        // swap the worlds
+        let next = self.take_world(to);
+        let mut old = Parked {
+            dim: from,
+            world: std::mem::replace(&mut self.world, next.world),
+            mobs: std::mem::replace(&mut self.mobs, next.mobs),
+            unsaved: std::mem::replace(&mut self.unsaved, next.unsaved),
+            tiles: std::mem::replace(&mut self.play.tiles, next.tiles),
+            items: std::mem::replace(&mut self.play.items, next.items),
+            teleport_rand: std::mem::replace(&mut self.teleport_rand, next.teleport_rand),
+        };
+        // Unloaded chunks of the old dimension go to disk now.
+        if let Some(d) = old.world.save_dir.clone() {
+            for key in std::mem::take(&mut old.unsaved) {
+                if let Some(c) = old.world.chunks.get(&key) {
+                    let _ = save::write_chunk(&d, key.0, key.1, &c.to_bytes());
+                }
+            }
+        }
+        self.parked.push(old);
+        self.dim = to;
+        self.world.total_time = self.parked.last().unwrap().world.total_time;
+        self.last_attacked = None;
+        self.last_attacker = None;
+        // where the player arrives
+        let mut pos = feet;
+        let mut new_yaw = yaw;
+        if to == 1 {
+            // WorldProviderEnd.getEntrancePortalLocation
+            pos = [100.0, 50.0, 0.0];
+            self.load_around(pos);
+            pos = crate::dimension::end_platform(&mut self.world, pos);
+        } else if from == 1 {
+            // out of the End: back to the spawn point
+            pos = self.spawn;
+            self.load_around(pos);
+        } else {
+            let k = if to == -1 { 1.0 / 8.0 } else { 8.0 };
+            pos[0] = (pos[0] * k).clamp(-29999872.0, 29999872.0);
+            pos[2] = (pos[2] * k).clamp(-29999872.0, 29999872.0);
+            self.load_around(pos);
+            match crate::dimension::find_portal(&mut self.world, pos, yaw) {
+                Some((p, y)) => {
+                    pos = p;
+                    new_yaw = y;
+                }
+                None => {
+                    let mut r = std::mem::replace(&mut self.teleport_rand, JavaRandom::new(0));
+                    crate::dimension::make_portal(&mut self.world, &mut r, pos);
+                    self.teleport_rand = r;
+                    if let Some((p, y)) = crate::dimension::find_portal(&mut self.world, pos, yaw) {
+                        pos = p;
+                        new_yaw = y;
+                    }
+                }
+            }
+        }
+        self.play.player = (pos, new_yaw);
+        if let Some(p) = &mut self.player {
+            p.0 = pos;
+            p.1[0] = new_yaw;
+        }
+        self.centre = ((pos[0].floor() as i32) >> 4, (pos[2].floor() as i32) >> 4);
+        for key in std::mem::take(&mut self.sent).into_keys() {
+            events.push(Event::Unload(key));
+        }
+        self.await_ack = true;
+        self.portal_cooldown = 10;
+        events.push(Event::Dimension {
+            dim: to,
+            pos,
+            yaw: new_yaw,
+        });
+        let sound = if to == 1 || from == 1 {
+            ""
+        } else {
+            "portal.travel"
+        };
+        if !sound.is_empty() {
+            events.push(Event::Sounds(vec![(sound, pos, 1.0, 1.0)]));
+        }
+    }
+
+    /// Loads the 3x3 chunks around a position (portal search and building).
+    fn load_around(&mut self, pos: [f64; 3]) {
+        let (cx, cz) = ((pos[0].floor() as i32) >> 4, (pos[2].floor() as i32) >> 4);
+        for dx in -2..=2 {
+            for dz in -2..=2 {
+                self.world.load_chunk(cx + dx, cz + dz);
+            }
+        }
+    }
+
     /// `--summon Kind[:tamed|:sit|:big|:n],...`: a row of mobs four blocks in
     /// front of the player once the world is up (for checking models).
     fn summon_once(&mut self) {
@@ -1016,23 +1347,79 @@ impl Sim {
 
     /// Writes the level file and every chunk changed since the last save.
     pub fn save(&mut self) -> std::io::Result<()> {
-        let Some(dir) = self.world.save_dir.clone() else {
+        let Some(base) = self.base_dir.clone() else {
             return Ok(());
         };
+        // every dimension but the overworld keeps its own data folder
+        let wdir = self.world.save_dir.clone().unwrap_or(base.clone());
         for key in std::mem::take(&mut self.unsaved) {
             if let Some(c) = self.world.chunks.get(&key) {
-                save::write_chunk(&dir, key.0, key.1, &c.to_bytes())?;
+                save::write_chunk(&wdir, key.0, key.1, &c.to_bytes())?;
             }
         }
+        for p in &mut self.parked {
+            let Some(d) = p.world.save_dir.clone() else {
+                continue;
+            };
+            for key in std::mem::take(&mut p.unsaved) {
+                if let Some(c) = p.world.chunks.get(&key) {
+                    save::write_chunk(&d, key.0, key.1, &c.to_bytes())?;
+                }
+            }
+            let data = d.join("data");
+            std::fs::create_dir_all(&data)?;
+            if let Some(st) = &p.world.structures {
+                save::write_atomic(&data.join("structures.txt"), st.save().as_bytes())?;
+            }
+            save::write_atomic(
+                &data.join("entities.txt"),
+                p.mobs.encode().join("\n").as_bytes(),
+            )?;
+            if p.dim != 0 {
+                let mut tmp = Play::new(GameMode::Survival);
+                tmp.tiles = p.tiles.clone();
+                save::write_atomic(
+                    &data.join("tiles.txt"),
+                    tmp.encode_tiles().join("\n").as_bytes(),
+                )?;
+            }
+        }
+        if self.dim != 0 {
+            let data = wdir.join("data");
+            std::fs::create_dir_all(&data)?;
+            save::write_atomic(
+                &data.join("tiles.txt"),
+                self.play.encode_tiles().join("\n").as_bytes(),
+            )?;
+        }
+        let overworld_tiles = if self.dim == 0 {
+            self.play.encode_tiles()
+        } else {
+            let mut tmp = Play::new(GameMode::Survival);
+            if let Some(p) = self.parked.iter().find(|p| p.dim == 0) {
+                tmp.tiles = p.tiles.clone();
+            }
+            tmp.encode_tiles()
+        };
+        let ticks = if self.dim == 0 {
+            self.world.pending_tick_list()
+        } else {
+            self.parked
+                .iter()
+                .find(|p| p.dim == 0)
+                .map(|p| p.world.pending_tick_list())
+                .unwrap_or_default()
+        };
         let level = Level {
             seed: self.world.seed(),
             total_time: self.world.total_time,
             world_time: self.world_time,
             vanilla_parity: crate::compat::vanilla_parity(),
             player: self.player,
-            ticks: self.world.pending_tick_list(),
+            ticks,
             unknown: {
                 let mut u = self.unknown_level_keys.clone();
+                u.push(("dim".into(), self.dim.to_string()));
                 u.push(("inventory".into(), self.play.inv.encode()));
                 u.push(("weather".into(), self.weather.encode()));
                 u.push((
@@ -1054,26 +1441,26 @@ impl Sim {
                 if let Some(st) = &self.stats {
                     u.push(("stats".into(), st.clone()));
                 }
-                for t in self.play.encode_tiles() {
+                for t in overworld_tiles {
                     u.push(("tile".into(), t));
                 }
                 u
             },
         };
         if let Some(st) = &self.world.structures {
-            let data = dir.join("data");
+            let data = wdir.join("data");
             std::fs::create_dir_all(&data)?;
             save::write_atomic(&data.join("structures.txt"), st.save().as_bytes())?;
         }
         {
-            let data = dir.join("data");
+            let data = wdir.join("data");
             std::fs::create_dir_all(&data)?;
             save::write_atomic(
                 &data.join("entities.txt"),
                 self.mobs.encode().join("\n").as_bytes(),
             )?;
         }
-        save::write_level(&dir, &level)
+        save::write_level(&base, &level)
     }
 
     /// Mob AI, spawning and despawning, and what the client must hear of it.
@@ -1887,5 +2274,62 @@ mod tests {
             }
         }
         assert!(tamed, "a bone tames one time in three");
+    }
+
+    #[test]
+    fn nether_portal_round_trip() {
+        let (mut sim, x, y, z) = redstone_sim();
+        // a 4 x 5 obsidian frame along x
+        let w = &mut sim.world;
+        for i in 0..4 {
+            w.set_block(x + i, y, z, block::OBSIDIAN, 0, 3);
+            w.set_block(x + i, y + 4, z, block::OBSIDIAN, 0, 3);
+        }
+        for j in 1..4 {
+            w.set_block(x, y + j, z, block::OBSIDIAN, 0, 3);
+            w.set_block(x + 3, y + j, z, block::OBSIDIAN, 0, 3);
+        }
+        w.set_block(x + 1, y + 1, z, block::FIRE, 0, 3);
+        for i in 1..3 {
+            for j in 1..4 {
+                assert_eq!(w.block(x + i, y + j, z), block::PORTAL, "lit at {i},{j}");
+            }
+        }
+        let inside = [x as f64 + 1.5, (y + 1) as f64, z as f64 + 0.5];
+        let mut ev = Vec::new();
+        sim.step(&[Command::Player(inside, [0.0, 0.0], false)], &mut ev);
+        sim.step(&[Command::Player(inside, [0.0, 0.0], false)], &mut ev);
+        assert_eq!(sim.dim, -1, "creative players travel at once");
+        let arrived = ev.iter().find_map(|e| match e {
+            Event::Dimension { dim: -1, pos, .. } => Some(*pos),
+            _ => None,
+        });
+        let pos = arrived.expect("dimension event");
+        assert!((pos[0] - inside[0] / 8.0).abs() < 20.0 && (pos[2] - inside[2] / 8.0).abs() < 20.0);
+        assert_eq!(
+            crate::dimension::portal_contact(&mut sim.world, pos),
+            Some(block::PORTAL),
+            "standing in the new portal"
+        );
+        // stay put: the cooldown keeps us here
+        ev.clear();
+        sim.step(&[Command::DimensionAck], &mut ev);
+        for _ in 0..5 {
+            sim.step(&[Command::Player(pos, [0.0, 0.0], false)], &mut ev);
+        }
+        assert_eq!(sim.dim, -1);
+        // step out, wait, step back in
+        let out = [pos[0] + 3.0, pos[1], pos[2] + 3.0];
+        for _ in 0..15 {
+            sim.step(&[Command::Player(out, [0.0, 0.0], false)], &mut ev);
+        }
+        sim.step(&[Command::Player(pos, [0.0, 0.0], false)], &mut ev);
+        sim.step(&[Command::Player(pos, [0.0, 0.0], false)], &mut ev);
+        assert_eq!(sim.dim, 0, "back to the overworld");
+        let (ppos, _) = sim.play.player;
+        assert!(
+            (ppos[0] - inside[0]).abs() < 3.0 && (ppos[2] - inside[2]).abs() < 3.0,
+            "{ppos:?}"
+        );
     }
 }

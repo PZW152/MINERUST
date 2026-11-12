@@ -59,6 +59,8 @@ pub struct Chunk {
     pub light_populated: bool,
     pub ticked: bool,
     queued_light_checks: i32,
+    /// `WorldProvider.hasNoSky` (Nether and End): no sky light at all.
+    pub no_sky: bool,
 }
 
 #[inline]
@@ -87,6 +89,7 @@ impl Chunk {
             light_populated: false,
             ticked: false,
             queued_light_checks: 0,
+            no_sky: false,
         }
     }
 
@@ -150,6 +153,9 @@ impl Chunk {
                         break;
                     }
                     y -= 1;
+                }
+                if self.no_sky {
+                    continue;
                 }
                 let mut l = 15i32;
                 let mut y = top + 16 - 1;
@@ -345,6 +351,7 @@ impl Chunk {
             light_populated: flags & 2 != 0,
             ticked: flags & 4 != 0,
             queued_light_checks: queued,
+            no_sky: false,
         })
     }
 }
@@ -406,6 +413,22 @@ pub enum GenEntity {
     Item {
         pos: [f64; 3],
         stack: crate::item::Stack,
+    },
+    /// `BiomeEndDecorator`: the ender dragon over the island.
+    Dragon {
+        pos: [f64; 3],
+        yaw: f32,
+    },
+    /// `WorldGenSpikes`: an ender crystal on top of a pillar.
+    Crystal {
+        pos: [f64; 3],
+        yaw: f32,
+    },
+    /// Wither skeletons, blazes and the like placed by structures.
+    Mob {
+        kind: crate::entity::mob::Kind,
+        pos: [f64; 3],
+        variant: i32,
     },
     /// `SpawnerAnimals.performWorldGenSpawning`
     Animal {
@@ -552,7 +575,8 @@ impl ServerWorld {
                 .and_then(|d| crate::world::save::read_chunk(d, cx, cz)),
         };
         if let Some(bytes) = stored {
-            if let Some(c) = Chunk::from_bytes(cx, cz, &bytes) {
+            if let Some(mut c) = Chunk::from_bytes(cx, cz, &bytes) {
+                c.no_sky = self.provider.dim != 0;
                 self.insert_restored(Box::new(c));
                 return;
             }
@@ -570,7 +594,11 @@ impl ServerWorld {
             return false;
         }
         let mut c = Box::new(Chunk::new(data));
-        c.generate_skylight_map();
+        c.no_sky = self.provider.dim != 0;
+        // ChunkProviderHell never builds the height map; the others do.
+        if self.provider.dim != -1 {
+            c.generate_skylight_map();
+        }
         self.chunks.insert((cx, cz), c);
         self.mark_dirty_chunk(cx, cz);
         self.register_structures(cx, cz);
@@ -610,6 +638,7 @@ impl ServerWorld {
     pub fn insert_raw(&mut self, data: ChunkData) {
         let key = (data.cx, data.cz);
         let mut c = Box::new(Chunk::new(data));
+        c.no_sky = self.provider.dim != 0;
         c.generate_skylight_map();
         c.terrain_populated = true;
         self.chunks.insert(key, c);
@@ -722,7 +751,11 @@ impl ServerWorld {
     fn populate(&mut self, cx: i32, cz: i32) {
         if !self.chunk(cx, cz).terrain_populated {
             self.check_light(cx, cz);
-            super::populate::populate(self, cx, cz);
+            match self.provider.dim {
+                -1 => super::gen::hell::populate(self, cx, cz),
+                1 => super::gen::end::populate(self, cx, cz),
+                _ => super::populate::populate(self, cx, cz),
+            }
             self.populated += 1;
             // The four chunks it can write into may have just become meshable.
             for (dx, dz) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
@@ -1108,6 +1141,12 @@ impl ServerWorld {
             }
             c.height[col] = h;
             new_h = h;
+            if c.no_sky {
+                if new_h < c.height_min {
+                    c.height_min = new_h;
+                }
+                return;
+            }
             if h < old_h {
                 for yy in h..old_h {
                     if c.has_section(yy) {
@@ -1328,7 +1367,7 @@ impl ServerWorld {
 
     /// `World.func_147451_t` (updateAllLightTypes)
     pub fn update_all_light(&mut self, x: i32, y: i32, z: i32) -> bool {
-        let a = self.update_light(true, x, y, z);
+        let a = self.provider.dim == 0 && self.update_light(true, x, y, z);
         let b = self.update_light(false, x, y, z);
         a | b
     }
@@ -1621,12 +1660,13 @@ impl ServerWorld {
             block::FLOWING_WATER | block::FLOWING_LAVA => {
                 self.check_liquid_collisions(id, x, y, z);
                 if self.block(x, y, z) == id {
-                    let rate = liquid_tick_rate(id);
+                    let rate = self.liquid_rate(id);
                     self.schedule_update(x, y, z, id, rate);
                 }
             }
             block::WATER | block::LAVA => self.check_liquid_collisions(id, x, y, z),
             block::SAND | block::GRAVEL => self.schedule_update(x, y, z, id, 2),
+            block::FIRE => self.fire_added(x, y, z),
             block::TORCH | block::REDSTONE_TORCH | block::UNLIT_REDSTONE_TORCH => {
                 self.torch_added(id, x, y, z);
                 if id == block::REDSTONE_TORCH && self.block(x, y, z) == id {
@@ -2014,6 +2054,8 @@ impl ServerWorld {
                 super::rail::neighbour_changed(self, x, y, z, src)
             }
             block::TRIPWIRE => super::tripwire::wire_neighbour(self, x, y, z),
+            block::FIRE => self.fire_neighbour(x, y, z),
+            block::PORTAL => self.portal_neighbour(x, y, z),
             block::WOODEN_DOOR | block::IRON_DOOR => self.door_neighbour(id, x, y, z, src),
             block::TRIPWIRE_HOOK => super::tripwire::hook_neighbour(self, x, y, z, src),
             block::WATER | block::LAVA => {
@@ -2022,7 +2064,7 @@ impl ServerWorld {
                     // setNotStationary
                     let m = self.meta(x, y, z);
                     self.set_block(x, y, z, id - 1, m, 2);
-                    self.schedule_update(x, y, z, id - 1, liquid_tick_rate(id));
+                    self.schedule_update(x, y, z, id - 1, self.liquid_rate(id));
                 }
             }
             block::FLOWING_WATER | block::FLOWING_LAVA => self.check_liquid_collisions(id, x, y, z),
@@ -2104,6 +2146,7 @@ impl ServerWorld {
             block::FLOWING_WATER | block::FLOWING_LAVA => self.liquid_tick(id, x, y, z, rand),
             block::SAND | block::GRAVEL => self.try_fall(id, x, y, z),
             block::TRIPWIRE_HOOK => super::tripwire::hook_tick(self, x, y, z),
+            block::FIRE => self.fire_tick(x, y, z, rand),
             block::TRIPWIRE => {
                 if self.meta(x, y, z) & 1 == 1 {
                     self.tripwire_check(x, y, z);
@@ -2234,11 +2277,27 @@ impl ServerWorld {
     }
 
     /// `BlockDynamicLiquid.updateTick`
+    /// `BlockLiquid.tickRate`: lava ticks every 10 in worlds without sky.
+    pub fn liquid_rate(&self, id: u8) -> i32 {
+        if block::material(id) == Material::Water {
+            5
+        } else if self.provider.dim != 0 {
+            10
+        } else {
+            30
+        }
+    }
+
     fn liquid_tick(&mut self, id: u8, x: i32, y: i32, z: i32, rand: &mut JavaRandom) {
         let mat = block::material(id);
         let mut level = self.liquid_level(mat, x, y, z);
-        let step = if mat == Material::Lava { 2 } else { 1 };
-        let mut rate = liquid_tick_rate(id);
+        // BlockDynamicLiquid: lava spreads two levels per block, one in the Nether.
+        let step = if mat == Material::Lava && self.provider.dim != -1 {
+            2
+        } else {
+            1
+        };
+        let mut rate = self.liquid_rate(id);
         if level > 0 {
             let mut sources = 0;
             let mut min = -100;
@@ -2387,6 +2446,8 @@ impl ServerWorld {
 }
 
 /// `BlockLiquid.tickRate` (overworld)
+/// `BlockLiquid.tickRate` in the overworld.
+#[allow(dead_code)]
 fn liquid_tick_rate(id: u8) -> i32 {
     if block::material(id) == Material::Water {
         5

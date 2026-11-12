@@ -564,6 +564,7 @@ pub fn build(chunks: &[MeshChunk; 9], atlas: &Atlas, noise: &BiomeNoise) -> Chun
                     Shape::Rail => rail(&cx, out, id, meta, x, y, z),
                     Shape::Crops => crops(&cx, out, id, meta, x, y, z),
                     Shape::Wire => wire(&cx, out, meta, x, y, z),
+                    Shape::Fire => fire(&cx, out, x, y, z),
                     Shape::Tripwire => tripwire(&cx, out, meta, x, y, z),
                     Shape::Cocoa | Shape::None => {}
                 }
@@ -2010,6 +2011,240 @@ fn wire(cx: &Ctx, out: &mut Vec<Vertex>, meta: i32, x: i32, y: i32, z: i32) {
             light,
             false,
         );
+    }
+}
+
+/// `renderBlockFire`: four slanted sheets per layer over a burning floor,
+/// or sheets leaning against the burning sides.
+fn fire(cx: &Ctx, out: &mut Vec<Vertex>, x: i32, y: i32, z: i32) {
+    let r = &cx.r;
+    let (Some(t0), Some(t1)) = (cx.rect(block::FIRE, 0, 0), cx.rect(block::FIRE, 0, 1)) else {
+        return;
+    };
+    let light = light_bytes(r.bright(x, y, z));
+    let c = [255u8; 4];
+    let (bx, by, bz) = ((x - 16) as f32, y as f32, (z - 16) as f32);
+    let h = 1.4f32;
+    let below = r.block(x, y - 1, z);
+    let flammable = |id: u8| {
+        matches!(
+            id,
+            block::PLANKS
+                | block::FENCE
+                | block::LOG
+                | block::LOG2
+                | block::LEAVES
+                | block::LEAVES2
+                | block::WOOL
+                | block::BOOKSHELF
+                | block::TNT
+                | block::TALLGRASS
+                | block::VINE
+                | block::COAL_BLOCK
+                | block::HAY_BLOCK
+                | block::CARPET
+        ) || block::is_stairs(id) && block::material(id) == block::Material::Wood
+    };
+    let uv = |t: [f32; 4]| {
+        let (u0, v0, u1, v1) = (t[0], t[1], t[2], t[3]);
+        [[u1, v0], [u1, v1], [u0, v1], [u0, v0]]
+    };
+    let solid_below = block::info(below).normal_cube() || flammable(below);
+    if solid_below {
+        let (a, b) = if (x + y + z) & 1 == 1 {
+            (t1, t0)
+        } else {
+            (t0, t1)
+        };
+        let (d5, d6, d7, d8) = (bx + 0.7, bx + 0.3, bz + 0.7, bz + 0.3);
+        let (d9, d10, d11, d12) = (bx + 0.2, bx + 0.8, bz + 0.2, bz + 0.8);
+        quad(
+            out,
+            [
+                [d9, by + h, bz + 1.0],
+                [d5, by, bz + 1.0],
+                [d5, by, bz],
+                [d9, by + h, bz],
+            ],
+            uv(a),
+            c,
+            light,
+            true,
+        );
+        quad(
+            out,
+            [
+                [d10, by + h, bz],
+                [d6, by, bz],
+                [d6, by, bz + 1.0],
+                [d10, by + h, bz + 1.0],
+            ],
+            uv(a),
+            c,
+            light,
+            true,
+        );
+        quad(
+            out,
+            [
+                [bx + 1.0, by + h, d12],
+                [bx + 1.0, by, d8],
+                [bx, by, d8],
+                [bx, by + h, d12],
+            ],
+            uv(b),
+            c,
+            light,
+            true,
+        );
+        quad(
+            out,
+            [
+                [bx, by + h, d11],
+                [bx, by, d7],
+                [bx + 1.0, by, d7],
+                [bx + 1.0, by + h, d11],
+            ],
+            uv(b),
+            c,
+            light,
+            true,
+        );
+        let (d9, d10, d11, d12) = (bx, bx + 1.0, bz, bz + 1.0);
+        let (d5, d6, d7, d8) = (bx + 0.1, bx + 0.9, bz + 0.1, bz + 0.9);
+        quad(
+            out,
+            [
+                [d5, by + h, bz],
+                [d9, by, bz],
+                [d9, by, bz + 1.0],
+                [d5, by + h, bz + 1.0],
+            ],
+            uv(b),
+            c,
+            light,
+            true,
+        );
+        quad(
+            out,
+            [
+                [d6, by + h, bz + 1.0],
+                [d10, by, bz + 1.0],
+                [d10, by, bz],
+                [d6, by + h, bz],
+            ],
+            uv(b),
+            c,
+            light,
+            true,
+        );
+        quad(
+            out,
+            [
+                [bx, by + h, d8],
+                [bx, by, d12],
+                [bx + 1.0, by, d12],
+                [bx + 1.0, by + h, d8],
+            ],
+            uv(a),
+            c,
+            light,
+            true,
+        );
+        quad(
+            out,
+            [
+                [bx + 1.0, by + h, d7],
+                [bx + 1.0, by, d11],
+                [bx, by, d11],
+                [bx, by + h, d7],
+            ],
+            uv(a),
+            c,
+            light,
+            true,
+        );
+    } else {
+        // sheets leaning against each burning neighbour
+        let f = 0.2f32;
+        let hh = h;
+        let side = |dx: i32, dz: i32| flammable(r.block(x + dx, y, z + dz));
+        if side(-1, 0) {
+            quad(
+                out,
+                [
+                    [bx + f, by + hh, bz + 1.0],
+                    [bx, by, bz + 1.0],
+                    [bx, by, bz],
+                    [bx + f, by + hh, bz],
+                ],
+                uv(t0),
+                c,
+                light,
+                true,
+            );
+        }
+        if side(1, 0) {
+            quad(
+                out,
+                [
+                    [bx + 1.0 - f, by + hh, bz],
+                    [bx + 1.0, by, bz],
+                    [bx + 1.0, by, bz + 1.0],
+                    [bx + 1.0 - f, by + hh, bz + 1.0],
+                ],
+                uv(t0),
+                c,
+                light,
+                true,
+            );
+        }
+        if side(0, -1) {
+            quad(
+                out,
+                [
+                    [bx, by + hh, bz + f],
+                    [bx, by, bz],
+                    [bx + 1.0, by, bz],
+                    [bx + 1.0, by + hh, bz + f],
+                ],
+                uv(t1),
+                c,
+                light,
+                true,
+            );
+        }
+        if side(0, 1) {
+            quad(
+                out,
+                [
+                    [bx + 1.0, by + hh, bz + 1.0 - f],
+                    [bx + 1.0, by, bz + 1.0],
+                    [bx, by, bz + 1.0],
+                    [bx, by + hh, bz + 1.0 - f],
+                ],
+                uv(t1),
+                c,
+                light,
+                true,
+            );
+        }
+        if flammable(r.block(x, y + 1, z)) {
+            let top = by + 1.0;
+            quad(
+                out,
+                [
+                    [bx, top, bz],
+                    [bx + 1.0, top - 0.2, bz],
+                    [bx + 1.0, top - 0.2, bz + 1.0],
+                    [bx, top, bz + 1.0],
+                ],
+                uv(t0),
+                c,
+                light,
+                true,
+            );
+        }
     }
 }
 

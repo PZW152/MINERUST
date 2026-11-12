@@ -49,6 +49,10 @@ pub struct ChunkProvider {
     pub gen_biomes: Arc<GenLayer>,
     pub biome_index: Arc<GenLayer>,
     pub terrain: TerrainState,
+    /// `WorldProvider.dimensionId`: 0 overworld, -1 Nether, 1 End.
+    pub dim: i32,
+    pub hell: Option<Box<super::hell::HellGen>>,
+    pub end: Option<Box<super::end::EndGen>>,
 }
 
 pub fn boxed() -> Box<[u8; 65536]> {
@@ -96,11 +100,31 @@ impl ChunkProvider {
             gen_biomes,
             biome_index,
             terrain: TerrainState::new(seed),
+            dim: 0,
+            hell: None,
+            end: None,
         }
+    }
+
+    /// The generator of another dimension (`WorldProviderHell` / `WorldProviderEnd`).
+    pub fn new_dim(seed: i64, dim: i32) -> Self {
+        let mut p = Self::new(seed);
+        p.dim = dim;
+        match dim {
+            -1 => p.hell = Some(Box::new(super::hell::HellGen::new(seed))),
+            1 => p.end = Some(Box::new(super::end::EndGen::new(seed))),
+            _ => {}
+        }
+        p
     }
 
     /// `WorldChunkManager.getBiomeGenAt(x, z)` id.
     pub fn biome_at(&self, x: i32, z: i32) -> i32 {
+        match self.dim {
+            -1 => return 8,
+            1 => return 9,
+            _ => {}
+        }
         self.biome_index.get_ints(x, z, 1, 1)[0]
     }
 
@@ -203,6 +227,12 @@ impl ChunkProvider {
 
     /// `provideChunk(cx, cz)` (terrain, surface, caves, ravines; no structures).
     pub fn provide_chunk(&self, cx: i32, cz: i32) -> ChunkData {
+        if let Some(h) = &self.hell {
+            return h.provide(cx, cz);
+        }
+        if let Some(e) = &self.end {
+            return e.provide(cx, cz);
+        }
         let mut rand = JavaRandom::new(0);
         rand.set_seed(
             (cx as i64)

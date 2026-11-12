@@ -64,7 +64,8 @@ public class PopHarness {
         WorldInfo info = new WorldInfo(ws, "x");
         set(World.class, w, "worldInfo", info);
         info.getGameRulesInstance().setOrCreateGameRule("doTileDrops", "false");
-        WorldProvider p = WorldProvider.getProviderForDimension(0);
+        int dim = System.getenv("DIM") == null ? 0 : Integer.parseInt(System.getenv("DIM"));
+        WorldProvider p = WorldProvider.getProviderForDimension(dim);
         set(World.class, w, "provider", p);
         p.registerWorld(w);
 
@@ -81,7 +82,9 @@ public class PopHarness {
 
         boolean features = System.getenv("NO_FEATURES") == null;
         set(World.class, w, "mapStorage", new net.minecraft.world.storage.MapStorage(null));
-        ChunkProviderGenerate gen = new ChunkProviderGenerate(w, seed, features);
+        net.minecraft.world.chunk.IChunkProvider gen = dim == -1
+            ? new net.minecraft.world.gen.ChunkProviderHell(w, seed)
+            : new ChunkProviderGenerate(w, seed, features);
         ChunkProviderServer server = new ChunkProviderServer(w, null, gen);
         set(World.class, w, "chunkProvider", server);
         set(WorldServer.class, w, "theChunkProviderServer", server);

@@ -78,6 +78,12 @@ pub const WEB: u8 = 30;
 pub const PISTON: u8 = 33;
 pub const PISTON_HEAD: u8 = 34;
 pub const TRAPDOOR: u8 = 96;
+pub const PORTAL: u8 = 90;
+pub const NETHER_BRICK_FENCE: u8 = 113;
+pub const NETHER_WART: u8 = 115;
+pub const END_PORTAL: u8 = 119;
+pub const DRAGON_EGG: u8 = 122;
+pub const QUARTZ_ORE: u8 = 153;
 pub const REDSTONE_LAMP: u8 = 123;
 pub const LIT_REDSTONE_LAMP: u8 = 124;
 pub const WOOL: u8 = 35;
@@ -221,6 +227,8 @@ pub enum Shape {
     Tripwire,
     /// Blocks drawn as a fixed set of boxes (`shapes::static_boxes`).
     Boxes,
+    /// `renderBlockFire` (3)
+    Fire,
 }
 
 /// `net.minecraft.block.material.Material`
@@ -257,6 +265,8 @@ pub enum Material {
     Carpet,
     Sponge,
     Portal,
+    /// `Material.dragonEgg`
+    DragonEgg,
 }
 
 impl Material {
@@ -499,7 +509,7 @@ fn build() -> [BlockInfo; 256] {
     let mut torch = base(Shape::Torch, M::Circuits, false);
     torch.light_value = 14;
     t[TORCH as usize] = torch;
-    t[FIRE as usize] = base(Shape::None, M::Fire, false);
+    t[FIRE as usize] = base(Shape::Fire, M::Fire, false);
     t[FIRE as usize].light_value = 15;
 
     let mut slab = base(Shape::Slab, M::Rock, false);
@@ -546,6 +556,21 @@ fn build() -> [BlockInfo; 256] {
     t[LIT_REDSTONE_LAMP as usize] = cube(M::Iron);
     t[LIT_REDSTONE_LAMP as usize].light_value = 15;
     t[PISTON_HEAD as usize] = base(Shape::Boxes, M::Piston, false);
+    // BlockPortal: a thin translucent pane that glows.
+    let mut portal = base(Shape::Boxes, M::Portal, false);
+    portal.light_value = 11;
+    portal.translucent = true;
+    t[PORTAL as usize] = portal;
+    t[NETHER_BRICK_FENCE as usize] = base(Shape::Fence, M::Rock, false);
+    t[NETHER_WART as usize] = base(Shape::Crops, M::Plants, false);
+    // BlockEndPortal: 0.75 high, light 15, no collision.
+    let mut end_portal = base(Shape::Boxes, M::Portal, false);
+    end_portal.light_value = 15;
+    t[END_PORTAL as usize] = end_portal;
+    let mut egg = base(Shape::Boxes, M::DragonEgg, false);
+    egg.light_value = 1;
+    t[DRAGON_EGG as usize] = egg;
+    t[QUARTZ_ORE as usize] = cube(M::Rock);
     t[TRAPDOOR as usize] = base(Shape::Boxes, M::Wood, false);
     // TNT uses Material.tnt, which is translucent: not an opaque cube for
     // `Material.isOpaque` but still rendered and lit as a full block.
@@ -1079,6 +1104,23 @@ pub fn texture_name(id: u8, meta: u8, face: usize) -> Option<&'static str> {
             }
         }
         TRAPDOOR => "trapdoor",
+        FIRE => {
+            if face == 1 {
+                "fire_layer_1"
+            } else {
+                "fire_layer_0"
+            }
+        }
+        PORTAL => "portal",
+        NETHER_BRICK_FENCE => "nether_brick",
+        NETHER_WART => match meta {
+            0 => "nether_wart_stage_0",
+            1 | 2 => "nether_wart_stage_1",
+            _ => "nether_wart_stage_2",
+        },
+        END_PORTAL => "portal",
+        DRAGON_EGG => "dragon_egg",
+        QUARTZ_ORE => "quartz_ore",
         REDSTONE_LAMP => "redstone_lamp_off",
         LIT_REDSTONE_LAMP => "redstone_lamp_on",
         WEB => "web",

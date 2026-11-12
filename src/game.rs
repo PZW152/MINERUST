@@ -33,6 +33,8 @@ struct ClientChunk {
 #[derive(Default)]
 pub struct ClientWorld {
     chunks: HashMap<(i32, i32), ClientChunk>,
+    /// Dimension of the chunks held (no rain outside the overworld).
+    pub dim: i32,
 }
 
 impl ClientWorld {
@@ -187,6 +189,12 @@ pub struct Game {
     pub selected: Option<([i32; 3], [i32; 3])>,
     pub screenshot: Option<std::path::PathBuf>,
     light_table: [f32; 16],
+    /// `WorldProvider.dimensionId` of the world on screen.
+    dim: i32,
+    /// `EntityPlayerSP.timeInPortal` (and last tick's value).
+    portal_time: f32,
+    prev_portal_time: f32,
+    in_portal: bool,
     ticks: u64,
     noise: BiomeNoise,
     /// `(ticks shown, position in the frame order)` per animated tile.
@@ -267,6 +275,18 @@ fn decode_stats(t: &str) -> Option<Stats> {
         s = Stats::default();
     }
     Some(s)
+}
+
+/// `WorldProvider.generateLightBrightnessTable` (the Nether never goes
+/// below 0.1).
+fn light_table(dim: i32) -> [f32; 16] {
+    let f = if dim == -1 { 0.1f32 } else { 0.0 };
+    let mut t = [0f32; 16];
+    for (i, v) in t.iter_mut().enumerate() {
+        let f1 = 1.0f32 - i as f32 / 15.0f32;
+        *v = (1.0f32 - f1) / (f1 * 3.0f32 + 1.0f32) * (1.0 - f) + f;
+    }
+    t
 }
 
 fn hsb_to_rgb(hue: f32, s: f32, b: f32) -> [f32; 3] {
@@ -354,11 +374,7 @@ impl Game {
         }
         offsets.sort_by_key(|&(x, z)| (x * x + z * z, x, z));
 
-        let mut light_table = [0f32; 16];
-        for (i, v) in light_table.iter_mut().enumerate() {
-            let f1 = 1.0f32 - i as f32 / 15.0f32;
-            *v = (1.0f32 - f1) / (f1 * 3.0f32 + 1.0f32);
-        }
+        let light_table = light_table(0);
 
         let center = (
             math::floor_double(pos[0]) >> 4,
@@ -415,6 +431,10 @@ impl Game {
             selected: None,
             screenshot: None,
             light_table,
+            dim: 0,
+            portal_time: 0.0,
+            prev_portal_time: 0.0,
+            in_portal: false,
             ticks: 0,
             noise: BiomeNoise::new(),
             anim_state: Vec::new(),
@@ -553,6 +573,39 @@ impl Game {
                     self.world.chunks.remove(&key);
                     self.renderer.remove_mesh(key);
                     self.dirty.remove(&key);
+                }
+                Event::Dimension { dim, pos, yaw } => {
+                    // NetHandlerPlayClient.handleRespawn: a new world
+                    self.dim = dim;
+                    let keys: Vec<(i32, i32)> = self.world.chunks.keys().copied().collect();
+                    for key in keys {
+                        self.world.chunks.remove(&key);
+                        self.renderer.remove_mesh(key);
+                    }
+                    self.dirty.clear();
+                    self.world.dim = dim;
+                    self.mobs.clear();
+                    self.items.clear();
+                    self.tnt.clear();
+                    self.arrows.clear();
+                    self.light_table = light_table(dim);
+                    self.player.set_position(pos[0], pos[1], pos[2]);
+                    self.player.motion = [0.0; 3];
+                    self.player.yaw = yaw;
+                    self.player.prev_pos = self.player.pos;
+                    self.stats.fall_distance = 0.0;
+                    self.portal_time = 0.0;
+                    self.prev_portal_time = 0.0;
+                    let _ = self.sim.commands.send(Command::DimensionAck);
+                }
+                Event::Portal(t) => {
+                    let was = self.in_portal;
+                    self.in_portal = t > 0;
+                    if self.in_portal && !was && self.portal_time == 0.0 {
+                        let r = &mut self.particle_rand;
+                        let p = r.next_float() * 0.4 + 0.8;
+                        self.sound("portal.trigger", None, 1.0, p);
+                    }
                 }
                 Event::Inventory(v) => {
                     let was_open = self.view.open != Open::None;
@@ -706,7 +759,11 @@ impl Game {
         self.sim.shutdown();
     }
     fn celestial_angle(&self, partial: f32) -> f32 {
-        sim::celestial_angle(self.world_time, partial)
+        match self.dim {
+            -1 => 0.5,
+            1 => 0.0,
+            _ => sim::celestial_angle(self.world_time, partial),
+        }
     }
 
     /// `TextureAtlasSprite.updateAnimation` for every animated tile.
@@ -798,6 +855,13 @@ impl Game {
 
     fn tick(&mut self) {
         self.ticks += 1;
+        // EntityPlayerSP.onLivingUpdate: timeInPortal
+        self.prev_portal_time = self.portal_time;
+        if self.in_portal {
+            self.portal_time = (self.portal_time + 0.0125).min(1.0);
+        } else if self.portal_time > 0.0 {
+            self.portal_time = (self.portal_time - 0.05).max(0.0);
+        }
         self.tick_animations();
         if !self.freeze_time {
             self.world_time += 1;
@@ -1724,6 +1788,11 @@ impl Game {
             r = r * 0.96f32 + 0.03f32;
             g = g * 0.96f32 + 0.03f32;
             b = b * 0.96f32 + 0.03f32;
+            if self.dim == 1 {
+                r = 0.22f32 + f2 * 0.75f32;
+                g = 0.28f32 + f5 * 0.75f32;
+                b = 0.25f32 + f6 * 0.75f32;
+            }
             r = r.min(1.0);
             g = g.min(1.0);
             b = b.min(1.0);
@@ -1829,11 +1898,20 @@ impl Game {
                 *c = *c * (1.0 - thunder * 0.75) + l * thunder * 0.75;
             }
         }
-        let mut fog = [
-            0.7529412f32 * (day * 0.94f32 + 0.06f32),
-            0.84705883f32 * (day * 0.94f32 + 0.06f32),
-            1.0f32 * (day * 0.91f32 + 0.09f32),
-        ];
+        let mut fog = match self.dim {
+            // WorldProviderHell.getFogColor
+            -1 => [0.2f32, 0.03, 0.03],
+            // WorldProviderEnd.getFogColor
+            1 => {
+                let c = 0.15f32;
+                [0.627451 * c, 0.5019608 * c, 0.627451 * c]
+            }
+            _ => [
+                0.7529412f32 * (day * 0.94f32 + 0.06f32),
+                0.84705883f32 * (day * 0.94f32 + 0.06f32),
+                1.0f32 * (day * 0.91f32 + 0.09f32),
+            ],
+        };
         let look = self.look();
         if self.render_distance >= 4 {
             let sun_side = if math::sin(angle * math::PI * 2.0f32) > 0.0 {
@@ -1916,6 +1994,8 @@ impl Game {
         let fog_params = match eye_mat {
             Material::Water => [0.0, 0.0, 0.1, 1.0],
             Material::Lava => [0.0, 0.0, 2.0, 1.0],
+            // WorldProviderHell.doesXZShowFog: thick fog close by
+            _ if self.dim == -1 => [far * 0.05f32, far.min(192.0) * 0.5f32, 0.0, 0.0],
             _ => [far * 0.75f32, far, 0.0, 0.0],
         };
 
@@ -1970,11 +2050,15 @@ impl Game {
         let star = {
             let f = (1.0f32 - (math::cos(angle * math::PI * 2.0f32) * 2.0f32 + 0.25f32))
                 .clamp(0.0, 1.0);
-            f * f * 0.5f32 * (1.0 - rain)
+            if self.dim != 0 {
+                0.0
+            } else {
+                f * f * 0.5f32 * (1.0 - rain)
+            }
         };
         let sunrise = {
             let f3 = math::cos(angle * math::PI * 2.0f32);
-            if (-0.4f32..=0.4f32).contains(&f3) {
+            if self.dim == 0 && (-0.4f32..=0.4f32).contains(&f3) {
                 let c = f3 / 0.4f32 * 0.5f32 + 0.5f32;
                 let mut a = 1.0f32 - (1.0f32 - math::sin(c * math::PI)) * 0.99f32;
                 a *= a;
@@ -2032,18 +2116,33 @@ impl Game {
             cam_up: row(1, tan),
             cam_fwd: row(2, -1.0),
             fog_color: [fog[0], fog[1], fog[2], 1.0],
-            sky_color: [sky[0], sky[1], sky[2], 1.0],
+            // RenderGlobal.renderSky: only the overworld has a sky dome; the
+            // End draws its dark box, the Nether nothing but the fog.
+            sky_color: match self.dim {
+                -1 => [fog[0], fog[1], fog[2], 1.0],
+                1 => [0.035, 0.03, 0.045, 1.0],
+                _ => [sky[0], sky[1], sky[2], 1.0],
+            },
             fog_params,
             sun_dir: [-theta.sin(), theta.cos(), 0.0, (eye[1] - 63.0) as f32],
-            sky_params: [far * 0.8f32, 1.0 - rain, 0.0, 0.0],
+            sky_params: [
+                far * 0.8f32,
+                if self.dim == 0 { 1.0 - rain } else { 0.0 },
+                0.0,
+                0.0,
+            ],
             sun_rect: self.atlas.rects[self.atlas.sun as usize],
             moon_rect: self.atlas.rects[self.atlas.moon[moon_phase] as usize],
-            void_color: [
-                sky[0] * 0.2f32 + 0.04f32,
-                sky[1] * 0.2f32 + 0.04f32,
-                sky[2] * 0.6f32 + 0.1f32,
-                1.0,
-            ],
+            void_color: match self.dim {
+                -1 => [fog[0], fog[1], fog[2], 1.0],
+                1 => [0.035, 0.03, 0.045, 1.0],
+                _ => [
+                    sky[0] * 0.2f32 + 0.04f32,
+                    sky[1] * 0.2f32 + 0.04f32,
+                    sky[2] * 0.6f32 + 0.1f32,
+                    1.0,
+                ],
+            },
             lightmap: [[0.0; 4]; 256],
         };
         self.lightmap(&mut g.lightmap);
@@ -2317,6 +2416,19 @@ impl Game {
                 }
             }
         }
+        // GuiIngame.func_130015_b: the purple portal swirl
+        let pt = self.prev_portal_time + (self.portal_time - self.prev_portal_time) * partial;
+        if pt > 0.0 {
+            if let Some(t) = self.atlas.tile(crate::block::PORTAL, 1, 2) {
+                let mut a = pt;
+                if a < 1.0 {
+                    a *= a;
+                    a *= a;
+                    a = a * 0.8 + 0.2;
+                }
+                ui.atlas_rect(0.0, 0.0, ui.w, ui.h, t, 0xFFFFFF, a);
+            }
+        }
         screens::hotbar(&mut ui, &self.view.inv);
         if self.mode == GameMode::Survival {
             let under = eye_mat == Material::Water;
@@ -2433,7 +2545,7 @@ impl Game {
             screenshot: self.screenshot.take(),
             star_brightness: star,
             sunrise,
-            clouds: Some(clouds),
+            clouds: if self.dim == 0 { Some(clouds) } else { None },
         };
         self.renderer.render(&frame, window_size);
     }

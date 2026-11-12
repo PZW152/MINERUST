@@ -1,6 +1,7 @@
 //! `MapGenStructure`, `StructureStart`, `StructureComponent` and
 //! `StructureBoundingBox`, with the four overworld structure types.
 
+pub mod fortress;
 pub mod mineshaft;
 pub mod scattered;
 pub mod stronghold;
@@ -183,6 +184,7 @@ pub enum Kind {
     Village(village::VPiece),
     Hold(stronghold::Hold),
     Scatter(scattered::Scatter),
+    Fortress(fortress::FKind),
 }
 
 /// `StructureComponent`
@@ -759,6 +761,10 @@ impl Piece {
                 out.push(3);
                 s.save(out);
             }
+            Kind::Fortress(f) => {
+                out.push(4);
+                f.save(out);
+            }
         }
     }
 
@@ -776,6 +782,7 @@ impl Piece {
             1 => Kind::Village(village::VPiece::load(v)?),
             2 => Kind::Hold(stronghold::Hold::load(v)?),
             3 => Kind::Scatter(scattered::Scatter::load(v)?),
+            4 => Kind::Fortress(fortress::FKind::load(v)?),
             _ => return None,
         };
         Some(Piece {
@@ -818,6 +825,7 @@ pub enum Type {
     Village,
     Stronghold,
     Temple,
+    Fortress,
 }
 
 /// `StructureStart`
@@ -930,6 +938,7 @@ fn add_parts(
         Kind::Village(_) => village::add_parts(&mut p, w, r, clip),
         Kind::Hold(_) => stronghold::add_parts(&mut p, w, r, clip),
         Kind::Scatter(_) => scattered::add_parts(&mut p, w, r, clip),
+        Kind::Fortress(_) => fortress::add_parts(&mut p, w, r, clip),
     };
     pieces[i] = p;
     ok
@@ -994,9 +1003,10 @@ pub struct Gen {
     checked: HashSet<(i32, i32)>,
 }
 
-/// The four overworld `MapGenStructure`s of `ChunkProviderGenerate`.
+/// The `MapGenStructure`s of a chunk provider: mineshafts, villages,
+/// strongholds and temples in the overworld, fortresses in the Nether.
 pub struct Structures {
-    pub gens: [Gen; 4],
+    pub gens: Vec<Gen>,
     seed: i64,
     /// `MapGenStronghold.structureCoords`
     pub stronghold_coords: Vec<(i32, i32)>,
@@ -1009,8 +1019,22 @@ impl Structures {
             map: StartMap::default(),
             checked: HashSet::new(),
         };
+        if provider.dim == -1 {
+            return Structures {
+                gens: vec![g(Type::Fortress)],
+                seed: provider.seed,
+                stronghold_coords: Vec::new(),
+            };
+        }
+        if provider.dim != 0 {
+            return Structures {
+                gens: Vec::new(),
+                seed: provider.seed,
+                stronghold_coords: Vec::new(),
+            };
+        }
         Structures {
-            gens: [
+            gens: vec![
                 g(Type::Mineshaft),
                 g(Type::Village),
                 g(Type::Stronghold),
@@ -1019,6 +1043,26 @@ impl Structures {
             seed: provider.seed,
             stronghold_coords: stronghold::find_coords(provider),
         }
+    }
+
+    /// `MapGenNetherBridge.hasStructureAt`: inside one of the pieces.
+    pub fn fortress_piece_at(&self, x: i32, y: i32, z: i32) -> bool {
+        self.gens
+            .iter()
+            .filter(|g| g.ty == Type::Fortress)
+            .any(|g| {
+                g.map
+                    .starts()
+                    .any(|s| s.bb.inside(x, y, z) && s.pieces.iter().any(|p| p.bb.inside(x, y, z)))
+            })
+    }
+
+    /// `MapGenStructure.isInsideStructureBounds` for fortresses.
+    pub fn fortress_bounds_at(&self, x: i32, y: i32, z: i32) -> bool {
+        self.gens
+            .iter()
+            .filter(|g| g.ty == Type::Fortress)
+            .any(|g| g.map.starts().any(|s| s.bb.inside(x, y, z)))
     }
 
     /// `func_151539_a` of each generator for the chunk being provided.
@@ -1062,6 +1106,8 @@ impl Structures {
                             .then(|| stronghold::start(&mut r, x, z)),
                         Type::Temple => scattered::can_spawn(provider, seed, x, z)
                             .then(|| scattered::start(provider, &mut r, x, z)),
+                        Type::Fortress => fortress::can_spawn(&mut r, seed, x, z)
+                            .then(|| fortress::start(&mut r, x, z)),
                     };
                     if let Some(s) = start {
                         g.map.insert(s);
@@ -1119,7 +1165,10 @@ impl Structures {
     /// `MapGenStructure.getNearestInstance` for strongholds (`/locate`, eyes).
     pub fn nearest_stronghold(&self, x: i32, y: i32, z: i32) -> Option<[i32; 3]> {
         let mut best: Option<(f64, [i32; 3])> = None;
-        for s in self.gens[2].map.starts() {
+        let Some(holds) = self.gens.iter().find(|g| g.ty == Type::Stronghold) else {
+            return None;
+        };
+        for s in holds.map.starts() {
             if s.sizeable {
                 if let Some(p) = s.pieces.first() {
                     let c = [p.bb.cx(), p.bb.cy(), p.bb.cz()];
@@ -1170,7 +1219,7 @@ impl Structures {
             .collect::<Option<Vec<_>>>()?;
         let mut it = v.iter();
         let mut gens: Vec<Vec<Start>> = Vec::new();
-        for _ in 0..4 {
+        for _ in 0..self.gens.len() {
             let n = *it.next()? as usize;
             let mut list = Vec::new();
             for _ in 0..n {
