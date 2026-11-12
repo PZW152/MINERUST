@@ -1545,7 +1545,10 @@ pub struct Mobs {
     pub fireballs: Vec<Fireball>,
     /// Explosions of other entities (`EntityMinecartTNT.explodeCart`), done
     /// in the next tick.
-    pub queued_explosions: Vec<([f64; 3], f32)>,
+    pub queued_explosions: Vec<crate::world::explosion::Request>,
+    /// Entities outside `Mobs` an explosion can reach (items, vehicles,
+    /// falling blocks), set by the owner before `tick`.
+    pub blast_targets: Vec<crate::world::explosion::Target>,
     next_id: u32,
     pub rand: JavaRandom,
 }
@@ -1560,6 +1563,7 @@ impl Default for Mobs {
             tnt: Vec::new(),
             fireballs: Vec::new(),
             queued_explosions: Vec::new(),
+            blast_targets: Vec::new(),
             next_id: 1,
             rand: JavaRandom::new(0x6D6F62),
         }
@@ -1575,7 +1579,9 @@ pub struct Outcome {
     pub drops: Vec<([f64; 3], Stack)>,
     pub sounds: Vec<(&'static str, [f64; 3], f32, f32)>,
     /// Explosions (centre, size) for particles and sound.
-    pub explosions: Vec<[f64; 4]>,
+    pub explosions: Vec<crate::world::explosion::View>,
+    /// What the explosions did to `Mobs::blast_targets`.
+    pub blasts: Vec<crate::world::explosion::Blast>,
     /// Particles for the client (portal, slime, heart, smoke).
     pub particles: Vec<Puff>,
     /// The mob that last hurt the player this tick.
@@ -1626,8 +1632,16 @@ impl Mobs {
     /// `new EntityTNTPrimed(world, x, y, z, placer)` at the block centre.
     /// `World.createExplosion(entity, x, y, z, size, true)` for an entity
     /// that is not a mob.
-    pub fn queue_explosion(&mut self, pos: [f64; 3], size: f32, _rails_survive: bool) {
-        self.queued_explosions.push((pos, size));
+    pub fn queue_explosion(&mut self, pos: [f64; 3], size: f32, ignited: bool) {
+        use crate::world::explosion::{Exploder, Request};
+        self.queued_explosions.push(Request {
+            pos,
+            size,
+            flaming: false,
+            smoking: true,
+            exploder: Exploder::Cart { ignited },
+            exclude: None,
+        });
     }
 
     pub fn prime_tnt(&mut self, pos: [f64; 3], fuse: i32) {
@@ -1828,7 +1842,7 @@ impl Mobs {
             .map(|m| m.pos)
             .collect();
         let mut new_arrows = Vec::new();
-        let mut explosions: Vec<([f64; 3], f32, bool, bool)> = Vec::new();
+        let mut explosions: Vec<crate::world::explosion::Request> = Vec::new();
         let mut balls: Vec<Fireball> = Vec::new();
         let others: Vec<Other> = self
             .list
@@ -1900,7 +1914,15 @@ impl Mobs {
                         }
                     }
                     if !f.small {
-                        explosions.push((at, 1.0, true, false));
+                        // EntityLargeFireball: newExplosion(null, ..., 1, true, mobGriefing)
+                        explosions.push(crate::world::explosion::Request {
+                            pos: at,
+                            size: 1.0,
+                            flaming: true,
+                            smoking: true,
+                            exploder: crate::world::explosion::Exploder::None,
+                            exclude: None,
+                        });
                     }
                 }
                 None if gone => {
@@ -1944,25 +1966,22 @@ impl Mobs {
             if f <= 0 {
                 let c = t.pos;
                 self.tnt.remove(k);
-                explosions.push((c, 4.0, false, false));
+                // EntityTNTPrimed.explode
+                explosions.push(crate::world::explosion::Request {
+                    pos: c,
+                    size: 4.0,
+                    flaming: false,
+                    smoking: true,
+                    exploder: crate::world::explosion::Exploder::Tnt,
+                    exclude: None,
+                });
             } else {
                 k += 1;
             }
         }
-        for (c, size) in std::mem::take(&mut self.queued_explosions) {
-            explosions.push((c, size, false, false));
-        }
-        for (c, size, fire, living) in explosions {
-            explode(
-                w,
-                self,
-                player,
-                c,
-                size,
-                fire,
-                if living { Some(c) } else { None },
-                out,
-            );
+        explosions.extend(std::mem::take(&mut self.queued_explosions));
+        for r in explosions {
+            explode(w, self, player, r, out);
         }
         // deaths
         let mut splits: Vec<([f64; 3], i32, f32)> = Vec::new();
@@ -2030,7 +2049,16 @@ impl Mobs {
             }
         }
         for c in blasts {
-            explode(w, self, player, c, 6.0, true, None, out);
+            // EntityEnderCrystal: createExplosion(null, ..., 6.0F, true)
+            let r = crate::world::explosion::Request {
+                pos: c,
+                size: 6.0,
+                flaming: false,
+                smoking: true,
+                exploder: crate::world::explosion::Exploder::None,
+                exclude: None,
+            };
+            explode(w, self, player, r, out);
         }
         for (pos, size, yaw) in splits {
             let id = self.next_id;
@@ -2690,7 +2718,7 @@ fn tick_mob(
     zombies: &[[f64; 3]],
     out: &mut Outcome,
     arrows: &mut Vec<Arrow>,
-    explosions: &mut Vec<([f64; 3], f32, bool, bool)>,
+    explosions: &mut Vec<crate::world::explosion::Request>,
     others: &[Other],
     strikes: &mut Vec<Strike>,
     balls: &mut Vec<Fireball>,
@@ -3297,7 +3325,7 @@ fn creeper(
     w: &mut ServerWorld,
     player: &PlayerInfo,
     out: &mut Outcome,
-    explosions: &mut Vec<([f64; 3], f32, bool, bool)>,
+    explosions: &mut Vec<crate::world::explosion::Request>,
 ) {
     let d2 = m.dist2(player.feet);
     let swelling = m.target_player && d2 < 9.0 && m.can_see(w, player.eye());
@@ -3327,7 +3355,14 @@ fn creeper(
     if m.fuse >= 30 {
         m.fuse = 30;
         // the creeper is the exploder (getExplosivePlacedBy)
-        explosions.push((m.pos, 3.0, false, true));
+        explosions.push(crate::world::explosion::Request {
+            pos: m.pos,
+            size: 3.0,
+            flaming: false,
+            smoking: true,
+            exploder: crate::world::explosion::Exploder::Living(m.pos),
+            exclude: Some(m.id),
+        });
         m.health = 0.0;
         m.death_time = 19;
         m.dead = true;
@@ -3454,150 +3489,119 @@ pub fn explosion_resistance(id: u8) -> f32 {
     (h * 5.0).max(explicit * 3.0) / 5.0
 }
 
-/// `Explosion.doExplosionA` + `doExplosionB(true)`
-#[allow(clippy::too_many_arguments)]
+/// `World.newExplosion`: `Explosion.doExplosionA` and the server's
+/// `doExplosionB(false)`, then `S27PacketExplosion` for the client.
 fn explode(
     w: &mut ServerWorld,
     mobs: &mut Mobs,
     player: &PlayerInfo,
-    c: [f64; 3],
-    size: f32,
-    flaming: bool,
-    exploder: Option<[f64; 3]>,
+    r: crate::world::explosion::Request,
     out: &mut Outcome,
 ) {
-    let r = &mut mobs.rand;
-    let mut hit: std::collections::BTreeSet<(i32, i32, i32)> = std::collections::BTreeSet::new();
-    for i in 0..16 {
-        for j in 0..16 {
-            for k in 0..16 {
-                if i == 0 || i == 15 || j == 0 || j == 15 || k == 0 || k == 15 {
-                    let mut d = [
-                        i as f64 / 15.0 * 2.0 - 1.0,
-                        j as f64 / 15.0 * 2.0 - 1.0,
-                        k as f64 / 15.0 * 2.0 - 1.0,
-                    ];
-                    let l = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
-                    for v in &mut d {
-                        *v /= l;
-                    }
-                    let mut f1 = size * (0.7 + r.next_float() * 0.6);
-                    let mut p = [c[0], c[1], c[2]];
-                    let step = 0.3f32;
-                    while f1 > 0.0 {
-                        let (bx, by, bz) = (
-                            math::floor_double(p[0]),
-                            math::floor_double(p[1]),
-                            math::floor_double(p[2]),
-                        );
-                        let id = w.block(bx, by, bz);
-                        if id != block::AIR {
-                            f1 -= (explosion_resistance(id) + 0.3) * step;
-                        }
-                        if f1 > 0.0 && (0..256).contains(&by) {
-                            hit.insert((bx, by, bz));
-                        }
-                        for a in 0..3 {
-                            p[a] += d[a] * step as f64;
-                        }
-                        f1 -= step * 0.75;
-                    }
-                }
-            }
-        }
-    }
-    // entity damage
-    let f = size * 2.0;
-    let apply = |pos: [f64; 3], eye: f64| -> Option<(f32, [f64; 3])> {
-        let dist = ((pos[0] - c[0]).powi(2) + (pos[1] - c[1]).powi(2) + (pos[2] - c[2]).powi(2))
-            .sqrt()
-            / f as f64;
-        if dist > 1.0 {
-            return None;
-        }
-        let (mut dx, mut dy, mut dz) = (pos[0] - c[0], pos[1] + eye - c[1], pos[2] - c[2]);
-        let l = (dx * dx + dy * dy + dz * dz).sqrt();
-        if l == 0.0 {
-            return None;
-        }
-        dx /= l;
-        dy /= l;
-        dz /= l;
-        let density = 1.0; // world.getBlockDensity approximated as unobstructed
-        let d10 = (1.0 - dist) * density;
-        let dmg = ((d10 * d10 + d10) / 2.0 * 8.0 * f as f64 + 1.0) as i32 as f32;
-        Some((dmg, [dx * d10, dy * d10, dz * d10]))
-    };
-    if player.attackable {
-        if let Some((dmg, k)) = apply(player.feet, 1.62) {
-            out.hits.push(Hit::Explosion {
-                amount: dmg,
-                knock: k,
-                from: exploder,
+    use crate::world::explosion::{self as ex, Target};
+    let mut targets: Vec<Target> = Vec::new();
+    // EntityPlayerMP: posY is the feet, getEyeHeight 0.12
+    targets.push(Target {
+        tag: ex::TAG_PLAYER,
+        pos: player.feet,
+        eye: 0.12f32 as f64,
+        bb: player.bb(),
+    });
+    for m in &mobs.list {
+        if Some(m.id) != r.exclude && m.death_time == 0 {
+            targets.push(Target {
+                tag: ex::TAG_MOB | m.id as u64,
+                pos: m.pos,
+                eye: m.kind.eye_height() as f64,
+                bb: m.bb,
             });
         }
     }
-    for t in mobs.tnt.iter_mut() {
-        if let Some((_, k)) = apply(t.pos, 0.0) {
-            for a in 0..3 {
-                t.motion[a] += k[a];
+    for (i, t) in mobs.tnt.iter().enumerate() {
+        let h = 0.49;
+        targets.push(Target {
+            tag: ex::TAG_TNT | i as u64,
+            pos: t.pos,
+            eye: 0.0,
+            bb: Aabb {
+                min: [t.pos[0] - h, t.pos[1] - h, t.pos[2] - h],
+                max: [t.pos[0] + h, t.pos[1] + h, t.pos[2] + h],
+            },
+        });
+    }
+    for (i, a) in mobs.arrows.iter().enumerate() {
+        targets.push(Target {
+            tag: ex::TAG_ARROW | i as u64,
+            pos: a.e.pos,
+            eye: 0.0,
+            bb: a.e.bb,
+        });
+    }
+    for (i, t) in mobs.throwables.iter().enumerate() {
+        targets.push(Target {
+            tag: ex::TAG_THROWABLE | i as u64,
+            pos: t.e.pos,
+            eye: 0.0,
+            bb: t.e.bb,
+        });
+    }
+    targets.extend(mobs.blast_targets.iter().copied());
+    let (affected, blasts) = ex::explosion_a(w, &r, &targets);
+    let from = match r.exploder {
+        ex::Exploder::Living(p) => Some(p),
+        _ => None,
+    };
+    for b in blasts {
+        let k = (b.tag & 0xFFFF_FFFF) as usize;
+        match b.tag & !0xFFFF_FFFF {
+            ex::TAG_PLAYER => out.hits.push(Hit::Explosion {
+                amount: b.damage,
+                knock: b.push,
+                from,
+            }),
+            ex::TAG_MOB => {
+                if let Some(m) = mobs.list.iter_mut().find(|m| m.id as usize == k) {
+                    m.damage(b.damage, None);
+                    for a in 0..3 {
+                        m.motion[a] += b.push[a];
+                    }
+                }
             }
+            ex::TAG_TNT => {
+                if let Some(t) = mobs.tnt.get_mut(k) {
+                    for a in 0..3 {
+                        t.motion[a] += b.push[a];
+                    }
+                }
+            }
+            ex::TAG_ARROW => {
+                if let Some(t) = mobs.arrows.get_mut(k) {
+                    for a in 0..3 {
+                        t.e.motion[a] += b.push[a];
+                    }
+                }
+            }
+            ex::TAG_THROWABLE => {
+                if let Some(t) = mobs.throwables.get_mut(k) {
+                    for a in 0..3 {
+                        t.e.motion[a] += b.push[a];
+                    }
+                }
+            }
+            _ => out.blasts.push(b),
         }
     }
-    for m in mobs.list.iter_mut() {
-        if let Some((dmg, k)) = apply(m.pos, m.kind.eye_height() as f64) {
-            m.damage(dmg, None);
-            for a in 0..3 {
-                m.motion[a] += k[a];
-            }
-        }
-    }
-    // blocks
-    let mut chain = Vec::new();
-    let r = &mut mobs.rand;
-    for &(x, y, z) in hit.iter() {
-        let id = w.block(x, y, z);
-        if id == block::AIR {
-            continue;
-        }
-        if block::material(id).is_liquid() {
-            continue;
-        }
-        let meta = w.meta(x, y, z);
-        if id == block::TNT {
-            // BlockTNT.onBlockDestroyedByExplosion: a short fuse, no drop.
-            w.set_block(x, y, z, block::AIR, 0, 3);
-            let fuse = w.rand.next_int_n(20) + 10;
-            chain.push(([x as f64 + 0.5, y as f64 + 0.5, z as f64 + 0.5], fuse));
-            continue;
-        }
-        if r.next_float() <= 1.0 / size {
-            for s in crate::item::drops(id, meta, r) {
-                out.drops
-                    .push(([x as f64 + 0.5, y as f64 + 0.5, z as f64 + 0.5], s));
-            }
-        }
-        w.set_block(x, y, z, block::AIR, 0, 3);
-    }
-    if flaming {
-        // Explosion.doExplosionB with isFlaming
-        for &(x, y, z) in hit.iter() {
-            if w.is_air(x, y, z)
-                && block::info(w.block(x, y - 1, z)).full_block
-                && r.next_int_n(3) == 0
-            {
-                w.set_block(x, y, z, block::FIRE, 0, 3);
-            }
-        }
-    }
-    out.explosions.push([c[0], c[1], c[2], size as f64]);
-    out.sounds.push((
-        "random.explode",
-        c,
-        4.0,
-        (1.0 + (r.next_float() - r.next_float()) * 0.2) * 0.7,
-    ));
-    for (p, fuse) in chain {
+    let mut rng = JavaRandom::new(mobs.rand.next_long());
+    let res = ex::explosion_b(w, &r, &affected, &mut rng);
+    out.sounds.push(("random.explode", r.pos, 4.0, res.pitch));
+    out.explosions.push(ex::View {
+        pos: r.pos,
+        size: r.size,
+        smoking: r.smoking,
+        // WorldServer.newExplosion: cleared unless isSmoking
+        blocks: if r.smoking { affected } else { Vec::new() },
+    });
+    for (p, fuse) in res.tnt {
         mobs.prime_tnt(p, fuse);
     }
 }

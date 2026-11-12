@@ -144,8 +144,9 @@ pub enum CartOut {
     /// `EntityItem` spawned with the container's scatter: position and
     /// motion.
     Scatter([f64; 3], [f64; 3], Stack),
-    /// `World.createExplosion(this, x, y, z, size, true)`
-    Explode([f64; 3], f32),
+    /// `World.createExplosion(this, x, y, z, size, true)`, and whether the
+    /// cart was ignited (`isIgnited`, which spares rails)
+    Explode([f64; 3], f32, bool),
     /// `playSoundAtEntity`
     Sound(&'static str, f32, f32),
     /// `setEntityState(10)`: the client's cart is ignited.
@@ -420,7 +421,7 @@ impl Minecart {
             d = 5.0;
         }
         let size = (4.0 + self.e.rand.next_double() * 1.5 * d) as f32;
-        out.push(CartOut::Explode(self.e.pos, size));
+        out.push(CartOut::Explode(self.e.pos, size, self.fuse > -1));
         self.e.dead = true;
     }
 

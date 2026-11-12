@@ -21,8 +21,7 @@
       一般／箱子／動力（煤、推力）／TNT（引信、撞擊與摔落爆炸、`setEntityState(10)`）礦車、`ItemMinecart`、
       礦車互撞與推動生物（空礦車載走生物）、偵測鐵軌、`RenderMinecart`（沿鐵軌的傾斜與 `getPosOffset`、顯示方塊）、
       礦井的箱子礦車、存檔
-- [ ] 礦車：漏斗礦車的吸取（等漏斗方塊）、指令方塊與生怪磚礦車、觸發鐵軌（157）、點燃的 TNT 礦車爆炸時保住鐵軌
-      （`Explosion` 的 `func_145772_a` 鉤子）、`MovingSoundMinecart` / `...Riding` 的連續音效、騎乘中的生物存檔（`Riding`）
+- [ ] 礦車：漏斗礦車的吸取（等漏斗方塊）、指令方塊與生怪磚礦車、觸發鐵軌（157）、`MovingSoundMinecart` / `...Riding` 的連續音效、騎乘中的生物存檔（`Riding`）
 - [ ] 騎乘：馬（跳躍、鞍、馬鎧、箱子、馬的物品欄）、豬＋鞍＋胡蘿蔔釣竿
 - [ ] 傳送門建造時的中繼值與原版一致
 - [ ] 實體（生物、掉落物、箭、礦車）穿越傳送門 `Entity.travelToDimension`
@@ -30,7 +29,13 @@
 - [ ] 雙層植物上半燒掉時的掉落行為放到 `--vanilla-parity` 開關後
 - [x] 掉落物：`EntityItem` 逐行重寫（`pushOutOfBlocks`、水流、岩漿燃燒、合併、撿拾音效與飛向玩家的動畫）
 - [x] `EntityArrow` 逐行移植（`World.rayTraceBlocks`、`collisionRayTrace` 含樓梯八格、`calculateIntercept`、撿回、燃燒箭點燃 TNT）
-- [ ] 爆炸的 `getBlockDensity` 當成無遮蔽
+- [x] `Explosion` 逐行移植：世界亂數的射線、`exploder` 的抗性鉤子（點燃的 TNT 礦車保住鐵軌）、Java 8
+      `HashSet<ChunkPosition>` 的迭代順序、`getBlockDensity`、所有實體（玩家眼高 0.12、創造模式也會被推、掉落物、
+      船、礦車、箭、投擲物、落沙）、`doExplosionB(false)` 的掉落機率與連鎖 TNT、客戶端 `doExplosionB(true)` 的粒子；
+      終界水晶的爆炸改回不起火
+- [ ] 方塊掉落表：每種方塊的 `quantityDropped` / `getItemDropped` / `damageDropped` 逐一移植（目前 `item::drops`
+      先算出全部掉落物，亂數順序與原版不同）
+- [ ] 苦力怕：閃電劈中變成高壓苦力怕（爆炸半徑 6）、`mobGriefing` 規則
 - [ ] GUI 漸層用兩個矩形近似（`drawGradientRect`）
 
 ## B. 缺少的方塊（28 種）

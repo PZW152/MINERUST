@@ -1039,12 +1039,7 @@ impl Game {
                 }
                 Event::Explosions(list) => {
                     for e in list {
-                        let c = [e[0], e[1], e[2]];
-                        if e[3] >= 2.0 {
-                            self.particles.huge_explosion(c);
-                        } else {
-                            self.particles.large_explode(c, 1.0);
-                        }
+                        self.explosion_b(e);
                     }
                 }
                 Event::Weather(w) => self.weather = w,
@@ -1741,6 +1736,9 @@ impl Game {
                     self.particles.item_break(p, rect);
                 }
             }
+            "largeexplode" => self.particles.large_explode(p, 1.0),
+            "hugeexplosion" => self.particles.huge_explosion(p),
+            "explode" => self.particles.explode(p, m),
             "splash" => self.particles.splash(p, m),
             "reddust" => self
                 .particles

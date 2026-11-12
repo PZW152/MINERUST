@@ -391,6 +391,11 @@ impl Sim {
         self.play = play;
     }
 
+    /// `cart_outs` for the rest of the sim.
+    pub(super) fn vehicle_outs(&mut self, play: &mut Play, i: usize, outs: Vec<CartOut>) {
+        self.cart_outs(play, i, outs);
+    }
+
     /// The results of a minecart's tick or hit.
     fn cart_outs(&mut self, play: &mut Play, i: usize, outs: Vec<CartOut>) {
         let id = play.vehicles[i].v.id();
@@ -407,7 +412,7 @@ impl Sim {
                     it.e.motion = m;
                     play.items.push(it);
                 }
-                CartOut::Explode(p, size) => self.mobs.queue_explosion(p, size, true),
+                CartOut::Explode(p, size, ignited) => self.mobs.queue_explosion(p, size, ignited),
                 CartOut::Sound(n, v, pi) => self.vehicle_sounds.push((n, pos, v, pi)),
                 CartOut::Ignited => self
                     .vehicle_events

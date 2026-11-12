@@ -527,6 +527,15 @@ impl Play {
                 );
                 self.spawn(it);
             }
+            GenEntity::ScatteredItem { pos, stack } => {
+                let id = self.next_item;
+                self.next_item += 1;
+                let mut pr = std::mem::replace(&mut self.prand, JavaRandom::new(0));
+                let mut it = ItemEntity::new(id, stack, pos, &mut pr);
+                self.prand = pr;
+                it.pickup_delay = 10;
+                self.spawn(it);
+            }
             GenEntity::MinecartChest { pos, slots } => {
                 use crate::entity::minecart::{CartKind, Minecart};
                 let id = crate::entity::vehicle::VEHICLE_ID | self.next_item;

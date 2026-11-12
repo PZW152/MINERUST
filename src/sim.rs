@@ -130,7 +130,8 @@ pub enum Event {
     Hits(Vec<crate::entity::mob::Hit>),
     /// Sounds: name, position, volume, pitch.
     Sounds(Vec<(&'static str, [f64; 3], f32, f32)>),
-    Explosions(Vec<[f64; 4]>),
+    /// `S27PacketExplosion`s
+    Explosions(Vec<crate::world::explosion::View>),
     Weather(Weather),
     /// Primed TNT near the player: position, previous position, fuse.
     Tnt(Vec<([f64; 3], [f64; 3], i32)>),
@@ -2548,6 +2549,69 @@ impl Sim {
     }
 
     /// Mob AI, spawning and despawning, and what the client must hear of it.
+    /// `attackEntityFrom(explosion)` and the push for the entities outside
+    /// `Mobs` an explosion reached.
+    fn apply_blasts(&mut self, play: &mut Play, blasts: Vec<crate::world::explosion::Blast>) {
+        use crate::entity::vehicle::Vehicle;
+        use crate::world::explosion::{TAG_FALLING, TAG_ITEM, TAG_VEHICLE};
+        for b in blasts {
+            let id = (b.tag & 0xFFFF_FFFF) as u32;
+            match b.tag & !0xFFFF_FFFF {
+                TAG_ITEM => {
+                    if let Some(it) = play.items.iter_mut().find(|i| i.id == id) {
+                        it.attack(None, true, b.damage);
+                        for a in 0..3 {
+                            it.e.motion[a] += b.push[a];
+                        }
+                    }
+                }
+                TAG_FALLING => {
+                    if let Some(f) = play.falling.iter_mut().find(|f| f.id == id) {
+                        for a in 0..3 {
+                            f.e.motion[a] += b.push[a];
+                        }
+                    }
+                }
+                TAG_VEHICLE => {
+                    let Some(i) = play.vehicles.iter().position(|v| v.v.id() == id) else {
+                        continue;
+                    };
+                    let mut outs = Vec::new();
+                    let mut broke = None;
+                    match &mut play.vehicles[i].v {
+                        Vehicle::Boat(boat) => broke = boat.attack(b.damage, false),
+                        Vehicle::Cart(c) => c.attack(b.damage, false, true, false, &mut outs),
+                    }
+                    {
+                        let e = play.vehicles[i].v.e_mut();
+                        for a in 0..3 {
+                            e.motion[a] += b.push[a];
+                        }
+                    }
+                    if let Some(drop) = broke {
+                        if drop {
+                            let p = play.vehicles[i].v.e().pos;
+                            let nid = play.next_item;
+                            play.next_item += 1;
+                            let mut r = std::mem::replace(&mut play.prand, JavaRandom::new(0));
+                            let mut it = crate::entity::item::ItemEntity::new(
+                                nid,
+                                crate::item::Stack::new(333, 0, 1),
+                                p,
+                                &mut r,
+                            );
+                            play.prand = r;
+                            it.pickup_delay = 10;
+                            play.items.push(it);
+                        }
+                    }
+                    self.vehicle_outs(play, i, outs);
+                }
+                _ => {}
+            }
+        }
+    }
+
     fn tick_mobs(&mut self, play: &mut Play, events: &mut Vec<Event>) {
         use crate::entity::mob;
         let (feet, yaw) = play.player;
@@ -2577,7 +2641,53 @@ impl Sim {
         self.world.moon_factor = [1.0, 0.75, 0.5, 0.25, 0.0, 0.25, 0.5, 0.75]
             [((self.world_time / 24000 % 8 + 8) % 8) as usize];
         let mut out = mob::Outcome::default();
+        {
+            // entities an explosion in the mobs' tick can reach
+            use crate::world::explosion::{Target, TAG_FALLING, TAG_ITEM, TAG_VEHICLE};
+            let mut t = Vec::new();
+            for it in &play.items {
+                t.push(Target {
+                    tag: TAG_ITEM | it.id as u64,
+                    pos: it.e.pos,
+                    eye: 0.0,
+                    bb: it.bb(),
+                });
+            }
+            for f in &play.falling {
+                t.push(Target {
+                    tag: TAG_FALLING | f.id as u64,
+                    pos: f.e.pos,
+                    eye: 0.0,
+                    bb: f.e.bb,
+                });
+            }
+            for v in &play.vehicles {
+                t.push(Target {
+                    tag: TAG_VEHICLE | v.v.id() as u64,
+                    pos: v.v.e().pos,
+                    eye: 0.0,
+                    bb: v.v.e().bb,
+                });
+            }
+            self.mobs.blast_targets = t;
+        }
         self.mobs.tick(&mut self.world, &info, &mut out);
+        self.mobs.blast_targets.clear();
+        self.apply_blasts(play, std::mem::take(&mut out.blasts));
+        // the explosions' drops spawn now, as spawnEntityInWorld does
+        {
+            use crate::world::server::GenEntity;
+            let mut rest = Vec::new();
+            let mut rnd = std::mem::replace(&mut self.world.rand, JavaRandom::new(0));
+            for e in std::mem::take(&mut self.world.gen_entities) {
+                match e {
+                    GenEntity::ScatteredItem { .. } => play.add_gen_entity(e, &mut rnd),
+                    other => rest.push(other),
+                }
+            }
+            self.world.rand = rnd;
+            self.world.gen_entities = rest;
+        }
         let animals = self.world.total_time % 400 == 0;
         mob::natural_spawning(&mut self.world, &mut self.mobs, feet, self.spawn, animals);
         mob::village_golems(&mut self.world, &mut self.mobs);
@@ -3809,6 +3919,48 @@ mod tests {
         };
         let e = crate::potion::effects_of(slots[0].unwrap().meta, false);
         assert_eq!(e[0].id, crate::potion::MOVE_SPEED);
+    }
+
+    /// Explosion.doExplosionA: World.getBlockDensity shields a player
+    /// behind obsidian; TNT breaks the platform and primes the TNT next to it.
+    #[test]
+    fn explosions_follow_block_density() {
+        let run = |wall: bool| -> (f32, bool, usize) {
+            let (mut sim, x, y, z) = redstone_sim();
+            sim.play.mode = GameMode::Survival;
+            let feet = [x as f64 + 4.5, y as f64, z as f64 + 0.5];
+            if wall {
+                for dy in 0..4 {
+                    for dx in 0..9 {
+                        sim.world
+                            .set_block(x + dx, y + dy, z + 2, block::OBSIDIAN, 0, 3);
+                    }
+                }
+            }
+            sim.world.set_block(x + 4, y, z + 6, block::TNT, 0, 3);
+            for _ in 0..2 {
+                sim.step(&[Command::Player(feet, [0.0, 0.0], false)], &mut Vec::new());
+            }
+            sim.splayer.living.health = 20.0;
+            sim.mobs
+                .prime_tnt([x as f64 + 4.5, y as f64 + 0.5, z as f64 + 5.5], 0);
+            let mut ev = Vec::new();
+            for _ in 0..3 {
+                sim.step(&[Command::Player(feet, [0.0, 0.0], false)], &mut ev);
+            }
+            let broke = sim.world.block(x + 4, y - 1, z + 5) == block::AIR;
+            let chained = sim.mobs.tnt.len();
+            (20.0 - sim.splayer.living.health, broke, chained)
+        };
+        let (open, broke, chained) = run(false);
+        let (shielded, _, _) = run(true);
+        assert!(broke, "the platform under the TNT is gone");
+        assert_eq!(chained, 1, "the TNT beside it was primed");
+        assert!(open > shielded, "open {open} vs behind obsidian {shielded}");
+        assert!(
+            shielded <= 1.5,
+            "only the +1 of (int)(...+1.0) gets through: {shielded}"
+        );
     }
 
     /// ItemMinecart.onItemUse puts a cart on a rail; moveOnRail keeps it on

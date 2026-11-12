@@ -374,4 +374,42 @@ impl Game {
             }
         }
     }
+
+    /// `S27PacketExplosion`: the client's `Explosion.doExplosionB(true)`.
+    pub(super) fn explosion_b(&mut self, e: crate::world::explosion::View) {
+        let c = e.pos;
+        let r = &mut self.particle_rand;
+        let pitch = (1.0 + (r.next_float() - r.next_float()) * 0.2) * 0.7;
+        self.sound("random.explode", Some(c), 4.0, pitch);
+        if e.size >= 2.0 && e.smoking {
+            self.particles.huge_explosion(c);
+        } else {
+            self.particles.large_explode(c, 1.0);
+        }
+        if e.smoking {
+            for [x, y, z] in e.blocks {
+                let r = &mut self.particle_rand;
+                let px = x as f64 + r.next_float() as f64;
+                let py = y as f64 + r.next_float() as f64;
+                let pz = z as f64 + r.next_float() as f64;
+                let mut d = [px - c[0], py - c[1], pz - c[2]];
+                let l = math::sqrt_double(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]) as f64;
+                for v in &mut d {
+                    *v /= l;
+                }
+                let mut k = 0.5 / (l / e.size as f64 + 0.1);
+                k *= (r.next_float() * r.next_float() + 0.3) as f64;
+                for v in &mut d {
+                    *v *= k;
+                }
+                self.particles
+                    .explode([(px + c[0]) / 2.0, (py + c[1]) / 2.0, (pz + c[2]) / 2.0], d);
+                self.particles.smoke([px, py, pz], d, false);
+                // setBlock(air) on the client
+                if self.world.peek_block(x, y, z) != block::AIR {
+                    self.world.set_local(x, y, z, block::AIR, 0);
+                }
+            }
+        }
+    }
 }

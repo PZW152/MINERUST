@@ -454,6 +454,12 @@ pub enum GenEntity {
         pos: [f64; 3],
         stack: crate::item::Stack,
     },
+    /// `Block.dropBlockAsItem_do` with its offset already drawn from the
+    /// world's random: the `EntityItem`'s position.
+    ScatteredItem {
+        pos: [f64; 3],
+        stack: crate::item::Stack,
+    },
     /// `EntityFallingBlock` from `BlockFalling.tryFall`.
     FallingBlock {
         pos: [f64; 3],

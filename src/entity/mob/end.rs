@@ -327,7 +327,7 @@ pub fn dragon(
                 bb.min[1] + (bb.max[1] - bb.min[1]) * m.rand.next_float() as f64,
                 bb.min[2] + (bb.max[2] - bb.min[2]) * m.rand.next_float() as f64,
             ];
-            out.explosions.push([p[0], p[1], p[2], 1.0]);
+            out.particles.push(("largeexplode", p, [0.0; 3]));
         }
     }
     m.hanging = slowed;
@@ -352,7 +352,7 @@ pub fn dragon_dying(m: &mut Mob, w: &mut ServerWorld, out: &mut Outcome) -> bool
             m.pos[1] + 2.0 + ((r.next_float() - 0.5) * 4.0) as f64,
             m.pos[2] + ((r.next_float() - 0.5) * 8.0) as f64,
         ];
-        out.explosions.push([p[0], p[1], p[2], 4.0]);
+        out.particles.push(("hugeexplosion", p, [0.0; 3]));
     }
     if t > 150 && t % 5 == 0 {
         out.hits.push(Hit::Xp(1000));
