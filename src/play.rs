@@ -396,8 +396,9 @@ impl Play {
             GenEntity::FallingBlock { pos, block, meta } => {
                 let id = self.next_item;
                 self.next_item += 1;
-                self.falling
-                    .push(crate::entity::falling::FallingBlock::new(id, pos, block, meta));
+                self.falling.push(crate::entity::falling::FallingBlock::new(
+                    id, pos, block, meta,
+                ));
             }
             GenEntity::Item { pos, stack } => {
                 let id = self.next_item;
@@ -1554,10 +1555,16 @@ impl Play {
         tmp.falling = falling.to_vec();
         let mut keys = std::collections::BTreeSet::new();
         for e in &tmp.items {
-            keys.insert(((e.e.pos[0].floor() as i32) >> 4, (e.e.pos[2].floor() as i32) >> 4));
+            keys.insert((
+                (e.e.pos[0].floor() as i32) >> 4,
+                (e.e.pos[2].floor() as i32) >> 4,
+            ));
         }
         for f in &tmp.falling {
-            keys.insert(((f.e.pos[0].floor() as i32) >> 4, (f.e.pos[2].floor() as i32) >> 4));
+            keys.insert((
+                (f.e.pos[0].floor() as i32) >> 4,
+                (f.e.pos[2].floor() as i32) >> 4,
+            ));
         }
         let mut list = Vec::new();
         for (cx, cz) in keys {

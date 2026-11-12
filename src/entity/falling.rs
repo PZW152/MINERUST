@@ -81,7 +81,12 @@ impl FallingBlock {
     }
 
     /// `EntityFallingBlock.onUpdate`. Items it drops go to `drops`.
-    pub fn tick(&mut self, w: &mut ServerWorld, drops: &mut Vec<([f64; 3], Stack)>, fx: &mut Vec<Fx>) {
+    pub fn tick(
+        &mut self,
+        w: &mut ServerWorld,
+        drops: &mut Vec<([f64; 3], Stack)>,
+        fx: &mut Vec<Fx>,
+    ) {
         if block::material(self.block) == Material::Air {
             self.e.dead = true;
             return;
@@ -130,7 +135,8 @@ impl FallingBlock {
                 // World.canPlaceEntityOnSide(block, x, y, z, true, 1, null, null)
                 let here = w.block(x, y, z);
                 let placeable = (block::material(here) == Material::Circuits && self.block == 145)
-                    || (block::material(here).replaceable() && w.can_place_block_at(self.block, x, y, z));
+                    || (block::material(here).replaceable()
+                        && w.can_place_block_at(self.block, x, y, z));
                 if !self.broken
                     && placeable
                     && !w.can_fall_below(x, y - 1, z)
@@ -138,20 +144,27 @@ impl FallingBlock {
                 {
                     // BlockAnvil.func_149828_a: the landing sound
                     if self.block == 145 {
-                        w.redstone_effects.push(crate::world::redstone::Effect::Sound(
-                            "random.anvil_land",
-                            [x as f64 + 0.5, y as f64 + 0.5, z as f64 + 0.5],
-                            0.3,
-                            w.rand.next_float() * 0.1 + 0.9,
-                        ));
+                        w.redstone_effects
+                            .push(crate::world::redstone::Effect::Sound(
+                                "random.anvil_land",
+                                [x as f64 + 0.5, y as f64 + 0.5, z as f64 + 0.5],
+                                0.3,
+                                w.rand.next_float() * 0.1 + 0.9,
+                            ));
                     }
                 } else if self.drop_item && !self.broken {
-                    drops.push((self.e.pos, Stack::new(self.block as u16, self.damage_dropped(), 1)));
+                    drops.push((
+                        self.e.pos,
+                        Stack::new(self.block as u16, self.damage_dropped(), 1),
+                    ));
                 }
             }
         } else if (self.fall_time > 100 && !(1..=256).contains(&y)) || self.fall_time > 600 {
             if self.drop_item {
-                drops.push((self.e.pos, Stack::new(self.block as u16, self.damage_dropped(), 1)));
+                drops.push((
+                    self.e.pos,
+                    Stack::new(self.block as u16, self.damage_dropped(), 1),
+                ));
             }
             self.e.dead = true;
         }
@@ -164,7 +177,8 @@ impl FallingBlock {
             if n > 0 {
                 // getEntitiesWithinAABBExcludingEntity(this, boundingBox) take
                 // min(floor(n * fallHurtAmount), fallHurtMax)
-                let amount = (math::floor_float(n as f32 * self.fall_hurt_amount)).min(self.fall_hurt_max);
+                let amount =
+                    (math::floor_float(n as f32 * self.fall_hurt_amount)).min(self.fall_hurt_max);
                 self.hurt = Some((self.e.bb, amount as f32));
             }
             if n > 0

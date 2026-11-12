@@ -479,7 +479,11 @@ pub fn static_boxes(id: u8, meta: u8) -> Vec<Bx> {
         block::CAULDRON => vec![FULL],
         block::TRAPDOOR => vec![trapdoor(meta)],
         // BlockPortal.setBlockBoundsBasedOnState: axis 1 spans x, 2 spans z
-        block::PORTAL => vec![portal_bounds(if meta & 3 == 0 { 2 } else { (meta & 3) as i32 })],
+        block::PORTAL => vec![portal_bounds(if meta & 3 == 0 {
+            2
+        } else {
+            (meta & 3) as i32
+        })],
         block::END_PORTAL => vec![[0.0, 0.0, 0.0, 1.0, 0.75, 1.0]],
         block::DRAGON_EGG => vec![[0.0625, 0.0, 0.0625, 0.9375, 1.0, 0.9375]],
         block::PISTON_HEAD => piston_head(meta),

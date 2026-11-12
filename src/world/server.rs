@@ -2434,7 +2434,9 @@ impl ServerWorld {
     /// `BlockFalling.tryFall` (`func_149830_m`)
     fn try_fall(&mut self, id: u8, x: i32, mut y: i32, z: i32) {
         if self.can_fall_below(x, y - 1, z) && y >= 0 {
-            if self.fall_instantly || !self.check_chunks_exist(x - 32, y - 32, z - 32, x + 32, y + 32, z + 32) {
+            if self.fall_instantly
+                || !self.check_chunks_exist(x - 32, y - 32, z - 32, x + 32, y + 32, z + 32)
+            {
                 self.set_air(x, y, z);
                 while self.can_fall_below(x, y - 1, z) && y > 0 {
                     y -= 1;
@@ -2446,7 +2448,11 @@ impl ServerWorld {
             } else {
                 let meta = self.meta(x, y, z);
                 self.gen_entities.push(GenEntity::FallingBlock {
-                    pos: [x as f64 + 0.5f32 as f64, y as f64 + 0.5f32 as f64, z as f64 + 0.5f32 as f64],
+                    pos: [
+                        x as f64 + 0.5f32 as f64,
+                        y as f64 + 0.5f32 as f64,
+                        z as f64 + 0.5f32 as f64,
+                    ],
                     block: id,
                     meta,
                 });

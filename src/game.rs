@@ -669,7 +669,8 @@ impl Game {
                     for (i, &b) in chunk.data.blocks.iter().enumerate() {
                         if b == block::END_PORTAL {
                             // index ((x << 4 | z) << 8) | y
-                            let (x, z, y) = ((i >> 12) as i32, (i >> 8 & 15) as i32, (i & 255) as i32);
+                            let (x, z, y) =
+                                ((i >> 12) as i32, (i >> 8 & 15) as i32, (i & 255) as i32);
                             portals.push([key.0 * 16 + x, y, key.1 * 16 + z]);
                         }
                     }

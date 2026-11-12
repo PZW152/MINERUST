@@ -317,8 +317,16 @@ impl Atlas {
             let size = img.w.min(img.h);
             Ok(b.add(crop(&img, 0, 0, size), size))
         };
-        let end_portal = whole(&mut b, jar, "assets/minecraft/textures/entity/end_portal.png")?;
-        let end_sky = whole(&mut b, jar, "assets/minecraft/textures/environment/end_sky.png")?;
+        let end_portal = whole(
+            &mut b,
+            jar,
+            "assets/minecraft/textures/entity/end_portal.png",
+        )?;
+        let end_sky = whole(
+            &mut b,
+            jar,
+            "assets/minecraft/textures/environment/end_sky.png",
+        )?;
         let mut moon = [0u16; 8];
         {
             let img = read_png(jar, "assets/minecraft/textures/environment/moon_phases.png")?;

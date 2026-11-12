@@ -15,6 +15,7 @@ mod item_table;
 mod java;
 mod particles;
 mod play;
+mod potion;
 mod render;
 mod screens;
 mod shapes;

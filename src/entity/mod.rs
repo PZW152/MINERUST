@@ -2,6 +2,7 @@ pub mod base;
 pub mod collide;
 pub mod falling;
 pub mod item;
+pub mod living;
 pub mod mob;
 pub mod path;
 pub mod player;

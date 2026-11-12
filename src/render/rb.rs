@@ -287,7 +287,11 @@ impl<'a, 'b> Rb<'a, 'b> {
 
     /// `getBlockIconFromSideAndMetadata`
     pub fn side_icon(&self, side: i32) -> Icon {
-        Icon::new(self.atlas().tile(self.id, self.meta as u8, side as usize).unwrap_or([0.0; 4]))
+        Icon::new(
+            self.atlas()
+                .tile(self.id, self.meta as u8, side as usize)
+                .unwrap_or([0.0; 4]),
+        )
     }
 
     fn block_at(&self, x: i32, y: i32, z: i32) -> u8 {
@@ -517,7 +521,17 @@ impl<'a, 'b> Rb<'a, 'b> {
 
     /// `RenderBlocks.mixAoBrightness`
     #[allow(clippy::too_many_arguments)]
-    fn mixAoBrightness(&self, a: i32, b: i32, c: i32, d: i32, e: f64, f: f64, g: f64, h: f64) -> i32 {
+    fn mixAoBrightness(
+        &self,
+        a: i32,
+        b: i32,
+        c: i32,
+        d: i32,
+        e: f64,
+        f: f64,
+        g: f64,
+        h: f64,
+    ) -> i32 {
         let hi = ((a >> 16 & 255) as f64 * e
             + (b >> 16 & 255) as f64 * f
             + (c >> 16 & 255) as f64 * g
@@ -555,8 +569,22 @@ impl<'a, 'b> Rb<'a, 'b> {
     }
 
     /// `RenderBlocks.renderStandardBlockWithAmbientOcclusion`
-    #[allow(unused_assignments, unused_mut, unused_variables, unused_parens, clippy::all)]
-    pub fn std_ao(&mut self, mut var2: i32, mut var3: i32, mut var4: i32, var5: f32, var6: f32, var7: f32) -> bool {
+    #[allow(
+        unused_assignments,
+        unused_mut,
+        unused_variables,
+        unused_parens,
+        clippy::all
+    )]
+    pub fn std_ao(
+        &mut self,
+        mut var2: i32,
+        mut var3: i32,
+        mut var4: i32,
+        var5: f32,
+        var6: f32,
+        var7: f32,
+    ) -> bool {
         self.enableAO = true;
         let mut var8: bool = false;
         let mut var9: f32 = 0.0f32;
@@ -623,14 +651,50 @@ impl<'a, 'b> Rb<'a, 'b> {
                 var20 = self.mixed(var2, var3 - 1, var4);
             }
             let mut var21: f32 = self.ao_light(var2, var3 - 1, var4);
-            var9 = (self.aoLightValueScratchXYZNNP + self.aoLightValueScratchXYNN + self.aoLightValueScratchYZNP + var21) / 4.0f32;
-            var12 = (self.aoLightValueScratchYZNP + var21 + self.aoLightValueScratchXYZPNP + self.aoLightValueScratchXYPN) / 4.0f32;
-            var11 = (var21 + self.aoLightValueScratchYZNN + self.aoLightValueScratchXYPN + self.aoLightValueScratchXYZPNN) / 4.0f32;
-            var10 = (self.aoLightValueScratchXYNN + self.aoLightValueScratchXYZNNN + var21 + self.aoLightValueScratchYZNN) / 4.0f32;
-            self.brightnessTopLeft = self.getAoBrightness(self.aoBrightnessXYZNNP, self.aoBrightnessXYNN, self.aoBrightnessYZNP, var20);
-            self.brightnessTopRight = self.getAoBrightness(self.aoBrightnessYZNP, self.aoBrightnessXYZPNP, self.aoBrightnessXYPN, var20);
-            self.brightnessBottomRight = self.getAoBrightness(self.aoBrightnessYZNN, self.aoBrightnessXYPN, self.aoBrightnessXYZPNN, var20);
-            self.brightnessBottomLeft = self.getAoBrightness(self.aoBrightnessXYNN, self.aoBrightnessXYZNNN, self.aoBrightnessYZNN, var20);
+            var9 = (self.aoLightValueScratchXYZNNP
+                + self.aoLightValueScratchXYNN
+                + self.aoLightValueScratchYZNP
+                + var21)
+                / 4.0f32;
+            var12 = (self.aoLightValueScratchYZNP
+                + var21
+                + self.aoLightValueScratchXYZPNP
+                + self.aoLightValueScratchXYPN)
+                / 4.0f32;
+            var11 = (var21
+                + self.aoLightValueScratchYZNN
+                + self.aoLightValueScratchXYPN
+                + self.aoLightValueScratchXYZPNN)
+                / 4.0f32;
+            var10 = (self.aoLightValueScratchXYNN
+                + self.aoLightValueScratchXYZNNN
+                + var21
+                + self.aoLightValueScratchYZNN)
+                / 4.0f32;
+            self.brightnessTopLeft = self.getAoBrightness(
+                self.aoBrightnessXYZNNP,
+                self.aoBrightnessXYNN,
+                self.aoBrightnessYZNP,
+                var20,
+            );
+            self.brightnessTopRight = self.getAoBrightness(
+                self.aoBrightnessYZNP,
+                self.aoBrightnessXYZPNP,
+                self.aoBrightnessXYPN,
+                var20,
+            );
+            self.brightnessBottomRight = self.getAoBrightness(
+                self.aoBrightnessYZNN,
+                self.aoBrightnessXYPN,
+                self.aoBrightnessXYZPNN,
+                var20,
+            );
+            self.brightnessBottomLeft = self.getAoBrightness(
+                self.aoBrightnessXYNN,
+                self.aoBrightnessXYZNNN,
+                self.aoBrightnessYZNN,
+                var20,
+            );
             if var13 {
                 self.colorRedTopRight = var5 * 0.5f32;
                 self.colorRedBottomRight = self.colorRedTopRight;
@@ -670,7 +734,12 @@ impl<'a, 'b> Rb<'a, 'b> {
             self.colorRedTopRight = self.colorRedTopRight * (var12);
             self.colorGreenTopRight = self.colorGreenTopRight * (var12);
             self.colorBlueTopRight = self.colorBlueTopRight * (var12);
-            self.face_y_neg((var2 as f64), (var3 as f64), (var4 as f64), self.icon(var2, var3, var4, 0));
+            self.face_y_neg(
+                (var2 as f64),
+                (var3 as f64),
+                (var4 as f64),
+                self.icon(var2, var3, var4, 0),
+            );
             var8 = true;
         }
         if self.renderAllFaces || self.should_side(var2, var3 + 1, var4, 1) {
@@ -725,14 +794,50 @@ impl<'a, 'b> Rb<'a, 'b> {
                 var67 = self.mixed(var2, var3 + 1, var4);
             }
             let mut var72: f32 = self.ao_light(var2, var3 + 1, var4);
-            var12 = (self.aoLightValueScratchXYZNPP + self.aoLightValueScratchXYNP + self.aoLightValueScratchYZPP + var72) / 4.0f32;
-            var9 = (self.aoLightValueScratchYZPP + var72 + self.aoLightValueScratchXYZPPP + self.aoLightValueScratchXYPP) / 4.0f32;
-            var10 = (var72 + self.aoLightValueScratchYZPN + self.aoLightValueScratchXYPP + self.aoLightValueScratchXYZPPN) / 4.0f32;
-            var11 = (self.aoLightValueScratchXYNP + self.aoLightValueScratchXYZNPN + var72 + self.aoLightValueScratchYZPN) / 4.0f32;
-            self.brightnessTopRight = self.getAoBrightness(self.aoBrightnessXYZNPP, self.aoBrightnessXYNP, self.aoBrightnessYZPP, var67);
-            self.brightnessTopLeft = self.getAoBrightness(self.aoBrightnessYZPP, self.aoBrightnessXYZPPP, self.aoBrightnessXYPP, var67);
-            self.brightnessBottomLeft = self.getAoBrightness(self.aoBrightnessYZPN, self.aoBrightnessXYPP, self.aoBrightnessXYZPPN, var67);
-            self.brightnessBottomRight = self.getAoBrightness(self.aoBrightnessXYNP, self.aoBrightnessXYZNPN, self.aoBrightnessYZPN, var67);
+            var12 = (self.aoLightValueScratchXYZNPP
+                + self.aoLightValueScratchXYNP
+                + self.aoLightValueScratchYZPP
+                + var72)
+                / 4.0f32;
+            var9 = (self.aoLightValueScratchYZPP
+                + var72
+                + self.aoLightValueScratchXYZPPP
+                + self.aoLightValueScratchXYPP)
+                / 4.0f32;
+            var10 = (var72
+                + self.aoLightValueScratchYZPN
+                + self.aoLightValueScratchXYPP
+                + self.aoLightValueScratchXYZPPN)
+                / 4.0f32;
+            var11 = (self.aoLightValueScratchXYNP
+                + self.aoLightValueScratchXYZNPN
+                + var72
+                + self.aoLightValueScratchYZPN)
+                / 4.0f32;
+            self.brightnessTopRight = self.getAoBrightness(
+                self.aoBrightnessXYZNPP,
+                self.aoBrightnessXYNP,
+                self.aoBrightnessYZPP,
+                var67,
+            );
+            self.brightnessTopLeft = self.getAoBrightness(
+                self.aoBrightnessYZPP,
+                self.aoBrightnessXYZPPP,
+                self.aoBrightnessXYPP,
+                var67,
+            );
+            self.brightnessBottomLeft = self.getAoBrightness(
+                self.aoBrightnessYZPN,
+                self.aoBrightnessXYPP,
+                self.aoBrightnessXYZPPN,
+                var67,
+            );
+            self.brightnessBottomRight = self.getAoBrightness(
+                self.aoBrightnessXYNP,
+                self.aoBrightnessXYZNPN,
+                self.aoBrightnessYZPN,
+                var67,
+            );
             self.colorRedTopRight = var5;
             self.colorRedBottomRight = self.colorRedTopRight;
             self.colorRedBottomLeft = self.colorRedBottomRight;
@@ -757,7 +862,12 @@ impl<'a, 'b> Rb<'a, 'b> {
             self.colorRedTopRight = self.colorRedTopRight * (var12);
             self.colorGreenTopRight = self.colorGreenTopRight * (var12);
             self.colorBlueTopRight = self.colorBlueTopRight * (var12);
-            self.face_y_pos((var2 as f64), (var3 as f64), (var4 as f64), self.icon(var2, var3, var4, 1));
+            self.face_y_pos(
+                (var2 as f64),
+                (var3 as f64),
+                (var4 as f64),
+                self.icon(var2, var3, var4, 1),
+            );
             var8 = true;
         }
         if self.renderAllFaces || self.should_side(var2, var3, var4 - 1, 2) {
@@ -812,14 +922,50 @@ impl<'a, 'b> Rb<'a, 'b> {
                 var68 = self.mixed(var2, var3, var4 - 1);
             }
             let mut var73: f32 = self.ao_light(var2, var3, var4 - 1);
-            var9 = (self.aoLightValueScratchXZNN + self.aoLightValueScratchXYZNPN + var73 + self.aoLightValueScratchYZPN) / 4.0f32;
-            var10 = (var73 + self.aoLightValueScratchYZPN + self.aoLightValueScratchXZPN + self.aoLightValueScratchXYZPPN) / 4.0f32;
-            var11 = (self.aoLightValueScratchYZNN + var73 + self.aoLightValueScratchXYZPNN + self.aoLightValueScratchXZPN) / 4.0f32;
-            var12 = (self.aoLightValueScratchXYZNNN + self.aoLightValueScratchXZNN + self.aoLightValueScratchYZNN + var73) / 4.0f32;
-            self.brightnessTopLeft = self.getAoBrightness(self.aoBrightnessXZNN, self.aoBrightnessXYZNPN, self.aoBrightnessYZPN, var68);
-            self.brightnessBottomLeft = self.getAoBrightness(self.aoBrightnessYZPN, self.aoBrightnessXZPN, self.aoBrightnessXYZPPN, var68);
-            self.brightnessBottomRight = self.getAoBrightness(self.aoBrightnessYZNN, self.aoBrightnessXYZPNN, self.aoBrightnessXZPN, var68);
-            self.brightnessTopRight = self.getAoBrightness(self.aoBrightnessXYZNNN, self.aoBrightnessXZNN, self.aoBrightnessYZNN, var68);
+            var9 = (self.aoLightValueScratchXZNN
+                + self.aoLightValueScratchXYZNPN
+                + var73
+                + self.aoLightValueScratchYZPN)
+                / 4.0f32;
+            var10 = (var73
+                + self.aoLightValueScratchYZPN
+                + self.aoLightValueScratchXZPN
+                + self.aoLightValueScratchXYZPPN)
+                / 4.0f32;
+            var11 = (self.aoLightValueScratchYZNN
+                + var73
+                + self.aoLightValueScratchXYZPNN
+                + self.aoLightValueScratchXZPN)
+                / 4.0f32;
+            var12 = (self.aoLightValueScratchXYZNNN
+                + self.aoLightValueScratchXZNN
+                + self.aoLightValueScratchYZNN
+                + var73)
+                / 4.0f32;
+            self.brightnessTopLeft = self.getAoBrightness(
+                self.aoBrightnessXZNN,
+                self.aoBrightnessXYZNPN,
+                self.aoBrightnessYZPN,
+                var68,
+            );
+            self.brightnessBottomLeft = self.getAoBrightness(
+                self.aoBrightnessYZPN,
+                self.aoBrightnessXZPN,
+                self.aoBrightnessXYZPPN,
+                var68,
+            );
+            self.brightnessBottomRight = self.getAoBrightness(
+                self.aoBrightnessYZNN,
+                self.aoBrightnessXYZPNN,
+                self.aoBrightnessXZPN,
+                var68,
+            );
+            self.brightnessTopRight = self.getAoBrightness(
+                self.aoBrightnessXYZNNN,
+                self.aoBrightnessXZNN,
+                self.aoBrightnessYZNN,
+                var68,
+            );
             if var13 {
                 self.colorRedTopRight = var5 * 0.8f32;
                 self.colorRedBottomRight = self.colorRedTopRight;
@@ -874,7 +1020,12 @@ impl<'a, 'b> Rb<'a, 'b> {
                 self.colorBlueBottomLeft = self.colorBlueBottomLeft * (var7);
                 self.colorBlueBottomRight = self.colorBlueBottomRight * (var7);
                 self.colorBlueTopRight = self.colorBlueTopRight * (var7);
-                self.face_z_neg((var2 as f64), (var3 as f64), (var4 as f64), self.grass_overlay());
+                self.face_z_neg(
+                    (var2 as f64),
+                    (var3 as f64),
+                    (var4 as f64),
+                    self.grass_overlay(),
+                );
             }
             var8 = true;
         }
@@ -930,14 +1081,50 @@ impl<'a, 'b> Rb<'a, 'b> {
                 var69 = self.mixed(var2, var3, var4 + 1);
             }
             let mut var74: f32 = self.ao_light(var2, var3, var4 + 1);
-            var9 = (self.aoLightValueScratchXZNP + self.aoLightValueScratchXYZNPP + var74 + self.aoLightValueScratchYZPP) / 4.0f32;
-            var12 = (var74 + self.aoLightValueScratchYZPP + self.aoLightValueScratchXZPP + self.aoLightValueScratchXYZPPP) / 4.0f32;
-            var11 = (self.aoLightValueScratchYZNP + var74 + self.aoLightValueScratchXYZPNP + self.aoLightValueScratchXZPP) / 4.0f32;
-            var10 = (self.aoLightValueScratchXYZNNP + self.aoLightValueScratchXZNP + self.aoLightValueScratchYZNP + var74) / 4.0f32;
-            self.brightnessTopLeft = self.getAoBrightness(self.aoBrightnessXZNP, self.aoBrightnessXYZNPP, self.aoBrightnessYZPP, var69);
-            self.brightnessTopRight = self.getAoBrightness(self.aoBrightnessYZPP, self.aoBrightnessXZPP, self.aoBrightnessXYZPPP, var69);
-            self.brightnessBottomRight = self.getAoBrightness(self.aoBrightnessYZNP, self.aoBrightnessXYZPNP, self.aoBrightnessXZPP, var69);
-            self.brightnessBottomLeft = self.getAoBrightness(self.aoBrightnessXYZNNP, self.aoBrightnessXZNP, self.aoBrightnessYZNP, var69);
+            var9 = (self.aoLightValueScratchXZNP
+                + self.aoLightValueScratchXYZNPP
+                + var74
+                + self.aoLightValueScratchYZPP)
+                / 4.0f32;
+            var12 = (var74
+                + self.aoLightValueScratchYZPP
+                + self.aoLightValueScratchXZPP
+                + self.aoLightValueScratchXYZPPP)
+                / 4.0f32;
+            var11 = (self.aoLightValueScratchYZNP
+                + var74
+                + self.aoLightValueScratchXYZPNP
+                + self.aoLightValueScratchXZPP)
+                / 4.0f32;
+            var10 = (self.aoLightValueScratchXYZNNP
+                + self.aoLightValueScratchXZNP
+                + self.aoLightValueScratchYZNP
+                + var74)
+                / 4.0f32;
+            self.brightnessTopLeft = self.getAoBrightness(
+                self.aoBrightnessXZNP,
+                self.aoBrightnessXYZNPP,
+                self.aoBrightnessYZPP,
+                var69,
+            );
+            self.brightnessTopRight = self.getAoBrightness(
+                self.aoBrightnessYZPP,
+                self.aoBrightnessXZPP,
+                self.aoBrightnessXYZPPP,
+                var69,
+            );
+            self.brightnessBottomRight = self.getAoBrightness(
+                self.aoBrightnessYZNP,
+                self.aoBrightnessXYZPNP,
+                self.aoBrightnessXZPP,
+                var69,
+            );
+            self.brightnessBottomLeft = self.getAoBrightness(
+                self.aoBrightnessXYZNNP,
+                self.aoBrightnessXZNP,
+                self.aoBrightnessYZNP,
+                var69,
+            );
             if var13 {
                 self.colorRedTopRight = var5 * 0.8f32;
                 self.colorRedBottomRight = self.colorRedTopRight;
@@ -978,7 +1165,12 @@ impl<'a, 'b> Rb<'a, 'b> {
             self.colorGreenTopRight = self.colorGreenTopRight * (var12);
             self.colorBlueTopRight = self.colorBlueTopRight * (var12);
             let mut var77: Icon = self.icon(var2, var3, var4, 3);
-            self.face_z_pos((var2 as f64), (var3 as f64), (var4 as f64), self.icon(var2, var3, var4, 3));
+            self.face_z_pos(
+                (var2 as f64),
+                (var3 as f64),
+                (var4 as f64),
+                self.icon(var2, var3, var4, 3),
+            );
             if FANCY_GRASS && var77.grass_side && !self.overrideBlockTexture.is_some() {
                 self.colorRedTopLeft = self.colorRedTopLeft * (var5);
                 self.colorRedBottomLeft = self.colorRedBottomLeft * (var5);
@@ -992,7 +1184,12 @@ impl<'a, 'b> Rb<'a, 'b> {
                 self.colorBlueBottomLeft = self.colorBlueBottomLeft * (var7);
                 self.colorBlueBottomRight = self.colorBlueBottomRight * (var7);
                 self.colorBlueTopRight = self.colorBlueTopRight * (var7);
-                self.face_z_pos((var2 as f64), (var3 as f64), (var4 as f64), self.grass_overlay());
+                self.face_z_pos(
+                    (var2 as f64),
+                    (var3 as f64),
+                    (var4 as f64),
+                    self.grass_overlay(),
+                );
             }
             var8 = true;
         }
@@ -1048,14 +1245,50 @@ impl<'a, 'b> Rb<'a, 'b> {
                 var70 = self.mixed(var2 - 1, var3, var4);
             }
             let mut var75: f32 = self.ao_light(var2 - 1, var3, var4);
-            var12 = (self.aoLightValueScratchXYNN + self.aoLightValueScratchXYZNNP + var75 + self.aoLightValueScratchXZNP) / 4.0f32;
-            var9 = (var75 + self.aoLightValueScratchXZNP + self.aoLightValueScratchXYNP + self.aoLightValueScratchXYZNPP) / 4.0f32;
-            var10 = (self.aoLightValueScratchXZNN + var75 + self.aoLightValueScratchXYZNPN + self.aoLightValueScratchXYNP) / 4.0f32;
-            var11 = (self.aoLightValueScratchXYZNNN + self.aoLightValueScratchXYNN + self.aoLightValueScratchXZNN + var75) / 4.0f32;
-            self.brightnessTopRight = self.getAoBrightness(self.aoBrightnessXYNN, self.aoBrightnessXYZNNP, self.aoBrightnessXZNP, var70);
-            self.brightnessTopLeft = self.getAoBrightness(self.aoBrightnessXZNP, self.aoBrightnessXYNP, self.aoBrightnessXYZNPP, var70);
-            self.brightnessBottomLeft = self.getAoBrightness(self.aoBrightnessXZNN, self.aoBrightnessXYZNPN, self.aoBrightnessXYNP, var70);
-            self.brightnessBottomRight = self.getAoBrightness(self.aoBrightnessXYZNNN, self.aoBrightnessXYNN, self.aoBrightnessXZNN, var70);
+            var12 = (self.aoLightValueScratchXYNN
+                + self.aoLightValueScratchXYZNNP
+                + var75
+                + self.aoLightValueScratchXZNP)
+                / 4.0f32;
+            var9 = (var75
+                + self.aoLightValueScratchXZNP
+                + self.aoLightValueScratchXYNP
+                + self.aoLightValueScratchXYZNPP)
+                / 4.0f32;
+            var10 = (self.aoLightValueScratchXZNN
+                + var75
+                + self.aoLightValueScratchXYZNPN
+                + self.aoLightValueScratchXYNP)
+                / 4.0f32;
+            var11 = (self.aoLightValueScratchXYZNNN
+                + self.aoLightValueScratchXYNN
+                + self.aoLightValueScratchXZNN
+                + var75)
+                / 4.0f32;
+            self.brightnessTopRight = self.getAoBrightness(
+                self.aoBrightnessXYNN,
+                self.aoBrightnessXYZNNP,
+                self.aoBrightnessXZNP,
+                var70,
+            );
+            self.brightnessTopLeft = self.getAoBrightness(
+                self.aoBrightnessXZNP,
+                self.aoBrightnessXYNP,
+                self.aoBrightnessXYZNPP,
+                var70,
+            );
+            self.brightnessBottomLeft = self.getAoBrightness(
+                self.aoBrightnessXZNN,
+                self.aoBrightnessXYZNPN,
+                self.aoBrightnessXYNP,
+                var70,
+            );
+            self.brightnessBottomRight = self.getAoBrightness(
+                self.aoBrightnessXYZNNN,
+                self.aoBrightnessXYNN,
+                self.aoBrightnessXZNN,
+                var70,
+            );
             if var13 {
                 self.colorRedTopRight = var5 * 0.6f32;
                 self.colorRedBottomRight = self.colorRedTopRight;
@@ -1110,7 +1343,12 @@ impl<'a, 'b> Rb<'a, 'b> {
                 self.colorBlueBottomLeft = self.colorBlueBottomLeft * (var7);
                 self.colorBlueBottomRight = self.colorBlueBottomRight * (var7);
                 self.colorBlueTopRight = self.colorBlueTopRight * (var7);
-                self.face_x_neg((var2 as f64), (var3 as f64), (var4 as f64), self.grass_overlay());
+                self.face_x_neg(
+                    (var2 as f64),
+                    (var3 as f64),
+                    (var4 as f64),
+                    self.grass_overlay(),
+                );
             }
             var8 = true;
         }
@@ -1166,14 +1404,50 @@ impl<'a, 'b> Rb<'a, 'b> {
                 var71 = self.mixed(var2 + 1, var3, var4);
             }
             let mut var76: f32 = self.ao_light(var2 + 1, var3, var4);
-            var9 = (self.aoLightValueScratchXYPN + self.aoLightValueScratchXYZPNP + var76 + self.aoLightValueScratchXZPP) / 4.0f32;
-            var10 = (self.aoLightValueScratchXYZPNN + self.aoLightValueScratchXYPN + self.aoLightValueScratchXZPN + var76) / 4.0f32;
-            var11 = (self.aoLightValueScratchXZPN + var76 + self.aoLightValueScratchXYZPPN + self.aoLightValueScratchXYPP) / 4.0f32;
-            var12 = (var76 + self.aoLightValueScratchXZPP + self.aoLightValueScratchXYPP + self.aoLightValueScratchXYZPPP) / 4.0f32;
-            self.brightnessTopLeft = self.getAoBrightness(self.aoBrightnessXYPN, self.aoBrightnessXYZPNP, self.aoBrightnessXZPP, var71);
-            self.brightnessTopRight = self.getAoBrightness(self.aoBrightnessXZPP, self.aoBrightnessXYPP, self.aoBrightnessXYZPPP, var71);
-            self.brightnessBottomRight = self.getAoBrightness(self.aoBrightnessXZPN, self.aoBrightnessXYZPPN, self.aoBrightnessXYPP, var71);
-            self.brightnessBottomLeft = self.getAoBrightness(self.aoBrightnessXYZPNN, self.aoBrightnessXYPN, self.aoBrightnessXZPN, var71);
+            var9 = (self.aoLightValueScratchXYPN
+                + self.aoLightValueScratchXYZPNP
+                + var76
+                + self.aoLightValueScratchXZPP)
+                / 4.0f32;
+            var10 = (self.aoLightValueScratchXYZPNN
+                + self.aoLightValueScratchXYPN
+                + self.aoLightValueScratchXZPN
+                + var76)
+                / 4.0f32;
+            var11 = (self.aoLightValueScratchXZPN
+                + var76
+                + self.aoLightValueScratchXYZPPN
+                + self.aoLightValueScratchXYPP)
+                / 4.0f32;
+            var12 = (var76
+                + self.aoLightValueScratchXZPP
+                + self.aoLightValueScratchXYPP
+                + self.aoLightValueScratchXYZPPP)
+                / 4.0f32;
+            self.brightnessTopLeft = self.getAoBrightness(
+                self.aoBrightnessXYPN,
+                self.aoBrightnessXYZPNP,
+                self.aoBrightnessXZPP,
+                var71,
+            );
+            self.brightnessTopRight = self.getAoBrightness(
+                self.aoBrightnessXZPP,
+                self.aoBrightnessXYPP,
+                self.aoBrightnessXYZPPP,
+                var71,
+            );
+            self.brightnessBottomRight = self.getAoBrightness(
+                self.aoBrightnessXZPN,
+                self.aoBrightnessXYZPPN,
+                self.aoBrightnessXYPP,
+                var71,
+            );
+            self.brightnessBottomLeft = self.getAoBrightness(
+                self.aoBrightnessXYZPNN,
+                self.aoBrightnessXYPN,
+                self.aoBrightnessXZPN,
+                var71,
+            );
             if var13 {
                 self.colorRedTopRight = var5 * 0.6f32;
                 self.colorRedBottomRight = self.colorRedTopRight;
@@ -1228,7 +1502,12 @@ impl<'a, 'b> Rb<'a, 'b> {
                 self.colorBlueBottomLeft = self.colorBlueBottomLeft * (var7);
                 self.colorBlueBottomRight = self.colorBlueBottomRight * (var7);
                 self.colorBlueTopRight = self.colorBlueTopRight * (var7);
-                self.face_x_pos((var2 as f64), (var3 as f64), (var4 as f64), self.grass_overlay());
+                self.face_x_pos(
+                    (var2 as f64),
+                    (var3 as f64),
+                    (var4 as f64),
+                    self.grass_overlay(),
+                );
             }
             var8 = true;
         }
@@ -1237,8 +1516,22 @@ impl<'a, 'b> Rb<'a, 'b> {
     }
 
     /// `RenderBlocks.renderStandardBlockWithAmbientOcclusionPartial`
-    #[allow(unused_assignments, unused_mut, unused_variables, unused_parens, clippy::all)]
-    pub fn std_ao_partial(&mut self, mut var2: i32, mut var3: i32, mut var4: i32, var5: f32, var6: f32, var7: f32) -> bool {
+    #[allow(
+        unused_assignments,
+        unused_mut,
+        unused_variables,
+        unused_parens,
+        clippy::all
+    )]
+    pub fn std_ao_partial(
+        &mut self,
+        mut var2: i32,
+        mut var3: i32,
+        mut var4: i32,
+        var5: f32,
+        var6: f32,
+        var7: f32,
+    ) -> bool {
         self.enableAO = true;
         let mut var8: bool = false;
         let mut var9: f32 = 0.0f32;
@@ -1305,14 +1598,50 @@ impl<'a, 'b> Rb<'a, 'b> {
                 var20 = self.mixed(var2, var3 - 1, var4);
             }
             let mut var21: f32 = self.ao_light(var2, var3 - 1, var4);
-            var9 = (self.aoLightValueScratchXYZNNP + self.aoLightValueScratchXYNN + self.aoLightValueScratchYZNP + var21) / 4.0f32;
-            var12 = (self.aoLightValueScratchYZNP + var21 + self.aoLightValueScratchXYZPNP + self.aoLightValueScratchXYPN) / 4.0f32;
-            var11 = (var21 + self.aoLightValueScratchYZNN + self.aoLightValueScratchXYPN + self.aoLightValueScratchXYZPNN) / 4.0f32;
-            var10 = (self.aoLightValueScratchXYNN + self.aoLightValueScratchXYZNNN + var21 + self.aoLightValueScratchYZNN) / 4.0f32;
-            self.brightnessTopLeft = self.getAoBrightness(self.aoBrightnessXYZNNP, self.aoBrightnessXYNN, self.aoBrightnessYZNP, var20);
-            self.brightnessTopRight = self.getAoBrightness(self.aoBrightnessYZNP, self.aoBrightnessXYZPNP, self.aoBrightnessXYPN, var20);
-            self.brightnessBottomRight = self.getAoBrightness(self.aoBrightnessYZNN, self.aoBrightnessXYPN, self.aoBrightnessXYZPNN, var20);
-            self.brightnessBottomLeft = self.getAoBrightness(self.aoBrightnessXYNN, self.aoBrightnessXYZNNN, self.aoBrightnessYZNN, var20);
+            var9 = (self.aoLightValueScratchXYZNNP
+                + self.aoLightValueScratchXYNN
+                + self.aoLightValueScratchYZNP
+                + var21)
+                / 4.0f32;
+            var12 = (self.aoLightValueScratchYZNP
+                + var21
+                + self.aoLightValueScratchXYZPNP
+                + self.aoLightValueScratchXYPN)
+                / 4.0f32;
+            var11 = (var21
+                + self.aoLightValueScratchYZNN
+                + self.aoLightValueScratchXYPN
+                + self.aoLightValueScratchXYZPNN)
+                / 4.0f32;
+            var10 = (self.aoLightValueScratchXYNN
+                + self.aoLightValueScratchXYZNNN
+                + var21
+                + self.aoLightValueScratchYZNN)
+                / 4.0f32;
+            self.brightnessTopLeft = self.getAoBrightness(
+                self.aoBrightnessXYZNNP,
+                self.aoBrightnessXYNN,
+                self.aoBrightnessYZNP,
+                var20,
+            );
+            self.brightnessTopRight = self.getAoBrightness(
+                self.aoBrightnessYZNP,
+                self.aoBrightnessXYZPNP,
+                self.aoBrightnessXYPN,
+                var20,
+            );
+            self.brightnessBottomRight = self.getAoBrightness(
+                self.aoBrightnessYZNN,
+                self.aoBrightnessXYPN,
+                self.aoBrightnessXYZPNN,
+                var20,
+            );
+            self.brightnessBottomLeft = self.getAoBrightness(
+                self.aoBrightnessXYNN,
+                self.aoBrightnessXYZNNN,
+                self.aoBrightnessYZNN,
+                var20,
+            );
             if var13 {
                 self.colorRedTopRight = var5 * 0.5f32;
                 self.colorRedBottomRight = self.colorRedTopRight;
@@ -1352,7 +1681,12 @@ impl<'a, 'b> Rb<'a, 'b> {
             self.colorRedTopRight = self.colorRedTopRight * (var12);
             self.colorGreenTopRight = self.colorGreenTopRight * (var12);
             self.colorBlueTopRight = self.colorBlueTopRight * (var12);
-            self.face_y_neg((var2 as f64), (var3 as f64), (var4 as f64), self.icon(var2, var3, var4, 0));
+            self.face_y_neg(
+                (var2 as f64),
+                (var3 as f64),
+                (var4 as f64),
+                self.icon(var2, var3, var4, 0),
+            );
             var8 = true;
         }
         if self.renderAllFaces || self.should_side(var2, var3 + 1, var4, 1) {
@@ -1407,14 +1741,50 @@ impl<'a, 'b> Rb<'a, 'b> {
                 var74 = self.mixed(var2, var3 + 1, var4);
             }
             let mut var79: f32 = self.ao_light(var2, var3 + 1, var4);
-            var12 = (self.aoLightValueScratchXYZNPP + self.aoLightValueScratchXYNP + self.aoLightValueScratchYZPP + var79) / 4.0f32;
-            var9 = (self.aoLightValueScratchYZPP + var79 + self.aoLightValueScratchXYZPPP + self.aoLightValueScratchXYPP) / 4.0f32;
-            var10 = (var79 + self.aoLightValueScratchYZPN + self.aoLightValueScratchXYPP + self.aoLightValueScratchXYZPPN) / 4.0f32;
-            var11 = (self.aoLightValueScratchXYNP + self.aoLightValueScratchXYZNPN + var79 + self.aoLightValueScratchYZPN) / 4.0f32;
-            self.brightnessTopRight = self.getAoBrightness(self.aoBrightnessXYZNPP, self.aoBrightnessXYNP, self.aoBrightnessYZPP, var74);
-            self.brightnessTopLeft = self.getAoBrightness(self.aoBrightnessYZPP, self.aoBrightnessXYZPPP, self.aoBrightnessXYPP, var74);
-            self.brightnessBottomLeft = self.getAoBrightness(self.aoBrightnessYZPN, self.aoBrightnessXYPP, self.aoBrightnessXYZPPN, var74);
-            self.brightnessBottomRight = self.getAoBrightness(self.aoBrightnessXYNP, self.aoBrightnessXYZNPN, self.aoBrightnessYZPN, var74);
+            var12 = (self.aoLightValueScratchXYZNPP
+                + self.aoLightValueScratchXYNP
+                + self.aoLightValueScratchYZPP
+                + var79)
+                / 4.0f32;
+            var9 = (self.aoLightValueScratchYZPP
+                + var79
+                + self.aoLightValueScratchXYZPPP
+                + self.aoLightValueScratchXYPP)
+                / 4.0f32;
+            var10 = (var79
+                + self.aoLightValueScratchYZPN
+                + self.aoLightValueScratchXYPP
+                + self.aoLightValueScratchXYZPPN)
+                / 4.0f32;
+            var11 = (self.aoLightValueScratchXYNP
+                + self.aoLightValueScratchXYZNPN
+                + var79
+                + self.aoLightValueScratchYZPN)
+                / 4.0f32;
+            self.brightnessTopRight = self.getAoBrightness(
+                self.aoBrightnessXYZNPP,
+                self.aoBrightnessXYNP,
+                self.aoBrightnessYZPP,
+                var74,
+            );
+            self.brightnessTopLeft = self.getAoBrightness(
+                self.aoBrightnessYZPP,
+                self.aoBrightnessXYZPPP,
+                self.aoBrightnessXYPP,
+                var74,
+            );
+            self.brightnessBottomLeft = self.getAoBrightness(
+                self.aoBrightnessYZPN,
+                self.aoBrightnessXYPP,
+                self.aoBrightnessXYZPPN,
+                var74,
+            );
+            self.brightnessBottomRight = self.getAoBrightness(
+                self.aoBrightnessXYNP,
+                self.aoBrightnessXYZNPN,
+                self.aoBrightnessYZPN,
+                var74,
+            );
             self.colorRedTopRight = var5;
             self.colorRedBottomRight = self.colorRedTopRight;
             self.colorRedBottomLeft = self.colorRedBottomRight;
@@ -1439,7 +1809,12 @@ impl<'a, 'b> Rb<'a, 'b> {
             self.colorRedTopRight = self.colorRedTopRight * (var12);
             self.colorGreenTopRight = self.colorGreenTopRight * (var12);
             self.colorBlueTopRight = self.colorBlueTopRight * (var12);
-            self.face_y_pos((var2 as f64), (var3 as f64), (var4 as f64), self.icon(var2, var3, var4, 1));
+            self.face_y_pos(
+                (var2 as f64),
+                (var3 as f64),
+                (var4 as f64),
+                self.icon(var2, var3, var4, 1),
+            );
             var8 = true;
         }
         if self.renderAllFaces || self.should_side(var2, var3, var4 - 1, 2) {
@@ -1494,22 +1869,110 @@ impl<'a, 'b> Rb<'a, 'b> {
                 var75 = self.mixed(var2, var3, var4 - 1);
             }
             let mut var80: f32 = self.ao_light(var2, var3, var4 - 1);
-            let mut var22: f32 = (self.aoLightValueScratchXZNN + self.aoLightValueScratchXYZNPN + var80 + self.aoLightValueScratchYZPN) / 4.0f32;
-            let mut var23: f32 = (var80 + self.aoLightValueScratchYZPN + self.aoLightValueScratchXZPN + self.aoLightValueScratchXYZPPN) / 4.0f32;
-            let mut var24: f32 = (self.aoLightValueScratchYZNN + var80 + self.aoLightValueScratchXYZPNN + self.aoLightValueScratchXZPN) / 4.0f32;
-            let mut var25: f32 = (self.aoLightValueScratchXYZNNN + self.aoLightValueScratchXZNN + self.aoLightValueScratchYZNN + var80) / 4.0f32;
-            var9 = (((var22 as f64) * self.renderMaxY * (1.0f64 - self.renderMinX) + (var23 as f64) * self.renderMaxY * self.renderMinX + (var24 as f64) * (1.0f64 - self.renderMaxY) * self.renderMinX + (var25 as f64) * (1.0f64 - self.renderMaxY) * (1.0f64 - self.renderMinX)) as f32);
-            var10 = (((var22 as f64) * self.renderMaxY * (1.0f64 - self.renderMaxX) + (var23 as f64) * self.renderMaxY * self.renderMaxX + (var24 as f64) * (1.0f64 - self.renderMaxY) * self.renderMaxX + (var25 as f64) * (1.0f64 - self.renderMaxY) * (1.0f64 - self.renderMaxX)) as f32);
-            var11 = (((var22 as f64) * self.renderMinY * (1.0f64 - self.renderMaxX) + (var23 as f64) * self.renderMinY * self.renderMaxX + (var24 as f64) * (1.0f64 - self.renderMinY) * self.renderMaxX + (var25 as f64) * (1.0f64 - self.renderMinY) * (1.0f64 - self.renderMaxX)) as f32);
-            var12 = (((var22 as f64) * self.renderMinY * (1.0f64 - self.renderMinX) + (var23 as f64) * self.renderMinY * self.renderMinX + (var24 as f64) * (1.0f64 - self.renderMinY) * self.renderMinX + (var25 as f64) * (1.0f64 - self.renderMinY) * (1.0f64 - self.renderMinX)) as f32);
-            let mut var26: i32 = self.getAoBrightness(self.aoBrightnessXZNN, self.aoBrightnessXYZNPN, self.aoBrightnessYZPN, var75);
-            let mut var27: i32 = self.getAoBrightness(self.aoBrightnessYZPN, self.aoBrightnessXZPN, self.aoBrightnessXYZPPN, var75);
-            let mut var28: i32 = self.getAoBrightness(self.aoBrightnessYZNN, self.aoBrightnessXYZPNN, self.aoBrightnessXZPN, var75);
-            let mut var29: i32 = self.getAoBrightness(self.aoBrightnessXYZNNN, self.aoBrightnessXZNN, self.aoBrightnessYZNN, var75);
-            self.brightnessTopLeft = self.mixAoBrightness(var26, var27, var28, var29, self.renderMaxY * (1.0f64 - self.renderMinX), self.renderMaxY * self.renderMinX, (1.0f64 - self.renderMaxY) * self.renderMinX, (1.0f64 - self.renderMaxY) * (1.0f64 - self.renderMinX));
-            self.brightnessBottomLeft = self.mixAoBrightness(var26, var27, var28, var29, self.renderMaxY * (1.0f64 - self.renderMaxX), self.renderMaxY * self.renderMaxX, (1.0f64 - self.renderMaxY) * self.renderMaxX, (1.0f64 - self.renderMaxY) * (1.0f64 - self.renderMaxX));
-            self.brightnessBottomRight = self.mixAoBrightness(var26, var27, var28, var29, self.renderMinY * (1.0f64 - self.renderMaxX), self.renderMinY * self.renderMaxX, (1.0f64 - self.renderMinY) * self.renderMaxX, (1.0f64 - self.renderMinY) * (1.0f64 - self.renderMaxX));
-            self.brightnessTopRight = self.mixAoBrightness(var26, var27, var28, var29, self.renderMinY * (1.0f64 - self.renderMinX), self.renderMinY * self.renderMinX, (1.0f64 - self.renderMinY) * self.renderMinX, (1.0f64 - self.renderMinY) * (1.0f64 - self.renderMinX));
+            let mut var22: f32 = (self.aoLightValueScratchXZNN
+                + self.aoLightValueScratchXYZNPN
+                + var80
+                + self.aoLightValueScratchYZPN)
+                / 4.0f32;
+            let mut var23: f32 = (var80
+                + self.aoLightValueScratchYZPN
+                + self.aoLightValueScratchXZPN
+                + self.aoLightValueScratchXYZPPN)
+                / 4.0f32;
+            let mut var24: f32 = (self.aoLightValueScratchYZNN
+                + var80
+                + self.aoLightValueScratchXYZPNN
+                + self.aoLightValueScratchXZPN)
+                / 4.0f32;
+            let mut var25: f32 = (self.aoLightValueScratchXYZNNN
+                + self.aoLightValueScratchXZNN
+                + self.aoLightValueScratchYZNN
+                + var80)
+                / 4.0f32;
+            var9 = (((var22 as f64) * self.renderMaxY * (1.0f64 - self.renderMinX)
+                + (var23 as f64) * self.renderMaxY * self.renderMinX
+                + (var24 as f64) * (1.0f64 - self.renderMaxY) * self.renderMinX
+                + (var25 as f64) * (1.0f64 - self.renderMaxY) * (1.0f64 - self.renderMinX))
+                as f32);
+            var10 = (((var22 as f64) * self.renderMaxY * (1.0f64 - self.renderMaxX)
+                + (var23 as f64) * self.renderMaxY * self.renderMaxX
+                + (var24 as f64) * (1.0f64 - self.renderMaxY) * self.renderMaxX
+                + (var25 as f64) * (1.0f64 - self.renderMaxY) * (1.0f64 - self.renderMaxX))
+                as f32);
+            var11 = (((var22 as f64) * self.renderMinY * (1.0f64 - self.renderMaxX)
+                + (var23 as f64) * self.renderMinY * self.renderMaxX
+                + (var24 as f64) * (1.0f64 - self.renderMinY) * self.renderMaxX
+                + (var25 as f64) * (1.0f64 - self.renderMinY) * (1.0f64 - self.renderMaxX))
+                as f32);
+            var12 = (((var22 as f64) * self.renderMinY * (1.0f64 - self.renderMinX)
+                + (var23 as f64) * self.renderMinY * self.renderMinX
+                + (var24 as f64) * (1.0f64 - self.renderMinY) * self.renderMinX
+                + (var25 as f64) * (1.0f64 - self.renderMinY) * (1.0f64 - self.renderMinX))
+                as f32);
+            let mut var26: i32 = self.getAoBrightness(
+                self.aoBrightnessXZNN,
+                self.aoBrightnessXYZNPN,
+                self.aoBrightnessYZPN,
+                var75,
+            );
+            let mut var27: i32 = self.getAoBrightness(
+                self.aoBrightnessYZPN,
+                self.aoBrightnessXZPN,
+                self.aoBrightnessXYZPPN,
+                var75,
+            );
+            let mut var28: i32 = self.getAoBrightness(
+                self.aoBrightnessYZNN,
+                self.aoBrightnessXYZPNN,
+                self.aoBrightnessXZPN,
+                var75,
+            );
+            let mut var29: i32 = self.getAoBrightness(
+                self.aoBrightnessXYZNNN,
+                self.aoBrightnessXZNN,
+                self.aoBrightnessYZNN,
+                var75,
+            );
+            self.brightnessTopLeft = self.mixAoBrightness(
+                var26,
+                var27,
+                var28,
+                var29,
+                self.renderMaxY * (1.0f64 - self.renderMinX),
+                self.renderMaxY * self.renderMinX,
+                (1.0f64 - self.renderMaxY) * self.renderMinX,
+                (1.0f64 - self.renderMaxY) * (1.0f64 - self.renderMinX),
+            );
+            self.brightnessBottomLeft = self.mixAoBrightness(
+                var26,
+                var27,
+                var28,
+                var29,
+                self.renderMaxY * (1.0f64 - self.renderMaxX),
+                self.renderMaxY * self.renderMaxX,
+                (1.0f64 - self.renderMaxY) * self.renderMaxX,
+                (1.0f64 - self.renderMaxY) * (1.0f64 - self.renderMaxX),
+            );
+            self.brightnessBottomRight = self.mixAoBrightness(
+                var26,
+                var27,
+                var28,
+                var29,
+                self.renderMinY * (1.0f64 - self.renderMaxX),
+                self.renderMinY * self.renderMaxX,
+                (1.0f64 - self.renderMinY) * self.renderMaxX,
+                (1.0f64 - self.renderMinY) * (1.0f64 - self.renderMaxX),
+            );
+            self.brightnessTopRight = self.mixAoBrightness(
+                var26,
+                var27,
+                var28,
+                var29,
+                self.renderMinY * (1.0f64 - self.renderMinX),
+                self.renderMinY * self.renderMinX,
+                (1.0f64 - self.renderMinY) * self.renderMinX,
+                (1.0f64 - self.renderMinY) * (1.0f64 - self.renderMinX),
+            );
             if var13 {
                 self.colorRedTopRight = var5 * 0.8f32;
                 self.colorRedBottomRight = self.colorRedTopRight;
@@ -1564,7 +2027,12 @@ impl<'a, 'b> Rb<'a, 'b> {
                 self.colorBlueBottomLeft = self.colorBlueBottomLeft * (var7);
                 self.colorBlueBottomRight = self.colorBlueBottomRight * (var7);
                 self.colorBlueTopRight = self.colorBlueTopRight * (var7);
-                self.face_z_neg((var2 as f64), (var3 as f64), (var4 as f64), self.grass_overlay());
+                self.face_z_neg(
+                    (var2 as f64),
+                    (var3 as f64),
+                    (var4 as f64),
+                    self.grass_overlay(),
+                );
             }
             var8 = true;
         }
@@ -1620,22 +2088,110 @@ impl<'a, 'b> Rb<'a, 'b> {
                 var76 = self.mixed(var2, var3, var4 + 1);
             }
             let mut var81: f32 = self.ao_light(var2, var3, var4 + 1);
-            let mut var85: f32 = (self.aoLightValueScratchXZNP + self.aoLightValueScratchXYZNPP + var81 + self.aoLightValueScratchYZPP) / 4.0f32;
-            let mut var91: f32 = (var81 + self.aoLightValueScratchYZPP + self.aoLightValueScratchXZPP + self.aoLightValueScratchXYZPPP) / 4.0f32;
-            let mut var94: f32 = (self.aoLightValueScratchYZNP + var81 + self.aoLightValueScratchXYZPNP + self.aoLightValueScratchXZPP) / 4.0f32;
-            let mut var97: f32 = (self.aoLightValueScratchXYZNNP + self.aoLightValueScratchXZNP + self.aoLightValueScratchYZNP + var81) / 4.0f32;
-            var9 = (((var85 as f64) * self.renderMaxY * (1.0f64 - self.renderMinX) + (var91 as f64) * self.renderMaxY * self.renderMinX + (var94 as f64) * (1.0f64 - self.renderMaxY) * self.renderMinX + (var97 as f64) * (1.0f64 - self.renderMaxY) * (1.0f64 - self.renderMinX)) as f32);
-            var10 = (((var85 as f64) * self.renderMinY * (1.0f64 - self.renderMinX) + (var91 as f64) * self.renderMinY * self.renderMinX + (var94 as f64) * (1.0f64 - self.renderMinY) * self.renderMinX + (var97 as f64) * (1.0f64 - self.renderMinY) * (1.0f64 - self.renderMinX)) as f32);
-            var11 = (((var85 as f64) * self.renderMinY * (1.0f64 - self.renderMaxX) + (var91 as f64) * self.renderMinY * self.renderMaxX + (var94 as f64) * (1.0f64 - self.renderMinY) * self.renderMaxX + (var97 as f64) * (1.0f64 - self.renderMinY) * (1.0f64 - self.renderMaxX)) as f32);
-            var12 = (((var85 as f64) * self.renderMaxY * (1.0f64 - self.renderMaxX) + (var91 as f64) * self.renderMaxY * self.renderMaxX + (var94 as f64) * (1.0f64 - self.renderMaxY) * self.renderMaxX + (var97 as f64) * (1.0f64 - self.renderMaxY) * (1.0f64 - self.renderMaxX)) as f32);
-            let mut var100: i32 = self.getAoBrightness(self.aoBrightnessXZNP, self.aoBrightnessXYZNPP, self.aoBrightnessYZPP, var76);
-            let mut var103: i32 = self.getAoBrightness(self.aoBrightnessYZPP, self.aoBrightnessXZPP, self.aoBrightnessXYZPPP, var76);
-            let mut var106: i32 = self.getAoBrightness(self.aoBrightnessYZNP, self.aoBrightnessXYZPNP, self.aoBrightnessXZPP, var76);
-            let mut var109: i32 = self.getAoBrightness(self.aoBrightnessXYZNNP, self.aoBrightnessXZNP, self.aoBrightnessYZNP, var76);
-            self.brightnessTopLeft = self.mixAoBrightness(var100, var109, var106, var103, self.renderMaxY * (1.0f64 - self.renderMinX), (1.0f64 - self.renderMaxY) * (1.0f64 - self.renderMinX), (1.0f64 - self.renderMaxY) * self.renderMinX, self.renderMaxY * self.renderMinX);
-            self.brightnessBottomLeft = self.mixAoBrightness(var100, var109, var106, var103, self.renderMinY * (1.0f64 - self.renderMinX), (1.0f64 - self.renderMinY) * (1.0f64 - self.renderMinX), (1.0f64 - self.renderMinY) * self.renderMinX, self.renderMinY * self.renderMinX);
-            self.brightnessBottomRight = self.mixAoBrightness(var100, var109, var106, var103, self.renderMinY * (1.0f64 - self.renderMaxX), (1.0f64 - self.renderMinY) * (1.0f64 - self.renderMaxX), (1.0f64 - self.renderMinY) * self.renderMaxX, self.renderMinY * self.renderMaxX);
-            self.brightnessTopRight = self.mixAoBrightness(var100, var109, var106, var103, self.renderMaxY * (1.0f64 - self.renderMaxX), (1.0f64 - self.renderMaxY) * (1.0f64 - self.renderMaxX), (1.0f64 - self.renderMaxY) * self.renderMaxX, self.renderMaxY * self.renderMaxX);
+            let mut var85: f32 = (self.aoLightValueScratchXZNP
+                + self.aoLightValueScratchXYZNPP
+                + var81
+                + self.aoLightValueScratchYZPP)
+                / 4.0f32;
+            let mut var91: f32 = (var81
+                + self.aoLightValueScratchYZPP
+                + self.aoLightValueScratchXZPP
+                + self.aoLightValueScratchXYZPPP)
+                / 4.0f32;
+            let mut var94: f32 = (self.aoLightValueScratchYZNP
+                + var81
+                + self.aoLightValueScratchXYZPNP
+                + self.aoLightValueScratchXZPP)
+                / 4.0f32;
+            let mut var97: f32 = (self.aoLightValueScratchXYZNNP
+                + self.aoLightValueScratchXZNP
+                + self.aoLightValueScratchYZNP
+                + var81)
+                / 4.0f32;
+            var9 = (((var85 as f64) * self.renderMaxY * (1.0f64 - self.renderMinX)
+                + (var91 as f64) * self.renderMaxY * self.renderMinX
+                + (var94 as f64) * (1.0f64 - self.renderMaxY) * self.renderMinX
+                + (var97 as f64) * (1.0f64 - self.renderMaxY) * (1.0f64 - self.renderMinX))
+                as f32);
+            var10 = (((var85 as f64) * self.renderMinY * (1.0f64 - self.renderMinX)
+                + (var91 as f64) * self.renderMinY * self.renderMinX
+                + (var94 as f64) * (1.0f64 - self.renderMinY) * self.renderMinX
+                + (var97 as f64) * (1.0f64 - self.renderMinY) * (1.0f64 - self.renderMinX))
+                as f32);
+            var11 = (((var85 as f64) * self.renderMinY * (1.0f64 - self.renderMaxX)
+                + (var91 as f64) * self.renderMinY * self.renderMaxX
+                + (var94 as f64) * (1.0f64 - self.renderMinY) * self.renderMaxX
+                + (var97 as f64) * (1.0f64 - self.renderMinY) * (1.0f64 - self.renderMaxX))
+                as f32);
+            var12 = (((var85 as f64) * self.renderMaxY * (1.0f64 - self.renderMaxX)
+                + (var91 as f64) * self.renderMaxY * self.renderMaxX
+                + (var94 as f64) * (1.0f64 - self.renderMaxY) * self.renderMaxX
+                + (var97 as f64) * (1.0f64 - self.renderMaxY) * (1.0f64 - self.renderMaxX))
+                as f32);
+            let mut var100: i32 = self.getAoBrightness(
+                self.aoBrightnessXZNP,
+                self.aoBrightnessXYZNPP,
+                self.aoBrightnessYZPP,
+                var76,
+            );
+            let mut var103: i32 = self.getAoBrightness(
+                self.aoBrightnessYZPP,
+                self.aoBrightnessXZPP,
+                self.aoBrightnessXYZPPP,
+                var76,
+            );
+            let mut var106: i32 = self.getAoBrightness(
+                self.aoBrightnessYZNP,
+                self.aoBrightnessXYZPNP,
+                self.aoBrightnessXZPP,
+                var76,
+            );
+            let mut var109: i32 = self.getAoBrightness(
+                self.aoBrightnessXYZNNP,
+                self.aoBrightnessXZNP,
+                self.aoBrightnessYZNP,
+                var76,
+            );
+            self.brightnessTopLeft = self.mixAoBrightness(
+                var100,
+                var109,
+                var106,
+                var103,
+                self.renderMaxY * (1.0f64 - self.renderMinX),
+                (1.0f64 - self.renderMaxY) * (1.0f64 - self.renderMinX),
+                (1.0f64 - self.renderMaxY) * self.renderMinX,
+                self.renderMaxY * self.renderMinX,
+            );
+            self.brightnessBottomLeft = self.mixAoBrightness(
+                var100,
+                var109,
+                var106,
+                var103,
+                self.renderMinY * (1.0f64 - self.renderMinX),
+                (1.0f64 - self.renderMinY) * (1.0f64 - self.renderMinX),
+                (1.0f64 - self.renderMinY) * self.renderMinX,
+                self.renderMinY * self.renderMinX,
+            );
+            self.brightnessBottomRight = self.mixAoBrightness(
+                var100,
+                var109,
+                var106,
+                var103,
+                self.renderMinY * (1.0f64 - self.renderMaxX),
+                (1.0f64 - self.renderMinY) * (1.0f64 - self.renderMaxX),
+                (1.0f64 - self.renderMinY) * self.renderMaxX,
+                self.renderMinY * self.renderMaxX,
+            );
+            self.brightnessTopRight = self.mixAoBrightness(
+                var100,
+                var109,
+                var106,
+                var103,
+                self.renderMaxY * (1.0f64 - self.renderMaxX),
+                (1.0f64 - self.renderMaxY) * (1.0f64 - self.renderMaxX),
+                (1.0f64 - self.renderMaxY) * self.renderMaxX,
+                self.renderMaxY * self.renderMaxX,
+            );
             if var13 {
                 self.colorRedTopRight = var5 * 0.8f32;
                 self.colorRedBottomRight = self.colorRedTopRight;
@@ -1690,7 +2246,12 @@ impl<'a, 'b> Rb<'a, 'b> {
                 self.colorBlueBottomLeft = self.colorBlueBottomLeft * (var7);
                 self.colorBlueBottomRight = self.colorBlueBottomRight * (var7);
                 self.colorBlueTopRight = self.colorBlueTopRight * (var7);
-                self.face_z_pos((var2 as f64), (var3 as f64), (var4 as f64), self.grass_overlay());
+                self.face_z_pos(
+                    (var2 as f64),
+                    (var3 as f64),
+                    (var4 as f64),
+                    self.grass_overlay(),
+                );
             }
             var8 = true;
         }
@@ -1746,22 +2307,110 @@ impl<'a, 'b> Rb<'a, 'b> {
                 var77 = self.mixed(var2 - 1, var3, var4);
             }
             let mut var82: f32 = self.ao_light(var2 - 1, var3, var4);
-            let mut var87: f32 = (self.aoLightValueScratchXYNN + self.aoLightValueScratchXYZNNP + var82 + self.aoLightValueScratchXZNP) / 4.0f32;
-            let mut var92: f32 = (var82 + self.aoLightValueScratchXZNP + self.aoLightValueScratchXYNP + self.aoLightValueScratchXYZNPP) / 4.0f32;
-            let mut var95: f32 = (self.aoLightValueScratchXZNN + var82 + self.aoLightValueScratchXYZNPN + self.aoLightValueScratchXYNP) / 4.0f32;
-            let mut var98: f32 = (self.aoLightValueScratchXYZNNN + self.aoLightValueScratchXYNN + self.aoLightValueScratchXZNN + var82) / 4.0f32;
-            var9 = (((var92 as f64) * self.renderMaxY * self.renderMaxZ + (var95 as f64) * self.renderMaxY * (1.0f64 - self.renderMaxZ) + (var98 as f64) * (1.0f64 - self.renderMaxY) * (1.0f64 - self.renderMaxZ) + (var87 as f64) * (1.0f64 - self.renderMaxY) * self.renderMaxZ) as f32);
-            var10 = (((var92 as f64) * self.renderMaxY * self.renderMinZ + (var95 as f64) * self.renderMaxY * (1.0f64 - self.renderMinZ) + (var98 as f64) * (1.0f64 - self.renderMaxY) * (1.0f64 - self.renderMinZ) + (var87 as f64) * (1.0f64 - self.renderMaxY) * self.renderMinZ) as f32);
-            var11 = (((var92 as f64) * self.renderMinY * self.renderMinZ + (var95 as f64) * self.renderMinY * (1.0f64 - self.renderMinZ) + (var98 as f64) * (1.0f64 - self.renderMinY) * (1.0f64 - self.renderMinZ) + (var87 as f64) * (1.0f64 - self.renderMinY) * self.renderMinZ) as f32);
-            var12 = (((var92 as f64) * self.renderMinY * self.renderMaxZ + (var95 as f64) * self.renderMinY * (1.0f64 - self.renderMaxZ) + (var98 as f64) * (1.0f64 - self.renderMinY) * (1.0f64 - self.renderMaxZ) + (var87 as f64) * (1.0f64 - self.renderMinY) * self.renderMaxZ) as f32);
-            let mut var101: i32 = self.getAoBrightness(self.aoBrightnessXYNN, self.aoBrightnessXYZNNP, self.aoBrightnessXZNP, var77);
-            let mut var104: i32 = self.getAoBrightness(self.aoBrightnessXZNP, self.aoBrightnessXYNP, self.aoBrightnessXYZNPP, var77);
-            let mut var107: i32 = self.getAoBrightness(self.aoBrightnessXZNN, self.aoBrightnessXYZNPN, self.aoBrightnessXYNP, var77);
-            let mut var110: i32 = self.getAoBrightness(self.aoBrightnessXYZNNN, self.aoBrightnessXYNN, self.aoBrightnessXZNN, var77);
-            self.brightnessTopLeft = self.mixAoBrightness(var104, var107, var110, var101, self.renderMaxY * self.renderMaxZ, self.renderMaxY * (1.0f64 - self.renderMaxZ), (1.0f64 - self.renderMaxY) * (1.0f64 - self.renderMaxZ), (1.0f64 - self.renderMaxY) * self.renderMaxZ);
-            self.brightnessBottomLeft = self.mixAoBrightness(var104, var107, var110, var101, self.renderMaxY * self.renderMinZ, self.renderMaxY * (1.0f64 - self.renderMinZ), (1.0f64 - self.renderMaxY) * (1.0f64 - self.renderMinZ), (1.0f64 - self.renderMaxY) * self.renderMinZ);
-            self.brightnessBottomRight = self.mixAoBrightness(var104, var107, var110, var101, self.renderMinY * self.renderMinZ, self.renderMinY * (1.0f64 - self.renderMinZ), (1.0f64 - self.renderMinY) * (1.0f64 - self.renderMinZ), (1.0f64 - self.renderMinY) * self.renderMinZ);
-            self.brightnessTopRight = self.mixAoBrightness(var104, var107, var110, var101, self.renderMinY * self.renderMaxZ, self.renderMinY * (1.0f64 - self.renderMaxZ), (1.0f64 - self.renderMinY) * (1.0f64 - self.renderMaxZ), (1.0f64 - self.renderMinY) * self.renderMaxZ);
+            let mut var87: f32 = (self.aoLightValueScratchXYNN
+                + self.aoLightValueScratchXYZNNP
+                + var82
+                + self.aoLightValueScratchXZNP)
+                / 4.0f32;
+            let mut var92: f32 = (var82
+                + self.aoLightValueScratchXZNP
+                + self.aoLightValueScratchXYNP
+                + self.aoLightValueScratchXYZNPP)
+                / 4.0f32;
+            let mut var95: f32 = (self.aoLightValueScratchXZNN
+                + var82
+                + self.aoLightValueScratchXYZNPN
+                + self.aoLightValueScratchXYNP)
+                / 4.0f32;
+            let mut var98: f32 = (self.aoLightValueScratchXYZNNN
+                + self.aoLightValueScratchXYNN
+                + self.aoLightValueScratchXZNN
+                + var82)
+                / 4.0f32;
+            var9 = (((var92 as f64) * self.renderMaxY * self.renderMaxZ
+                + (var95 as f64) * self.renderMaxY * (1.0f64 - self.renderMaxZ)
+                + (var98 as f64) * (1.0f64 - self.renderMaxY) * (1.0f64 - self.renderMaxZ)
+                + (var87 as f64) * (1.0f64 - self.renderMaxY) * self.renderMaxZ)
+                as f32);
+            var10 = (((var92 as f64) * self.renderMaxY * self.renderMinZ
+                + (var95 as f64) * self.renderMaxY * (1.0f64 - self.renderMinZ)
+                + (var98 as f64) * (1.0f64 - self.renderMaxY) * (1.0f64 - self.renderMinZ)
+                + (var87 as f64) * (1.0f64 - self.renderMaxY) * self.renderMinZ)
+                as f32);
+            var11 = (((var92 as f64) * self.renderMinY * self.renderMinZ
+                + (var95 as f64) * self.renderMinY * (1.0f64 - self.renderMinZ)
+                + (var98 as f64) * (1.0f64 - self.renderMinY) * (1.0f64 - self.renderMinZ)
+                + (var87 as f64) * (1.0f64 - self.renderMinY) * self.renderMinZ)
+                as f32);
+            var12 = (((var92 as f64) * self.renderMinY * self.renderMaxZ
+                + (var95 as f64) * self.renderMinY * (1.0f64 - self.renderMaxZ)
+                + (var98 as f64) * (1.0f64 - self.renderMinY) * (1.0f64 - self.renderMaxZ)
+                + (var87 as f64) * (1.0f64 - self.renderMinY) * self.renderMaxZ)
+                as f32);
+            let mut var101: i32 = self.getAoBrightness(
+                self.aoBrightnessXYNN,
+                self.aoBrightnessXYZNNP,
+                self.aoBrightnessXZNP,
+                var77,
+            );
+            let mut var104: i32 = self.getAoBrightness(
+                self.aoBrightnessXZNP,
+                self.aoBrightnessXYNP,
+                self.aoBrightnessXYZNPP,
+                var77,
+            );
+            let mut var107: i32 = self.getAoBrightness(
+                self.aoBrightnessXZNN,
+                self.aoBrightnessXYZNPN,
+                self.aoBrightnessXYNP,
+                var77,
+            );
+            let mut var110: i32 = self.getAoBrightness(
+                self.aoBrightnessXYZNNN,
+                self.aoBrightnessXYNN,
+                self.aoBrightnessXZNN,
+                var77,
+            );
+            self.brightnessTopLeft = self.mixAoBrightness(
+                var104,
+                var107,
+                var110,
+                var101,
+                self.renderMaxY * self.renderMaxZ,
+                self.renderMaxY * (1.0f64 - self.renderMaxZ),
+                (1.0f64 - self.renderMaxY) * (1.0f64 - self.renderMaxZ),
+                (1.0f64 - self.renderMaxY) * self.renderMaxZ,
+            );
+            self.brightnessBottomLeft = self.mixAoBrightness(
+                var104,
+                var107,
+                var110,
+                var101,
+                self.renderMaxY * self.renderMinZ,
+                self.renderMaxY * (1.0f64 - self.renderMinZ),
+                (1.0f64 - self.renderMaxY) * (1.0f64 - self.renderMinZ),
+                (1.0f64 - self.renderMaxY) * self.renderMinZ,
+            );
+            self.brightnessBottomRight = self.mixAoBrightness(
+                var104,
+                var107,
+                var110,
+                var101,
+                self.renderMinY * self.renderMinZ,
+                self.renderMinY * (1.0f64 - self.renderMinZ),
+                (1.0f64 - self.renderMinY) * (1.0f64 - self.renderMinZ),
+                (1.0f64 - self.renderMinY) * self.renderMinZ,
+            );
+            self.brightnessTopRight = self.mixAoBrightness(
+                var104,
+                var107,
+                var110,
+                var101,
+                self.renderMinY * self.renderMaxZ,
+                self.renderMinY * (1.0f64 - self.renderMaxZ),
+                (1.0f64 - self.renderMinY) * (1.0f64 - self.renderMaxZ),
+                (1.0f64 - self.renderMinY) * self.renderMaxZ,
+            );
             if var13 {
                 self.colorRedTopRight = var5 * 0.6f32;
                 self.colorRedBottomRight = self.colorRedTopRight;
@@ -1816,7 +2465,12 @@ impl<'a, 'b> Rb<'a, 'b> {
                 self.colorBlueBottomLeft = self.colorBlueBottomLeft * (var7);
                 self.colorBlueBottomRight = self.colorBlueBottomRight * (var7);
                 self.colorBlueTopRight = self.colorBlueTopRight * (var7);
-                self.face_x_neg((var2 as f64), (var3 as f64), (var4 as f64), self.grass_overlay());
+                self.face_x_neg(
+                    (var2 as f64),
+                    (var3 as f64),
+                    (var4 as f64),
+                    self.grass_overlay(),
+                );
             }
             var8 = true;
         }
@@ -1872,22 +2526,106 @@ impl<'a, 'b> Rb<'a, 'b> {
                 var78 = self.mixed(var2 + 1, var3, var4);
             }
             let mut var83: f32 = self.ao_light(var2 + 1, var3, var4);
-            let mut var89: f32 = (self.aoLightValueScratchXYPN + self.aoLightValueScratchXYZPNP + var83 + self.aoLightValueScratchXZPP) / 4.0f32;
-            let mut var93: f32 = (self.aoLightValueScratchXYZPNN + self.aoLightValueScratchXYPN + self.aoLightValueScratchXZPN + var83) / 4.0f32;
-            let mut var96: f32 = (self.aoLightValueScratchXZPN + var83 + self.aoLightValueScratchXYZPPN + self.aoLightValueScratchXYPP) / 4.0f32;
-            let mut var99: f32 = (var83 + self.aoLightValueScratchXZPP + self.aoLightValueScratchXYPP + self.aoLightValueScratchXYZPPP) / 4.0f32;
-            var9 = (((var89 as f64) * (1.0f64 - self.renderMinY) * self.renderMaxZ + (var93 as f64) * (1.0f64 - self.renderMinY) * (1.0f64 - self.renderMaxZ) + (var96 as f64) * self.renderMinY * (1.0f64 - self.renderMaxZ) + (var99 as f64) * self.renderMinY * self.renderMaxZ) as f32);
-            var10 = (((var89 as f64) * (1.0f64 - self.renderMinY) * self.renderMinZ + (var93 as f64) * (1.0f64 - self.renderMinY) * (1.0f64 - self.renderMinZ) + (var96 as f64) * self.renderMinY * (1.0f64 - self.renderMinZ) + (var99 as f64) * self.renderMinY * self.renderMinZ) as f32);
-            var11 = (((var89 as f64) * (1.0f64 - self.renderMaxY) * self.renderMinZ + (var93 as f64) * (1.0f64 - self.renderMaxY) * (1.0f64 - self.renderMinZ) + (var96 as f64) * self.renderMaxY * (1.0f64 - self.renderMinZ) + (var99 as f64) * self.renderMaxY * self.renderMinZ) as f32);
-            var12 = (((var89 as f64) * (1.0f64 - self.renderMaxY) * self.renderMaxZ + (var93 as f64) * (1.0f64 - self.renderMaxY) * (1.0f64 - self.renderMaxZ) + (var96 as f64) * self.renderMaxY * (1.0f64 - self.renderMaxZ) + (var99 as f64) * self.renderMaxY * self.renderMaxZ) as f32);
-            let mut var102: i32 = self.getAoBrightness(self.aoBrightnessXYPN, self.aoBrightnessXYZPNP, self.aoBrightnessXZPP, var78);
-            let mut var105: i32 = self.getAoBrightness(self.aoBrightnessXZPP, self.aoBrightnessXYPP, self.aoBrightnessXYZPPP, var78);
-            let mut var108: i32 = self.getAoBrightness(self.aoBrightnessXZPN, self.aoBrightnessXYZPPN, self.aoBrightnessXYPP, var78);
-            let mut var111: i32 = self.getAoBrightness(self.aoBrightnessXYZPNN, self.aoBrightnessXYPN, self.aoBrightnessXZPN, var78);
-            self.brightnessTopLeft = self.mixAoBrightness(var102, var111, var108, var105, (1.0f64 - self.renderMinY) * self.renderMaxZ, (1.0f64 - self.renderMinY) * (1.0f64 - self.renderMaxZ), self.renderMinY * (1.0f64 - self.renderMaxZ), self.renderMinY * self.renderMaxZ);
-            self.brightnessBottomLeft = self.mixAoBrightness(var102, var111, var108, var105, (1.0f64 - self.renderMinY) * self.renderMinZ, (1.0f64 - self.renderMinY) * (1.0f64 - self.renderMinZ), self.renderMinY * (1.0f64 - self.renderMinZ), self.renderMinY * self.renderMinZ);
-            self.brightnessBottomRight = self.mixAoBrightness(var102, var111, var108, var105, (1.0f64 - self.renderMaxY) * self.renderMinZ, (1.0f64 - self.renderMaxY) * (1.0f64 - self.renderMinZ), self.renderMaxY * (1.0f64 - self.renderMinZ), self.renderMaxY * self.renderMinZ);
-            self.brightnessTopRight = self.mixAoBrightness(var102, var111, var108, var105, (1.0f64 - self.renderMaxY) * self.renderMaxZ, (1.0f64 - self.renderMaxY) * (1.0f64 - self.renderMaxZ), self.renderMaxY * (1.0f64 - self.renderMaxZ), self.renderMaxY * self.renderMaxZ);
+            let mut var89: f32 = (self.aoLightValueScratchXYPN
+                + self.aoLightValueScratchXYZPNP
+                + var83
+                + self.aoLightValueScratchXZPP)
+                / 4.0f32;
+            let mut var93: f32 = (self.aoLightValueScratchXYZPNN
+                + self.aoLightValueScratchXYPN
+                + self.aoLightValueScratchXZPN
+                + var83)
+                / 4.0f32;
+            let mut var96: f32 = (self.aoLightValueScratchXZPN
+                + var83
+                + self.aoLightValueScratchXYZPPN
+                + self.aoLightValueScratchXYPP)
+                / 4.0f32;
+            let mut var99: f32 = (var83
+                + self.aoLightValueScratchXZPP
+                + self.aoLightValueScratchXYPP
+                + self.aoLightValueScratchXYZPPP)
+                / 4.0f32;
+            var9 = (((var89 as f64) * (1.0f64 - self.renderMinY) * self.renderMaxZ
+                + (var93 as f64) * (1.0f64 - self.renderMinY) * (1.0f64 - self.renderMaxZ)
+                + (var96 as f64) * self.renderMinY * (1.0f64 - self.renderMaxZ)
+                + (var99 as f64) * self.renderMinY * self.renderMaxZ) as f32);
+            var10 = (((var89 as f64) * (1.0f64 - self.renderMinY) * self.renderMinZ
+                + (var93 as f64) * (1.0f64 - self.renderMinY) * (1.0f64 - self.renderMinZ)
+                + (var96 as f64) * self.renderMinY * (1.0f64 - self.renderMinZ)
+                + (var99 as f64) * self.renderMinY * self.renderMinZ) as f32);
+            var11 = (((var89 as f64) * (1.0f64 - self.renderMaxY) * self.renderMinZ
+                + (var93 as f64) * (1.0f64 - self.renderMaxY) * (1.0f64 - self.renderMinZ)
+                + (var96 as f64) * self.renderMaxY * (1.0f64 - self.renderMinZ)
+                + (var99 as f64) * self.renderMaxY * self.renderMinZ) as f32);
+            var12 = (((var89 as f64) * (1.0f64 - self.renderMaxY) * self.renderMaxZ
+                + (var93 as f64) * (1.0f64 - self.renderMaxY) * (1.0f64 - self.renderMaxZ)
+                + (var96 as f64) * self.renderMaxY * (1.0f64 - self.renderMaxZ)
+                + (var99 as f64) * self.renderMaxY * self.renderMaxZ) as f32);
+            let mut var102: i32 = self.getAoBrightness(
+                self.aoBrightnessXYPN,
+                self.aoBrightnessXYZPNP,
+                self.aoBrightnessXZPP,
+                var78,
+            );
+            let mut var105: i32 = self.getAoBrightness(
+                self.aoBrightnessXZPP,
+                self.aoBrightnessXYPP,
+                self.aoBrightnessXYZPPP,
+                var78,
+            );
+            let mut var108: i32 = self.getAoBrightness(
+                self.aoBrightnessXZPN,
+                self.aoBrightnessXYZPPN,
+                self.aoBrightnessXYPP,
+                var78,
+            );
+            let mut var111: i32 = self.getAoBrightness(
+                self.aoBrightnessXYZPNN,
+                self.aoBrightnessXYPN,
+                self.aoBrightnessXZPN,
+                var78,
+            );
+            self.brightnessTopLeft = self.mixAoBrightness(
+                var102,
+                var111,
+                var108,
+                var105,
+                (1.0f64 - self.renderMinY) * self.renderMaxZ,
+                (1.0f64 - self.renderMinY) * (1.0f64 - self.renderMaxZ),
+                self.renderMinY * (1.0f64 - self.renderMaxZ),
+                self.renderMinY * self.renderMaxZ,
+            );
+            self.brightnessBottomLeft = self.mixAoBrightness(
+                var102,
+                var111,
+                var108,
+                var105,
+                (1.0f64 - self.renderMinY) * self.renderMinZ,
+                (1.0f64 - self.renderMinY) * (1.0f64 - self.renderMinZ),
+                self.renderMinY * (1.0f64 - self.renderMinZ),
+                self.renderMinY * self.renderMinZ,
+            );
+            self.brightnessBottomRight = self.mixAoBrightness(
+                var102,
+                var111,
+                var108,
+                var105,
+                (1.0f64 - self.renderMaxY) * self.renderMinZ,
+                (1.0f64 - self.renderMaxY) * (1.0f64 - self.renderMinZ),
+                self.renderMaxY * (1.0f64 - self.renderMinZ),
+                self.renderMaxY * self.renderMinZ,
+            );
+            self.brightnessTopRight = self.mixAoBrightness(
+                var102,
+                var111,
+                var108,
+                var105,
+                (1.0f64 - self.renderMaxY) * self.renderMaxZ,
+                (1.0f64 - self.renderMaxY) * (1.0f64 - self.renderMaxZ),
+                self.renderMaxY * (1.0f64 - self.renderMaxZ),
+                self.renderMaxY * self.renderMaxZ,
+            );
             if var13 {
                 self.colorRedTopRight = var5 * 0.6f32;
                 self.colorRedBottomRight = self.colorRedTopRight;
@@ -1942,7 +2680,12 @@ impl<'a, 'b> Rb<'a, 'b> {
                 self.colorBlueBottomLeft = self.colorBlueBottomLeft * (var7);
                 self.colorBlueBottomRight = self.colorBlueBottomRight * (var7);
                 self.colorBlueTopRight = self.colorBlueTopRight * (var7);
-                self.face_x_pos((var2 as f64), (var3 as f64), (var4 as f64), self.grass_overlay());
+                self.face_x_pos(
+                    (var2 as f64),
+                    (var3 as f64),
+                    (var4 as f64),
+                    self.grass_overlay(),
+                );
             }
             var8 = true;
         }
@@ -1951,8 +2694,22 @@ impl<'a, 'b> Rb<'a, 'b> {
     }
 
     /// `RenderBlocks.renderStandardBlockWithColorMultiplier`
-    #[allow(unused_assignments, unused_mut, unused_variables, unused_parens, clippy::all)]
-    pub fn std_flat(&mut self, mut var2: i32, mut var3: i32, mut var4: i32, var5: f32, var6: f32, var7: f32) -> bool {
+    #[allow(
+        unused_assignments,
+        unused_mut,
+        unused_variables,
+        unused_parens,
+        clippy::all
+    )]
+    pub fn std_flat(
+        &mut self,
+        mut var2: i32,
+        mut var3: i32,
+        mut var4: i32,
+        var5: f32,
+        var6: f32,
+        var7: f32,
+    ) -> bool {
         self.enableAO = false;
         let mut var9: bool = false;
         let mut var10: f32 = 0.5f32;
@@ -1984,58 +2741,112 @@ impl<'a, 'b> Rb<'a, 'b> {
         }
         let mut var26: i32 = self.mixed(var2, var3, var4);
         if self.renderAllFaces || self.should_side(var2, var3 - 1, var4, 0) {
-            self.bright = if self.renderMinY > 0.0f64 { var26 } else { self.mixed(var2, var3 - 1, var4) };
+            self.bright = if self.renderMinY > 0.0f64 {
+                var26
+            } else {
+                self.mixed(var2, var3 - 1, var4)
+            };
             self.color(var17, var20, var23);
-            self.face_y_neg((var2 as f64), (var3 as f64), (var4 as f64), self.icon(var2, var3, var4, 0));
+            self.face_y_neg(
+                (var2 as f64),
+                (var3 as f64),
+                (var4 as f64),
+                self.icon(var2, var3, var4, 0),
+            );
             var9 = true;
         }
         if self.renderAllFaces || self.should_side(var2, var3 + 1, var4, 1) {
-            self.bright = if self.renderMaxY < 1.0f64 { var26 } else { self.mixed(var2, var3 + 1, var4) };
+            self.bright = if self.renderMaxY < 1.0f64 {
+                var26
+            } else {
+                self.mixed(var2, var3 + 1, var4)
+            };
             self.color(var14, var15, var16);
-            self.face_y_pos((var2 as f64), (var3 as f64), (var4 as f64), self.icon(var2, var3, var4, 1));
+            self.face_y_pos(
+                (var2 as f64),
+                (var3 as f64),
+                (var4 as f64),
+                self.icon(var2, var3, var4, 1),
+            );
             var9 = true;
         }
         if self.renderAllFaces || self.should_side(var2, var3, var4 - 1, 2) {
-            self.bright = if self.renderMinZ > 0.0f64 { var26 } else { self.mixed(var2, var3, var4 - 1) };
+            self.bright = if self.renderMinZ > 0.0f64 {
+                var26
+            } else {
+                self.mixed(var2, var3, var4 - 1)
+            };
             self.color(var18, var21, var24);
             let mut var27: Icon = self.icon(var2, var3, var4, 2);
             self.face_z_neg((var2 as f64), (var3 as f64), (var4 as f64), var27);
             if FANCY_GRASS && var27.grass_side && !self.overrideBlockTexture.is_some() {
                 self.color(var18 * var5, var21 * var6, var24 * var7);
-                self.face_z_neg((var2 as f64), (var3 as f64), (var4 as f64), self.grass_overlay());
+                self.face_z_neg(
+                    (var2 as f64),
+                    (var3 as f64),
+                    (var4 as f64),
+                    self.grass_overlay(),
+                );
             }
             var9 = true;
         }
         if self.renderAllFaces || self.should_side(var2, var3, var4 + 1, 3) {
-            self.bright = if self.renderMaxZ < 1.0f64 { var26 } else { self.mixed(var2, var3, var4 + 1) };
+            self.bright = if self.renderMaxZ < 1.0f64 {
+                var26
+            } else {
+                self.mixed(var2, var3, var4 + 1)
+            };
             self.color(var18, var21, var24);
             let mut var28: Icon = self.icon(var2, var3, var4, 3);
             self.face_z_pos((var2 as f64), (var3 as f64), (var4 as f64), var28);
             if FANCY_GRASS && var28.grass_side && !self.overrideBlockTexture.is_some() {
                 self.color(var18 * var5, var21 * var6, var24 * var7);
-                self.face_z_pos((var2 as f64), (var3 as f64), (var4 as f64), self.grass_overlay());
+                self.face_z_pos(
+                    (var2 as f64),
+                    (var3 as f64),
+                    (var4 as f64),
+                    self.grass_overlay(),
+                );
             }
             var9 = true;
         }
         if self.renderAllFaces || self.should_side(var2 - 1, var3, var4, 4) {
-            self.bright = if self.renderMinX > 0.0f64 { var26 } else { self.mixed(var2 - 1, var3, var4) };
+            self.bright = if self.renderMinX > 0.0f64 {
+                var26
+            } else {
+                self.mixed(var2 - 1, var3, var4)
+            };
             self.color(var19, var22, var25);
             let mut var29: Icon = self.icon(var2, var3, var4, 4);
             self.face_x_neg((var2 as f64), (var3 as f64), (var4 as f64), var29);
             if FANCY_GRASS && var29.grass_side && !self.overrideBlockTexture.is_some() {
                 self.color(var19 * var5, var22 * var6, var25 * var7);
-                self.face_x_neg((var2 as f64), (var3 as f64), (var4 as f64), self.grass_overlay());
+                self.face_x_neg(
+                    (var2 as f64),
+                    (var3 as f64),
+                    (var4 as f64),
+                    self.grass_overlay(),
+                );
             }
             var9 = true;
         }
         if self.renderAllFaces || self.should_side(var2 + 1, var3, var4, 5) {
-            self.bright = if self.renderMaxX < 1.0f64 { var26 } else { self.mixed(var2 + 1, var3, var4) };
+            self.bright = if self.renderMaxX < 1.0f64 {
+                var26
+            } else {
+                self.mixed(var2 + 1, var3, var4)
+            };
             self.color(var19, var22, var25);
             let mut var30: Icon = self.icon(var2, var3, var4, 5);
             self.face_x_pos((var2 as f64), (var3 as f64), (var4 as f64), var30);
             if FANCY_GRASS && var30.grass_side && !self.overrideBlockTexture.is_some() {
                 self.color(var19 * var5, var22 * var6, var25 * var7);
-                self.face_x_pos((var2 as f64), (var3 as f64), (var4 as f64), self.grass_overlay());
+                self.face_x_pos(
+                    (var2 as f64),
+                    (var3 as f64),
+                    (var4 as f64),
+                    self.grass_overlay(),
+                );
             }
             var9 = true;
         }
@@ -2043,7 +2854,13 @@ impl<'a, 'b> Rb<'a, 'b> {
     }
 
     /// `RenderBlocks.renderFaceYNeg`
-    #[allow(unused_assignments, unused_mut, unused_variables, unused_parens, clippy::all)]
+    #[allow(
+        unused_assignments,
+        unused_mut,
+        unused_variables,
+        unused_parens,
+        clippy::all
+    )]
     pub fn face_y_neg(&mut self, var2: f64, var4: f64, var6: f64, mut var8: Icon) {
         if self.overrideBlockTexture.is_some() {
             var8 = self.overrideBlockTexture.unwrap();
@@ -2106,16 +2923,32 @@ impl<'a, 'b> Rb<'a, 'b> {
             var28 = var2 + self.renderMinX;
         }
         if self.enableAO {
-            self.color(self.colorRedTopLeft, self.colorGreenTopLeft, self.colorBlueTopLeft);
+            self.color(
+                self.colorRedTopLeft,
+                self.colorGreenTopLeft,
+                self.colorBlueTopLeft,
+            );
             self.bright = self.brightnessTopLeft;
             self.vertex(var26, var30, var34, var20, var24);
-            self.color(self.colorRedBottomLeft, self.colorGreenBottomLeft, self.colorBlueBottomLeft);
+            self.color(
+                self.colorRedBottomLeft,
+                self.colorGreenBottomLeft,
+                self.colorBlueBottomLeft,
+            );
             self.bright = self.brightnessBottomLeft;
             self.vertex(var26, var30, var32, var10, var14);
-            self.color(self.colorRedBottomRight, self.colorGreenBottomRight, self.colorBlueBottomRight);
+            self.color(
+                self.colorRedBottomRight,
+                self.colorGreenBottomRight,
+                self.colorBlueBottomRight,
+            );
             self.bright = self.brightnessBottomRight;
             self.vertex(var28, var30, var32, var18, var22);
-            self.color(self.colorRedTopRight, self.colorGreenTopRight, self.colorBlueTopRight);
+            self.color(
+                self.colorRedTopRight,
+                self.colorGreenTopRight,
+                self.colorBlueTopRight,
+            );
             self.bright = self.brightnessTopRight;
             self.vertex(var28, var30, var34, var12, var16);
         } else {
@@ -2127,7 +2960,13 @@ impl<'a, 'b> Rb<'a, 'b> {
     }
 
     /// `RenderBlocks.renderFaceYPos`
-    #[allow(unused_assignments, unused_mut, unused_variables, unused_parens, clippy::all)]
+    #[allow(
+        unused_assignments,
+        unused_mut,
+        unused_variables,
+        unused_parens,
+        clippy::all
+    )]
     pub fn face_y_pos(&mut self, var2: f64, var4: f64, var6: f64, mut var8: Icon) {
         if self.overrideBlockTexture.is_some() {
             var8 = self.overrideBlockTexture.unwrap();
@@ -2190,16 +3029,32 @@ impl<'a, 'b> Rb<'a, 'b> {
             var28 = var2 + self.renderMinX;
         }
         if self.enableAO {
-            self.color(self.colorRedTopLeft, self.colorGreenTopLeft, self.colorBlueTopLeft);
+            self.color(
+                self.colorRedTopLeft,
+                self.colorGreenTopLeft,
+                self.colorBlueTopLeft,
+            );
             self.bright = self.brightnessTopLeft;
             self.vertex(var28, var30, var34, var12, var16);
-            self.color(self.colorRedBottomLeft, self.colorGreenBottomLeft, self.colorBlueBottomLeft);
+            self.color(
+                self.colorRedBottomLeft,
+                self.colorGreenBottomLeft,
+                self.colorBlueBottomLeft,
+            );
             self.bright = self.brightnessBottomLeft;
             self.vertex(var28, var30, var32, var18, var22);
-            self.color(self.colorRedBottomRight, self.colorGreenBottomRight, self.colorBlueBottomRight);
+            self.color(
+                self.colorRedBottomRight,
+                self.colorGreenBottomRight,
+                self.colorBlueBottomRight,
+            );
             self.bright = self.brightnessBottomRight;
             self.vertex(var26, var30, var32, var10, var14);
-            self.color(self.colorRedTopRight, self.colorGreenTopRight, self.colorBlueTopRight);
+            self.color(
+                self.colorRedTopRight,
+                self.colorGreenTopRight,
+                self.colorBlueTopRight,
+            );
             self.bright = self.brightnessTopRight;
             self.vertex(var26, var30, var34, var20, var24);
         } else {
@@ -2211,7 +3066,13 @@ impl<'a, 'b> Rb<'a, 'b> {
     }
 
     /// `RenderBlocks.renderFaceZNeg`
-    #[allow(unused_assignments, unused_mut, unused_variables, unused_parens, clippy::all)]
+    #[allow(
+        unused_assignments,
+        unused_mut,
+        unused_variables,
+        unused_parens,
+        clippy::all
+    )]
     pub fn face_z_neg(&mut self, var2: f64, var4: f64, var6: f64, mut var8: Icon) {
         if self.overrideBlockTexture.is_some() {
             var8 = self.overrideBlockTexture.unwrap();
@@ -2283,16 +3144,32 @@ impl<'a, 'b> Rb<'a, 'b> {
             var28 = var2 + self.renderMinX;
         }
         if self.enableAO {
-            self.color(self.colorRedTopLeft, self.colorGreenTopLeft, self.colorBlueTopLeft);
+            self.color(
+                self.colorRedTopLeft,
+                self.colorGreenTopLeft,
+                self.colorBlueTopLeft,
+            );
             self.bright = self.brightnessTopLeft;
             self.vertex(var26, var32, var34, var40, var22);
-            self.color(self.colorRedBottomLeft, self.colorGreenBottomLeft, self.colorBlueBottomLeft);
+            self.color(
+                self.colorRedBottomLeft,
+                self.colorGreenBottomLeft,
+                self.colorBlueBottomLeft,
+            );
             self.bright = self.brightnessBottomLeft;
             self.vertex(var28, var32, var34, var10, var14);
-            self.color(self.colorRedBottomRight, self.colorGreenBottomRight, self.colorBlueBottomRight);
+            self.color(
+                self.colorRedBottomRight,
+                self.colorGreenBottomRight,
+                self.colorBlueBottomRight,
+            );
             self.bright = self.brightnessBottomRight;
             self.vertex(var28, var30, var34, var20, var24);
-            self.color(self.colorRedTopRight, self.colorGreenTopRight, self.colorBlueTopRight);
+            self.color(
+                self.colorRedTopRight,
+                self.colorGreenTopRight,
+                self.colorBlueTopRight,
+            );
             self.bright = self.brightnessTopRight;
             self.vertex(var26, var30, var34, var12, var16);
         } else {
@@ -2304,7 +3181,13 @@ impl<'a, 'b> Rb<'a, 'b> {
     }
 
     /// `RenderBlocks.renderFaceZPos`
-    #[allow(unused_assignments, unused_mut, unused_variables, unused_parens, clippy::all)]
+    #[allow(
+        unused_assignments,
+        unused_mut,
+        unused_variables,
+        unused_parens,
+        clippy::all
+    )]
     pub fn face_z_pos(&mut self, var2: f64, var4: f64, var6: f64, mut var8: Icon) {
         if self.overrideBlockTexture.is_some() {
             var8 = self.overrideBlockTexture.unwrap();
@@ -2372,16 +3255,32 @@ impl<'a, 'b> Rb<'a, 'b> {
             var28 = var2 + self.renderMinX;
         }
         if self.enableAO {
-            self.color(self.colorRedTopLeft, self.colorGreenTopLeft, self.colorBlueTopLeft);
+            self.color(
+                self.colorRedTopLeft,
+                self.colorGreenTopLeft,
+                self.colorBlueTopLeft,
+            );
             self.bright = self.brightnessTopLeft;
             self.vertex(var26, var32, var34, var10, var14);
-            self.color(self.colorRedBottomLeft, self.colorGreenBottomLeft, self.colorBlueBottomLeft);
+            self.color(
+                self.colorRedBottomLeft,
+                self.colorGreenBottomLeft,
+                self.colorBlueBottomLeft,
+            );
             self.bright = self.brightnessBottomLeft;
             self.vertex(var26, var30, var34, var20, var24);
-            self.color(self.colorRedBottomRight, self.colorGreenBottomRight, self.colorBlueBottomRight);
+            self.color(
+                self.colorRedBottomRight,
+                self.colorGreenBottomRight,
+                self.colorBlueBottomRight,
+            );
             self.bright = self.brightnessBottomRight;
             self.vertex(var28, var30, var34, var12, var16);
-            self.color(self.colorRedTopRight, self.colorGreenTopRight, self.colorBlueTopRight);
+            self.color(
+                self.colorRedTopRight,
+                self.colorGreenTopRight,
+                self.colorBlueTopRight,
+            );
             self.bright = self.brightnessTopRight;
             self.vertex(var28, var32, var34, var40, var22);
         } else {
@@ -2393,7 +3292,13 @@ impl<'a, 'b> Rb<'a, 'b> {
     }
 
     /// `RenderBlocks.renderFaceXNeg`
-    #[allow(unused_assignments, unused_mut, unused_variables, unused_parens, clippy::all)]
+    #[allow(
+        unused_assignments,
+        unused_mut,
+        unused_variables,
+        unused_parens,
+        clippy::all
+    )]
     pub fn face_x_neg(&mut self, var2: f64, var4: f64, var6: f64, mut var8: Icon) {
         if self.overrideBlockTexture.is_some() {
             var8 = self.overrideBlockTexture.unwrap();
@@ -2461,16 +3366,32 @@ impl<'a, 'b> Rb<'a, 'b> {
             var34 = var6 + self.renderMinZ;
         }
         if self.enableAO {
-            self.color(self.colorRedTopLeft, self.colorGreenTopLeft, self.colorBlueTopLeft);
+            self.color(
+                self.colorRedTopLeft,
+                self.colorGreenTopLeft,
+                self.colorBlueTopLeft,
+            );
             self.bright = self.brightnessTopLeft;
             self.vertex(var26, var30, var34, var40, var22);
-            self.color(self.colorRedBottomLeft, self.colorGreenBottomLeft, self.colorBlueBottomLeft);
+            self.color(
+                self.colorRedBottomLeft,
+                self.colorGreenBottomLeft,
+                self.colorBlueBottomLeft,
+            );
             self.bright = self.brightnessBottomLeft;
             self.vertex(var26, var30, var32, var10, var14);
-            self.color(self.colorRedBottomRight, self.colorGreenBottomRight, self.colorBlueBottomRight);
+            self.color(
+                self.colorRedBottomRight,
+                self.colorGreenBottomRight,
+                self.colorBlueBottomRight,
+            );
             self.bright = self.brightnessBottomRight;
             self.vertex(var26, var28, var32, var20, var24);
-            self.color(self.colorRedTopRight, self.colorGreenTopRight, self.colorBlueTopRight);
+            self.color(
+                self.colorRedTopRight,
+                self.colorGreenTopRight,
+                self.colorBlueTopRight,
+            );
             self.bright = self.brightnessTopRight;
             self.vertex(var26, var28, var34, var12, var16);
         } else {
@@ -2482,7 +3403,13 @@ impl<'a, 'b> Rb<'a, 'b> {
     }
 
     /// `RenderBlocks.renderFaceXPos`
-    #[allow(unused_assignments, unused_mut, unused_variables, unused_parens, clippy::all)]
+    #[allow(
+        unused_assignments,
+        unused_mut,
+        unused_variables,
+        unused_parens,
+        clippy::all
+    )]
     pub fn face_x_pos(&mut self, var2: f64, var4: f64, var6: f64, mut var8: Icon) {
         if self.overrideBlockTexture.is_some() {
             var8 = self.overrideBlockTexture.unwrap();
@@ -2554,16 +3481,32 @@ impl<'a, 'b> Rb<'a, 'b> {
             var34 = var6 + self.renderMinZ;
         }
         if self.enableAO {
-            self.color(self.colorRedTopLeft, self.colorGreenTopLeft, self.colorBlueTopLeft);
+            self.color(
+                self.colorRedTopLeft,
+                self.colorGreenTopLeft,
+                self.colorBlueTopLeft,
+            );
             self.bright = self.brightnessTopLeft;
             self.vertex(var26, var28, var34, var20, var24);
-            self.color(self.colorRedBottomLeft, self.colorGreenBottomLeft, self.colorBlueBottomLeft);
+            self.color(
+                self.colorRedBottomLeft,
+                self.colorGreenBottomLeft,
+                self.colorBlueBottomLeft,
+            );
             self.bright = self.brightnessBottomLeft;
             self.vertex(var26, var28, var32, var12, var16);
-            self.color(self.colorRedBottomRight, self.colorGreenBottomRight, self.colorBlueBottomRight);
+            self.color(
+                self.colorRedBottomRight,
+                self.colorGreenBottomRight,
+                self.colorBlueBottomRight,
+            );
             self.bright = self.brightnessBottomRight;
             self.vertex(var26, var30, var32, var40, var22);
-            self.color(self.colorRedTopRight, self.colorGreenTopRight, self.colorBlueTopRight);
+            self.color(
+                self.colorRedTopRight,
+                self.colorGreenTopRight,
+                self.colorBlueTopRight,
+            );
             self.bright = self.brightnessTopRight;
             self.vertex(var26, var30, var34, var10, var14);
         } else {
@@ -2773,19 +3716,91 @@ impl<'a, 'b> Rb<'a, 'b> {
                 self.set_render_bounds(0.0, 0.0, 0.0, 1.0, 0.25, 1.0);
                 self.render_standard(x, y, z);
                 let (y0, y1) = (p(yf + 0.25), p(yf + 0.25 + l));
-                self.rod_ud(px(xf + 0.375), px(xf + 0.625), y0, y1, pz(zf + 0.625), pz(zf + 0.625), 0.8, len);
-                self.rod_ud(px(xf + 0.625), px(xf + 0.375), y0, y1, pz(zf + 0.375), pz(zf + 0.375), 0.8, len);
-                self.rod_ud(px(xf + 0.375), px(xf + 0.375), y0, y1, pz(zf + 0.375), pz(zf + 0.625), 0.6, len);
-                self.rod_ud(px(xf + 0.625), px(xf + 0.625), y0, y1, pz(zf + 0.625), pz(zf + 0.375), 0.6, len);
+                self.rod_ud(
+                    px(xf + 0.375),
+                    px(xf + 0.625),
+                    y0,
+                    y1,
+                    pz(zf + 0.625),
+                    pz(zf + 0.625),
+                    0.8,
+                    len,
+                );
+                self.rod_ud(
+                    px(xf + 0.625),
+                    px(xf + 0.375),
+                    y0,
+                    y1,
+                    pz(zf + 0.375),
+                    pz(zf + 0.375),
+                    0.8,
+                    len,
+                );
+                self.rod_ud(
+                    px(xf + 0.375),
+                    px(xf + 0.375),
+                    y0,
+                    y1,
+                    pz(zf + 0.375),
+                    pz(zf + 0.625),
+                    0.6,
+                    len,
+                );
+                self.rod_ud(
+                    px(xf + 0.625),
+                    px(xf + 0.625),
+                    y0,
+                    y1,
+                    pz(zf + 0.625),
+                    pz(zf + 0.375),
+                    0.6,
+                    len,
+                );
             }
             1 => {
                 self.set_render_bounds(0.0, 0.75, 0.0, 1.0, 1.0, 1.0);
                 self.render_standard(x, y, z);
                 let (y0, y1) = (p(yf - 0.25 + 1.0 - l), p(yf - 0.25 + 1.0));
-                self.rod_ud(px(xf + 0.375), px(xf + 0.625), y0, y1, pz(zf + 0.625), pz(zf + 0.625), 0.8, len);
-                self.rod_ud(px(xf + 0.625), px(xf + 0.375), y0, y1, pz(zf + 0.375), pz(zf + 0.375), 0.8, len);
-                self.rod_ud(px(xf + 0.375), px(xf + 0.375), y0, y1, pz(zf + 0.375), pz(zf + 0.625), 0.6, len);
-                self.rod_ud(px(xf + 0.625), px(xf + 0.625), y0, y1, pz(zf + 0.625), pz(zf + 0.375), 0.6, len);
+                self.rod_ud(
+                    px(xf + 0.375),
+                    px(xf + 0.625),
+                    y0,
+                    y1,
+                    pz(zf + 0.625),
+                    pz(zf + 0.625),
+                    0.8,
+                    len,
+                );
+                self.rod_ud(
+                    px(xf + 0.625),
+                    px(xf + 0.375),
+                    y0,
+                    y1,
+                    pz(zf + 0.375),
+                    pz(zf + 0.375),
+                    0.8,
+                    len,
+                );
+                self.rod_ud(
+                    px(xf + 0.375),
+                    px(xf + 0.375),
+                    y0,
+                    y1,
+                    pz(zf + 0.375),
+                    pz(zf + 0.625),
+                    0.6,
+                    len,
+                );
+                self.rod_ud(
+                    px(xf + 0.625),
+                    px(xf + 0.625),
+                    y0,
+                    y1,
+                    pz(zf + 0.625),
+                    pz(zf + 0.375),
+                    0.6,
+                    len,
+                );
             }
             2 => {
                 self.uvRotateSouth = 1;
@@ -2793,10 +3808,46 @@ impl<'a, 'b> Rb<'a, 'b> {
                 self.set_render_bounds(0.0, 0.0, 0.0, 1.0, 1.0, 0.25);
                 self.render_standard(x, y, z);
                 let (z0, z1) = (pz(zf + 0.25), pz(zf + 0.25 + l));
-                self.rod_sn(px(xf + 0.375), px(xf + 0.375), p(yf + 0.625), p(yf + 0.375), z0, z1, 0.6, len);
-                self.rod_sn(px(xf + 0.625), px(xf + 0.625), p(yf + 0.375), p(yf + 0.625), z0, z1, 0.6, len);
-                self.rod_sn(px(xf + 0.375), px(xf + 0.625), p(yf + 0.375), p(yf + 0.375), z0, z1, 0.5, len);
-                self.rod_sn(px(xf + 0.625), px(xf + 0.375), p(yf + 0.625), p(yf + 0.625), z0, z1, 1.0, len);
+                self.rod_sn(
+                    px(xf + 0.375),
+                    px(xf + 0.375),
+                    p(yf + 0.625),
+                    p(yf + 0.375),
+                    z0,
+                    z1,
+                    0.6,
+                    len,
+                );
+                self.rod_sn(
+                    px(xf + 0.625),
+                    px(xf + 0.625),
+                    p(yf + 0.375),
+                    p(yf + 0.625),
+                    z0,
+                    z1,
+                    0.6,
+                    len,
+                );
+                self.rod_sn(
+                    px(xf + 0.375),
+                    px(xf + 0.625),
+                    p(yf + 0.375),
+                    p(yf + 0.375),
+                    z0,
+                    z1,
+                    0.5,
+                    len,
+                );
+                self.rod_sn(
+                    px(xf + 0.625),
+                    px(xf + 0.375),
+                    p(yf + 0.625),
+                    p(yf + 0.625),
+                    z0,
+                    z1,
+                    1.0,
+                    len,
+                );
             }
             3 => {
                 self.uvRotateSouth = 2;
@@ -2806,10 +3857,46 @@ impl<'a, 'b> Rb<'a, 'b> {
                 self.set_render_bounds(0.0, 0.0, 0.75, 1.0, 1.0, 1.0);
                 self.render_standard(x, y, z);
                 let (z0, z1) = (pz(zf - 0.25 + 1.0 - l), pz(zf - 0.25 + 1.0));
-                self.rod_sn(px(xf + 0.375), px(xf + 0.375), p(yf + 0.625), p(yf + 0.375), z0, z1, 0.6, len);
-                self.rod_sn(px(xf + 0.625), px(xf + 0.625), p(yf + 0.375), p(yf + 0.625), z0, z1, 0.6, len);
-                self.rod_sn(px(xf + 0.375), px(xf + 0.625), p(yf + 0.375), p(yf + 0.375), z0, z1, 0.5, len);
-                self.rod_sn(px(xf + 0.625), px(xf + 0.375), p(yf + 0.625), p(yf + 0.625), z0, z1, 1.0, len);
+                self.rod_sn(
+                    px(xf + 0.375),
+                    px(xf + 0.375),
+                    p(yf + 0.625),
+                    p(yf + 0.375),
+                    z0,
+                    z1,
+                    0.6,
+                    len,
+                );
+                self.rod_sn(
+                    px(xf + 0.625),
+                    px(xf + 0.625),
+                    p(yf + 0.375),
+                    p(yf + 0.625),
+                    z0,
+                    z1,
+                    0.6,
+                    len,
+                );
+                self.rod_sn(
+                    px(xf + 0.375),
+                    px(xf + 0.625),
+                    p(yf + 0.375),
+                    p(yf + 0.375),
+                    z0,
+                    z1,
+                    0.5,
+                    len,
+                );
+                self.rod_sn(
+                    px(xf + 0.625),
+                    px(xf + 0.375),
+                    p(yf + 0.625),
+                    p(yf + 0.625),
+                    z0,
+                    z1,
+                    1.0,
+                    len,
+                );
             }
             4 => {
                 self.uvRotateEast = 1;
@@ -2819,10 +3906,46 @@ impl<'a, 'b> Rb<'a, 'b> {
                 self.set_render_bounds(0.0, 0.0, 0.0, 0.25, 1.0, 1.0);
                 self.render_standard(x, y, z);
                 let (x0, x1) = (px(xf + 0.25), px(xf + 0.25 + l));
-                self.rod_ew(x0, x1, p(yf + 0.375), p(yf + 0.375), pz(zf + 0.625), pz(zf + 0.375), 0.5, len);
-                self.rod_ew(x0, x1, p(yf + 0.625), p(yf + 0.625), pz(zf + 0.375), pz(zf + 0.625), 1.0, len);
-                self.rod_ew(x0, x1, p(yf + 0.375), p(yf + 0.625), pz(zf + 0.375), pz(zf + 0.375), 0.6, len);
-                self.rod_ew(x0, x1, p(yf + 0.625), p(yf + 0.375), pz(zf + 0.625), pz(zf + 0.625), 0.6, len);
+                self.rod_ew(
+                    x0,
+                    x1,
+                    p(yf + 0.375),
+                    p(yf + 0.375),
+                    pz(zf + 0.625),
+                    pz(zf + 0.375),
+                    0.5,
+                    len,
+                );
+                self.rod_ew(
+                    x0,
+                    x1,
+                    p(yf + 0.625),
+                    p(yf + 0.625),
+                    pz(zf + 0.375),
+                    pz(zf + 0.625),
+                    1.0,
+                    len,
+                );
+                self.rod_ew(
+                    x0,
+                    x1,
+                    p(yf + 0.375),
+                    p(yf + 0.625),
+                    pz(zf + 0.375),
+                    pz(zf + 0.375),
+                    0.6,
+                    len,
+                );
+                self.rod_ew(
+                    x0,
+                    x1,
+                    p(yf + 0.625),
+                    p(yf + 0.375),
+                    pz(zf + 0.625),
+                    pz(zf + 0.625),
+                    0.6,
+                    len,
+                );
             }
             5 => {
                 self.uvRotateEast = 2;
@@ -2832,10 +3955,46 @@ impl<'a, 'b> Rb<'a, 'b> {
                 self.set_render_bounds(0.75, 0.0, 0.0, 1.0, 1.0, 1.0);
                 self.render_standard(x, y, z);
                 let (x0, x1) = (px(xf - 0.25 + 1.0 - l), px(xf - 0.25 + 1.0));
-                self.rod_ew(x0, x1, p(yf + 0.375), p(yf + 0.375), pz(zf + 0.625), pz(zf + 0.375), 0.5, len);
-                self.rod_ew(x0, x1, p(yf + 0.625), p(yf + 0.625), pz(zf + 0.375), pz(zf + 0.625), 1.0, len);
-                self.rod_ew(x0, x1, p(yf + 0.375), p(yf + 0.625), pz(zf + 0.375), pz(zf + 0.375), 0.6, len);
-                self.rod_ew(x0, x1, p(yf + 0.625), p(yf + 0.375), pz(zf + 0.625), pz(zf + 0.625), 0.6, len);
+                self.rod_ew(
+                    x0,
+                    x1,
+                    p(yf + 0.375),
+                    p(yf + 0.375),
+                    pz(zf + 0.625),
+                    pz(zf + 0.375),
+                    0.5,
+                    len,
+                );
+                self.rod_ew(
+                    x0,
+                    x1,
+                    p(yf + 0.625),
+                    p(yf + 0.625),
+                    pz(zf + 0.375),
+                    pz(zf + 0.625),
+                    1.0,
+                    len,
+                );
+                self.rod_ew(
+                    x0,
+                    x1,
+                    p(yf + 0.375),
+                    p(yf + 0.625),
+                    pz(zf + 0.375),
+                    pz(zf + 0.375),
+                    0.6,
+                    len,
+                );
+                self.rod_ew(
+                    x0,
+                    x1,
+                    p(yf + 0.625),
+                    p(yf + 0.375),
+                    pz(zf + 0.625),
+                    pz(zf + 0.625),
+                    0.6,
+                    len,
+                );
             }
             _ => {}
         }

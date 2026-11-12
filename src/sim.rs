@@ -1793,7 +1793,10 @@ impl Sim {
         // CommandSetBlock: x y z id [meta]
         if let Ok(list) = std::env::var("MINERUST_SETBLOCK") {
             for cmd in list.split(';') {
-                let v: Vec<i32> = cmd.split_whitespace().filter_map(|t| t.parse().ok()).collect();
+                let v: Vec<i32> = cmd
+                    .split_whitespace()
+                    .filter_map(|t| t.parse().ok())
+                    .collect();
                 if v.len() >= 4 && (0..256).contains(&v[1]) {
                     let meta = v.get(4).copied().unwrap_or(0);
                     self.world.set_block(v[0], v[1], v[2], v[3] as u8, meta, 3);
