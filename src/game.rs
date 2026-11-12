@@ -174,6 +174,9 @@ pub struct Game {
     /// Server view of the inventory and open window.
     pub view: InvView,
     items: Vec<ItemView>,
+    /// Sound output (absent when no asset directory or device was found).
+    pub audio: Option<crate::audio::Audio>,
+    next_step: f32,
     mobs: Vec<crate::sim::MobView>,
     arrows: Vec<crate::sim::ArrowView>,
     /// Mob under the crosshair and its distance.
@@ -395,6 +398,8 @@ impl Game {
                 furnace: None,
             },
             items: Vec::new(),
+            audio: None,
+            next_step: 1.0,
             mobs: Vec::new(),
             arrows: Vec::new(),
             target_mob: None,
@@ -530,7 +535,12 @@ impl Game {
                     self.arrows = a;
                 }
                 Event::Hits(hits) => self.apply_hits(hits),
-                Event::Sounds(_) | Event::Explosions(_) => {}
+                Event::Sounds(list) => {
+                    for (name, pos, vol, pitch) in list {
+                        self.sound(name, Some(pos), vol, pitch);
+                    }
+                }
+                Event::Explosions(_) => {}
                 Event::Respawn(p) => {
                     self.player = Player::new(p[0], p[1], p[2]);
                     self.player.allow_flying = self.mode == GameMode::Creative;
@@ -742,6 +752,26 @@ impl Game {
                 Input::default()
             };
             self.player.tick(&self.world, &input);
+            // Entity.moveEntity: a step sound per block walked.
+            if self.player.on_ground
+                && !self.player.sneaking
+                && self.player.distance_walked > self.next_step
+            {
+                self.next_step = self.player.distance_walked.floor() + 1.0;
+                let (x, y, z) = (
+                    math::floor_double(self.player.pos[0]),
+                    math::floor_double(self.player.bb.min[1] - 0.2),
+                    math::floor_double(self.player.pos[2]),
+                );
+                let id = self.world.peek_block(x, y, z);
+                if id != crate::block::AIR {
+                    self.block_sound(id, [x, y, z], "step", 0.15, 1.0);
+                }
+            }
+            if let Some(a) = self.audio.as_mut() {
+                a.set_listener(self.player.pos, self.player.yaw);
+                a.tick_music();
+            }
         } else {
             self.player.prev_pos = self.player.pos;
         }
@@ -844,6 +874,35 @@ impl Game {
         [(f2 * f3) as f64, f4 as f64, (f1 * f3) as f64]
     }
 
+    fn sound(&mut self, name: &str, pos: Option<[f64; 3]>, vol: f32, pitch: f32) {
+        if let Some(a) = self.audio.as_mut() {
+            a.play(name, pos, vol, pitch);
+        }
+    }
+
+    /// `Block.stepSound` break sound at a block.
+    fn block_sound(&mut self, id: u8, pos: [i32; 3], kind: &str, vol: f32, pitch: f32) {
+        let (name, p) = crate::audio::step_sound(id);
+        let ev = if kind == "dig" && id == crate::block::GLASS
+            || id == crate::block::GLASS_PANE
+            || id == crate::block::ICE
+        {
+            if kind == "dig" {
+                "random.glass".to_string()
+            } else {
+                format!("{kind}.stone")
+            }
+        } else {
+            format!("{kind}.{name}")
+        };
+        let c = [
+            pos[0] as f64 + 0.5,
+            pos[1] as f64 + 0.5,
+            pos[2] as f64 + 0.5,
+        ];
+        self.sound(&ev, Some(c), vol, pitch * p);
+    }
+
     /// Damage, knockback and experience from mobs.
     fn apply_hits(&mut self, hits: Vec<crate::entity::mob::Hit>) {
         use crate::entity::mob::Hit;
@@ -869,6 +928,7 @@ impl Game {
                 }
             };
             if self.stats.damage(cause, amount, self.mode) {
+                self.sound("game.player.hurt", None, 1.0, 1.0);
                 self.player.motion[0] = self.player.motion[0] / 2.0 + knock[0];
                 self.player.motion[1] = (self.player.motion[1] / 2.0 + knock[1]).min(0.4);
                 self.player.motion[2] = self.player.motion[2] / 2.0 + knock[2];
@@ -1011,12 +1071,16 @@ impl Game {
             self.hit_delay -= 1;
             return;
         }
+        let id = self.world.peek_block(pos[0], pos[1], pos[2]);
         if self.mode == GameMode::Creative {
             self.hit_delay = 5;
+            self.block_sound(id, pos, "dig", 1.0, 0.8);
             let _ = self.sim.commands.send(Command::Dig(pos));
             return;
         }
-        let id = self.world.peek_block(pos[0], pos[1], pos[2]);
+        if self.ticks % 4 == 0 {
+            self.block_sound(id, pos, "step", 0.25, 0.5);
+        }
         let in_water = self.player.eye_material(&self.world, self.eye(0.0)) == Material::Water;
         let step =
             crate::item::break_progress(self.view.inv.held(), id, in_water, self.player.on_ground);
@@ -1024,6 +1088,7 @@ impl Game {
             Some(d) if d.pos == pos => {
                 let damage = d.damage + step;
                 if damage >= 1.0 {
+                    self.block_sound(id, pos, "dig", 1.0, 0.8);
                     let _ = self.sim.commands.send(Command::Dig(pos));
                     self.stats.add_exhaustion(0.025);
                     self.dig = None;
@@ -1034,6 +1099,7 @@ impl Game {
             }
             _ => {
                 if step >= 1.0 {
+                    self.block_sound(id, pos, "dig", 1.0, 0.8);
                     let _ = self.sim.commands.send(Command::Dig(pos));
                     self.stats.add_exhaustion(0.025);
                     self.dig = None;
@@ -1047,6 +1113,13 @@ impl Game {
     fn use_item(&mut self) {
         if let Some((b, n)) = self.selected {
             if n != [0, 0, 0] {
+                if let Some(id) = self.view.inv.held().and_then(|s| s.block()) {
+                    let p = [b[0] + n[0], b[1] + n[1], b[2] + n[2]];
+                    if crate::block::material(self.world.peek_block(p[0], p[1], p[2])).replaceable()
+                    {
+                        self.block_sound(id, p, "dig", 1.0, 0.8);
+                    }
+                }
                 let _ = self.sim.commands.send(Command::Use {
                     target: b,
                     face: n,

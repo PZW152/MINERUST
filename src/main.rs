@@ -2,6 +2,7 @@
 
 #![allow(dead_code)]
 
+mod audio;
 mod block;
 mod compat;
 mod entity;
@@ -590,6 +591,24 @@ impl ApplicationHandler for App {
                 self.opts.cfg.save_dir = Some(dir);
             }
             let mut game = Game::new(renderer, atlas, &self.opts.cfg);
+            // The launcher keeps assets next to versions/: <root>/assets.
+            if self.opts.auto_shot.is_none() {
+                if let Some(root) = jar_path
+                    .parent()
+                    .and_then(|p| p.parent())
+                    .and_then(|p| p.parent())
+                {
+                    game.audio = audio::Audio::new(&root.join("assets"));
+                    println!(
+                        "Sound: {}",
+                        if game.audio.is_some() {
+                            "on"
+                        } else {
+                            "off (assets not found)"
+                        }
+                    );
+                }
+            }
             game.apply_start_screen();
             println!(
                 "Seed: {}{}",

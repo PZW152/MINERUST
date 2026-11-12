@@ -12,6 +12,8 @@ raw-window-handle = "0.6"
 naga = { version = "24", features = ["wgsl-in", "spv-out"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
 png = "0.17"
+cpal = "0.15"
+lewton = "0.10"
 
 [profile.dev]
 opt-level = 2
