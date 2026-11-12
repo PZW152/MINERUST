@@ -767,7 +767,7 @@ pub fn populate(w: &mut ServerWorld, cx: i32, cz: i32) {
         super::features::dungeon::dungeon(w, &mut r, x, y, z);
     }
     decorate(w, &mut r, biome.id, bx, bz);
-    // SpawnerAnimals.performWorldGenSpawning only spawns entities.
+    crate::entity::mob::world_gen_spawning(w, biome.id as i32, bx + 8, bz + 8, &mut r);
     let (sx, sz) = (bx + 8, bz + 8);
     for i in 0..16 {
         for j in 0..16 {

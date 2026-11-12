@@ -16,7 +16,7 @@ pub struct Input {
     pub sprint: bool,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct Aabb {
     pub min: [f64; 3],
     pub max: [f64; 3],

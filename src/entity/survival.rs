@@ -18,6 +18,11 @@ pub enum Damage {
     Fire,
     Starve,
     Void,
+    /// `DamageSource.causeMobDamage`
+    Mob(crate::entity::mob::Kind),
+    Arrow,
+    Explosion,
+    Poison,
 }
 
 #[derive(Clone, Debug)]
@@ -40,6 +45,12 @@ pub struct Stats {
     pub death_time: i32,
     /// Last cause of death, for the death screen.
     pub last_cause: Option<Damage>,
+    /// `experienceLevel`, `experienceTotal`, `experience` (bar progress).
+    pub xp_level: i32,
+    pub xp_total: i32,
+    pub xp: f32,
+    /// Remaining ticks of the poison effect.
+    pub poison: i32,
 }
 
 pub const MAX_HEALTH: f32 = 20.0;
@@ -63,12 +74,39 @@ impl Default for Stats {
             dead: false,
             death_time: 0,
             last_cause: None,
+            xp_level: 0,
+            xp_total: 0,
+            xp: 0.0,
+            poison: 0,
         }
     }
 }
 
 impl Stats {
     /// `FoodStats.addExhaustion`
+    /// `EntityPlayer.xpBarCap`
+    pub fn xp_bar_cap(&self) -> i32 {
+        if self.xp_level >= 30 {
+            62 + (self.xp_level - 30) * 7
+        } else if self.xp_level >= 15 {
+            17 + (self.xp_level - 15) * 3
+        } else {
+            17
+        }
+    }
+
+    /// `EntityPlayer.addExperience`
+    pub fn add_xp(&mut self, n: i32) {
+        let n = n.min(i32::MAX - self.xp_total);
+        self.xp += n as f32 / self.xp_bar_cap() as f32;
+        self.xp_total += n;
+        while self.xp >= 1.0 {
+            self.xp = (self.xp - 1.0) * self.xp_bar_cap() as f32;
+            self.xp_level += 1;
+            self.xp /= self.xp_bar_cap() as f32;
+        }
+    }
+
     pub fn add_exhaustion(&mut self, f: f32) {
         self.exhaustion = (self.exhaustion + f).min(40.0);
     }
@@ -133,6 +171,13 @@ impl Stats {
         if self.dead {
             self.death_time += 1;
             return;
+        }
+        // Potion.poison: one damage every 25 ticks while above one health
+        if self.poison > 0 {
+            if self.poison % 25 == 0 && self.health > 1.0 {
+                self.damage(Damage::Poison, 1.0, mode);
+            }
+            self.poison -= 1;
         }
         if self.hurt_time > 0 {
             self.hurt_time -= 1;
@@ -251,6 +296,17 @@ impl Stats {
             Some(Damage::Fire) => "Player burned to death",
             Some(Damage::Starve) => "Player starved to death",
             Some(Damage::Void) => "Player fell out of the world",
+            Some(Damage::Mob(k)) => match k {
+                crate::entity::mob::Kind::Zombie => "Player was slain by Zombie",
+                crate::entity::mob::Kind::Spider => "Player was slain by Spider",
+                crate::entity::mob::Kind::CaveSpider => "Player was slain by Cave Spider",
+                crate::entity::mob::Kind::Silverfish => "Player was slain by Silverfish",
+                crate::entity::mob::Kind::Witch => "Player was killed by Witch using magic",
+                _ => "Player was slain by a mob",
+            },
+            Some(Damage::Arrow) => "Player was shot by Skeleton",
+            Some(Damage::Explosion) => "Player was blown up by Creeper",
+            Some(Damage::Poison) => "Player died",
             None => "Player died",
         }
     }

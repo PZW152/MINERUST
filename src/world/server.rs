@@ -407,6 +407,12 @@ pub enum GenEntity {
         pos: [f64; 3],
         stack: crate::item::Stack,
     },
+    /// `SpawnerAnimals.performWorldGenSpawning`
+    Animal {
+        kind: crate::entity::mob::Kind,
+        pos: [f64; 3],
+        yaw: f32,
+    },
 }
 
 pub struct ServerWorld {

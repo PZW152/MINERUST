@@ -508,8 +508,28 @@ pub fn survival_bars(
     underwater: bool,
 ) {
     let (w, h) = (ui.w, ui.h);
-    // Experience bar background (no experience yet).
+    // Experience bar (GuiIngame.renderTooltip: the xp part).
     ui.icon(w / 2.0 - 91.0, h - 32.0 + 3.0, 0.0, 64.0, 182.0, 5.0);
+    let filled = (s.xp * 183.0) as i32;
+    if filled > 0 {
+        ui.icon(
+            w / 2.0 - 91.0,
+            h - 32.0 + 3.0,
+            0.0,
+            69.0,
+            filled as f32,
+            5.0,
+        );
+    }
+    if s.xp_level > 0 {
+        let t = s.xp_level.to_string();
+        let x = (w - ui.text_width(&t)) / 2.0;
+        let y = h - 31.0 - 4.0;
+        for (dx, dy) in [(1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0)] {
+            ui.text(&t, x + dx, y + dy, 0x000000, false);
+        }
+        ui.text(&t, x, y, 0x80FF20, false);
+    }
     let left = w / 2.0 - 91.0;
     let right = w / 2.0 + 91.0;
     let top = h - 39.0;

@@ -4,7 +4,7 @@ use crate::block;
 use std::collections::HashMap;
 use std::io::Read;
 
-pub const ATLAS_SIZE: u32 = 512;
+pub const ATLAS_SIZE: u32 = 1024;
 /// Atlas width in 16px cells.
 const GRID: usize = (ATLAS_SIZE / 16) as usize;
 pub const MIP_LEVELS: u32 = 5;
@@ -40,6 +40,8 @@ pub struct Atlas {
     pub destroy: [u16; 10],
     /// Item sprites by `(id, meta)`.
     pub items: HashMap<(u16, i32), u16>,
+    /// Entity textures (path under `textures/entity/`): tile and cell size.
+    pub mobs: HashMap<&'static str, (u16, u32)>,
     /// `entity/steve.png` (64x32) in the top half of a 64x64 tile.
     pub skin: u16,
     /// `environment/clouds.png` as a 256x256 opacity mask.
@@ -365,6 +367,19 @@ impl Atlas {
             }
             b.add(px, 64)
         };
+        let mut mobs = HashMap::new();
+        for name in crate::render::model::TEXTURES {
+            let img = read_png(jar, &format!("assets/minecraft/textures/entity/{name}.png"))?;
+            let cell = img.w.max(img.h).next_power_of_two();
+            let mut px = vec![0u8; (cell * cell * 4) as usize];
+            for y in 0..img.h {
+                let s = (y * img.w * 4) as usize;
+                let n = (img.w * 4) as usize;
+                let d = (y * cell * 4) as usize;
+                px[d..d + n].copy_from_slice(&img.rgba[s..s + n]);
+            }
+            mobs.insert(name, (b.add(px, cell), cell));
+        }
         // Animated sprites: every frame of the strip, in metadata order.
         let mut anims = Vec::new();
         for (name, tile, size) in [
@@ -467,6 +482,7 @@ impl Atlas {
             skin,
             destroy,
             items,
+            mobs,
             ui,
             char_width,
             anims,
@@ -484,6 +500,14 @@ impl Atlas {
             moon,
             grass_map: color_map(jar, "assets/minecraft/textures/colormap/grass.png")?,
             foliage_map: color_map(jar, "assets/minecraft/textures/colormap/foliage.png")?,
+        })
+    }
+
+    pub fn mob_tex(&self, name: &str) -> Option<crate::render::model::Tex> {
+        let &(t, cell) = self.mobs.get(name)?;
+        Some(crate::render::model::Tex {
+            rect: self.rects[t as usize],
+            size: cell as f32,
         })
     }
 

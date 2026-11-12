@@ -66,6 +66,17 @@ pub enum Command {
     Respawn,
     /// `/give`: adds the stack to the inventory.
     Give(crate::item::Stack),
+    /// Left click on a mob (`attackTargetEntityWithCurrentItem`).
+    Attack {
+        id: u32,
+        damage: f32,
+        crit: bool,
+        knockback: i32,
+    },
+    /// Whether mobs may target and hurt the player.
+    PlayerState {
+        attackable: bool,
+    },
     Shutdown,
 }
 
@@ -84,6 +95,53 @@ pub enum Event {
     Items(Vec<ItemView>),
     /// After `Respawn`: where to put the player (feet).
     Respawn([f64; 3]),
+    /// Every mob and arrow near the player, sent each tick.
+    Mobs(Vec<MobView>, Vec<ArrowView>),
+    /// Damage and experience for the player.
+    Hits(Vec<crate::entity::mob::Hit>),
+    /// Sounds: name, position, volume, pitch.
+    Sounds(Vec<(&'static str, [f64; 3], f32, f32)>),
+    Explosions(Vec<[f64; 4]>),
+}
+
+/// What the client draws of a mob.
+#[derive(Clone, Debug)]
+pub struct MobView {
+    pub id: u32,
+    pub kind: crate::entity::mob::Kind,
+    pub pos: [f64; 3],
+    pub prev: [f64; 3],
+    pub body_yaw: f32,
+    pub prev_body_yaw: f32,
+    pub head_yaw: f32,
+    pub prev_head_yaw: f32,
+    pub pitch: f32,
+    pub prev_pitch: f32,
+    pub limb_swing: f32,
+    pub limb_amount: f32,
+    pub prev_limb_amount: f32,
+    pub swing: f32,
+    pub prev_swing: f32,
+    pub hurt_time: i32,
+    pub death_time: i32,
+    pub ticks: i32,
+    pub variant: i32,
+    pub sheared: bool,
+    pub fuse: i32,
+    pub prev_fuse: i32,
+    pub wing: f32,
+    pub prev_wing: f32,
+    pub eat_timer: i32,
+    pub fire: bool,
+    pub bb: [f64; 6],
+}
+
+#[derive(Clone, Debug)]
+pub struct ArrowView {
+    pub pos: [f64; 3],
+    pub prev: [f64; 3],
+    pub yaw: f32,
+    pub pitch: f32,
 }
 
 pub struct SimConfig {
@@ -124,6 +182,9 @@ pub struct Sim {
     spawn: [f64; 3],
     stats: Option<String>,
     respawn_pending: bool,
+    pub mobs: crate::entity::mob::Mobs,
+    player_attackable: bool,
+    pending_out: Vec<crate::entity::mob::Outcome>,
 }
 
 /// Level keys owned by the gameplay state (kept out of `unknown`).
@@ -177,7 +238,17 @@ impl Sim {
             spawn: [0.0; 3],
             stats: None,
             respawn_pending: false,
+            mobs: crate::entity::mob::Mobs::default(),
+            player_attackable: true,
+            pending_out: Vec::new(),
         };
+        if let Some(d) = &cfg.save_dir {
+            if let Ok(text) = std::fs::read_to_string(d.join("data").join("entities.txt")) {
+                for line in text.lines() {
+                    let _ = sim.mobs.decode(line);
+                }
+            }
+        }
         let start = match level {
             Some(l) => {
                 sim.world.total_time = l.total_time;
@@ -449,6 +520,19 @@ impl Sim {
                 self.play = play;
             }
             Command::Respawn => self.respawn_pending = true,
+            Command::Attack {
+                id,
+                damage,
+                crit,
+                knockback,
+            } => {
+                let mut out = crate::entity::mob::Outcome::default();
+                let (feet, yaw) = self.play.player;
+                self.mobs
+                    .attack(id, damage, crit, feet, yaw, knockback, &mut out);
+                self.pending_out.push(out);
+            }
+            Command::PlayerState { attackable } => self.player_attackable = attackable,
             Command::Give(s) => {
                 if s.count > 0 && s.count <= 64 {
                     let _ = self.play.inv.add(s);
@@ -560,9 +644,36 @@ impl Sim {
         }
         let mut rnd = std::mem::replace(&mut self.world.rand, JavaRandom::new(0));
         for e in std::mem::take(&mut self.world.gen_entities) {
-            play.add_gen_entity(e, &mut rnd);
+            use crate::world::server::GenEntity;
+            match e {
+                GenEntity::Villager { pos, profession } => {
+                    let id =
+                        self.mobs
+                            .spawn(crate::entity::mob::Kind::Villager, pos, 0.0, &mut rnd);
+                    if let Some(m) = self.mobs.list.iter_mut().find(|m| m.id == id) {
+                        m.variant = profession;
+                        m.persistent = true;
+                    }
+                }
+                GenEntity::Witch { pos } => {
+                    let id = self
+                        .mobs
+                        .spawn(crate::entity::mob::Kind::Witch, pos, 0.0, &mut rnd);
+                    if let Some(m) = self.mobs.list.iter_mut().find(|m| m.id == id) {
+                        m.persistent = true;
+                    }
+                }
+                GenEntity::Animal { kind, pos, yaw } => {
+                    let id = self.mobs.spawn(kind, pos, yaw, &mut rnd);
+                    if let Some(m) = self.mobs.list.iter_mut().find(|m| m.id == id) {
+                        m.persistent = true;
+                    }
+                }
+                other => play.add_gen_entity(other, &mut rnd),
+            }
         }
         self.world.rand = rnd;
+        self.tick_mobs(&mut play, events);
         self.play = play;
         if self.play.inv_dirty {
             self.play.inv_dirty = false;
@@ -681,7 +792,117 @@ impl Sim {
             std::fs::create_dir_all(&data)?;
             save::write_atomic(&data.join("structures.txt"), st.save().as_bytes())?;
         }
+        {
+            let data = dir.join("data");
+            std::fs::create_dir_all(&data)?;
+            save::write_atomic(
+                &data.join("entities.txt"),
+                self.mobs.encode().join("\n").as_bytes(),
+            )?;
+        }
         save::write_level(&dir, &level)
+    }
+
+    /// Mob AI, spawning and despawning, and what the client must hear of it.
+    fn tick_mobs(&mut self, play: &mut Play, events: &mut Vec<Event>) {
+        use crate::entity::mob;
+        let (feet, yaw) = play.player;
+        let held = play.inv.held().map(|s| s.id);
+        let info = mob::PlayerInfo {
+            feet,
+            yaw,
+            attackable: self.player_attackable && play.mode == GameMode::Survival,
+            held,
+        };
+        let mut out = mob::Outcome::default();
+        self.mobs.tick(&mut self.world, &info, &mut out);
+        let animals = self.world.total_time % 400 == 0;
+        mob::natural_spawning(&mut self.world, &mut self.mobs, feet, self.spawn, animals);
+        if self.world.total_time % 40 == 0 {
+            self.mobs.despawn(feet);
+        }
+        let mut outs = std::mem::take(&mut self.pending_out);
+        outs.push(out);
+        let mut hits = Vec::new();
+        let mut sounds = Vec::new();
+        let mut explosions = Vec::new();
+        let mut rnd = std::mem::replace(&mut self.world.rand, JavaRandom::new(0));
+        for o in outs {
+            for (p, st) in o.drops {
+                play.add_gen_entity(
+                    crate::world::server::GenEntity::Item { pos: p, stack: st },
+                    &mut rnd,
+                );
+            }
+            hits.extend(o.hits);
+            sounds.extend(o.sounds);
+            explosions.extend(o.explosions);
+        }
+        self.world.rand = rnd;
+        if !hits.is_empty() {
+            events.push(Event::Hits(hits));
+        }
+        if !sounds.is_empty() {
+            events.push(Event::Sounds(sounds));
+        }
+        if !explosions.is_empty() {
+            events.push(Event::Explosions(explosions));
+        }
+        let r2 = ((self.view + 1) * 16) as f64;
+        let views: Vec<MobView> = self
+            .mobs
+            .list
+            .iter()
+            .filter(|m| (m.pos[0] - feet[0]).abs() < r2 && (m.pos[2] - feet[2]).abs() < r2)
+            .map(|m| MobView {
+                id: m.id,
+                kind: m.kind,
+                pos: m.pos,
+                prev: m.prev_pos,
+                body_yaw: m.body_yaw,
+                prev_body_yaw: m.prev_body_yaw,
+                head_yaw: m.head_yaw,
+                prev_head_yaw: m.prev_head_yaw,
+                pitch: m.pitch,
+                prev_pitch: m.prev_pitch,
+                limb_swing: m.limb_swing,
+                limb_amount: m.limb_amount,
+                prev_limb_amount: m.prev_limb_amount,
+                swing: m.swing,
+                prev_swing: m.prev_swing,
+                hurt_time: m.hurt_time,
+                death_time: m.death_time,
+                ticks: m.ticks,
+                variant: m.variant,
+                sheared: m.sheared,
+                fuse: m.fuse,
+                prev_fuse: m.prev_fuse,
+                wing: m.wing,
+                prev_wing: m.prev_wing,
+                eat_timer: m.eat_timer,
+                fire: m.fire > 0,
+                bb: [
+                    m.bb.min[0],
+                    m.bb.min[1],
+                    m.bb.min[2],
+                    m.bb.max[0],
+                    m.bb.max[1],
+                    m.bb.max[2],
+                ],
+            })
+            .collect();
+        let arrows: Vec<ArrowView> = self
+            .mobs
+            .arrows
+            .iter()
+            .map(|a| ArrowView {
+                pos: a.pos,
+                prev: a.prev_pos,
+                yaw: a.yaw,
+                pitch: a.pitch,
+            })
+            .collect();
+        events.push(Event::Mobs(views, arrows));
     }
 
     /// Order-independent digest of the whole simulation state.

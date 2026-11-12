@@ -174,6 +174,10 @@ pub struct Game {
     /// Server view of the inventory and open window.
     pub view: InvView,
     items: Vec<ItemView>,
+    mobs: Vec<crate::sim::MobView>,
+    arrows: Vec<crate::sim::ArrowView>,
+    /// Mob under the crosshair and its distance.
+    target_mob: Option<(u32, f64)>,
     pub stats: Stats,
     pub mode: GameMode,
     pub screen: Screen,
@@ -204,14 +208,14 @@ pub struct Game {
 
 fn encode_stats(s: &Stats) -> String {
     format!(
-        "{},{},{},{},{},{}",
-        s.health, s.food, s.saturation, s.exhaustion, s.air, s.fire
+        "{},{},{},{},{},{},{},{},{}",
+        s.health, s.food, s.saturation, s.exhaustion, s.air, s.fire, s.xp_level, s.xp_total, s.xp
     )
 }
 
 fn decode_stats(t: &str) -> Option<Stats> {
     let f: Vec<&str> = t.split(',').collect();
-    if f.len() != 6 {
+    if f.len() != 6 && f.len() != 9 {
         return None;
     }
     let mut s = Stats::default();
@@ -221,6 +225,11 @@ fn decode_stats(t: &str) -> Option<Stats> {
     s.exhaustion = f[3].parse::<f32>().ok()?.clamp(0.0, 40.0);
     s.air = f[4].parse::<i32>().ok()?.clamp(-20, 300);
     s.fire = f[5].parse::<i32>().ok()?.max(0);
+    if f.len() == 9 {
+        s.xp_level = f[6].parse::<i32>().ok()?.max(0);
+        s.xp_total = f[7].parse::<i32>().ok()?.max(0);
+        s.xp = f[8].parse::<f32>().ok()?.clamp(0.0, 1.0);
+    }
     if s.health <= 0.0 {
         // Died and quit: come back alive.
         s = Stats::default();
@@ -386,6 +395,9 @@ impl Game {
                 furnace: None,
             },
             items: Vec::new(),
+            mobs: Vec::new(),
+            arrows: Vec::new(),
+            target_mob: None,
             stats,
             mode,
             screen: Screen::Playing,
@@ -513,6 +525,12 @@ impl Game {
                     }
                 }
                 Event::Items(v) => self.items = v,
+                Event::Mobs(m, a) => {
+                    self.mobs = m;
+                    self.arrows = a;
+                }
+                Event::Hits(hits) => self.apply_hits(hits),
+                Event::Sounds(_) | Event::Explosions(_) => {}
                 Event::Respawn(p) => {
                     self.player = Player::new(p[0], p[1], p[2]);
                     self.player.allow_flying = self.mode == GameMode::Creative;
@@ -826,6 +844,79 @@ impl Game {
         [(f2 * f3) as f64, f4 as f64, (f1 * f3) as f64]
     }
 
+    /// Damage, knockback and experience from mobs.
+    fn apply_hits(&mut self, hits: Vec<crate::entity::mob::Hit>) {
+        use crate::entity::mob::Hit;
+        use crate::entity::survival::Damage;
+        for h in hits {
+            let (cause, amount, knock) = match h {
+                Hit::Melee {
+                    kind,
+                    amount,
+                    knock,
+                    poison,
+                } => {
+                    if poison > 0 {
+                        self.stats.poison = self.stats.poison.max(poison);
+                    }
+                    (Damage::Mob(kind), amount, knock)
+                }
+                Hit::Arrow { amount, knock } => (Damage::Arrow, amount, knock),
+                Hit::Explosion { amount, knock } => (Damage::Explosion, amount, knock),
+                Hit::Xp(n) => {
+                    self.stats.add_xp(n);
+                    continue;
+                }
+            };
+            if self.stats.damage(cause, amount, self.mode) {
+                self.player.motion[0] = self.player.motion[0] / 2.0 + knock[0];
+                self.player.motion[1] = (self.player.motion[1] / 2.0 + knock[1]).min(0.4);
+                self.player.motion[2] = self.player.motion[2] / 2.0 + knock[2];
+            }
+        }
+    }
+
+    /// `EntityPlayer.attackTargetEntityWithCurrentItem` on the client side:
+    /// damage of the held item, critical hits and sprint knockback.
+    fn attack_mob(&mut self, id: u32) {
+        let held = self.view.inv.held();
+        let mut dmg = 1.0f32;
+        if let Some(s) = held {
+            if let Some(t) = crate::item::tool(s.id) {
+                let mat = match t.max_uses {
+                    59 => 0.0,
+                    131 => 1.0,
+                    250 => 2.0,
+                    1561 => 3.0,
+                    _ => 0.0,
+                };
+                let base = match t.kind {
+                    crate::item::ToolKind::Sword => 4.0,
+                    crate::item::ToolKind::Axe => 3.0,
+                    crate::item::ToolKind::Pickaxe => 2.0,
+                    crate::item::ToolKind::Shovel => 1.0,
+                    crate::item::ToolKind::Hoe => -mat,
+                };
+                dmg += base + mat;
+            }
+        }
+        let crit =
+            self.stats.fall_distance > 0.0 && !self.player.on_ground && !self.player.in_water;
+        let knockback = if self.player.sprinting { 1 } else { 0 };
+        if knockback > 0 {
+            self.player.motion[0] *= 0.6;
+            self.player.motion[2] *= 0.6;
+            self.player.sprinting = false;
+        }
+        self.stats.add_exhaustion(0.3);
+        let _ = self.sim.commands.send(Command::Attack {
+            id,
+            damage: dmg,
+            crit,
+            knockback,
+        });
+    }
+
     /// Block under the crosshair within survival reach (4.5 blocks).
     fn pick(&self, eye: [f64; 3]) -> Option<([i32; 3], [i32; 3])> {
         let d = self.look();
@@ -1008,6 +1099,11 @@ impl Game {
         match self.screen {
             Screen::Playing => {
                 match button {
+                    0 if self.target_mob.is_some() => {
+                        self.swing_item();
+                        let (id, _) = self.target_mob.unwrap();
+                        self.attack_mob(id);
+                    }
                     0 => {
                         self.swing_item();
                         // The first hit happens on the press (clickBlock).
@@ -1190,6 +1286,41 @@ impl Game {
 
         let eye = self.eye(partial);
         self.selected = self.pick(eye);
+        {
+            // EntityRenderer.getMouseOver: a mob closer than the block wins.
+            let look = self.look();
+            let reach = if self.mode == GameMode::Creative {
+                5.0
+            } else {
+                3.0
+            };
+            let block_d = self.selected.map(|(b, _)| {
+                let c = [b[0] as f64 + 0.5, b[1] as f64 + 0.5, b[2] as f64 + 0.5];
+                ((c[0] - eye[0]).powi(2) + (c[1] - eye[1]).powi(2) + (c[2] - eye[2]).powi(2)).sqrt()
+                    - 0.5
+            });
+            self.target_mob = None;
+            for m in &self.mobs {
+                if m.death_time > 0 {
+                    continue;
+                }
+                let bb = crate::entity::player::Aabb {
+                    min: [m.bb[0] - 0.1, m.bb[1] - 0.1, m.bb[2] - 0.1],
+                    max: [m.bb[3] + 0.1, m.bb[4] + 0.1, m.bb[5] + 0.1],
+                };
+                if let Some(t) = crate::entity::mob::ray_box(eye, look, &bb) {
+                    if t <= reach
+                        && block_d.map_or(true, |d| t < d)
+                        && self.target_mob.map_or(true, |x| t < x.1)
+                    {
+                        self.target_mob = Some((m.id, t));
+                    }
+                }
+            }
+            if self.target_mob.is_some() {
+                self.selected = None;
+            }
+        }
         let eye_mat = self.player.eye_material(&self.world, eye);
 
         // --- Fog and sky colours (EntityRenderer.updateFogColor) ---
@@ -1422,6 +1553,60 @@ impl Game {
 
         // --- Dropped items, crack overlay, hand ---
         let mut dynamic: Vec<crate::render::mesher::Vertex> = Vec::new();
+        for m in &self.mobs {
+            let t = partial as f64;
+            let p = [
+                m.prev[0] + (m.pos[0] - m.prev[0]) * t,
+                m.prev[1] + (m.pos[1] - m.prev[1]) * t,
+                m.prev[2] + (m.pos[2] - m.prev[2]) * t,
+            ];
+            let rel = [
+                (p[0] - eye[0]) as f32,
+                (p[1] - eye[1]) as f32,
+                (p[2] - eye[2]) as f32,
+            ];
+            if rel[0] * rel[0] + rel[2] * rel[2] > (rd * 16.0) * (rd * 16.0) {
+                continue;
+            }
+            // Entity.getBrightnessForRender
+            let ly = math::floor_double(p[1] + (m.bb[4] - m.bb[1]) * 0.66);
+            let (lx, lz) = (math::floor_double(p[0]), math::floor_double(p[2]));
+            let (sky, blk) = (
+                self.world.light(true, lx, ly, lz),
+                self.world.light(false, lx, ly, lz),
+            );
+            let blk = if m.fire { 15 } else { blk };
+            let light = [(blk << 4) as u8, (sky << 4) as u8, 0, 0];
+            let atlas = &self.atlas;
+            crate::render::model::mob(&mut dynamic, &|n| atlas.mob_tex(n), m, rel, partial, light);
+        }
+        if let Some(at) = self.atlas.mob_tex("arrow") {
+            for a in &self.arrows {
+                let t = partial as f64;
+                let p = [
+                    a.prev[0] + (a.pos[0] - a.prev[0]) * t,
+                    a.prev[1] + (a.pos[1] - a.prev[1]) * t,
+                    a.prev[2] + (a.pos[2] - a.prev[2]) * t,
+                ];
+                let rel = [
+                    (p[0] - eye[0]) as f32,
+                    (p[1] - eye[1]) as f32,
+                    (p[2] - eye[2]) as f32,
+                ];
+                let (lx, ly, lz) = (
+                    math::floor_double(p[0]),
+                    math::floor_double(p[1]),
+                    math::floor_double(p[2]),
+                );
+                let light = [
+                    (self.world.light(false, lx, ly, lz) << 4) as u8,
+                    (self.world.light(true, lx, ly, lz) << 4) as u8,
+                    0,
+                    0,
+                ];
+                crate::render::model::arrow(&mut dynamic, at, rel, a.yaw, a.pitch, light);
+            }
+        }
         for it in &self.items {
             let t = partial as f64;
             let p = [
