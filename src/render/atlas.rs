@@ -369,7 +369,11 @@ impl Atlas {
         };
         let mut mobs = HashMap::new();
         for name in crate::render::model::TEXTURES {
-            let img = read_png(jar, &format!("assets/minecraft/textures/entity/{name}.png"))?;
+            let path = match name.strip_prefix("../") {
+                Some(rest) => format!("assets/minecraft/textures/{rest}.png"),
+                None => format!("assets/minecraft/textures/entity/{name}.png"),
+            };
+            let img = read_png(jar, &path)?;
             let cell = img.w.max(img.h).next_power_of_two();
             let mut px = vec![0u8; (cell * cell * 4) as usize];
             for y in 0..img.h {

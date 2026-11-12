@@ -68,6 +68,7 @@ cargo run --release -- --seed 1
   死亡與重生、經驗條與等級、攻擊生物（武器傷害、暴擊、疾跑擊退）
 - `RenderBlocks`／`EntityRenderer`：方塊 AO、群系混色、液體、光照貼圖、天空與霧、日出日落、星星、雲、動態材質
 - 聲音：純 Rust（cpal 輸出、lewton 解 Vorbis），經啟動器的資源索引與 sounds.json 解析事件；方塊破壞／放置／腳步、生物叫聲與受傷、弓、爆炸、玩家受傷、背景音樂（MusicTicker），含距離衰減與左右聲道
+- 天氣：World.updateWeather 的降雨／雷雨週期（存檔保存），天空、霧、雲、太陽月亮與光照圖隨雨變暗，雨雪條紋（renderRainSnow，依群系溫度），寒冷群系積雪，雨聲；--weather rain|thunder|clear
 - GUI：字型、HUD、物品欄、工作台、熔爐、箱子、暫停與死亡畫面、F3
 
 ## 尚未實作
@@ -75,7 +76,7 @@ cargo run --release -- --seed 1
 - 粒子
 - 馬、狼、豹貓、史萊姆、終界使者、魷魚、蝙蝠（世界生成時抽到它們仍照原版消耗亂數，但不生成）
 - 紅石電路的訊號傳遞、交易、繁殖、盔甲穿戴、藥水
-- 天氣、下界、終界、讀寫原版 Anvil 存檔、多人連線
+- 閃電、下界、終界、讀寫原版 Anvil 存檔、多人連線
 
 ## 驗證
 

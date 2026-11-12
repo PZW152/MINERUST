@@ -660,7 +660,9 @@ pub fn texture(kind: Kind, variant: i32, layer: u8) -> &'static str {
     }
 }
 
-pub const TEXTURES: [&str; 20] = [
+pub const TEXTURES: [&str; 22] = [
+    "../environment/rain",
+    "../environment/snow",
     "pig/pig",
     "cow/cow",
     "cow/mooshroom",

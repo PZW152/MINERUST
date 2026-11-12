@@ -45,6 +45,9 @@ impl ServerWorld {
             if self.can_block_freeze(x, y - 1, z, true) {
                 self.set_block(x, y - 1, z, block::ICE, 0, 3);
             }
+            if self.raining && self.can_snow_at(x, y, z, true) {
+                self.set_block(x, y, z, block::SNOW_LAYER, 0, 3);
+            }
         }
         let sections = self.chunks[&(cx, cz)].sections;
         for sec in 0..16i32 {

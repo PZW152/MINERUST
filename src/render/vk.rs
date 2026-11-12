@@ -280,6 +280,8 @@ pub struct Frame<'a> {
     pub crack: &'a [Vertex],
     /// First-person hand / held item quads, in view space.
     pub hand: &'a [Vertex],
+    /// Rain and snow streaks (camera-relative, alpha blended).
+    pub weather: &'a [Vertex],
     pub crosshair: bool,
 }
 
@@ -2271,6 +2273,7 @@ impl Renderer {
             let n_dyn = frame.dynamic.len().min(cap);
             let n_crack = frame.crack.len().min(cap - n_dyn);
             let n_hand = frame.hand.len().min(cap - n_dyn - n_crack);
+            let n_weather = frame.weather.len().min(cap - n_dyn - n_crack - n_hand);
             let wptr = self.frames[fi].world_ptr;
             let wbuf = self.frames[fi].world_buf;
             std::ptr::copy_nonoverlapping(frame.dynamic.as_ptr() as *const u8, wptr, n_dyn * vsz);
@@ -2283,6 +2286,11 @@ impl Renderer {
                 frame.hand.as_ptr() as *const u8,
                 wptr.add((n_dyn + n_crack) * vsz),
                 n_hand * vsz,
+            );
+            std::ptr::copy_nonoverlapping(
+                frame.weather.as_ptr() as *const u8,
+                wptr.add((n_dyn + n_crack + n_hand) * vsz),
+                n_weather * vsz,
             );
             if n_dyn >= 4 {
                 dev.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, self.pipe_opaque);
@@ -2319,6 +2327,16 @@ impl Renderer {
                         0,
                     );
                 }
+            }
+            if n_weather >= 4 {
+                push([0.0; 4], [0.0; 4]);
+                dev.cmd_bind_vertex_buffers(
+                    cmd,
+                    0,
+                    &[wbuf],
+                    &[((n_dyn + n_crack + n_hand) * vsz) as u64],
+                );
+                dev.cmd_draw_indexed(cmd, (n_weather / 4) as u32 * 6, 1, 0, 0, 0);
             }
             if let Some(c) = &frame.clouds {
                 if !c.before_terrain {

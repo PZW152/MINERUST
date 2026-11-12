@@ -170,6 +170,11 @@ impl Biome {
         self
     }
 
+    /// `getEnableSnow() || canSpawnLightningBolt()`
+    pub fn can_rain_or_snow(&self) -> bool {
+        self.enable_snow || self.enable_rain
+    }
+
     pub fn is_mesa(&self) -> bool {
         self.class == Class::Mesa
     }

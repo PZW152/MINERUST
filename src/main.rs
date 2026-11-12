@@ -459,6 +459,10 @@ fn parse_args() -> Options {
                 i += 1;
             }
             "--freeze-time" => o.cfg.freeze_time = true,
+            "--weather" if i + 1 < args.len() => {
+                std::env::set_var("MINERUST_WEATHER", &args[i + 1]);
+                i += 1;
+            }
             "--debug" => std::env::set_var("MINERUST_F3", "1"),
             "--vanilla-parity" => compat::set_vanilla_parity(true),
             "--no-save" => o.no_save = true,

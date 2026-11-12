@@ -59,6 +59,28 @@ impl ClientWorld {
         }
     }
 
+    /// `Chunk.getPrecipitationHeight`
+    pub fn precipitation_height(&self, x: i32, z: i32) -> i32 {
+        let Some(c) = self.chunks.get(&(x >> 4, z >> 4)) else {
+            return 0;
+        };
+        let (lx, lz) = (x & 15, z & 15);
+        let mut y = 255;
+        while y > 0 {
+            if c.mc.sections & (1 << (y >> 4)) == 0 {
+                y = (y & !15) - 1;
+                continue;
+            }
+            let id = c.mc.data.blocks[Self::index(lx, y, lz)];
+            let m = block::material(id);
+            if m.blocks_movement() || m.is_liquid() {
+                return y + 1;
+            }
+            y -= 1;
+        }
+        0
+    }
+
     pub fn biome(&self, x: i32, z: i32) -> &'static Biome {
         match self.chunks.get(&(x >> 4, z >> 4)) {
             Some(c) => {
@@ -176,6 +198,8 @@ pub struct Game {
     items: Vec<ItemView>,
     /// Sound output (absent when no asset directory or device was found).
     pub audio: Option<crate::audio::Audio>,
+    weather: crate::sim::Weather,
+    rain_sound: i32,
     next_step: f32,
     mobs: Vec<crate::sim::MobView>,
     arrows: Vec<crate::sim::ArrowView>,
@@ -399,6 +423,8 @@ impl Game {
             },
             items: Vec::new(),
             audio: None,
+            weather: Default::default(),
+            rain_sound: 0,
             next_step: 1.0,
             mobs: Vec::new(),
             arrows: Vec::new(),
@@ -541,6 +567,7 @@ impl Game {
                     }
                 }
                 Event::Explosions(_) => {}
+                Event::Weather(w) => self.weather = w,
                 Event::Respawn(p) => {
                     self.player = Player::new(p[0], p[1], p[2]);
                     self.player.allow_flying = self.mode == GameMode::Creative;
@@ -772,6 +799,34 @@ impl Game {
                 a.set_listener(self.player.pos, self.player.yaw);
                 a.tick_music();
             }
+            // EntityRenderer.addRainParticles: the rain sound
+            if self.weather.rain > 0.2 {
+                let (x, z) = (
+                    math::floor_double(self.player.pos[0]),
+                    math::floor_double(self.player.pos[2]),
+                );
+                let top = self.world.precipitation_height(x, z);
+                let b = self.world.biome(x, z);
+                if b.can_rain_or_snow()
+                    && b.float_temperature(&self.noise, x, top, z) >= 0.15
+                    && (top as f64) < self.player.pos[1] + 10.0
+                {
+                    let n = self.ticks as i32;
+                    if (n.wrapping_mul(1103515245) >> 8 & 3) < self.rain_sound {
+                        self.rain_sound = 0;
+                        let above = (top as f64) > self.player.pos[1] + 1.0;
+                        let p = [x as f64 + 0.5, top as f64, z as f64 + 0.5];
+                        self.sound(
+                            "ambient.weather.rain",
+                            Some(p),
+                            if above { 0.1 } else { 0.2 },
+                            if above { 0.5 } else { 1.0 },
+                        );
+                    } else {
+                        self.rain_sound += 1;
+                    }
+                }
+            }
         } else {
             self.player.prev_pos = self.player.pos;
         }
@@ -872,6 +927,134 @@ impl Game {
         let f3 = -math::cos(-pitch * 0.017453292f32);
         let f4 = math::sin(-pitch * 0.017453292f32);
         [(f2 * f3) as f64, f4 as f64, (f1 * f3) as f64]
+    }
+
+    fn rain(&self, partial: f32) -> f32 {
+        self.weather.prev_rain + (self.weather.rain - self.weather.prev_rain) * partial
+    }
+
+    /// `EntityRenderer.renderRainSnow` geometry around the camera.
+    fn weather_quads(&self, eye: [f64; 3], partial: f32) -> Vec<crate::render::mesher::Vertex> {
+        let mut out = Vec::new();
+        let rain = self.rain(partial);
+        if rain <= 0.0 {
+            return out;
+        }
+        let (Some(rt), Some(st)) = (
+            self.atlas.mob_tex("../environment/rain"),
+            self.atlas.mob_tex("../environment/snow"),
+        ) else {
+            return out;
+        };
+        let (px, pz) = (math::floor_double(eye[0]), math::floor_double(eye[2]));
+        let py = math::floor_double(eye[1]);
+        let r = 10;
+        let t = self.ticks as f32 + partial;
+        for z in pz - r..=pz + r {
+            for x in px - r..=px + r {
+                let (dx, dz) = ((x - px) as f32, (z - pz) as f32);
+                let len = (dx * dx + dz * dz).sqrt().max(0.01);
+                let (rx, rz) = (-dz / len * 0.5, dx / len * 0.5);
+                let b = self.world.biome(x, z);
+                if !b.can_rain_or_snow() {
+                    continue;
+                }
+                let top = self.world.precipitation_height(x, z);
+                let lo = (py - r).max(top);
+                let hi = (py + r).max(top);
+                if lo == hi {
+                    continue;
+                }
+                let temp = b.float_temperature(&self.noise, x, top, z);
+                let snow = temp < 0.15;
+                let tex = if snow { st } else { rt };
+                let seed = (x
+                    .wrapping_mul(x)
+                    .wrapping_mul(3121)
+                    .wrapping_add(x.wrapping_mul(45238971))
+                    ^ z.wrapping_mul(z)
+                        .wrapping_mul(418711)
+                        .wrapping_add(z.wrapping_mul(13761))) as i64;
+                let mut jr = crate::java::JavaRandom::new(seed);
+                let scroll = if snow {
+                    (self.ticks as f32 + partial) / 512.0
+                } else {
+                    (((self.ticks + (seed & 31) as u64) & 31) as f32 + partial) / 32.0
+                        * (3.0 + jr.next_float())
+                };
+                let du = if snow {
+                    jr.next_double() as f32 + t * 0.01 * jr.next_gaussian() as f32
+                } else {
+                    0.0
+                };
+                let d2 = dx * dx + dz * dz;
+                let a = ((1.0 - d2 / (r * r) as f32) * 0.5 + 0.5) * rain;
+                if a <= 0.0 {
+                    continue;
+                }
+                let lx = math::floor_double(x as f64);
+                let ly = top.max(py);
+                let (sky, blk) = (
+                    self.world.light(true, lx, ly, z),
+                    self.world.light(false, lx, ly, z),
+                );
+                let light = [(blk << 4) as u8, (sky << 4) as u8, 0, 0];
+                let col = [255, 255, 255, (a * 255.0) as u8];
+                let (cx, cz) = (
+                    (x as f64 - eye[0]) as f32 + 0.5,
+                    (z as f64 - eye[2]) as f32 + 0.5,
+                );
+                let u0 = tex.rect[0] + (tex.rect[2] - tex.rect[0]) * (du.fract().abs() * 0.0);
+                let u1 = tex.rect[0] + (tex.rect[2] - tex.rect[0]) * 64.0 / tex.size;
+                let vspan = (tex.rect[3] - tex.rect[1]) * 256.0 / tex.size;
+                for y in lo..hi {
+                    let mut v0 = (y as f32 * 0.25 + scroll).rem_euclid(1.0);
+                    let mut yy0 = y as f32;
+                    let yy1 = y as f32 + 1.0;
+                    while yy0 < yy1 {
+                        let room = (1.0 - v0) * 4.0;
+                        let seg = room.min(yy1 - yy0);
+                        let v1 = v0 + seg * 0.25;
+                        let (ya, yb) = (
+                            (yy0 as f64 - eye[1]) as f32,
+                            ((yy0 + seg) as f64 - eye[1]) as f32,
+                        );
+                        let (va, vb) = (tex.rect[1] + vspan * v0, tex.rect[1] + vspan * v1);
+                        let q = [
+                            crate::render::mesher::Vertex {
+                                pos: [cx - rx, ya, cz - rz],
+                                uv: [u0, vb],
+                                color: col,
+                                light,
+                            },
+                            crate::render::mesher::Vertex {
+                                pos: [cx + rx, ya, cz + rz],
+                                uv: [u1, vb],
+                                color: col,
+                                light,
+                            },
+                            crate::render::mesher::Vertex {
+                                pos: [cx + rx, yb, cz + rz],
+                                uv: [u1, va],
+                                color: col,
+                                light,
+                            },
+                            crate::render::mesher::Vertex {
+                                pos: [cx - rx, yb, cz - rz],
+                                uv: [u0, va],
+                                color: col,
+                                light,
+                            },
+                        ];
+                        out.extend_from_slice(&q);
+                        out.extend_from_slice(&[q[3], q[2], q[1], q[0]]);
+                        yy0 += seg;
+                        v0 = 0.0;
+                    }
+                }
+            }
+        }
+        out
     }
 
     fn sound(&mut self, name: &str, pos: Option<[f64; 3]>, vol: f32, pitch: f32) {
@@ -1306,6 +1489,10 @@ impl Game {
         let mut sb = 1.0f32 - (math::cos(angle * math::PI * 2.0f32) * 2.0f32 + 0.2f32);
         sb = sb.clamp(0.0, 1.0);
         sb = 1.0 - sb;
+        let rain = self.rain(1.0);
+        let thunder = self.weather.thunder;
+        sb = (sb as f64 * (1.0 - (rain * 5.0) as f64 / 16.0)) as f32;
+        sb = (sb as f64 * (1.0 - (thunder * 5.0) as f64 / 16.0)) as f32;
         let sun = sb * 0.8f32 + 0.2f32;
         for i in 0..256usize {
             let f = sun * 0.95f32 + 0.05f32;
@@ -1409,7 +1596,23 @@ impl Game {
         let temp = b.float_temperature(&self.noise, ex, ey, ez);
         let t = (temp / 3.0f32).clamp(-1.0, 1.0);
         let sky_rgb = hsb_to_rgb(0.62222224f32 - t * 0.05f32, 0.5f32 + t * 0.1f32, 1.0);
-        let sky = [sky_rgb[0] * day, sky_rgb[1] * day, sky_rgb[2] * day];
+        let mut sky = [sky_rgb[0] * day, sky_rgb[1] * day, sky_rgb[2] * day];
+        let rain = self.rain(partial);
+        let thunder = self.weather.prev_thunder
+            + (self.weather.thunder - self.weather.prev_thunder) * partial;
+        // World.getSkyColor: rain and thunder grey the sky
+        if rain > 0.0 {
+            let l = (sky[0] * 0.3 + sky[1] * 0.59 + sky[2] * 0.11) * 0.6;
+            for c in &mut sky {
+                *c = *c * (1.0 - rain * 0.75) + l * rain * 0.75;
+            }
+        }
+        if thunder > 0.0 {
+            let l = (sky[0] * 0.3 + sky[1] * 0.59 + sky[2] * 0.11) * 0.2;
+            for c in &mut sky {
+                *c = *c * (1.0 - thunder * 0.75) + l * thunder * 0.75;
+            }
+        }
         let mut fog = [
             0.7529412f32 * (day * 0.94f32 + 0.06f32),
             0.84705883f32 * (day * 0.94f32 + 0.06f32),
@@ -1449,6 +1652,18 @@ impl Game {
             fog = [0.02, 0.02, 0.2];
         } else if eye_mat == Material::Lava {
             fog = [0.6, 0.1, 0.0];
+        }
+        // EntityRenderer.updateFogColor: rain and thunder
+        if rain > 0.0 {
+            let (a, b) = (1.0 - rain * 0.5, 1.0 - rain * 0.4);
+            fog[0] *= a;
+            fog[1] *= a;
+            fog[2] *= b;
+        }
+        if thunder > 0.0 {
+            for c in &mut fog {
+                *c *= 1.0 - thunder * 0.5;
+            }
         }
         let fb = self.fog_color2 + (self.fog_color1 - self.fog_color2) * partial;
         for c in &mut fog {
@@ -1539,7 +1754,7 @@ impl Game {
         let star = {
             let f = (1.0f32 - (math::cos(angle * math::PI * 2.0f32) * 2.0f32 + 0.25f32))
                 .clamp(0.0, 1.0);
-            f * f * 0.5f32
+            f * f * 0.5f32 * (1.0 - rain)
         };
         let sunrise = {
             let f3 = math::cos(angle * math::PI * 2.0f32);
@@ -1568,11 +1783,18 @@ impl Game {
                 self.cloud_cell = Some((bx, bz));
             }
             let y = 128.0f32 - eye[1] as f32 + 0.33f32;
-            let color = [
+            let mut color = [
                 day * 0.9f32 + 0.1f32,
                 day * 0.9f32 + 0.1f32,
                 day * 0.85f32 + 0.15f32,
             ];
+            // World.getCloudColour
+            if rain > 0.0 {
+                let l = (color[0] * 0.3 + color[1] * 0.59 + color[2] * 0.11) * 0.6;
+                for c in &mut color {
+                    *c = *c * (1.0 - rain * 0.95) + l * rain * 0.95;
+                }
+            }
             crate::render::vk::CloudDraw {
                 offset: [
                     -((cx - bx as f64) * 12.0) as f32,
@@ -1597,7 +1819,7 @@ impl Game {
             sky_color: [sky[0], sky[1], sky[2], 1.0],
             fog_params,
             sun_dir: [-theta.sin(), theta.cos(), 0.0, (eye[1] - 63.0) as f32],
-            sky_params: [far * 0.8f32, 1.0, 0.0, 0.0],
+            sky_params: [far * 0.8f32, 1.0 - rain, 0.0, 0.0],
             sun_rect: self.atlas.rects[self.atlas.sun as usize],
             moon_rect: self.atlas.rects[self.atlas.moon[moon_phase] as usize],
             void_color: [
@@ -1851,11 +2073,21 @@ impl Game {
         } else {
             None
         };
+        let weather = self.weather_quads(eye, partial);
+        if std::env::var_os("MINERUST_DEBUG_WEATHER").is_some() && self.ticks % 40 == 0 {
+            eprintln!(
+                "weather: rain {} quads {} tex {:?}",
+                self.rain(partial),
+                weather.len() / 8,
+                self.atlas.mob_tex("../environment/rain").map(|t| t.rect)
+            );
+        }
         let frame = Frame {
             crosshair: self.screen == Screen::Playing,
             dynamic: &dynamic,
             crack: &crack,
             hand: &hand,
+            weather: &weather,
             ui: &ui_verts,
             globals: &g,
             cam: eye,

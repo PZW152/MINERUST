@@ -102,6 +102,7 @@ pub enum Event {
     /// Sounds: name, position, volume, pitch.
     Sounds(Vec<(&'static str, [f64; 3], f32, f32)>),
     Explosions(Vec<[f64; 4]>),
+    Weather(Weather),
 }
 
 /// What the client draws of a mob.
@@ -185,10 +186,86 @@ pub struct Sim {
     pub mobs: crate::entity::mob::Mobs,
     player_attackable: bool,
     pending_out: Vec<crate::entity::mob::Outcome>,
+    pub weather: Weather,
 }
 
 /// Level keys owned by the gameplay state (kept out of `unknown`).
-const PLAY_KEYS: [&str; 5] = ["inventory", "mode", "tile", "spawn", "stats"];
+const PLAY_KEYS: [&str; 6] = ["inventory", "mode", "tile", "spawn", "stats", "weather"];
+
+/// `WorldInfo` rain and thunder state and `World.updateWeather`.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Weather {
+    pub raining: bool,
+    pub rain_time: i32,
+    pub thundering: bool,
+    pub thunder_time: i32,
+    pub rain: f32,
+    pub prev_rain: f32,
+    pub thunder: f32,
+    pub prev_thunder: f32,
+}
+
+impl Weather {
+    pub fn update(&mut self, r: &mut JavaRandom) {
+        if self.thunder_time <= 0 {
+            self.thunder_time = if self.thundering {
+                r.next_int_n(12000) + 3600
+            } else {
+                r.next_int_n(168000) + 12000
+            };
+        } else {
+            self.thunder_time -= 1;
+            if self.thunder_time <= 0 {
+                self.thundering = !self.thundering;
+            }
+        }
+        self.prev_thunder = self.thunder;
+        self.thunder = (self.thunder + if self.thundering { 0.01 } else { -0.01 }).clamp(0.0, 1.0);
+        if self.rain_time <= 0 {
+            self.rain_time = if self.raining {
+                r.next_int_n(12000) + 12000
+            } else {
+                r.next_int_n(168000) + 12000
+            };
+        } else {
+            self.rain_time -= 1;
+            if self.rain_time <= 0 {
+                self.raining = !self.raining;
+            }
+        }
+        self.prev_rain = self.rain;
+        self.rain = (self.rain + if self.raining { 0.01 } else { -0.01 }).clamp(0.0, 1.0);
+    }
+    fn encode(&self) -> String {
+        format!(
+            "{},{},{},{},{},{}",
+            self.raining as i32,
+            self.rain_time,
+            self.thundering as i32,
+            self.thunder_time,
+            self.rain,
+            self.thunder
+        )
+    }
+    fn decode(s: &str) -> Option<Weather> {
+        let f: Vec<&str> = s.split(',').collect();
+        if f.len() != 6 {
+            return None;
+        }
+        let rain: f32 = f[4].parse().ok()?;
+        let thunder: f32 = f[5].parse().ok()?;
+        Some(Weather {
+            raining: f[0] == "1",
+            rain_time: f[1].parse().ok()?,
+            thundering: f[2] == "1",
+            thunder_time: f[3].parse().ok()?,
+            rain,
+            prev_rain: rain,
+            thunder,
+            prev_thunder: thunder,
+        })
+    }
+}
 
 fn spiral(radius: i32) -> Vec<(i32, i32)> {
     let mut v = Vec::new();
@@ -241,6 +318,7 @@ impl Sim {
             mobs: crate::entity::mob::Mobs::default(),
             player_attackable: true,
             pending_out: Vec::new(),
+            weather: Weather::default(),
         };
         if let Some(d) = &cfg.save_dir {
             if let Ok(text) = std::fs::read_to_string(d.join("data").join("entities.txt")) {
@@ -287,6 +365,11 @@ impl Sim {
                             }
                         }
                         "stats" => sim.stats = Some(v.clone()),
+                        "weather" => {
+                            if let Some(w) = Weather::decode(v) {
+                                sim.weather = w;
+                            }
+                        }
                         _ => {}
                     }
                 }
@@ -322,6 +405,18 @@ impl Sim {
                 }
             }
         };
+        // `/weather`: forced from the command line.
+        if let Ok(w) = std::env::var("MINERUST_WEATHER") {
+            let on = w == "rain" || w == "thunder";
+            sim.weather.raining = on;
+            sim.weather.thundering = w == "thunder";
+            sim.weather.rain_time = if on { 24000 } else { 168000 };
+            sim.weather.thunder_time = if w == "thunder" { 24000 } else { 168000 };
+            sim.weather.rain = if on { 1.0 } else { 0.0 };
+            sim.weather.prev_rain = sim.weather.rain;
+            sim.weather.thunder = if w == "thunder" { 1.0 } else { 0.0 };
+            sim.weather.prev_thunder = sim.weather.thunder;
+        }
         sim.play.player = (start.pos, start.rot[0]);
         sim.centre = (
             (start.pos[0].floor() as i32) >> 4,
@@ -623,7 +718,15 @@ impl Sim {
         if !self.freeze_time {
             self.world_time += 1;
         }
-        self.world.skylight_subtracted = skylight_subtracted(self.world_time);
+        {
+            let mut r = std::mem::replace(&mut self.world.rand, JavaRandom::new(0));
+            self.weather.update(&mut r);
+            self.world.rand = r;
+            self.world.raining = self.weather.rain > 0.2;
+        }
+        self.world.skylight_subtracted =
+            skylight_subtracted_weather(self.world_time, self.weather.rain, self.weather.thunder);
+        events.push(Event::Weather(self.weather));
         self.world.tick();
         let radius = self.view.min(7);
         for dx in -radius..=radius {
@@ -762,6 +865,7 @@ impl Sim {
             unknown: {
                 let mut u = self.unknown_level_keys.clone();
                 u.push(("inventory".into(), self.play.inv.encode()));
+                u.push(("weather".into(), self.weather.encode()));
                 u.push((
                     "mode".into(),
                     if self.play.mode == GameMode::Creative {
@@ -941,6 +1045,19 @@ impl Sim {
 }
 
 /// `World.calculateSkylightSubtracted(1.0)` for a world time.
+/// `World.calculateSkylightSubtracted` with rain and thunder.
+pub fn skylight_subtracted_weather(world_time: i64, rain: f32, thunder: f32) -> i32 {
+    let f = celestial_angle(world_time, 1.0);
+    let mut f1 =
+        1.0f32 - (crate::util::math::cos(f * crate::util::math::PI * 2.0f32) * 2.0f32 + 0.5f32);
+    f1 = f1.clamp(0.0, 1.0);
+    f1 = 1.0 - f1;
+    f1 = (f1 as f64 * (1.0 - (rain * 5.0f32) as f64 / 16.0)) as f32;
+    f1 = (f1 as f64 * (1.0 - (thunder * 5.0f32) as f64 / 16.0)) as f32;
+    f1 = 1.0 - f1;
+    (f1 * 11.0f32) as i32
+}
+
 pub fn skylight_subtracted(world_time: i64) -> i32 {
     let f = celestial_angle(world_time, 1.0);
     let mut f1 =

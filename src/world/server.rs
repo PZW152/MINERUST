@@ -452,6 +452,8 @@ pub struct ServerWorld {
     pending_structure_chunks: Vec<(i32, i32)>,
     /// `mapFeaturesEnabled`
     pub map_features: bool,
+    /// `World.isRaining`
+    pub raining: bool,
 }
 
 impl ServerWorld {
@@ -484,6 +486,7 @@ impl ServerWorld {
             structures,
             pending_structure_chunks: Vec::new(),
             map_features: true,
+            raining: false,
         }
     }
 
