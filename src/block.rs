@@ -76,6 +76,10 @@ pub const DETECTOR_RAIL: u8 = 28;
 pub const STICKY_PISTON: u8 = 29;
 pub const WEB: u8 = 30;
 pub const PISTON: u8 = 33;
+pub const PISTON_HEAD: u8 = 34;
+pub const TRAPDOOR: u8 = 96;
+pub const REDSTONE_LAMP: u8 = 123;
+pub const LIT_REDSTONE_LAMP: u8 = 124;
 pub const WOOL: u8 = 35;
 pub const GOLD_BLOCK: u8 = 41;
 pub const IRON_BLOCK: u8 = 42;
@@ -537,6 +541,12 @@ fn build() -> [BlockInfo; 256] {
         p.full_block = false;
         t[id as usize] = p;
     }
+    // BlockRedstoneLight: Material.redstoneLight (a plain solid material).
+    t[REDSTONE_LAMP as usize] = cube(M::Iron);
+    t[LIT_REDSTONE_LAMP as usize] = cube(M::Iron);
+    t[LIT_REDSTONE_LAMP as usize].light_value = 15;
+    t[PISTON_HEAD as usize] = base(Shape::Boxes, M::Piston, false);
+    t[TRAPDOOR as usize] = base(Shape::Boxes, M::Wood, false);
     // TNT uses Material.tnt, which is translucent: not an opaque cube for
     // `Material.isOpaque` but still rendered and lit as a full block.
     t[TNT as usize] = cube(M::Tnt);
@@ -1056,6 +1066,21 @@ pub fn texture_name(id: u8, meta: u8, face: usize) -> Option<&'static str> {
                 "piston_side"
             }
         }
+        PISTON_HEAD => {
+            let k = (meta & 7) as usize;
+            if face == k {
+                if meta & 8 != 0 {
+                    "piston_top_sticky"
+                } else {
+                    "piston_top_normal"
+                }
+            } else {
+                "piston_side"
+            }
+        }
+        TRAPDOOR => "trapdoor",
+        REDSTONE_LAMP => "redstone_lamp_off",
+        LIT_REDSTONE_LAMP => "redstone_lamp_on",
         WEB => "web",
         WOOL | CARPET => WOOL_COLORS[(meta & 15) as usize],
         GOLD_BLOCK => "gold_block",

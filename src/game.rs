@@ -206,6 +206,8 @@ pub struct Game {
     next_step: f32,
     mobs: Vec<crate::sim::MobView>,
     arrows: Vec<crate::sim::ArrowView>,
+    /// Primed TNT: position, previous position, fuse.
+    tnt: Vec<([f64; 3], [f64; 3], i32)>,
     /// Mob under the crosshair and its distance.
     target_mob: Option<(u32, f64)>,
     pub stats: Stats,
@@ -434,6 +436,7 @@ impl Game {
             next_step: 1.0,
             mobs: Vec::new(),
             arrows: Vec::new(),
+            tnt: Vec::new(),
             target_mob: None,
             stats,
             mode,
@@ -596,6 +599,16 @@ impl Game {
                 Event::Sounds(list) => {
                     for (name, pos, vol, pitch) in list {
                         self.sound(name, Some(pos), vol, pitch);
+                    }
+                }
+                Event::Tnt(list) => self.tnt = list,
+                Event::Notes(list) => {
+                    // BlockNote.onBlockEventReceived
+                    for (p, inst, pitch) in list {
+                        let f = 2f32.powf((pitch - 12) as f32 / 12.0);
+                        let c = [p[0] as f64 + 0.5, p[1] as f64 + 0.5, p[2] as f64 + 0.5];
+                        self.sound(inst, Some(c), 3.0, f);
+                        self.particles.note([c[0], p[1] as f64 + 1.2, c[2]], pitch);
                     }
                 }
                 Event::Explosions(list) => {
@@ -996,6 +1009,11 @@ impl Game {
     /// Per-tick particle spawning around the player.
     fn tick_particles(&mut self) {
         self.particles.tick(&self.world);
+        // EntityTNTPrimed.onUpdate: a puff of smoke every tick.
+        for &(pos, _, _) in &self.tnt {
+            self.particles
+                .smoke([pos[0], pos[1] + 0.5, pos[2]], [0.0; 3], false);
+        }
         let eye = self.player.pos;
         self.particles.display_ticks(&self.world, eye);
         // EntityRenderer.addRainParticles
@@ -2068,6 +2086,35 @@ impl Game {
                 ];
                 crate::render::model::arrow(&mut dynamic, at, rel, a.yaw, a.pitch, light);
             }
+        }
+        for &(pos, prev, fuse) in &self.tnt {
+            let t = partial as f64;
+            let p = [
+                prev[0] + (pos[0] - prev[0]) * t,
+                prev[1] + (pos[1] - prev[1]) * t,
+                prev[2] + (pos[2] - prev[2]) * t,
+            ];
+            let (lx, ly, lz) = (
+                math::floor_double(p[0]),
+                math::floor_double(p[1]),
+                math::floor_double(p[2]),
+            );
+            let light = (
+                self.world.light(true, lx, ly, lz),
+                self.world.light(false, lx, ly, lz),
+            );
+            entities::primed_tnt(
+                &mut dynamic,
+                &self.atlas,
+                [
+                    (p[0] - eye[0]) as f32,
+                    (p[1] - eye[1]) as f32,
+                    (p[2] - eye[2]) as f32,
+                ],
+                fuse,
+                partial,
+                light,
+            );
         }
         for it in &self.items {
             let t = partial as f64;

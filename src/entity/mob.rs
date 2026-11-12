@@ -1085,9 +1085,20 @@ pub fn brightness(w: &mut ServerWorld, x: i32, y: i32, z: i32) -> f32 {
 }
 
 /// Every mob, arrow and the spawning state of the world.
+/// `EntityTNTPrimed`: `pos` is the centre of the 0.98 box.
+#[derive(Clone, Debug)]
+pub struct Tnt {
+    pub pos: [f64; 3],
+    pub prev_pos: [f64; 3],
+    pub motion: [f64; 3],
+    pub fuse: i32,
+    on_ground: bool,
+}
+
 pub struct Mobs {
     pub list: Vec<Mob>,
     pub arrows: Vec<Arrow>,
+    pub tnt: Vec<Tnt>,
     next_id: u32,
     pub rand: JavaRandom,
 }
@@ -1097,6 +1108,7 @@ impl Default for Mobs {
         Mobs {
             list: Vec::new(),
             arrows: Vec::new(),
+            tnt: Vec::new(),
             next_id: 1,
             rand: JavaRandom::new(0x6D6F62),
         }
@@ -1113,7 +1125,92 @@ pub struct Outcome {
     pub explosions: Vec<[f64; 4]>,
 }
 
+/// `Entity.moveEntity` for a primed TNT box.
+fn tnt_move(t: &mut Tnt, w: &ServerWorld) {
+    use super::player::{colliding_boxes, Aabb};
+    let h = 0.49;
+    let mut bb = Aabb {
+        min: [t.pos[0] - h, t.pos[1] - h, t.pos[2] - h],
+        max: [t.pos[0] + h, t.pos[1] + h, t.pos[2] + h],
+    };
+    let (ox, oy, oz) = (t.motion[0], t.motion[1], t.motion[2]);
+    let (mut dx, mut dy, mut dz) = (ox, oy, oz);
+    let list = colliding_boxes(w, &bb.add_coord(dx, dy, dz));
+    for b in &list {
+        dy = b.calc_offset(&bb, 1, dy);
+    }
+    bb.offset(0.0, dy, 0.0);
+    for b in &list {
+        dx = b.calc_offset(&bb, 0, dx);
+    }
+    bb.offset(dx, 0.0, 0.0);
+    for b in &list {
+        dz = b.calc_offset(&bb, 2, dz);
+    }
+    bb.offset(0.0, 0.0, dz);
+    t.pos = [
+        (bb.min[0] + bb.max[0]) / 2.0,
+        bb.min[1] + h,
+        (bb.min[2] + bb.max[2]) / 2.0,
+    ];
+    t.on_ground = oy != dy && oy < 0.0;
+    if ox != dx {
+        t.motion[0] = 0.0;
+    }
+    if oy != dy {
+        t.motion[1] = 0.0;
+    }
+    if oz != dz {
+        t.motion[2] = 0.0;
+    }
+}
+
 impl Mobs {
+    /// `new EntityTNTPrimed(world, x, y, z, placer)` at the block centre.
+    pub fn prime_tnt(&mut self, pos: [f64; 3], fuse: i32) {
+        let f = (self.rand.next_double() * std::f64::consts::PI * 2.0) as f32;
+        let motion = [
+            (-(f.sin()) * 0.02) as f64,
+            0.2f32 as f64,
+            (-(f.cos()) * 0.02) as f64,
+        ];
+        self.tnt.push(Tnt {
+            pos,
+            prev_pos: pos,
+            motion,
+            fuse,
+            on_ground: false,
+        });
+    }
+
+    /// `BehaviorProjectileDispense` for arrows: `EntityArrow` launched along
+    /// `dir` at 1.1 with inaccuracy 6.
+    pub fn dispense_arrow(&mut self, pos: [f64; 3], dir: [f64; 3]) {
+        let mut v = [dir[0], dir[1] + 0.1, dir[2]];
+        let len = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+        for c in v.iter_mut() {
+            *c /= len;
+            *c += self.rand.next_gaussian()
+                * (if self.rand.next_boolean() { -1.0 } else { 1.0 })
+                * 0.007499999832361937
+                * 6.0;
+            *c *= 1.1;
+        }
+        let h = (v[0] * v[0] + v[2] * v[2]).sqrt();
+        let yaw = (v[0].atan2(v[2]) * 180.0 / std::f64::consts::PI) as f32;
+        let pitch = (v[1].atan2(h) * 180.0 / std::f64::consts::PI) as f32;
+        self.arrows.push(Arrow {
+            pos,
+            prev_pos: pos,
+            motion: v,
+            yaw,
+            pitch,
+            ticks: 0,
+            stuck: false,
+            damage: 2.0,
+        });
+    }
+
     pub fn spawn(
         &mut self,
         kind: Kind,
@@ -1164,6 +1261,31 @@ impl Mobs {
             );
         }
         self.arrows.extend(new_arrows);
+        // EntityTNTPrimed.onUpdate
+        let mut k = 0;
+        while k < self.tnt.len() {
+            let t = &mut self.tnt[k];
+            t.prev_pos = t.pos;
+            t.motion[1] -= 0.04;
+            tnt_move(t, w);
+            for v in &mut t.motion {
+                *v *= 0.98;
+            }
+            if t.on_ground {
+                t.motion[0] *= 0.7;
+                t.motion[2] *= 0.7;
+                t.motion[1] *= -0.5;
+            }
+            let f = t.fuse;
+            t.fuse -= 1;
+            if f <= 0 {
+                let c = t.pos;
+                self.tnt.remove(k);
+                explosions.push((c, 4.0));
+            } else {
+                k += 1;
+            }
+        }
         for (c, size) in explosions {
             explode(w, self, player, c, size, out);
         }
@@ -2077,7 +2199,7 @@ fn explode(
                         *v /= l;
                     }
                     let mut f1 = size * (0.7 + r.next_float() * 0.6);
-                    let mut p = [c[0], c[1] + 0.5, c[2]];
+                    let mut p = [c[0], c[1], c[2]];
                     let step = 0.3f32;
                     while f1 > 0.0 {
                         let (bx, by, bz) = (
@@ -2131,6 +2253,13 @@ fn explode(
             });
         }
     }
+    for t in mobs.tnt.iter_mut() {
+        if let Some((_, k)) = apply(t.pos, 0.0) {
+            for a in 0..3 {
+                t.motion[a] += k[a];
+            }
+        }
+    }
     for m in mobs.list.iter_mut() {
         if let Some((dmg, k)) = apply(m.pos, m.kind.eye_height() as f64) {
             m.damage(dmg, None);
@@ -2140,6 +2269,7 @@ fn explode(
         }
     }
     // blocks
+    let mut chain = Vec::new();
     let r = &mut mobs.rand;
     for &(x, y, z) in hit.iter() {
         let id = w.block(x, y, z);
@@ -2150,6 +2280,13 @@ fn explode(
             continue;
         }
         let meta = w.meta(x, y, z);
+        if id == block::TNT {
+            // BlockTNT.onBlockDestroyedByExplosion: a short fuse, no drop.
+            w.set_block(x, y, z, block::AIR, 0, 3);
+            let fuse = w.rand.next_int_n(20) + 10;
+            chain.push(([x as f64 + 0.5, y as f64 + 0.5, z as f64 + 0.5], fuse));
+            continue;
+        }
         if r.next_float() <= 1.0 / size {
             for s in crate::item::drops(id, meta, r) {
                 out.drops
@@ -2165,6 +2302,9 @@ fn explode(
         4.0,
         (1.0 + (r.next_float() - r.next_float()) * 0.2) * 0.7,
     ));
+    for (p, fuse) in chain {
+        mobs.prime_tnt(p, fuse);
+    }
 }
 
 /// `SpawnerAnimals.canCreatureTypeSpawnAtLocation` for land creatures.

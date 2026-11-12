@@ -273,6 +273,41 @@ fn sprite_rect(atlas: &Atlas, s: &Stack) -> Option<[f32; 4]> {
 /// One dropped item, relative to the camera. `light` is `(sky, block)` at
 /// the item, already combined with the sky darkening by the shader.
 #[allow(clippy::too_many_arguments)]
+/// `RenderTNTPrimed.doRender`: the block swells in its last ten ticks and
+/// flashes white every five.
+pub fn primed_tnt(
+    out: &mut Vec<Vertex>,
+    atlas: &Atlas,
+    centre: [f32; 3],
+    fuse: i32,
+    partial: f32,
+    light: (i32, i32),
+) {
+    let l = light_bytes(light.0, light.1);
+    let left = fuse as f32 - partial + 1.0;
+    let mut m = translate(centre[0], centre[1], centre[2]);
+    if left < 10.0 {
+        let mut f = (1.0 - left / 10.0).clamp(0.0, 1.0);
+        f *= f;
+        f *= f;
+        let s = 1.0 + f * 0.3;
+        m = mul(&m, &scale(s, s, s));
+    }
+    m = mul(&m, &translate(-0.5, -0.5, -0.5));
+    let start = out.len();
+    block_cube(out, atlas, block::TNT, 0, &m, l, 1.0);
+    if fuse / 5 % 2 == 0 {
+        let a = (1.0 - left / 100.0) * 0.8;
+        for v in &mut out[start..] {
+            for c in 0..3 {
+                let x = v.color[c] as f32 / 255.0;
+                v.color[c] = ((x + (1.0 - x) * a).min(1.0) * 255.0) as u8;
+            }
+            v.light = [240, 240, 0, 0];
+        }
+    }
+}
+
 pub fn item_entity(
     out: &mut Vec<Vertex>,
     atlas: &Atlas,

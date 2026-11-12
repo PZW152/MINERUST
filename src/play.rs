@@ -497,11 +497,90 @@ impl Play {
                     self.inv_dirty = true;
                     return;
                 }
+                block::LEVER => {
+                    w.toggle_lever(target[0], target[1], target[2]);
+                    return;
+                }
+                block::STONE_BUTTON | block::WOODEN_BUTTON => {
+                    w.press_button(tid, target[0], target[1], target[2]);
+                    return;
+                }
+                block::UNPOWERED_REPEATER | block::POWERED_REPEATER => {
+                    // BlockRedstoneRepeater.onBlockActivated: next delay.
+                    let m = w.meta(target[0], target[1], target[2]);
+                    let d = (((m & 12) >> 2) + 1) << 2 & 12;
+                    w.set_meta(target[0], target[1], target[2], d | (m & 3), 3);
+                    return;
+                }
+                block::NOTEBLOCK => {
+                    w.note_click(target[0], target[1], target[2]);
+                    return;
+                }
+                block::WOODEN_DOOR => {
+                    // BlockDoor.onBlockActivated
+                    let [x, y, z] = target;
+                    let ly = if w.meta(x, y, z) & 8 != 0 { y - 1 } else { y };
+                    let m = w.meta(x, ly, z);
+                    w.set_meta(x, ly, z, (m & 7) ^ 4, 2);
+                    w.door_sound(x, y, z);
+                    return;
+                }
+                block::TRAPDOOR => {
+                    let [x, y, z] = target;
+                    let m = w.meta(x, y, z);
+                    w.set_meta(x, y, z, m ^ 4, 2);
+                    w.door_sound(x, y, z);
+                    return;
+                }
+                block::DISPENSER => {
+                    self.tiles
+                        .entry(target)
+                        .or_insert(Tile::Dispenser { slots: [None; 9] });
+                    return;
+                }
+                block::TNT if self.inv.held().map(|s| s.id) == Some(259) => {
+                    // BlockTNT.onBlockActivated with flint and steel.
+                    w.prime_tnt(target[0], target[1], target[2], 80);
+                    self.damage_held(1);
+                    return;
+                }
                 _ => {}
             }
         }
         let Some(held) = self.inv.held() else { return };
-        let Some(id) = held.block() else { return };
+        if held.id == 324 || held.id == 330 {
+            self.place_door(w, target, face, held.id);
+            return;
+        }
+        if held.id == 259 {
+            // ItemFlintAndSteel.onItemUse: fire on the clicked side.
+            let p = [
+                target[0] + face[0],
+                target[1] + face[1],
+                target[2] + face[2],
+            ];
+            if w.is_air(p[0], p[1], p[2]) {
+                let pitch = w.rand.next_float() * 0.4 + 0.8;
+                w.redstone_effects
+                    .push(crate::world::redstone::Effect::Sound(
+                        "fire.ignite",
+                        [p[0] as f64 + 0.5, p[1] as f64 + 0.5, p[2] as f64 + 0.5],
+                        1.0,
+                        pitch,
+                    ));
+                w.set_block(p[0], p[1], p[2], block::FIRE, 0, 3);
+            }
+            self.damage_held(1);
+            return;
+        }
+        let id = match held.id {
+            331 => block::REDSTONE_WIRE,
+            356 => block::UNPOWERED_REPEATER,
+            _ => match held.block() {
+                Some(id) => id,
+                None => return,
+            },
+        };
         // ItemBlock.onItemUse: replaceable targets are replaced in place.
         let tmat = block::material(tid);
         let replace_in_place = tid == block::SNOW_LAYER
@@ -526,8 +605,80 @@ impl Play {
             return;
         }
         let mut meta = held.meta;
+        let side = match face {
+            [0, -1, 0] => 0,
+            [0, 1, 0] => 1,
+            [0, 0, -1] => 2,
+            [0, 0, 1] => 3,
+            [-1, 0, 0] => 4,
+            _ => 5,
+        };
+        let nc = |w: &mut ServerWorld, x: i32, y: i32, z: i32| {
+            block::info(w.block(x, y, z)).normal_cube()
+        };
+        let yaw4 = ((self.player.1 * 4.0 / 360.0) as f64 + 0.5).floor() as i32 & 3;
         match id {
-            block::TORCH => {
+            block::LEVER => {
+                // BlockLever.onBlockPlaced + onBlockPlacedBy
+                let k = match side {
+                    0 if nc(w, p[0], p[1] + 1, p[2]) => 0,
+                    1 if w.solid_top_surface(p[0], p[1] - 1, p[2]) => 5,
+                    2 if nc(w, p[0], p[1], p[2] + 1) => 4,
+                    3 if nc(w, p[0], p[1], p[2] - 1) => 3,
+                    4 if nc(w, p[0] + 1, p[1], p[2]) => 2,
+                    5 if nc(w, p[0] - 1, p[1], p[2]) => 1,
+                    _ => return,
+                };
+                meta = match k {
+                    5 if yaw4 & 1 != 0 => 6,
+                    0 if yaw4 & 1 == 0 => 7,
+                    k => k,
+                };
+            }
+            block::STONE_BUTTON | block::WOODEN_BUTTON => {
+                meta = match side {
+                    2 if nc(w, p[0], p[1], p[2] + 1) => 4,
+                    3 if nc(w, p[0], p[1], p[2] - 1) => 3,
+                    4 if nc(w, p[0] + 1, p[1], p[2]) => 2,
+                    5 if nc(w, p[0] - 1, p[1], p[2]) => 1,
+                    _ => return,
+                };
+            }
+            block::TRAPDOOR => {
+                meta = match side {
+                    2 if nc(w, p[0], p[1], p[2] + 1) => 0,
+                    3 if nc(w, p[0], p[1], p[2] - 1) => 1,
+                    4 if nc(w, p[0] + 1, p[1], p[2]) => 2,
+                    5 if nc(w, p[0] - 1, p[1], p[2]) => 3,
+                    _ => return,
+                };
+            }
+            block::STONE_PRESSURE_PLATE | block::WOODEN_PRESSURE_PLATE => {
+                if !w.solid_top_surface(p[0], p[1] - 1, p[2])
+                    && w.block(p[0], p[1] - 1, p[2]) != block::FENCE
+                {
+                    return;
+                }
+                meta = 0;
+            }
+            block::REDSTONE_WIRE => {
+                if !w.solid_top_surface(p[0], p[1] - 1, p[2])
+                    && w.block(p[0], p[1] - 1, p[2]) != block::GLOWSTONE
+                {
+                    return;
+                }
+                meta = 0;
+            }
+            block::UNPOWERED_REPEATER => {
+                if !w.solid_top_surface(p[0], p[1] - 1, p[2]) {
+                    return;
+                }
+                meta = (yaw4 + 2) % 4;
+            }
+            block::PISTON | block::STICKY_PISTON | block::DISPENSER => {
+                meta = self.orientation(p);
+            }
+            block::TORCH | block::REDSTONE_TORCH => {
                 // BlockTorch.onBlockPlaced: attach to the clicked face.
                 let side_ok = |w: &mut ServerWorld, x: i32, y: i32, z: i32| {
                     block::info(w.block(x, y, z)).normal_cube()
@@ -606,11 +757,167 @@ impl Play {
             w.set_block(p[0], p[1] + 1, p[2], id, 8, 3);
         } else {
             w.set_block(p[0], p[1], p[2], id, meta, 3);
+            match id {
+                // onBlockPlacedBy runs after the facing chosen in onBlockAdded.
+                block::DISPENSER => {
+                    w.set_meta(p[0], p[1], p[2], meta, 2);
+                }
+                block::UNPOWERED_REPEATER => w.repeater_placed(p[0], p[1], p[2]),
+                _ => {}
+            }
         }
         if self.mode == GameMode::Survival {
             self.inv.consume_held();
             self.inv_dirty = true;
         }
+    }
+
+    /// `BlockPistonBase.determineOrientation`
+    fn orientation(&self, p: Pos) -> i32 {
+        let ([px, py, pz], yaw) = self.player;
+        if (px - p[0] as f64).abs() < 2.0 && (pz - p[2] as f64).abs() < 2.0 {
+            let d = py + 1.82;
+            if d - p[1] as f64 > 2.0 {
+                return 1;
+            }
+            if p[1] as f64 - d > 0.0 {
+                return 0;
+            }
+        }
+        match (((yaw * 4.0 / 360.0) as f64 + 0.5).floor() as i32) & 3 {
+            0 => 2,
+            1 => 5,
+            2 => 3,
+            _ => 4,
+        }
+    }
+
+    /// Wears the held item by `n` uses (`ItemStack.damageItem`).
+    fn damage_held(&mut self, n: i32) {
+        if self.mode != GameMode::Survival {
+            return;
+        }
+        let i = self.inv.selected;
+        if let Some(s) = self.inv.main[i] {
+            let max = crate::item::max_damage(s.id);
+            let d = s.meta + n;
+            self.inv.main[i] = if max > 0 && d > max {
+                None
+            } else {
+                Some(Stack { meta: d, ..s })
+            };
+            self.inv_dirty = true;
+        }
+    }
+
+    /// `ItemDoor.onItemUse` + `placeDoorBlock`
+    fn place_door(&mut self, w: &mut ServerWorld, target: Pos, face: [i32; 3], item_id: u16) {
+        if face != [0, 1, 0] {
+            return;
+        }
+        let door = if item_id == 324 {
+            block::WOODEN_DOOR
+        } else {
+            block::IRON_DOOR
+        };
+        let [x, y, z] = [target[0], target[1] + 1, target[2]];
+        if y >= 255
+            || !w.solid_top_surface(x, y - 1, z)
+            || !w.material(x, y, z).replaceable()
+            || !w.material(x, y + 1, z).replaceable()
+        {
+            return;
+        }
+        let dir = (((self.player.1 + 180.0) * 4.0 / 360.0) as f64 - 0.5).floor() as i32 & 3;
+        let (b0, b1) = match dir {
+            0 => (0, 1),
+            1 => (-1, 0),
+            2 => (0, -1),
+            _ => (1, 0),
+        };
+        let nc = |w: &mut ServerWorld, x: i32, y: i32, z: i32| {
+            block::info(w.block(x, y, z)).normal_cube() as i32
+        };
+        let i1 = nc(w, x - b0, y, z - b1) + nc(w, x - b0, y + 1, z - b1);
+        let j1 = nc(w, x + b0, y, z + b1) + nc(w, x + b0, y + 1, z + b1);
+        let flag = w.block(x - b0, y, z - b1) == door || w.block(x - b0, y + 1, z - b1) == door;
+        let flag1 = w.block(x + b0, y, z + b1) == door || w.block(x + b0, y + 1, z + b1) == door;
+        let hinge = (flag && !flag1) || j1 > i1;
+        w.set_block(x, y, z, door, dir, 2);
+        w.set_block(x, y + 1, z, door, 8 | hinge as i32, 2);
+        w.notify_neighbours(x, y, z, door);
+        w.notify_neighbours(x, y + 1, z, door);
+        if self.mode == GameMode::Survival {
+            self.inv.consume_held();
+            self.inv_dirty = true;
+        }
+    }
+
+    /// `BlockDispenser.func_149941_e`: fires one random stack. Arrows and
+    /// TNT come back for the caller to spawn as entities.
+    pub fn dispense(
+        &mut self,
+        pos: Pos,
+        facing: i32,
+        r: &mut JavaRandom,
+        sounds: &mut Vec<(&'static str, [f64; 3], f32, f32)>,
+    ) -> Option<(Stack, [f64; 3], [f64; 3])> {
+        const FX: [i32; 6] = [0, 0, 0, 0, -1, 1];
+        const FY: [i32; 6] = [-1, 1, 0, 0, 0, 0];
+        const FZ: [i32; 6] = [0, 0, -1, 1, 0, 0];
+        let f = (facing as usize).min(5);
+        let c = [
+            pos[0] as f64 + 0.5,
+            pos[1] as f64 + 0.5,
+            pos[2] as f64 + 0.5,
+        ];
+        let Some(Tile::Dispenser { slots }) = self.tiles.get_mut(&pos) else {
+            sounds.push(("random.click", c, 1.0, 1.2));
+            return None;
+        };
+        // TileEntityDispenser.func_146017_i
+        let mut pick = None;
+        let mut j = 1;
+        for (k, s) in slots.iter().enumerate() {
+            if s.is_some() {
+                if r.next_int_n(j) == 0 {
+                    pick = Some(k);
+                }
+                j += 1;
+            }
+        }
+        let Some(k) = pick else {
+            sounds.push(("random.click", c, 1.0, 1.2));
+            return None;
+        };
+        let mut s = slots[k].unwrap();
+        let one = Stack { count: 1, ..s };
+        s.count -= 1;
+        slots[k] = if s.count == 0 { None } else { Some(s) };
+        let dir = [FX[f] as f64, FY[f] as f64, FZ[f] as f64];
+        let mut at = [
+            c[0] + 0.7 * dir[0],
+            c[1] + 0.7 * dir[1],
+            c[2] + 0.7 * dir[2],
+        ];
+        if one.id == 262 || one.id == block::TNT as u16 {
+            let snd = if one.id == 262 { 1.2 } else { 1.0 };
+            sounds.push(("random.click", c, 1.0, snd));
+            return Some((one, at, dir));
+        }
+        // BehaviorDefaultDispenseItem.doDispense
+        at[1] -= if FY[f] != 0 { 0.125 } else { 0.15625 };
+        let id = self.next_item;
+        self.next_item += 1;
+        let mut e = ItemEntity::new(id, one, at, r);
+        let d3 = r.next_double() * 0.1 + 0.2;
+        e.motion = [dir[0] * d3, 0.20000000298023224, dir[2] * d3];
+        for v in &mut e.motion {
+            *v += r.next_gaussian() * 0.007499999832361937 * 6.0;
+        }
+        self.spawn(e);
+        sounds.push(("random.click", c, 1.0, 1.0));
+        None
     }
 
     /// A click inside the open window. `Slot::Main` and the crafting slots

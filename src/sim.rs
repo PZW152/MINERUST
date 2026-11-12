@@ -103,6 +103,10 @@ pub enum Event {
     Sounds(Vec<(&'static str, [f64; 3], f32, f32)>),
     Explosions(Vec<[f64; 4]>),
     Weather(Weather),
+    /// Primed TNT near the player: position, previous position, fuse.
+    Tnt(Vec<([f64; 3], [f64; 3], i32)>),
+    /// Note blocks played this tick: position, instrument, pitch 0..24.
+    Notes(Vec<([i32; 3], &'static str, i32)>),
 }
 
 /// What the client draws of a mob.
@@ -742,6 +746,62 @@ impl Sim {
         }
         let mut play = std::mem::replace(&mut self.play, Play::new(GameMode::Survival));
         play.tick(&mut self.world);
+        // Entity contact with pressure plates and tripwire.
+        {
+            use crate::world::redstone::{Aabb6, Occupant};
+            let mut occ = Vec::new();
+            let (f, _) = play.player;
+            if !self.respawn_pending {
+                occ.push(Occupant {
+                    bb: Aabb6 {
+                        min: [f[0] - 0.3, f[1], f[2] - 0.3],
+                        max: [f[0] + 0.3, f[1] + 1.8, f[2] + 0.3],
+                    },
+                    living: true,
+                });
+            }
+            for m in &self.mobs.list {
+                if !m.dead {
+                    occ.push(Occupant {
+                        bb: Aabb6 {
+                            min: m.bb.min,
+                            max: m.bb.max,
+                        },
+                        living: true,
+                    });
+                }
+            }
+            for it in &play.items {
+                let b = it.bb();
+                occ.push(Occupant {
+                    bb: Aabb6 {
+                        min: b.min,
+                        max: b.max,
+                    },
+                    living: false,
+                });
+            }
+            for a in &self.mobs.arrows {
+                occ.push(Occupant {
+                    bb: Aabb6 {
+                        min: [a.pos[0] - 0.25, a.pos[1], a.pos[2] - 0.25],
+                        max: [a.pos[0] + 0.25, a.pos[1] + 0.5, a.pos[2] + 0.25],
+                    },
+                    living: false,
+                });
+            }
+            for t in &self.mobs.tnt {
+                occ.push(Occupant {
+                    bb: Aabb6 {
+                        min: [t.pos[0] - 0.49, t.pos[1] - 0.49, t.pos[2] - 0.49],
+                        max: [t.pos[0] + 0.49, t.pos[1] + 0.49, t.pos[2] + 0.49],
+                    },
+                    living: false,
+                });
+            }
+            self.world.occupants = occ;
+            self.world.redstone_entity_tick();
+        }
         for t in std::mem::take(&mut self.world.gen_tiles) {
             play.add_gen_tile(t);
         }
@@ -929,6 +989,38 @@ impl Sim {
         outs.push(out);
         let mut hits = Vec::new();
         let mut sounds = Vec::new();
+        let mut notes = Vec::new();
+        {
+            use crate::world::redstone::Effect;
+            let mut rnd = std::mem::replace(&mut self.world.rand, JavaRandom::new(0));
+            for e in std::mem::take(&mut self.world.redstone_effects) {
+                match e {
+                    Effect::Sound(n, p, v, pi) => sounds.push((n, p, v, pi)),
+                    Effect::Note(p, inst, pitch) => notes.push((p, inst, pitch)),
+                    Effect::Tnt(p, fuse) => self.mobs.prime_tnt(p, fuse),
+                    Effect::Dispense(p, facing) => {
+                        if let Some((s, at, dir)) = play.dispense(p, facing, &mut rnd, &mut sounds)
+                        {
+                            if s.id == 262 {
+                                self.mobs.dispense_arrow(at, dir);
+                            } else {
+                                // BlockSourceImpl: TNT primes in the block in front.
+                                let q = [
+                                    p[0] as f64 + 0.5 + dir[0],
+                                    p[1] as f64 + 0.5 + dir[1],
+                                    p[2] as f64 + 0.5 + dir[2],
+                                ];
+                                self.mobs.prime_tnt(q, 80);
+                            }
+                        }
+                    }
+                }
+            }
+            self.world.rand = rnd;
+        }
+        if !notes.is_empty() {
+            events.push(Event::Notes(notes));
+        }
         let mut explosions = Vec::new();
         let mut rnd = std::mem::replace(&mut self.world.rand, JavaRandom::new(0));
         for o in outs {
@@ -1007,6 +1099,13 @@ impl Sim {
             })
             .collect();
         events.push(Event::Mobs(views, arrows));
+        events.push(Event::Tnt(
+            self.mobs
+                .tnt
+                .iter()
+                .map(|t| (t.pos, t.prev_pos, t.fuse))
+                .collect(),
+        ));
     }
 
     /// Order-independent digest of the whole simulation state.
@@ -1430,5 +1529,161 @@ mod tests {
                 .sum::<u32>(),
             4
         );
+    }
+
+    fn redstone_sim() -> (Sim, i32, i32, i32) {
+        let cfg = SimConfig {
+            seed: 4242,
+            view: 2,
+            save_dir: None,
+            start_time: 6000,
+            freeze_time: true,
+            mode: GameMode::Creative,
+        };
+        let (mut sim, start) = Sim::new(&cfg);
+        let mut ev = Vec::new();
+        // Let the spawn area finish generating and drain the gravel ticks
+        // ore population schedules, as the spawn preparation does.
+        for _ in 0..400 {
+            sim.step(&[], &mut ev);
+            if sim.world.pending_ticks() < 200 {
+                break;
+            }
+        }
+        let (x, z) = (
+            start.pos[0].floor() as i32 + 2,
+            start.pos[2].floor() as i32 - 6,
+        );
+        let y = 200;
+        for dx in -2..12 {
+            for dz in -2..14 {
+                sim.world.set_block(x + dx, y, z + dz, block::STONE, 0, 3);
+            }
+        }
+        (sim, x, y + 1, z)
+    }
+
+    fn steps(sim: &mut Sim, n: usize) {
+        let mut ev = Vec::new();
+        for _ in 0..n {
+            sim.step(&[], &mut ev);
+        }
+    }
+
+    #[test]
+    fn lever_wire_lamp_and_torch_inverter() {
+        let (mut sim, x, y, z) = redstone_sim();
+        let w = &mut sim.world;
+        w.set_block(x, y, z, block::LEVER, 5, 3);
+        for i in 1..4 {
+            w.set_block(x + i, y, z, block::REDSTONE_WIRE, 0, 3);
+        }
+        w.set_block(x + 4, y, z, block::REDSTONE_LAMP, 0, 3);
+        w.toggle_lever(x, y, z);
+        assert_eq!(w.meta(x + 1, y, z), 15);
+        assert_eq!(w.meta(x + 3, y, z), 13);
+        assert_eq!(w.block(x + 4, y, z), block::LIT_REDSTONE_LAMP);
+        w.toggle_lever(x, y, z);
+        assert_eq!(w.meta(x + 1, y, z), 0);
+        assert_eq!(
+            w.block(x + 4, y, z),
+            block::LIT_REDSTONE_LAMP,
+            "lamps go out after 4 ticks"
+        );
+        steps(&mut sim, 5);
+        assert_eq!(sim.world.block(x + 4, y, z), block::REDSTONE_LAMP);
+
+        // A torch on the side of a block, inverted by a lever on top.
+        let w = &mut sim.world;
+        let (sx, sz) = (x, z + 3);
+        w.set_block(sx, y, sz, block::STONE, 0, 3);
+        w.set_block(sx + 1, y, sz, block::REDSTONE_TORCH, 1, 3);
+        w.set_block(sx, y + 1, sz, block::LEVER, 5, 3);
+        assert_eq!(w.block(sx + 1, y, sz), block::REDSTONE_TORCH);
+        w.toggle_lever(sx, y + 1, sz);
+        steps(&mut sim, 3);
+        assert_eq!(sim.world.block(sx + 1, y, sz), block::UNLIT_REDSTONE_TORCH);
+        sim.world.toggle_lever(sx, y + 1, sz);
+        steps(&mut sim, 3);
+        assert_eq!(sim.world.block(sx + 1, y, sz), block::REDSTONE_TORCH);
+    }
+
+    #[test]
+    fn repeater_delays_and_piston_pushes() {
+        let (mut sim, x, y, z) = redstone_sim();
+        let w = &mut sim.world;
+        // Lever, repeater with its input at -x (direction 1), lamp.
+        w.set_block(x, y, z, block::LEVER, 5, 3);
+        w.set_block(x + 1, y, z, block::UNPOWERED_REPEATER, 1, 3);
+        w.set_block(x + 2, y, z, block::REDSTONE_LAMP, 0, 3);
+        w.toggle_lever(x, y, z);
+        assert_eq!(w.block(x + 2, y, z), block::REDSTONE_LAMP);
+        steps(&mut sim, 1);
+        assert_eq!(sim.world.block(x + 2, y, z), block::REDSTONE_LAMP);
+        steps(&mut sim, 2);
+        assert_eq!(sim.world.block(x + 1, y, z), block::POWERED_REPEATER);
+        assert_eq!(sim.world.block(x + 2, y, z), block::LIT_REDSTONE_LAMP);
+
+        // Piston facing east with cobblestone in front; a lever on the
+        // stone behind it powers it.
+        let w = &mut sim.world;
+        let pz = z + 6;
+        w.set_block(x, y, pz, block::PISTON, 5, 3);
+        w.set_block(x + 1, y, pz, block::COBBLESTONE, 0, 3);
+        w.set_block(x - 1, y, pz, block::STONE, 0, 3);
+        w.set_block(x - 1, y + 1, pz, block::LEVER, 5, 3);
+        w.toggle_lever(x - 1, y + 1, pz);
+        assert_eq!(w.meta(x, y, pz), 13);
+        assert_eq!(w.block(x + 1, y, pz), block::PISTON_HEAD);
+        assert_eq!(w.block(x + 2, y, pz), block::COBBLESTONE);
+        w.toggle_lever(x - 1, y + 1, pz);
+        assert_eq!(w.meta(x, y, pz), 5);
+        assert_eq!(w.block(x + 1, y, pz), block::AIR);
+        assert_eq!(w.block(x + 2, y, pz), block::COBBLESTONE);
+
+        // A sticky piston pulls the block back.
+        let sz = z + 9;
+        w.set_block(x, y, sz, block::STICKY_PISTON, 5, 3);
+        w.set_block(x + 1, y, sz, block::COBBLESTONE, 0, 3);
+        w.set_block(x - 1, y, sz, block::STONE, 0, 3);
+        w.set_block(x - 1, y + 1, sz, block::LEVER, 5, 3);
+        w.toggle_lever(x - 1, y + 1, sz);
+        assert_eq!(w.block(x + 2, y, sz), block::COBBLESTONE);
+        w.toggle_lever(x - 1, y + 1, sz);
+        assert_eq!(w.block(x + 1, y, sz), block::COBBLESTONE);
+        assert_eq!(w.block(x + 2, y, sz), block::AIR);
+    }
+
+    #[test]
+    fn powered_tnt_primes_and_explodes() {
+        let (mut sim, x, y, z) = redstone_sim();
+        sim.world.set_block(x + 5, y, z + 5, block::TNT, 0, 3);
+        sim.world
+            .set_block(x + 6, y, z + 5, block::REDSTONE_BLOCK, 0, 3);
+        assert_eq!(sim.world.block(x + 5, y, z + 5), block::AIR);
+        steps(&mut sim, 1);
+        assert_eq!(sim.mobs.tnt.len(), 1);
+        steps(&mut sim, 85);
+        assert!(sim.mobs.tnt.is_empty());
+        assert_eq!(
+            sim.world.block(x + 5, y - 1, z + 5),
+            block::AIR,
+            "the floor is blown away"
+        );
+    }
+
+    #[test]
+    fn pressure_plate_opens_door() {
+        let (mut sim, x, y, z) = redstone_sim();
+        let w = &mut sim.world;
+        w.set_block(x, y, z, block::WOODEN_DOOR, 0, 2);
+        w.set_block(x, y + 1, z, block::WOODEN_DOOR, 8, 2);
+        w.set_block(x + 1, y, z, block::STONE_PRESSURE_PLATE, 0, 3);
+        let feet = [x as f64 + 1.5, y as f64, z as f64 + 0.5];
+        let mut ev = Vec::new();
+        sim.step(&[Command::Player(feet, [0.0, 0.0], false)], &mut ev);
+        sim.step(&[Command::Player(feet, [0.0, 0.0], false)], &mut ev);
+        assert_eq!(sim.world.meta(x + 1, y, z), 1);
+        assert_eq!(sim.world.meta(x, y, z) & 4, 4, "door opened");
     }
 }

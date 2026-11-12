@@ -383,6 +383,48 @@ fn tripwire_hook(meta: u8) -> Bx {
     }
 }
 
+/// `BlockTrapDoor.func_150117_b`
+pub fn trapdoor(meta: u8) -> Bx {
+    let f = 0.1875f32;
+    if meta & 4 != 0 {
+        match meta & 3 {
+            0 => [0.0, 0.0, 1.0 - f, 1.0, 1.0, 1.0],
+            1 => [0.0, 0.0, 0.0, 1.0, 1.0, f],
+            2 => [1.0 - f, 0.0, 0.0, 1.0, 1.0, 1.0],
+            _ => [0.0, 0.0, 0.0, f, 1.0, 1.0],
+        }
+    } else if meta & 8 != 0 {
+        [0.0, 1.0 - f, 0.0, 1.0, 1.0, 1.0]
+    } else {
+        [0.0, 0.0, 0.0, 1.0, f, 1.0]
+    }
+}
+
+/// `BlockPistonExtension.addCollisionBoxesToList`: the plate and the arm.
+pub fn piston_head(meta: u8) -> Vec<Bx> {
+    let (a, b) = (0.375f32, 0.625f32);
+    match meta & 7 {
+        0 => vec![[0.0, 0.0, 0.0, 1.0, 0.25, 1.0], [a, 0.25, a, b, 1.0, b]],
+        1 => vec![[0.0, 0.75, 0.0, 1.0, 1.0, 1.0], [a, 0.0, a, b, 0.75, b]],
+        2 => vec![
+            [0.0, 0.0, 0.0, 1.0, 1.0, 0.25],
+            [0.25, a, 0.25, 0.75, b, 1.0],
+        ],
+        3 => vec![
+            [0.0, 0.0, 0.75, 1.0, 1.0, 1.0],
+            [0.25, a, 0.0, 0.75, b, 0.75],
+        ],
+        4 => vec![
+            [0.0, 0.0, 0.0, 0.25, 1.0, 1.0],
+            [0.25, a, 0.25, 1.0, b, 0.75],
+        ],
+        _ => vec![
+            [0.75, 0.0, 0.0, 1.0, 1.0, 1.0],
+            [0.0, a, 0.25, 0.75, b, 0.75],
+        ],
+    }
+}
+
 /// Boxes of the blocks whose shape only depends on their own metadata.
 pub fn static_boxes(id: u8, meta: u8) -> Vec<Bx> {
     match id {
@@ -407,6 +449,8 @@ pub fn static_boxes(id: u8, meta: u8) -> Vec<Bx> {
         block::FLOWER_POT => vec![[0.3125, 0.0, 0.3125, 0.6875, 0.375, 0.6875]],
         block::CARPET => vec![[0.0, 0.0, 0.0, 1.0, 0.0625, 1.0]],
         block::CAULDRON => vec![FULL],
+        block::TRAPDOOR => vec![trapdoor(meta)],
+        block::PISTON_HEAD => piston_head(meta),
         _ => vec![FULL],
     }
 }
@@ -429,7 +473,9 @@ pub fn collision(get: Get, id: u8, meta: u8, x: i32, y: i32, z: i32, out: &mut V
             block::UNPOWERED_REPEATER | block::POWERED_REPEATER => {
                 out.push([0.0, 0.0, 0.0, 1.0, 0.125, 1.0])
             }
-            block::END_PORTAL_FRAME => out.extend(static_boxes(id, meta)),
+            block::END_PORTAL_FRAME | block::TRAPDOOR | block::PISTON_HEAD => {
+                out.extend(static_boxes(id, meta))
+            }
             block::FLOWER_POT => out.push([0.3125, 0.0, 0.3125, 0.6875, 0.375, 0.6875]),
             block::CAULDRON => {
                 // BlockCauldron.addCollisionBoxesToList

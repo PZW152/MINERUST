@@ -423,6 +423,8 @@ pub fn display_name(s: &Stack) -> String {
             CARROTS => "Carrots".into(),
             POTATOES => "Potatoes".into(),
             REDSTONE_BLOCK => "Block of Redstone".into(),
+            TRAPDOOR => "Trapdoor".into(),
+            REDSTONE_LAMP | LIT_REDSTONE_LAMP => "Redstone Lamp".into(),
             QUARTZ_BLOCK => "Block of Quartz".into(),
             HAY_BLOCK => "Hay Bale".into(),
             COAL_BLOCK => "Block of Coal".into(),
@@ -519,6 +521,9 @@ pub fn hardness(id: u8) -> f32 {
         LIT_PUMPKIN => 1.0,
         END_PORTAL_FRAME => -1.0,
         CARPET => 0.1,
+        REDSTONE_LAMP | LIT_REDSTONE_LAMP => 0.3,
+        TRAPDOOR => 3.0,
+        PISTON_HEAD => 0.5,
         _ => 0.0,
     }
 }
@@ -763,6 +768,8 @@ pub fn drops(id: u8, meta: i32, r: &mut JavaRandom) -> Vec<Stack> {
         UNLIT_REDSTONE_TORCH | REDSTONE_TORCH => one(REDSTONE_TORCH as ItemId, 0),
         UNPOWERED_REPEATER | POWERED_REPEATER => one(356, 0),
         CAULDRON => one(380, 0),
+        REDSTONE_LAMP | LIT_REDSTONE_LAMP => one(REDSTONE_LAMP as ItemId, 0),
+        PISTON_HEAD => Vec::new(),
         FLOWER_POT => one(390, 0),
         BOOKSHELF => vec![Stack::new(340, 0, 3)],
         GLOWSTONE => vec![Stack::new(348, 0, 2 + r.next_int_n(3) as u32)],

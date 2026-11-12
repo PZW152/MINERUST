@@ -454,6 +454,21 @@ pub struct ServerWorld {
     pub map_features: bool,
     /// `World.isRaining`
     pub raining: bool,
+    /// `BlockRedstoneWire.field_150181_a` (wires stop providing power while
+    /// a wire recomputes its own input).
+    pub(crate) wire_off: bool,
+    /// `BlockRedstoneTorch.field_150112_b`: recent toggles for burnout.
+    pub(crate) torch_toggles: Vec<(i32, i32, i32, i64)>,
+    /// `TileEntityNote.previousRedstoneState`
+    pub(crate) note_powered: FastMap<(i32, i32, i32), bool>,
+    /// `TileEntityNote.note`
+    pub note_pitch: FastMap<(i32, i32, i32), i32>,
+    /// Sounds, notes, dispenser shots and primed TNT for the game state.
+    pub redstone_effects: Vec<super::redstone::Effect>,
+    /// Bounding boxes of the entities this tick (pressure plates, tripwire).
+    pub occupants: Vec<super::redstone::Occupant>,
+    /// Scheduled updates being run this tick (`pendingTickListEntriesThisTick`).
+    ticking_now: Vec<(i32, i32, i32, u8)>,
 }
 
 impl ServerWorld {
@@ -487,6 +502,13 @@ impl ServerWorld {
             pending_structure_chunks: Vec::new(),
             map_features: true,
             raining: false,
+            wire_off: false,
+            torch_toggles: Vec::new(),
+            note_powered: FastMap::default(),
+            note_pitch: FastMap::default(),
+            redstone_effects: Vec::new(),
+            occupants: Vec::new(),
+            ticking_now: Vec::new(),
         }
     }
 
@@ -1436,8 +1458,32 @@ impl ServerWorld {
         self.on_neighbor_change(x, y, z + 1, src);
     }
 
+    /// One neighbour's `onNeighborBlockChange` (`World.notifyBlockOfNeighborChange`).
+    pub(crate) fn notify_one(&mut self, x: i32, y: i32, z: i32, src: u8) {
+        self.on_neighbor_change(x, y, z, src);
+    }
+
+    /// `WorldServer.isBlockTickScheduledThisTick`
+    pub(crate) fn tick_this_tick(&self, x: i32, y: i32, z: i32, id: u8) -> bool {
+        let f = super::redstone::tick_family(id);
+        self.ticking_now.contains(&(x, y, z, f))
+    }
+
+    /// `WorldServer.scheduleBlockUpdate`
+    pub fn schedule_update(&mut self, x: i32, y: i32, z: i32, id: u8, delay: i32) {
+        self.schedule_priority(x, y, z, id, delay, 0);
+    }
+
     /// `WorldServer.scheduleBlockUpdateWithPriority`
-    pub fn schedule_update(&mut self, x: i32, y: i32, z: i32, id: u8, mut delay: i32) {
+    pub fn schedule_priority(
+        &mut self,
+        x: i32,
+        y: i32,
+        z: i32,
+        id: u8,
+        mut delay: i32,
+        priority: i32,
+    ) {
         let mut r = 0;
         if self.scheduled_immediate && block::material(id) != Material::Air {
             // Every block except fire `requiresUpdates()`.
@@ -1445,7 +1491,9 @@ impl ServerWorld {
                 r = 8;
                 if self.check_chunks_exist(x - r, y - r, z - r, x + r, y + r, z + r) {
                     let b = self.block(x, y, z);
-                    if block::material(b) != Material::Air && b == id {
+                    if block::material(b) != Material::Air
+                        && super::redstone::tick_family(b) == super::redstone::tick_family(id)
+                    {
                         let mut rnd = std::mem::replace(&mut self.rand, JavaRandom::new(0));
                         self.update_tick(b, x, y, z, &mut rnd);
                         self.rand = rnd;
@@ -1456,7 +1504,8 @@ impl ServerWorld {
             delay = 1;
         }
         if self.check_chunks_exist(x - r, y - r, z - r, x + r, y + r, z + r) {
-            if self.tick_keys.insert((x, y, z, id)) {
+            let fam = super::redstone::tick_family(id);
+            if self.tick_keys.insert((x, y, z, fam)) {
                 let time = if block::material(id) != Material::Air {
                     delay as i64 + self.total_time
                 } else {
@@ -1465,7 +1514,7 @@ impl ServerWorld {
                 self.next_tick_id += 1;
                 self.ticks.insert(Tick {
                     time,
-                    priority: 0,
+                    priority,
                     id: self.next_tick_id,
                     x,
                     y,
@@ -1486,13 +1535,20 @@ impl ServerWorld {
                 break;
             }
             self.ticks.remove(&t);
-            self.tick_keys.remove(&(t.x, t.y, t.z, t.block));
+            self.tick_keys
+                .remove(&(t.x, t.y, t.z, super::redstone::tick_family(t.block)));
             now.push(t);
         }
+        self.ticking_now = now
+            .iter()
+            .map(|t| (t.x, t.y, t.z, super::redstone::tick_family(t.block)))
+            .collect();
         for t in now {
             if self.check_chunks_exist(t.x, t.y, t.z, t.x, t.y, t.z) {
                 let b = self.block(t.x, t.y, t.z);
-                if block::material(b) != Material::Air && b == t.block {
+                if block::material(b) != Material::Air
+                    && super::redstone::tick_family(b) == super::redstone::tick_family(t.block)
+                {
                     let mut rnd = std::mem::replace(&mut self.rand, JavaRandom::new(0));
                     self.update_tick(b, t.x, t.y, t.z, &mut rnd);
                     self.rand = rnd;
@@ -1501,6 +1557,7 @@ impl ServerWorld {
                 self.schedule_update(t.x, t.y, t.z, t.block, 0);
             }
         }
+        self.ticking_now.clear();
     }
 
     /// Re-queues a scheduled update read from a save file.
@@ -1526,7 +1583,12 @@ impl ServerWorld {
     // ---------------------------------------------------------------- block hooks
 
     /// `Block.breakBlock` of the replaced block.
-    fn break_block(&mut self, old: u8, _old_meta: i32, x: i32, y: i32, z: i32) {
+    fn break_block(&mut self, old: u8, old_meta: i32, x: i32, y: i32, z: i32) {
+        self.redstone_broken(old, old_meta, x, y, z);
+        if old == block::NOTEBLOCK {
+            self.note_powered.remove(&(x, y, z));
+            self.note_pitch.remove(&(x, y, z));
+        }
         let (r, only_unset) = match old {
             block::LEAVES | block::LEAVES2 => (1, false),
             block::LOG | block::LOG2 => (4, true),
@@ -1563,7 +1625,10 @@ impl ServerWorld {
             block::WATER | block::LAVA => self.check_liquid_collisions(id, x, y, z),
             block::SAND | block::GRAVEL => self.schedule_update(x, y, z, id, 2),
             block::TORCH | block::REDSTONE_TORCH | block::UNLIT_REDSTONE_TORCH => {
-                self.torch_added(id, x, y, z)
+                self.torch_added(id, x, y, z);
+                if id == block::REDSTONE_TORCH && self.block(x, y, z) == id {
+                    self.redstone_added(id, x, y, z);
+                }
             }
             block::RAIL | block::GOLDEN_RAIL | block::DETECTOR_RAIL => {
                 super::rail::refresh_shape(self, x, y, z, true);
@@ -1606,7 +1671,9 @@ impl ServerWorld {
                     }
                 }
             }
-            _ => {}
+            _ => {
+                self.redstone_added(id, x, y, z);
+            }
         }
     }
 
@@ -1652,7 +1719,7 @@ impl ServerWorld {
         }
     }
 
-    /// `BlockDoor.onNeighborBlockChange` (redstone power is not simulated).
+    /// `BlockDoor.onNeighborBlockChange`
     fn door_neighbour(&mut self, id: u8, x: i32, y: i32, z: i32, src: u8) {
         let m = self.meta(x, y, z);
         if m & 8 == 0 {
@@ -1674,6 +1741,11 @@ impl ServerWorld {
                     pos: [x as f64 + 0.5, y as f64 + 0.5, z as f64 + 0.5],
                     stack: crate::item::Stack::new(item, 0, 1),
                 });
+            } else {
+                let p = self.indirectly_powered(x, y, z) || self.indirectly_powered(x, y + 1, z);
+                if (p || super::redstone::can_provide_power(src)) && src != id {
+                    self.door_set_open(x, y, z, p);
+                }
             }
         } else {
             if self.block(x, y - 1, z) != id {
@@ -1683,6 +1755,31 @@ impl ServerWorld {
                 self.door_neighbour(id, x, y - 1, z, src);
             }
         }
+    }
+
+    /// `BlockDoor.func_150014_a` on the lower half at `(x, y, z)`.
+    pub fn door_set_open(&mut self, x: i32, y: i32, z: i32, open: bool) {
+        let m = self.meta(x, y, z);
+        if (m & 4 != 0) != open {
+            self.set_meta(x, y, z, (m & 7) ^ 4, 2);
+            self.door_sound(x, y, z);
+        }
+    }
+
+    /// `playAuxSFX(1003)`: `RenderGlobal` picks open or close at random.
+    pub fn door_sound(&mut self, x: i32, y: i32, z: i32) {
+        let s = if self.rand.next_float() < 0.5 {
+            "random.door_open"
+        } else {
+            "random.door_close"
+        };
+        let p = self.rand.next_float() * 0.1 + 0.9;
+        self.redstone_effects.push(super::redstone::Effect::Sound(
+            s,
+            [x as f64 + 0.5, y as f64 + 0.5, z as f64 + 0.5],
+            1.0,
+            p,
+        ));
     }
 
     /// `BlockTorch.canPlaceTorchOn`
@@ -1906,6 +2003,9 @@ impl ServerWorld {
     /// `Block.onNeighborBlockChange`
     fn on_neighbor_change(&mut self, x: i32, y: i32, z: i32, src: u8) {
         let id = self.block(x, y, z);
+        if self.redstone_neighbour(id, x, y, z, src) {
+            return;
+        }
         match id {
             block::RAIL | block::GOLDEN_RAIL | block::DETECTOR_RAIL => {
                 super::rail::neighbour_changed(self, x, y, z, src)
@@ -2001,7 +2101,14 @@ impl ServerWorld {
             block::FLOWING_WATER | block::FLOWING_LAVA => self.liquid_tick(id, x, y, z, rand),
             block::SAND | block::GRAVEL => self.try_fall(id, x, y, z),
             block::TRIPWIRE_HOOK => super::tripwire::hook_tick(self, x, y, z),
-            _ => {}
+            block::TRIPWIRE => {
+                if self.meta(x, y, z) & 1 == 1 {
+                    self.tripwire_check(x, y, z);
+                }
+            }
+            _ => {
+                self.redstone_tick(id, x, y, z, rand);
+            }
         }
     }
 

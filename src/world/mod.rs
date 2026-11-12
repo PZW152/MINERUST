@@ -4,6 +4,7 @@ pub mod gen;
 pub mod loot;
 pub mod populate;
 pub mod rail;
+pub mod redstone;
 pub mod save;
 pub mod server;
 pub mod structure;

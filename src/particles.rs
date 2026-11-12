@@ -50,6 +50,7 @@ enum Kind {
     Drip,
     Crit,
     Dust,
+    Note,
 }
 
 pub struct Particles {
@@ -290,6 +291,28 @@ impl Particles {
         self.add(p);
     }
 
+    /// `EntityNoteFX`: coloured by pitch (0..24).
+    pub fn note(&mut self, pos: [f64; 3], pitch: i32) {
+        let mut p = self.moving(pos, [0.0; 3]);
+        for v in &mut p.motion {
+            *v *= 0.01;
+        }
+        p.motion[1] += 0.2;
+        let f = pitch as f32 / 24.0;
+        let tau = std::f32::consts::PI * 2.0;
+        p.color = [
+            (f * tau).sin() * 0.65 + 0.35,
+            ((f + 1.0 / 3.0) * tau).sin() * 0.65 + 0.35,
+            ((f + 2.0 / 3.0) * tau).sin() * 0.65 + 0.35,
+            1.0,
+        ];
+        p.scale *= 0.75 * 2.0;
+        p.max_age = 6;
+        p.kind = Kind::Note;
+        p.sprite = Sprite::Index(64);
+        self.add(p);
+    }
+
     /// `EntityRainFX` splash
     pub fn rain(&mut self, pos: [f64; 3]) {
         let mut p = self.base(pos);
@@ -365,7 +388,7 @@ impl Particles {
                     p.color[2] *= 0.9;
                     p.motion[1] -= 0.02;
                 }
-                Kind::Drip => {}
+                Kind::Drip | Kind::Note => {}
                 _ => {
                     p.motion[1] -= 0.04 * p.gravity as f64;
                 }
@@ -381,6 +404,7 @@ impl Particles {
                 Kind::Flame => 0.96,
                 Kind::Lava => 0.999,
                 Kind::Crit => 0.7,
+                Kind::Note => 0.66,
                 Kind::Rain | Kind::Drip => 0.98,
                 _ => 0.98,
             };
@@ -394,7 +418,7 @@ impl Particles {
                     return false;
                 }
             }
-            if matches!(p.kind, Kind::Smoke | Kind::Explode) && p.pos[1] == p.prev[1] {
+            if matches!(p.kind, Kind::Smoke | Kind::Explode | Kind::Note) && p.pos[1] == p.prev[1] {
                 p.motion[0] *= 1.1;
                 p.motion[2] *= 1.1;
             }
