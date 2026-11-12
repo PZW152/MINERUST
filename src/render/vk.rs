@@ -286,6 +286,8 @@ pub struct Frame<'a> {
 }
 
 const UI_BUF_SIZE: u64 = 1 << 20;
+/// Camera-relative entity, crack, hand and weather quads.
+const WORLD_BUF_SIZE: u64 = 16 << 20;
 
 pub struct CloudDraw {
     /// Mesh origin relative to the camera.
@@ -1083,10 +1085,10 @@ impl Renderer {
                     .map_memory(ui_mem, 0, UI_BUF_SIZE, vk::MemoryMapFlags::empty())
                     .unwrap() as *mut u8;
                 let (world_buf, world_mem) =
-                    r.create_buffer(UI_BUF_SIZE * 2, vk::BufferUsageFlags::VERTEX_BUFFER, host);
+                    r.create_buffer(WORLD_BUF_SIZE, vk::BufferUsageFlags::VERTEX_BUFFER, host);
                 let world_ptr = r
                     .device
-                    .map_memory(world_mem, 0, UI_BUF_SIZE * 2, vk::MemoryMapFlags::empty())
+                    .map_memory(world_mem, 0, WORLD_BUF_SIZE, vk::MemoryMapFlags::empty())
                     .unwrap() as *mut u8;
                 let ui_info = [vk::DescriptorImageInfo {
                     sampler: vk::Sampler::null(),
@@ -1829,6 +1831,7 @@ impl Renderer {
                 .len()
                 .max(frame.crack.len())
                 .max(frame.hand.len())
+                .max(frame.weather.len())
                 / 4
                 + 1) as u32;
             self.ensure_indices(need);
@@ -2269,7 +2272,7 @@ impl Renderer {
             }
             // Dropped items, then the crack overlay, all camera-relative quads.
             let vsz = std::mem::size_of::<Vertex>();
-            let cap = (UI_BUF_SIZE as usize * 2) / vsz;
+            let cap = WORLD_BUF_SIZE as usize / vsz;
             let n_dyn = frame.dynamic.len().min(cap);
             let n_crack = frame.crack.len().min(cap - n_dyn);
             let n_hand = frame.hand.len().min(cap - n_dyn - n_crack);

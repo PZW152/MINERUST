@@ -454,6 +454,8 @@ pub struct ServerWorld {
     pub map_features: bool,
     /// `World.isRaining`
     pub raining: bool,
+    /// `World.getCurrentMoonPhaseFactor`
+    pub moon_factor: f32,
     /// `BlockRedstoneWire.field_150181_a` (wires stop providing power while
     /// a wire recomputes its own input).
     pub(crate) wire_off: bool,
@@ -502,6 +504,7 @@ impl ServerWorld {
             pending_structure_chunks: Vec::new(),
             map_features: true,
             raining: false,
+            moon_factor: 1.0,
             wire_off: false,
             torch_toggles: Vec::new(),
             note_powered: FastMap::default(),

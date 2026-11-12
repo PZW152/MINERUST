@@ -10,6 +10,9 @@ use crate::java::JavaRandom;
 use crate::util::math;
 use crate::world::server::ServerWorld;
 
+mod extra;
+pub use extra::{village_golems, Other, Puff, Strike};
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 pub enum Kind {
     Pig,
@@ -25,9 +28,17 @@ pub enum Kind {
     Villager,
     Witch,
     Silverfish,
+    Slime,
+    Enderman,
+    Squid,
+    Bat,
+    Wolf,
+    Ocelot,
+    Horse,
+    IronGolem,
 }
 
-pub const ALL_KINDS: [Kind; 13] = [
+pub const ALL_KINDS: [Kind; 21] = [
     Kind::Pig,
     Kind::Cow,
     Kind::Sheep,
@@ -41,6 +52,14 @@ pub const ALL_KINDS: [Kind; 13] = [
     Kind::Villager,
     Kind::Witch,
     Kind::Silverfish,
+    Kind::Slime,
+    Kind::Enderman,
+    Kind::Squid,
+    Kind::Bat,
+    Kind::Wolf,
+    Kind::Ocelot,
+    Kind::Horse,
+    Kind::IronGolem,
 ];
 
 impl Kind {
@@ -53,6 +72,13 @@ impl Kind {
             Kind::Spider => (1.4, 0.9),
             Kind::CaveSpider => (0.7, 0.5),
             Kind::Silverfish => (0.3, 0.7),
+            Kind::Slime => (0.6, 0.6),
+            Kind::Enderman => (0.6, 2.9),
+            Kind::Squid => (0.95, 0.95),
+            Kind::Bat => (0.5, 0.9),
+            Kind::Wolf | Kind::Ocelot => (0.6, 0.8),
+            Kind::Horse => (1.4, 1.6),
+            Kind::IronGolem => (1.4, 2.9),
             _ => (0.6, 1.8),
         }
     }
@@ -65,6 +91,13 @@ impl Kind {
             Kind::Spider => 16.0,
             Kind::CaveSpider => 12.0,
             Kind::Witch => 26.0,
+            Kind::Slime => 1.0,
+            Kind::Enderman => 40.0,
+            Kind::Squid | Kind::Ocelot => 10.0,
+            Kind::Bat => 6.0,
+            Kind::Wolf => 8.0,
+            Kind::Horse => 15.0,
+            Kind::IronGolem => 100.0,
             _ => 20.0,
         }
     }
@@ -77,6 +110,11 @@ impl Kind {
             Kind::Spider | Kind::CaveSpider => 0.8,
             Kind::Villager => 0.5,
             Kind::Silverfish => 0.6,
+            Kind::Slime => 0.7,
+            Kind::Enderman | Kind::Wolf | Kind::Ocelot => 0.3,
+            Kind::Squid | Kind::Bat => 0.7,
+            Kind::Horse => 0.225,
+            Kind::IronGolem => 0.25,
         }
     }
     pub fn hostile(self) -> bool {
@@ -89,17 +127,30 @@ impl Kind {
                 | Kind::CaveSpider
                 | Kind::Witch
                 | Kind::Silverfish
+                | Kind::Slime
+                | Kind::Enderman
         )
     }
+    /// `EnumCreatureType.creature` (counts towards the animal cap).
     pub fn animal(self) -> bool {
         matches!(
             self,
-            Kind::Pig | Kind::Cow | Kind::Sheep | Kind::Chicken | Kind::Mooshroom
+            Kind::Pig
+                | Kind::Cow
+                | Kind::Sheep
+                | Kind::Chicken
+                | Kind::Mooshroom
+                | Kind::Wolf
+                | Kind::Ocelot
+                | Kind::Horse
         )
     }
     /// Uses the old `updateEntityActionState` AI instead of AI tasks.
     fn old_ai(self) -> bool {
-        matches!(self, Kind::Spider | Kind::CaveSpider | Kind::Silverfish)
+        matches!(
+            self,
+            Kind::Spider | Kind::CaveSpider | Kind::Silverfish | Kind::Slime | Kind::Enderman
+        )
     }
     pub fn name(self) -> &'static str {
         match self {
@@ -116,6 +167,14 @@ impl Kind {
             Kind::Villager => "Villager",
             Kind::Witch => "Witch",
             Kind::Silverfish => "Silverfish",
+            Kind::Slime => "Slime",
+            Kind::Enderman => "Enderman",
+            Kind::Squid => "Squid",
+            Kind::Bat => "Bat",
+            Kind::Wolf => "Wolf",
+            Kind::Ocelot => "Ocelot",
+            Kind::Horse => "Horse",
+            Kind::IronGolem => "Iron Golem",
         }
     }
     /// `EntityList` string id.
@@ -134,6 +193,14 @@ impl Kind {
             Kind::Villager => "Villager",
             Kind::Witch => "Witch",
             Kind::Silverfish => "Silverfish",
+            Kind::Slime => "Slime",
+            Kind::Enderman => "Enderman",
+            Kind::Squid => "Squid",
+            Kind::Bat => "Bat",
+            Kind::Wolf => "Wolf",
+            Kind::Ocelot => "Ozelot",
+            Kind::Horse => "EntityHorse",
+            Kind::IronGolem => "VillagerGolem",
         }
     }
     pub fn from_id(s: &str) -> Option<Kind> {
@@ -148,12 +215,15 @@ impl Kind {
             Kind::Zombie => 3.0,
             Kind::Spider | Kind::CaveSpider => 2.0,
             Kind::Silverfish => 1.0,
+            Kind::Enderman | Kind::IronGolem => 7.0,
             _ => 2.0,
         }
     }
     fn follow_range(self) -> f32 {
         match self {
             Kind::Zombie => 40.0,
+            Kind::Enderman => 64.0,
+            Kind::Horse => 16.0,
             _ => 16.0,
         }
     }
@@ -246,6 +316,36 @@ pub struct Mob {
     /// Sheep `sheepTimer` (head down while eating).
     pub eat_timer: i32,
     pub dead: bool,
+    /// Slime `squishFactor`, `squishAmount` and `slimeJumpDelay`.
+    pub squish: f32,
+    pub prev_squish: f32,
+    squish_amount: f32,
+    jump_delay: i32,
+    /// Enderman carried block and data, `isScreaming`, timers.
+    pub carried: u8,
+    pub carried_meta: u8,
+    pub angry: bool,
+    aggressive: bool,
+    stare: i32,
+    teleport_delay: i32,
+    /// Squid pitch, yaw, rotation and tentacle angle, with last tick values.
+    pub sq: [f32; 4],
+    pub prev_sq: [f32; 4],
+    sq_vel: f32,
+    sq_speed: f32,
+    sq_turn: f32,
+    sq_vec: [f32; 3],
+    /// Bat hanging from a ceiling, and where it flies to.
+    pub hanging: bool,
+    bat_target: Option<[i32; 3]>,
+    /// Tamed by the player, and sitting (wolves and ocelots).
+    pub tamed: bool,
+    pub sitting: bool,
+    /// Iron golem arm swing timer; built by the player.
+    pub attack_timer: i32,
+    pub player_made: bool,
+    /// Another mob this one is after (wolves, golems).
+    target_mob: Option<u32>,
 }
 
 /// What the player looks like to the mobs.
@@ -253,6 +353,11 @@ pub struct Mob {
 pub struct PlayerInfo {
     pub feet: [f64; 3],
     pub yaw: f32,
+    pub pitch: f32,
+    /// The mob the player hit last, and the last one that hit the player
+    /// (tamed wolves join in).
+    pub last_attacked: Option<u32>,
+    pub last_attacker: Option<u32>,
     pub attackable: bool,
     /// Item ids the player holds (for tempting).
     pub held: Option<u16>,
@@ -392,20 +497,79 @@ impl Mob {
             egg_timer: 0,
             eat_timer: 0,
             dead: false,
+            squish: 0.0,
+            prev_squish: 0.0,
+            squish_amount: 0.0,
+            jump_delay: 0,
+            carried: 0,
+            carried_meta: 0,
+            angry: false,
+            aggressive: false,
+            stare: 0,
+            teleport_delay: 0,
+            sq: [0.0; 4],
+            prev_sq: [0.0; 4],
+            sq_vel: 0.0,
+            sq_speed: 0.0,
+            sq_turn: 0.0,
+            sq_vec: [0.0; 3],
+            hanging: kind == Kind::Bat,
+            bat_target: None,
+            tamed: false,
+            sitting: false,
+            attack_timer: 0,
+            player_made: false,
+            target_mob: None,
         };
         m.egg_timer = m.rand.next_int_n(6000) + 6000;
+        match kind {
+            Kind::Slime => {
+                // EntitySlime(World): size 1 << nextInt(3)
+                let size = 1 << m.rand.next_int_n(3);
+                m.jump_delay = m.rand.next_int_n(20) + 10;
+                m.set_slime_size(size);
+            }
+            Kind::Squid => m.sq_vel = 1.0 / (m.rand.next_float() + 1.0) * 0.2,
+            _ => {}
+        }
         m
     }
 
+    /// `EntitySlime.setSlimeSize`
+    pub fn set_slime_size(&mut self, size: i32) {
+        self.variant = size;
+        self.health = (size * size) as f32;
+        let p = self.pos;
+        self.set_position(p[0], p[1], p[2]);
+    }
+
+    /// Width and height of the box (slimes scale with their size).
+    pub fn dims(&self) -> (f32, f32) {
+        if self.kind == Kind::Slime {
+            let s = 0.6 * self.variant.max(1) as f32;
+            (s, s)
+        } else {
+            self.kind.size()
+        }
+    }
+
+    pub fn max_health(&self) -> f32 {
+        match self.kind {
+            Kind::Slime => (self.variant * self.variant) as f32,
+            Kind::Wolf if self.tamed => 20.0,
+            _ => self.kind.max_health(),
+        }
+    }
+
     fn width(&self) -> f32 {
-        self.kind.size().0
+        self.dims().0
     }
     fn height(&self) -> f32 {
-        self.kind.size().1
+        self.dims().1
     }
 
     pub fn set_position(&mut self, x: f64, y: f64, z: f64) {
-        let (w, h) = self.kind.size();
+        let (w, h) = self.dims();
         let hw = w as f64 / 2.0;
         self.pos = [x, y, z];
         self.bb = Aabb {
@@ -435,6 +599,20 @@ impl Mob {
                 };
             }
             Kind::Villager => self.variant = world_rand.next_int_n(5),
+            Kind::Horse => {
+                // EntityHorse.onSpawnWithEgg: a donkey one time in ten,
+                // otherwise a horse of a random colour and markings.
+                let r = &mut self.rand;
+                if r.next_int_n(10) == 0 {
+                    self.variant = 1 << 16;
+                    self.health = 15.0;
+                } else {
+                    let colour = r.next_int_n(7);
+                    let marks = r.next_int_n(5);
+                    self.variant = colour | marks << 8;
+                    self.health = 15.0 + r.next_int_n(8) as f32 + r.next_int_n(9) as f32;
+                }
+            }
             _ => {}
         }
     }
@@ -714,7 +892,7 @@ impl Mob {
 
     /// `PathNavigate.tryMoveToXYZ`
     fn path_to(&mut self, w: &mut ServerWorld, x: f64, y: f64, z: f64, speed: f64) -> bool {
-        let (wd, h) = self.kind.size();
+        let (wd, h) = self.dims();
         let from = Pt {
             x: math::floor_double(self.bb.min[0]),
             y: math::floor_double(self.bb.min[1] + 0.5),
@@ -796,8 +974,11 @@ impl Mob {
             if dx * dx + dy * dy + dz * dz >= 2.5000003e-7 {
                 let target = (dz.atan2(dx) * 180.0 / std::f64::consts::PI) as f32 - 90.0;
                 self.yaw = approach(self.yaw, target, 30.0);
-                self.ai_speed = (self.move_speed * self.kind.speed() as f64) as f32;
-                self.move_forward = self.ai_speed;
+                // EntityLivingBase.getAIMoveSpeed: 0.1 for the old AI, which
+                // walks with moveForward = movementSpeed.
+                let f = (self.move_speed * self.kind.speed() as f64) as f32;
+                self.ai_speed = if self.kind.old_ai() { 0.1 } else { f };
+                self.move_forward = f;
                 if dy > 0.0 && dx * dx + dz * dz < 1.0 {
                     self.jumping = true;
                 }
@@ -810,7 +991,7 @@ impl Mob {
         self.pitch = 0.0;
         if let Some(t) = self.look_at.take() {
             let dx = t[0] - self.pos[0];
-            let dy = t[1] - (self.pos[1] + self.kind.eye_height() as f64);
+            let dy = t[1] - (self.pos[1] + self.height() as f64 * 0.85);
             let dz = t[2] - self.pos[2];
             let d = (dx * dx + dz * dz).sqrt();
             let yaw = (dz.atan2(dx) * 180.0 / std::f64::consts::PI) as f32 - 90.0;
@@ -949,7 +1130,16 @@ impl Mob {
             }
         }
         self.health -= applied;
-        if self.kind.animal() || self.kind == Kind::Villager {
+        match self.kind {
+            Kind::Bat => self.hanging = false,
+            Kind::Enderman => self.angry = true,
+            Kind::Wolf | Kind::Ocelot => self.sitting = false,
+            _ => {}
+        }
+        if self.kind == Kind::Horse
+            || (self.kind.animal() && !matches!(self.kind, Kind::Wolf | Kind::Ocelot))
+            || self.kind == Kind::Villager
+        {
             self.task = Task::Panic;
             self.task_ticks = 0;
             self.path.clear();
@@ -1024,12 +1214,45 @@ impl Mob {
                     add(item, 0, k);
                 }
             }
-            Kind::Villager | Kind::Silverfish => {}
+            Kind::Slime => {
+                if self.variant == 1 {
+                    let n = r.next_int_n(3);
+                    add(341, 0, n);
+                }
+            }
+            Kind::Enderman => {
+                let n = r.next_int_n(2);
+                add(368, 0, n);
+            }
+            Kind::Squid => {
+                let n = r.next_int_n(3) + 1;
+                add(351, 0, n);
+            }
+            Kind::Horse => {
+                let n = r.next_int_n(3);
+                add(334, 0, n);
+            }
+            Kind::IronGolem => {
+                let n = r.next_int_n(3);
+                add(block::RED_FLOWER as u16, 0, n);
+                let n = 3 + r.next_int_n(3);
+                add(265, 0, n);
+            }
+            Kind::Villager | Kind::Silverfish | Kind::Bat | Kind::Wolf | Kind::Ocelot => {}
+        }
+        if self.kind == Kind::Enderman && self.carried != 0 {
+            v.push(Stack::new(self.carried as u16, self.carried_meta as i32, 1));
         }
         v
     }
 
     fn xp(&mut self) -> i32 {
+        match self.kind {
+            Kind::Slime => return self.variant,
+            Kind::Squid => return 1 + self.rand.next_int_n(3),
+            Kind::Bat | Kind::IronGolem => return 0,
+            _ => {}
+        }
         if self.kind.animal() {
             1 + self.rand.next_int_n(3)
         } else if self.kind.hostile() {
@@ -1042,7 +1265,7 @@ impl Mob {
     pub fn eye(&self) -> [f64; 3] {
         [
             self.pos[0],
-            self.pos[1] + self.kind.eye_height() as f64,
+            self.pos[1] + self.height() as f64 * 0.85,
             self.pos[2],
         ]
     }
@@ -1123,6 +1346,10 @@ pub struct Outcome {
     pub sounds: Vec<(&'static str, [f64; 3], f32, f32)>,
     /// Explosions (centre, size) for particles and sound.
     pub explosions: Vec<[f64; 4]>,
+    /// Particles for the client (portal, slime, heart, smoke).
+    pub particles: Vec<Puff>,
+    /// The mob that last hurt the player this tick.
+    pub attacker: Option<u32>,
 }
 
 /// `Entity.moveEntity` for a primed TNT box.
@@ -1211,6 +1438,14 @@ impl Mobs {
         });
     }
 
+    /// A new mob with its own random, not yet in the world.
+    pub fn make(&mut self, kind: Kind, pos: [f64; 3], yaw: f32) -> Mob {
+        let id = self.next_id;
+        self.next_id += 1;
+        let seed = self.rand.next_long();
+        Mob::new(id, kind, pos, yaw, seed)
+    }
+
     pub fn spawn(
         &mut self,
         kind: Kind,
@@ -1244,6 +1479,18 @@ impl Mobs {
             .collect();
         let mut new_arrows = Vec::new();
         let mut explosions: Vec<([f64; 3], f32)> = Vec::new();
+        let others: Vec<Other> = self
+            .list
+            .iter()
+            .filter(|m| m.health > 0.0)
+            .map(|m| Other {
+                id: m.id,
+                kind: m.kind,
+                pos: m.pos,
+                tamed: m.tamed,
+            })
+            .collect();
+        let mut strikes: Vec<Strike> = Vec::new();
         for m in self.list.iter_mut() {
             if !w.loaded(math::floor_double(m.pos[0]), math::floor_double(m.pos[2])) {
                 continue;
@@ -1258,9 +1505,25 @@ impl Mobs {
                 out,
                 &mut new_arrows,
                 &mut explosions,
+                &others,
+                &mut strikes,
             );
         }
         self.arrows.extend(new_arrows);
+        for st in strikes {
+            let Some(t) = self.list.iter_mut().find(|m| m.id == st.target) else {
+                continue;
+            };
+            if t.damage(st.amount, Some(st.at)) {
+                t.motion[1] += st.lift;
+                out.sounds.push((mob_sound(t, false), t.pos, 1.0, 1.0));
+                // EntityAIHurtByTarget
+                if matches!(t.kind, Kind::Wolf | Kind::IronGolem | Kind::Ocelot) || t.kind.hostile()
+                {
+                    t.target_mob = Some(st.from);
+                }
+            }
+        }
         // EntityTNTPrimed.onUpdate
         let mut k = 0;
         while k < self.tnt.len() {
@@ -1290,6 +1553,7 @@ impl Mobs {
             explode(w, self, player, c, size, out);
         }
         // deaths
+        let mut splits: Vec<([f64; 3], i32, f32)> = Vec::new();
         let mut i = 0;
         while i < self.list.len() {
             let m = &mut self.list[i];
@@ -1304,7 +1568,25 @@ impl Mobs {
                         out.hits.push(Hit::Xp(xp));
                     }
                 }
-                out.sounds.push((death_sound(m.kind), m.pos, 1.0, 1.0));
+                let s = mob_sound(m, true);
+                if !s.is_empty() {
+                    out.sounds.push((s, m.pos, 1.0, 1.0));
+                }
+                // EntitySlime.setDead: split into smaller slimes
+                if m.kind == Kind::Slime && m.variant > 1 {
+                    let size = m.variant;
+                    let n = 2 + m.rand.next_int_n(3);
+                    for k in 0..n {
+                        let fx = ((k % 2) as f32 - 0.5) * size as f32 / 4.0;
+                        let fz = ((k / 2) as f32 - 0.5) * size as f32 / 4.0;
+                        let yaw = m.rand.next_float() * 360.0;
+                        splits.push((
+                            [m.pos[0] + fx as f64, m.pos[1] + 0.5, m.pos[2] + fz as f64],
+                            size / 2,
+                            yaw,
+                        ));
+                    }
+                }
             }
             if m.health <= 0.0 {
                 m.death_time += 1;
@@ -1317,6 +1599,14 @@ impl Mobs {
             } else {
                 i += 1;
             }
+        }
+        for (pos, size, yaw) in splits {
+            let id = self.next_id;
+            self.next_id += 1;
+            let seed = self.rand.next_long();
+            let mut m = Mob::new(id, Kind::Slime, pos, yaw, seed);
+            m.set_slime_size(size);
+            self.list.push(m);
         }
         tick_arrows(&mut self.arrows, w, player, out, &mut self.list);
     }
@@ -1353,7 +1643,13 @@ impl Mobs {
                 m.motion[1] += 0.1;
                 m.motion[2] += (r.cos() * knockback as f32 * 0.5) as f64;
             }
-            out.sounds.push((hurt_sound(m.kind), m.pos, 1.0, 1.0));
+            let s = mob_sound(m, false);
+            if !s.is_empty() {
+                out.sounds.push((s, m.pos, 1.0, 1.0));
+            }
+            if matches!(m.kind, Kind::Wolf | Kind::IronGolem) && !m.tamed && !m.player_made {
+                m.target_player = true;
+            }
         }
     }
 
@@ -1377,11 +1673,158 @@ impl Mobs {
         best
     }
 
+    /// Right click on a mob (`EntityPlayer.interactWith` /
+    /// `EntityLiving.interact`). Returns what the held stack turns into
+    /// (`Some(None)` uses one up) and items that drop.
+    pub fn interact(
+        &mut self,
+        id: u32,
+        held: Option<Stack>,
+        player: [f64; 3],
+        out: &mut Outcome,
+    ) -> Option<Option<Stack>> {
+        let m = self
+            .list
+            .iter_mut()
+            .find(|m| m.id == id && m.health > 0.0)?;
+        let item = held.map(|s| s.id);
+        let one_less = |s: Stack| {
+            if s.count > 1 {
+                Some(Stack {
+                    count: s.count - 1,
+                    ..s
+                })
+            } else {
+                None
+            }
+        };
+        let heart = |m: &mut Mob, out: &mut Outcome, tamed: bool| {
+            let (wd, ht) = (m.width(), m.height());
+            for _ in 0..7 {
+                let r = &mut m.rand;
+                let p = [
+                    m.pos[0] + (r.next_float() * wd * 2.0 - wd) as f64,
+                    m.pos[1] + 0.5 + (r.next_float() * ht) as f64,
+                    m.pos[2] + (r.next_float() * wd * 2.0 - wd) as f64,
+                ];
+                let v = [
+                    r.next_gaussian() * 0.02,
+                    r.next_gaussian() * 0.02,
+                    r.next_gaussian() * 0.02,
+                ];
+                out.particles
+                    .push((if tamed { "heart" } else { "smoke" }, p, v));
+            }
+        };
+        match (m.kind, item) {
+            (Kind::Sheep, Some(359)) if !m.sheared => {
+                // EntitySheep.onSheared
+                m.sheared = true;
+                let n = 1 + m.rand.next_int_n(3);
+                for _ in 0..n {
+                    out.drops.push((
+                        [m.pos[0], m.pos[1] + 1.0, m.pos[2]],
+                        Stack::new(block::WOOL as u16, m.variant, 1),
+                    ));
+                }
+                out.sounds.push(("mob.sheep.shear", m.pos, 1.0, 1.0));
+                let s = held.unwrap();
+                let d = s.meta + 1;
+                Some(if d > crate::item::max_damage(s.id) {
+                    None
+                } else {
+                    Some(Stack { meta: d, ..s })
+                })
+            }
+            (Kind::Cow | Kind::Mooshroom, Some(325)) => {
+                // EntityCow.interact: a bucket of milk
+                let s = held.unwrap();
+                if s.count > 1 {
+                    out.drops.push((player, Stack::new(335, 0, 1)));
+                    Some(one_less(s))
+                } else {
+                    Some(Some(Stack::new(335, 0, 1)))
+                }
+            }
+            (Kind::Mooshroom, Some(281)) => {
+                let s = held.unwrap();
+                if s.count > 1 {
+                    out.drops.push((player, Stack::new(282, 0, 1)));
+                    Some(one_less(s))
+                } else {
+                    Some(Some(Stack::new(282, 0, 1)))
+                }
+            }
+            (Kind::Wolf, Some(352)) if !m.tamed && !m.angry => {
+                // EntityWolf.interact: a bone tames one time in three
+                if m.rand.next_int_n(3) == 0 {
+                    m.tamed = true;
+                    m.sitting = true;
+                    m.target_mob = None;
+                    m.target_player = false;
+                    m.health = 20.0;
+                    m.variant = 14; // collar: red
+                    heart(m, out, true);
+                } else {
+                    heart(m, out, false);
+                }
+                Some(one_less(held.unwrap()))
+            }
+            (Kind::Wolf, Some(351)) if m.tamed => {
+                // dye recolours the collar
+                let s = held.unwrap();
+                m.variant = 15 - (s.meta & 15);
+                Some(one_less(s))
+            }
+            (Kind::Wolf, Some(id))
+                if m.tamed
+                    && matches!(id, 319 | 320 | 363 | 364 | 365 | 366 | 367)
+                    && m.health < 20.0 =>
+            {
+                let heal = match id {
+                    320 | 364 => 8.0,
+                    366 => 6.0,
+                    363 | 319 => 3.0,
+                    _ => 2.0,
+                };
+                m.health = (m.health + heal).min(20.0);
+                Some(one_less(held.unwrap()))
+            }
+            (Kind::Ocelot, Some(349)) if !m.tamed => {
+                let d = m.dist2(player);
+                if d > 9.0 {
+                    return None;
+                }
+                if m.rand.next_int_n(3) == 0 {
+                    m.tamed = true;
+                    m.sitting = true;
+                    m.variant = 1 + m.rand.next_int_n(3);
+                    heart(m, out, true);
+                } else {
+                    heart(m, out, false);
+                }
+                Some(one_less(held.unwrap()))
+            }
+            (Kind::Wolf | Kind::Ocelot, _) if m.tamed => {
+                m.sitting = !m.sitting;
+                m.path.clear();
+                m.target_mob = None;
+                None
+            }
+            _ => None,
+        }
+    }
+
     /// Removes mobs that may despawn when far away (`despawnEntity`).
     pub fn despawn(&mut self, player: [f64; 3]) {
         let rand = &mut self.rand;
         self.list.retain_mut(|m| {
-            if m.persistent || m.kind.animal() || m.kind == Kind::Villager {
+            if m.persistent
+                || m.kind.animal()
+                || m.kind == Kind::Villager
+                || m.kind == Kind::IronGolem
+                || m.tamed
+            {
                 return true;
             }
             let d = m.dist2(player);
@@ -1413,7 +1856,7 @@ impl Mobs {
             .filter(|m| m.health > 0.0)
             .map(|m| {
                 format!(
-                    "{},{:?},{:?},{:?},{},{},{},{},{}",
+                    "{},{:?},{:?},{:?},{},{},{},{},{},{},{},{},{}",
                     m.kind.id(),
                     m.pos[0],
                     m.pos[1],
@@ -1422,7 +1865,11 @@ impl Mobs {
                     m.health,
                     m.variant,
                     m.sheared as i32,
-                    m.persistent as i32
+                    m.persistent as i32,
+                    m.tamed as i32 | (m.sitting as i32) << 1 | (m.player_made as i32) << 2,
+                    m.carried,
+                    m.carried_meta,
+                    m.angry as i32
                 )
             })
             .collect()
@@ -1439,10 +1886,22 @@ impl Mobs {
         self.next_id += 1;
         let seed = self.rand.next_long();
         let mut m = Mob::new(id, kind, pos, f[4].parse().ok()?, seed);
-        m.health = f[5].parse().ok()?;
         m.variant = f[6].parse().ok()?;
+        if kind == Kind::Slime {
+            m.set_slime_size(m.variant);
+        }
+        m.health = f[5].parse().ok()?;
         m.sheared = f[7] == "1";
         m.persistent = f[8] == "1";
+        if f.len() >= 13 {
+            let flags: i32 = f[9].parse().ok()?;
+            m.tamed = flags & 1 != 0;
+            m.sitting = flags & 2 != 0;
+            m.player_made = flags & 4 != 0;
+            m.carried = f[10].parse().ok()?;
+            m.carried_meta = f[11].parse().ok()?;
+            m.angry = f[12] == "1";
+        }
         self.list.push(m);
         Some(())
     }
@@ -1485,6 +1944,14 @@ pub fn hurt_sound(k: Kind) -> &'static str {
         Kind::Villager => "mob.villager.hit",
         Kind::Witch => "mob.witch.hurt",
         Kind::Silverfish => "mob.silverfish.hit",
+        Kind::Slime => "mob.slime.small",
+        Kind::Enderman => "mob.endermen.hit",
+        Kind::Squid => "",
+        Kind::Bat => "mob.bat.hurt",
+        Kind::Wolf => "mob.wolf.hurt",
+        Kind::Ocelot => "mob.cat.hitt",
+        Kind::Horse => "mob.horse.hit",
+        Kind::IronGolem => "mob.irongolem.hit",
     }
 }
 
@@ -1501,6 +1968,30 @@ pub fn death_sound(k: Kind) -> &'static str {
         Kind::Villager => "mob.villager.death",
         Kind::Witch => "mob.witch.death",
         Kind::Silverfish => "mob.silverfish.kill",
+        Kind::Slime => "mob.slime.small",
+        Kind::Enderman => "mob.endermen.death",
+        Kind::Squid => "",
+        Kind::Bat => "mob.bat.death",
+        Kind::Wolf => "mob.wolf.death",
+        Kind::Ocelot => "mob.cat.hitt",
+        Kind::Horse => "mob.horse.death",
+        Kind::IronGolem => "mob.irongolem.death",
+    }
+}
+
+/// Hurt or death sound of this particular mob (slime size, donkeys).
+pub fn mob_sound(m: &Mob, death: bool) -> &'static str {
+    match m.kind {
+        Kind::Slime if m.variant > 1 => "mob.slime.big",
+        Kind::Horse if (m.variant >> 16) == 1 => {
+            if death {
+                "mob.horse.donkey.death"
+            } else {
+                "mob.horse.donkey.hit"
+            }
+        }
+        k if death => death_sound(k),
+        k => hurt_sound(k),
     }
 }
 
@@ -1516,7 +2007,41 @@ pub fn idle_sound(k: Kind) -> Option<&'static str> {
         Kind::Villager => "mob.villager.idle",
         Kind::Witch => "mob.witch.idle",
         Kind::Silverfish => "mob.silverfish.say",
-        Kind::Creeper => return None,
+        Kind::Enderman => "mob.endermen.idle",
+        Kind::Bat => "mob.bat.idle",
+        Kind::Wolf => "mob.wolf.bark",
+        Kind::Horse => "mob.horse.idle",
+        Kind::Creeper | Kind::Slime | Kind::Squid | Kind::Ocelot | Kind::IronGolem => return None,
+    })
+}
+
+/// `getLivingSound` of this mob, with the state-dependent cases.
+fn idle_name(m: &mut Mob) -> Option<&'static str> {
+    Some(match m.kind {
+        Kind::Enderman if m.angry => "mob.endermen.scream",
+        Kind::Bat if m.hanging && m.rand.next_int_n(4) != 0 => return None,
+        Kind::Wolf => {
+            if m.angry {
+                "mob.wolf.growl"
+            } else if m.rand.next_int_n(3) == 0 {
+                if m.tamed && m.health < 10.0 {
+                    "mob.wolf.whine"
+                } else {
+                    "mob.wolf.panting"
+                }
+            } else {
+                "mob.wolf.bark"
+            }
+        }
+        Kind::Ocelot if m.tamed => {
+            if m.rand.next_int_n(4) == 0 {
+                "mob.cat.purreow"
+            } else {
+                "mob.cat.meow"
+            }
+        }
+        Kind::Horse if (m.variant >> 16) == 1 => "mob.horse.donkey.idle",
+        k => return idle_sound(k),
     })
 }
 
@@ -1531,6 +2056,8 @@ fn tick_mob(
     out: &mut Outcome,
     arrows: &mut Vec<Arrow>,
     explosions: &mut Vec<([f64; 3], f32)>,
+    others: &[Other],
+    strikes: &mut Vec<Strike>,
 ) {
     m.prev_pos = m.pos;
     m.prev_body_yaw = m.body_yaw;
@@ -1622,7 +2149,7 @@ fn tick_mob(
     }
     // idle sounds (getTalkInterval 80, livingSoundTime)
     if m.rand.next_int_n(1000) < m.ticks % 80 && m.rand.next_int_n(80) == 0 {
-        if let Some(s) = idle_sound(m.kind) {
+        if let Some(s) = idle_name(m) {
             out.sounds.push((
                 s,
                 m.pos,
@@ -1632,13 +2159,23 @@ fn tick_mob(
         }
     }
 
+    // Squid and bats move on their own.
+    if m.kind == Kind::Squid {
+        extra::squid(m, w);
+        return;
+    }
+    if m.kind == Kind::Bat {
+        extra::bat(m, w, player, out);
+        return;
+    }
+
     // ---------------------------------------------------------------- AI
     let pdist2 = m.dist2(player.feet);
     let sees_player = player.attackable
         && pdist2 < (m.kind.follow_range() as f64).powi(2)
         && m.can_see(w, player.eye());
     // targeting
-    if m.kind.hostile() {
+    if m.kind.hostile() && !matches!(m.kind, Kind::Enderman | Kind::Slime) {
         let spider_calm = matches!(m.kind, Kind::Spider | Kind::CaveSpider) && {
             let (x, y, z) = m.feet_block();
             brightness(w, x, y, z) > 0.5
@@ -1720,6 +2257,11 @@ fn tick_mob(
                 wander(m, w, 0.6, 120);
             }
         }
+        Kind::Slime => extra::slime(m, player, out),
+        Kind::Enderman => extra::enderman(m, w, player, day, out),
+        Kind::Wolf | Kind::Ocelot => extra::tameable(m, w, player, others, strikes, out),
+        Kind::Horse => extra::horse(m, w, player, out),
+        Kind::IronGolem => extra::golem(m, w, player, others, strikes, out),
         _ => animal(m, w, player, out),
     }
     // look at the player now and then (EntityAIWatchClosest)
@@ -1732,8 +2274,10 @@ fn tick_mob(
             m.task_ticks -= 1;
         }
     }
-    m.follow_path();
-    m.move_helper();
+    if m.kind != Kind::Slime {
+        m.follow_path();
+        m.move_helper();
+    }
     m.look_helper();
     if !m.kind.old_ai() {
         m.body_helper();
@@ -1760,7 +2304,11 @@ fn tick_mob(
     m.move_strafe *= 0.98;
     m.move_forward *= 0.98;
     let (s, f) = (m.move_strafe, m.move_forward);
+    let was_on_ground = m.on_ground;
     m.move_with_heading(w, s, f);
+    if m.kind == Kind::Slime {
+        extra::slime_landed(m, was_on_ground, out);
+    }
     // push out of the player (Entity.applyEntityCollision, mobs side only)
     let pb = player.bb();
     if m.bb.intersects(&pb) {
@@ -1905,7 +2453,7 @@ fn chase(m: &mut Mob, w: &mut ServerWorld, player: &PlayerInfo, out: &mut Outcom
         m.motion[2] = dz / f * 0.5 * 0.8 + m.motion[2] * 0.2;
         m.motion[1] = 0.4f32 as f64;
     }
-    let (w2, _) = m.kind.size();
+    let (w2, _) = m.dims();
     let reach = (w2 * 2.0 * w2 * 2.0 + 0.6) as f64;
     let pb = player.bb();
     let in_y = m.bb.max[1] > pb.min[1] && m.bb.min[1] < pb.max[1];
@@ -1927,6 +2475,7 @@ fn chase(m: &mut Mob, w: &mut ServerWorld, player: &PlayerInfo, out: &mut Outcom
             knock,
             poison,
         });
+        out.attacker = Some(m.id);
     }
 }
 
@@ -2334,10 +2883,10 @@ pub fn creature_list(biome: i32) -> Vec<Entry> {
     match base {
         0 | 24 | 7 | 11 | 16 | 26 | 25 | 2 | 17 | 37 | 38 | 39 | 12 | 13 => Vec::new(),
         14 | 15 => vec![(Some(Kind::Mooshroom), 8, 4, 8)],
-        1 => [default, vec![(None, 5, 2, 6)]].concat(),
-        35 | 36 => [default, vec![(None, 1, 2, 6)]].concat(),
-        4 | 18 => [default, vec![(None, 5, 4, 4)]].concat(),
-        5 | 19 | 30 | 31 | 32 | 33 => [default, vec![(None, 8, 4, 4)]].concat(),
+        1 => [default, vec![(Some(Kind::Horse), 5, 2, 6)]].concat(),
+        35 | 36 => [default, vec![(Some(Kind::Horse), 1, 2, 6)]].concat(),
+        4 | 18 => [default, vec![(Some(Kind::Wolf), 5, 4, 4)]].concat(),
+        5 | 19 | 30 | 31 | 32 | 33 => [default, vec![(Some(Kind::Wolf), 8, 4, 4)]].concat(),
         21 | 22 | 23 => [default, vec![(Some(Kind::Chicken), 10, 4, 4)]].concat(),
         _ => default,
     }
@@ -2354,17 +2903,116 @@ pub fn monster_list(biome: i32) -> Vec<Entry> {
         (Some(Kind::Zombie), 100, 4, 4),
         (Some(Kind::Skeleton), 100, 4, 4),
         (Some(Kind::Creeper), 100, 4, 4),
-        (None, 100, 4, 4),
-        (None, 10, 1, 4),
+        (Some(Kind::Slime), 100, 4, 4),
+        (Some(Kind::Enderman), 10, 1, 4),
         (Some(Kind::Witch), 5, 1, 1),
     ];
     if base == 6 {
-        v.push((None, 1, 1, 1));
+        v.push((Some(Kind::Slime), 1, 1, 1));
     }
     if (21..=23).contains(&base) {
-        v.push((None, 2, 1, 1));
+        v.push((Some(Kind::Ocelot), 2, 1, 1));
     }
     v
+}
+
+/// `BiomeGenBase.spawnableWaterCreatureList`
+pub fn water_list(biome: i32) -> Vec<Entry> {
+    let base = biome & 127;
+    if base == 14 || base == 15 {
+        return Vec::new();
+    }
+    vec![(Some(Kind::Squid), 10, 4, 4)]
+}
+
+/// `BiomeGenBase.spawnableCaveCreatureList`
+pub fn ambient_list(_biome: i32) -> Vec<Entry> {
+    vec![(Some(Kind::Bat), 10, 8, 8)]
+}
+
+/// `Chunk.getRandomWithSeed(987234911)`: one chunk in ten has slimes.
+pub fn slime_chunk(seed: i64, cx: i32, cz: i32) -> bool {
+    let s = seed
+        .wrapping_add(cx.wrapping_mul(cx).wrapping_mul(4987142) as i64)
+        .wrapping_add(cx.wrapping_mul(5947611) as i64)
+        .wrapping_add((cz.wrapping_mul(cz) as i64).wrapping_mul(4392871))
+        .wrapping_add(cz.wrapping_mul(389711) as i64)
+        ^ 987234911;
+    JavaRandom::new(s).next_int_n(10) == 0
+}
+
+/// `getCanSpawnHere` of each mob for natural spawning.
+fn can_spawn_here(w: &mut ServerWorld, m: &mut Mob, r: &mut JavaRandom) -> bool {
+    let (px, py, pz) = (
+        math::floor_double(m.pos[0]),
+        math::floor_double(m.bb.min[1]),
+        math::floor_double(m.pos[2]),
+    );
+    // EntityLiving.getCanSpawnHere: room to stand and no liquid
+    let free = |w: &mut ServerWorld, m: &Mob| {
+        colliding_boxes(w, &m.bb).is_empty()
+            && !m.in_material(w, &m.bb, Material::Water)
+            && !m.in_material(w, &m.bb, Material::Lava)
+    };
+    let mob_light = |w: &mut ServerWorld, r: &mut JavaRandom| {
+        // EntityMob.isValidLightLevel
+        if w.saved_light(true, px, py, pz) > r.next_int_n(32) {
+            false
+        } else {
+            w.block_light_value(px, py, pz, true) <= r.next_int_n(8)
+        }
+    };
+    match m.kind {
+        Kind::Slime => {
+            let biome = w.biome(px, pz).id as i32;
+            if biome == 6
+                && m.pos[1] > 50.0
+                && m.pos[1] < 70.0
+                && r.next_float() < 0.5
+                && r.next_float() < w.moon_factor
+                && w.block_light_value(px, py, pz, true) <= r.next_int_n(8)
+            {
+                return free(w, m);
+            }
+            if r.next_int_n(10) == 0 && slime_chunk(w.seed(), px >> 4, pz >> 4) && m.pos[1] < 40.0 {
+                return free(w, m);
+            }
+            false
+        }
+        Kind::Ocelot => {
+            // EntityOcelot.getCanSpawnHere
+            if r.next_int_n(3) == 0 {
+                return false;
+            }
+            if !free(w, m) || py < 63 {
+                return false;
+            }
+            matches!(
+                w.block(px, py - 1, pz),
+                block::GRASS | block::LEAVES | block::LEAVES2
+            )
+        }
+        Kind::Squid => m.pos[1] > 45.0 && m.pos[1] < 63.0 && colliding_boxes(w, &m.bb).is_empty(),
+        Kind::Bat => {
+            if py >= 63 {
+                return false;
+            }
+            let l = w.block_light_value(px, py, pz, true);
+            if r.next_boolean() {
+                return false;
+            }
+            if l > r.next_int_n(4) {
+                return false;
+            }
+            free(w, m)
+        }
+        k if k.hostile() => mob_light(w, r) && m.path_weight(w, px, py, pz) >= 0.0 && free(w, m),
+        _ => {
+            w.block(px, py - 1, pz) == block::GRASS
+                && w.full_block_light(px, py, pz) > 8
+                && free(w, m)
+        }
+    }
 }
 
 fn pick<'a>(r: &mut JavaRandom, list: &'a [Entry]) -> &'a Entry {
@@ -2445,20 +3093,21 @@ pub fn natural_spawning(
         }
     }
     let eligible = chunks.len() as i32 + 64; // edge chunks count towards the cap
-    for hostile in [true, false] {
-        if !hostile && !animals {
+                                             // EnumCreatureType: monster, creature, ambient, waterCreature
+    for ty in 0..4 {
+        let hostile = ty == 0;
+        if ty == 1 && !animals {
             continue;
         }
-        let cap = if hostile { 70 } else { 10 };
+        let cap = [70, 10, 15, 5][ty];
         let existing = mobs
             .list
             .iter()
-            .filter(|m| {
-                if hostile {
-                    m.kind.hostile()
-                } else {
-                    m.kind.animal()
-                }
+            .filter(|m| match ty {
+                0 => m.kind.hostile(),
+                1 => m.kind.animal(),
+                2 => m.kind == Kind::Bat,
+                _ => m.kind == Kind::Squid,
             })
             .count() as i32;
         if existing > cap * eligible / 256 {
@@ -2475,7 +3124,12 @@ pub fn natural_spawning(
             let x = cx * 16 + rand.next_int_n(16);
             let z = cz * 16 + rand.next_int_n(16);
             let y = rand.next_int_n((top + 16 - 1).max(1));
-            if block::info(w.block(x, y, z)).normal_cube() || w.material(x, y, z) != Material::Air {
+            let want = if ty == 3 {
+                Material::Water
+            } else {
+                Material::Air
+            };
+            if block::info(w.block(x, y, z)).normal_cube() || w.material(x, y, z) != want {
                 continue;
             }
             let mut spawned = 0;
@@ -2485,7 +3139,14 @@ pub fn natural_spawning(
                 for _ in 0..4 {
                     px += rand.next_int_n(6) - rand.next_int_n(6);
                     pz += rand.next_int_n(6) - rand.next_int_n(6);
-                    if !can_spawn_at(w, px, py, pz) {
+                    let ok_here = if ty == 3 {
+                        w.material(px, py, pz).is_liquid()
+                            && w.material(px, py - 1, pz).is_liquid()
+                            && !block::info(w.block(px, py + 1, pz)).normal_cube()
+                    } else {
+                        can_spawn_at(w, px, py, pz)
+                    };
+                    if !ok_here {
                         continue;
                     }
                     let (fx, fy, fz) = (px as f64 + 0.5, py as f64, pz as f64 + 0.5);
@@ -2500,10 +3161,11 @@ pub fn natural_spawning(
                     }
                     if entry.is_none() {
                         let biome = w.biome(px, pz).id as i32;
-                        let list = if hostile {
-                            monster_list(biome)
-                        } else {
-                            creature_list(biome)
+                        let list = match ty {
+                            0 => monster_list(biome),
+                            1 => creature_list(biome),
+                            2 => ambient_list(biome),
+                            _ => water_list(biome),
                         };
                         if list.is_empty() {
                             break 'packs;
@@ -2512,27 +3174,13 @@ pub fn natural_spawning(
                     }
                     let Some(e) = entry else { break };
                     let Some(kind) = e.0 else { continue };
-                    // getCanSpawnHere
-                    let ok = if hostile {
-                        let sky = w.saved_light(true, px, py, pz);
-                        if sky > rand.next_int_n(32) {
-                            false
-                        } else {
-                            let l = w.block_light_value(px, py, pz, true);
-                            l <= rand.next_int_n(8)
-                        }
-                    } else {
-                        w.block(px, py - 1, pz) == block::GRASS
-                            && w.full_block_light(px, py, pz) > 8
-                    };
-                    let (wd, h) = kind.size();
-                    let bb = Aabb {
-                        min: [fx - wd as f64 / 2.0, fy, fz - wd as f64 / 2.0],
-                        max: [fx + wd as f64 / 2.0, fy + h as f64, fz + wd as f64 / 2.0],
-                    };
-                    if ok && colliding_boxes(w, &bb).is_empty() {
-                        let yaw = rand.next_float() * 360.0;
-                        mobs.spawn(kind, [fx, fy, fz], yaw, &mut rand);
+                    let _ = hostile;
+                    // new Entity, setLocationAndAngles, getCanSpawnHere
+                    let yaw = rand.next_float() * 360.0;
+                    let mut m = mobs.make(kind, [fx, fy, fz], yaw);
+                    if can_spawn_here(w, &mut m, &mut rand) {
+                        m.on_spawn(&mut rand);
+                        mobs.list.push(m);
                         spawned += 1;
                         if spawned >= 4 {
                             break 'packs;

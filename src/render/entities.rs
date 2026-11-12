@@ -273,6 +273,18 @@ fn sprite_rect(atlas: &Atlas, s: &Stack) -> Option<[f32; 4]> {
 /// One dropped item, relative to the camera. `light` is `(sky, block)` at
 /// the item, already combined with the sky darkening by the shader.
 #[allow(clippy::too_many_arguments)]
+/// A unit block (`RenderBlocks.renderBlockAsItem`) transformed by `m`.
+pub fn block_model(
+    out: &mut Vec<Vertex>,
+    atlas: &Atlas,
+    id: u8,
+    meta: u8,
+    m: &Mat4,
+    light: [u8; 4],
+) {
+    block_cube(out, atlas, id, meta as i32, m, light, 1.0);
+}
+
 /// `RenderTNTPrimed.doRender`: the block swells in its last ten ticks and
 /// flashes white every five.
 pub fn primed_tnt(

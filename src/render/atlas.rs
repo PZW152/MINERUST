@@ -368,7 +368,11 @@ impl Atlas {
             b.add(px, 64)
         };
         let mut mobs = HashMap::new();
-        for name in crate::render::model::TEXTURES {
+        for name in crate::render::model::TEXTURES
+            .into_iter()
+            .chain(crate::render::model2::TEXTURES)
+            .chain(crate::render::model2::TEXTURES2)
+        {
             let path = match name.strip_prefix("../") {
                 Some(rest) => format!("assets/minecraft/textures/{rest}.png"),
                 None => format!("assets/minecraft/textures/entity/{name}.png"),

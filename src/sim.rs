@@ -77,6 +77,10 @@ pub enum Command {
     PlayerState {
         attackable: bool,
     },
+    /// Right click on a mob.
+    Interact {
+        id: u32,
+    },
     Shutdown,
 }
 
@@ -107,6 +111,8 @@ pub enum Event {
     Tnt(Vec<([f64; 3], [f64; 3], i32)>),
     /// Note blocks played this tick: position, instrument, pitch 0..24.
     Notes(Vec<([i32; 3], &'static str, i32)>),
+    /// Particles from mobs: kind, position, motion.
+    Particles(Vec<crate::entity::mob::Puff>),
 }
 
 /// What the client draws of a mob.
@@ -139,6 +145,17 @@ pub struct MobView {
     pub eat_timer: i32,
     pub fire: bool,
     pub bb: [f64; 6],
+    /// Slime squish (previous, current).
+    pub squish: [f32; 2],
+    /// Squid pitch, yaw, rotation, tentacle angle (previous, current).
+    pub sq: [[f32; 4]; 2],
+    /// 1 tamed, 2 sitting, 4 angry or screaming, 8 hanging bat.
+    pub flags: u32,
+    /// Enderman carried block and data.
+    pub carried: [u8; 2],
+    /// Iron golem `attackTimer`.
+    pub attack_timer: i32,
+    pub health: f32,
 }
 
 #[derive(Clone, Debug)]
@@ -182,6 +199,9 @@ pub struct Sim {
     pub world_time: i64,
     freeze_time: bool,
     player: Option<([f64; 3], [f32; 2], bool)>,
+    /// The mob the player hit last and the last one that hit the player.
+    last_attacked: Option<u32>,
+    last_attacker: Option<u32>,
     unknown_level_keys: Vec<(String, String)>,
     pub play: Play,
     spawn: [f64; 3],
@@ -314,6 +334,8 @@ impl Sim {
             world_time: cfg.start_time,
             freeze_time: cfg.freeze_time,
             player: None,
+            last_attacked: None,
+            last_attacker: None,
             unknown_level_keys: Vec::new(),
             play: Play::new(cfg.mode),
             spawn: [0.0; 3],
@@ -625,6 +647,7 @@ impl Sim {
                 crit,
                 knockback,
             } => {
+                self.last_attacked = Some(id);
                 let mut out = crate::entity::mob::Outcome::default();
                 let (feet, yaw) = self.play.player;
                 self.mobs
@@ -632,6 +655,19 @@ impl Sim {
                 self.pending_out.push(out);
             }
             Command::PlayerState { attackable } => self.player_attackable = attackable,
+            Command::Interact { id } => {
+                let mut out = crate::entity::mob::Outcome::default();
+                let held = self.play.inv.held();
+                let (feet, _) = self.play.player;
+                if let Some(next) = self.mobs.interact(id, held, feet, &mut out) {
+                    let i = self.play.inv.selected;
+                    if self.play.mode == GameMode::Survival || held.map_or(false, |s| s.id == 325) {
+                        self.play.inv.main[i] = next;
+                    }
+                    self.play.inv_dirty = true;
+                }
+                self.pending_out.push(out);
+            }
             Command::Give(s) => {
                 if s.count > 0 && s.count <= 64 {
                     let _ = self.play.inv.add(s);
@@ -719,6 +755,7 @@ impl Sim {
             self.apply(c);
         }
         self.load_chunks();
+        self.summon_once();
         if !self.freeze_time {
             self.world_time += 1;
         }
@@ -905,6 +942,78 @@ impl Sim {
         }
     }
 
+    /// `--summon Kind[:tamed|:sit|:big|:n],...`: a row of mobs four blocks in
+    /// front of the player once the world is up (for checking models).
+    fn summon_once(&mut self) {
+        static DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        if self.world.total_time < 20 || DONE.load(std::sync::atomic::Ordering::Relaxed) {
+            return;
+        }
+        {
+            let (f, _) = self.play.player;
+            let (cx, cz) = ((f[0].floor() as i32) >> 4, (f[2].floor() as i32) >> 4);
+            for dx in -1..=1 {
+                for dz in -1..=1 {
+                    if !self.world.chunk_exists(cx + dx, cz + dz) {
+                        return;
+                    }
+                }
+            }
+        }
+        DONE.store(true, std::sync::atomic::Ordering::Relaxed);
+        let Ok(list) = std::env::var("MINERUST_SUMMON") else {
+            return;
+        };
+        let (feet, yaw) = self.play.player;
+        let (s, c) = (yaw.to_radians().sin() as f64, yaw.to_radians().cos() as f64);
+        let fwd = [-s, c];
+        let side = [c, s];
+        let items: Vec<&str> = list.split(',').filter(|x| !x.is_empty()).collect();
+        let n = items.len() as f64;
+        let mut rnd = std::mem::replace(&mut self.world.rand, JavaRandom::new(0));
+        for (i, item) in items.iter().enumerate() {
+            let mut parts = item.split(':');
+            let Some(kind) = parts.next().and_then(crate::entity::mob::Kind::from_id) else {
+                continue;
+            };
+            let off = (i as f64 - (n - 1.0) / 2.0) * 2.2;
+            let dist: f64 = std::env::var("MINERUST_SUMMON_DIST")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(5.0);
+            let x = feet[0] + fwd[0] * dist + side[0] * off;
+            let z = feet[2] + fwd[1] * dist + side[1] * off;
+            let (bx, bz) = (x.floor() as i32, z.floor() as i32);
+            let mut y = feet[1].floor() as i32 + 3;
+            while y > 1 && !self.world.material(bx, y - 1, bz).blocks_movement() {
+                y -= 1;
+            }
+            let id = self
+                .mobs
+                .spawn(kind, [x, y as f64, z], yaw + 180.0, &mut rnd);
+            if std::env::var("MINERUST_DBG").is_ok() {
+                eprintln!("summon {:?} at {:.1} {} {:.1}", kind, x, y, z);
+            }
+            if let Some(m) = self.mobs.list.iter_mut().find(|m| m.id == id) {
+                m.persistent = true;
+                for p in parts {
+                    match p {
+                        "tamed" => m.tamed = true,
+                        "sit" => m.sitting = true,
+                        "big" => m.set_slime_size(4),
+                        "hang" => m.hanging = true,
+                        v => {
+                            if let Ok(k) = v.parse::<i32>() {
+                                m.variant = k;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        self.world.rand = rnd;
+    }
+
     /// Writes the level file and every chunk changed since the last save.
     pub fn save(&mut self) -> std::io::Result<()> {
         let Some(dir) = self.world.save_dir.clone() else {
@@ -975,13 +1084,31 @@ impl Sim {
         let info = mob::PlayerInfo {
             feet,
             yaw,
+            pitch: self.player.map_or(0.0, |p| p.1[1]),
             attackable: self.player_attackable && play.mode == GameMode::Survival,
             held,
+            last_attacked: self.last_attacked,
+            last_attacker: self.last_attacker,
         };
+        // World.getCurrentMoonPhaseFactor
+        self.world.moon_factor = [1.0, 0.75, 0.5, 0.25, 0.0, 0.25, 0.5, 0.75]
+            [((self.world_time / 24000 % 8 + 8) % 8) as usize];
         let mut out = mob::Outcome::default();
         self.mobs.tick(&mut self.world, &info, &mut out);
         let animals = self.world.total_time % 400 == 0;
         mob::natural_spawning(&mut self.world, &mut self.mobs, feet, self.spawn, animals);
+        mob::village_golems(&mut self.world, &mut self.mobs);
+        // forget targets that are gone
+        if let Some(id) = self.last_attacked {
+            if !self.mobs.list.iter().any(|m| m.id == id && m.health > 0.0) {
+                self.last_attacked = None;
+            }
+        }
+        if let Some(id) = self.last_attacker {
+            if !self.mobs.list.iter().any(|m| m.id == id && m.health > 0.0) {
+                self.last_attacker = None;
+            }
+        }
         if self.world.total_time % 40 == 0 {
             self.mobs.despawn(feet);
         }
@@ -1022,8 +1149,13 @@ impl Sim {
             events.push(Event::Notes(notes));
         }
         let mut explosions = Vec::new();
+        let mut particles = Vec::new();
         let mut rnd = std::mem::replace(&mut self.world.rand, JavaRandom::new(0));
         for o in outs {
+            if o.attacker.is_some() {
+                self.last_attacker = o.attacker;
+            }
+            particles.extend(o.particles);
             for (p, st) in o.drops {
                 play.add_gen_entity(
                     crate::world::server::GenEntity::Item { pos: p, stack: st },
@@ -1043,6 +1175,9 @@ impl Sim {
         }
         if !explosions.is_empty() {
             events.push(Event::Explosions(explosions));
+        }
+        if !particles.is_empty() {
+            events.push(Event::Particles(particles));
         }
         let r2 = ((self.view + 1) * 16) as f64;
         let views: Vec<MobView> = self
@@ -1077,6 +1212,15 @@ impl Sim {
                 prev_wing: m.prev_wing,
                 eat_timer: m.eat_timer,
                 fire: m.fire > 0,
+                squish: [m.prev_squish, m.squish],
+                sq: [m.prev_sq, m.sq],
+                flags: m.tamed as u32
+                    | (m.sitting as u32) << 1
+                    | (m.angry as u32) << 2
+                    | (m.hanging as u32) << 3,
+                carried: [m.carried, m.carried_meta],
+                attack_timer: m.attack_timer,
+                health: m.health,
                 bb: [
                     m.bb.min[0],
                     m.bb.min[1],
@@ -1685,5 +1829,63 @@ mod tests {
         sim.step(&[Command::Player(feet, [0.0, 0.0], false)], &mut ev);
         assert_eq!(sim.world.meta(x + 1, y, z), 1);
         assert_eq!(sim.world.meta(x, y, z) & 4, 4, "door opened");
+    }
+
+    #[test]
+    fn big_slime_splits_and_bone_tames_wolf() {
+        use crate::entity::mob::Kind;
+        let (mut sim, x, y, z) = redstone_sim();
+        let mut r = JavaRandom::new(5);
+        let id = sim.mobs.spawn(
+            Kind::Slime,
+            [x as f64 + 3.5, y as f64, z as f64 + 3.5],
+            0.0,
+            &mut r,
+        );
+        let m = sim.mobs.list.iter_mut().find(|m| m.id == id).unwrap();
+        m.set_slime_size(4);
+        m.health = 0.5;
+        let mut out = crate::entity::mob::Outcome::default();
+        sim.mobs.attack(
+            id,
+            5.0,
+            false,
+            [x as f64, y as f64, z as f64],
+            0.0,
+            0,
+            &mut out,
+        );
+        steps(&mut sim, 1);
+        let small: Vec<i32> = sim
+            .mobs
+            .list
+            .iter()
+            .filter(|m| m.kind == Kind::Slime && m.health > 0.0)
+            .map(|m| m.variant)
+            .collect();
+        assert!((2..=4).contains(&small.len()), "{small:?}");
+        assert!(small.iter().all(|&v| v == 2));
+
+        let wid = sim.mobs.spawn(
+            Kind::Wolf,
+            [x as f64 + 6.5, y as f64, z as f64 + 6.5],
+            0.0,
+            &mut r,
+        );
+        let mut tamed = false;
+        for _ in 0..30 {
+            let mut out = crate::entity::mob::Outcome::default();
+            let bone = Some(crate::item::Stack::new(352, 0, 64));
+            sim.mobs
+                .interact(wid, bone, [x as f64, y as f64, z as f64], &mut out);
+            let w = sim.mobs.list.iter().find(|m| m.id == wid).unwrap();
+            if w.tamed {
+                tamed = true;
+                assert!(w.sitting);
+                assert_eq!(w.health, 20.0);
+                break;
+            }
+        }
+        assert!(tamed, "a bone tames one time in three");
     }
 }

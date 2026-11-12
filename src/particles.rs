@@ -36,6 +36,8 @@ pub struct Particle {
     no_clip: bool,
     base_scale: f32,
     flame_base: f32,
+    /// `EntityPortalFX.portalPosX/Y/Z`
+    origin: [f64; 3],
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -51,6 +53,8 @@ enum Kind {
     Crit,
     Dust,
     Note,
+    Portal,
+    Heart,
 }
 
 pub struct Particles {
@@ -96,6 +100,7 @@ impl Particles {
             no_clip: false,
             base_scale: scale,
             flame_base: 0.0,
+            origin: pos,
         }
     }
 
@@ -313,6 +318,48 @@ impl Particles {
         self.add(p);
     }
 
+    /// `EntityPortalFX`: drifts back towards where it started.
+    pub fn portal(&mut self, pos: [f64; 3], m: [f64; 3]) {
+        let mut p = self.base(pos);
+        p.motion = m;
+        p.scale = self.r.next_float() * 0.2 + 0.5;
+        p.base_scale = p.scale;
+        let f = self.r.next_float() * 0.6 + 0.4;
+        p.color = [f * 0.9, f * 0.3, f, 1.0];
+        p.max_age = (self.rnd() * 10.0) as i32 + 40;
+        p.no_clip = true;
+        p.sprite = Sprite::Index((self.rnd() * 8.0) as i32);
+        p.kind = Kind::Portal;
+        p.origin = pos;
+        self.add(p);
+    }
+
+    /// `EntityHeartFX`
+    pub fn heart(&mut self, pos: [f64; 3], m: [f64; 3]) {
+        let mut p = self.moving(pos, [0.0; 3]);
+        for (v, a) in p.motion.iter_mut().zip(m) {
+            *v = *v * 0.01 + a;
+        }
+        p.motion[1] += 0.1;
+        p.scale *= 0.75 * 2.0;
+        p.base_scale = p.scale;
+        p.max_age = 16;
+        p.kind = Kind::Heart;
+        p.sprite = Sprite::Index(80);
+        self.add(p);
+    }
+
+    /// `EntityBreakingFX` of an item (slime balls when a slime lands).
+    pub fn item_break(&mut self, pos: [f64; 3], rect: [f32; 4]) {
+        let mut p = self.moving(pos, [0.0; 3]);
+        let jitter = [self.r.next_float() * 3.0, self.r.next_float() * 3.0];
+        p.sprite = Sprite::Block { rect, jitter };
+        p.gravity = 1.0;
+        p.scale /= 2.0;
+        p.kind = Kind::Dust;
+        self.add(p);
+    }
+
     /// `EntityRainFX` splash
     pub fn rain(&mut self, pos: [f64; 3]) {
         let mut p = self.base(pos);
@@ -371,6 +418,16 @@ impl Particles {
             if p.age >= p.max_age {
                 return false;
             }
+            if p.kind == Kind::Portal {
+                // EntityPortalFX.onUpdate
+                let f = p.age as f64 / p.max_age as f64;
+                let f1 = 1.0 - (-f + f * f * 2.0);
+                for a in 0..3 {
+                    p.pos[a] = p.origin[a] + p.motion[a] * f1;
+                }
+                p.pos[1] += 1.0 - f;
+                return true;
+            }
             match p.kind {
                 Kind::Smoke => {
                     p.sprite = Sprite::Index(7 - p.age * 8 / p.max_age);
@@ -388,7 +445,7 @@ impl Particles {
                     p.color[2] *= 0.9;
                     p.motion[1] -= 0.02;
                 }
-                Kind::Drip | Kind::Note => {}
+                Kind::Drip | Kind::Note | Kind::Heart => {}
                 _ => {
                     p.motion[1] -= 0.04 * p.gravity as f64;
                 }
@@ -405,6 +462,7 @@ impl Particles {
                 Kind::Lava => 0.999,
                 Kind::Crit => 0.7,
                 Kind::Note => 0.66,
+                Kind::Heart => 0.86,
                 Kind::Rain | Kind::Drip => 0.98,
                 _ => 0.98,
             };
@@ -418,7 +476,11 @@ impl Particles {
                     return false;
                 }
             }
-            if matches!(p.kind, Kind::Smoke | Kind::Explode | Kind::Note) && p.pos[1] == p.prev[1] {
+            if matches!(
+                p.kind,
+                Kind::Smoke | Kind::Explode | Kind::Note | Kind::Heart
+            ) && p.pos[1] == p.prev[1]
+            {
                 p.motion[0] *= 1.1;
                 p.motion[2] *= 1.1;
             }

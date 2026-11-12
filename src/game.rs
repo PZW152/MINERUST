@@ -602,6 +602,26 @@ impl Game {
                     }
                 }
                 Event::Tnt(list) => self.tnt = list,
+                Event::Particles(list) => {
+                    let slime = self
+                        .atlas
+                        .items
+                        .get(&(341, 0))
+                        .map(|&t| self.atlas.rects[t as usize]);
+                    for (kind, p, m) in list {
+                        match kind {
+                            "portal" => self.particles.portal(p, m),
+                            "heart" => self.particles.heart(p, m),
+                            "smoke" => self.particles.smoke(p, m, false),
+                            "slime" => {
+                                if let Some(r) = slime {
+                                    self.particles.item_break(p, r);
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
                 Event::Notes(list) => {
                     // BlockNote.onBlockEventReceived
                     for (p, inst, pitch) in list {
@@ -1009,6 +1029,25 @@ impl Game {
     /// Per-tick particle spawning around the player.
     fn tick_particles(&mut self) {
         self.particles.tick(&self.world);
+        // EntityEnderman.onLivingUpdate: two portal particles a tick.
+        for v in &self.mobs {
+            if v.kind == crate::entity::mob::Kind::Enderman && v.death_time == 0 {
+                for _ in 0..2 {
+                    let r = &mut self.particle_rand;
+                    let p = [
+                        v.pos[0] + (r.next_double() - 0.5) * 0.6,
+                        v.pos[1] + r.next_double() * 2.9 - 0.25,
+                        v.pos[2] + (r.next_double() - 0.5) * 0.6,
+                    ];
+                    let m = [
+                        (r.next_double() - 0.5) * 2.0,
+                        -r.next_double(),
+                        (r.next_double() - 0.5) * 2.0,
+                    ];
+                    self.particles.portal(p, m);
+                }
+            }
+        }
         // EntityTNTPrimed.onUpdate: a puff of smoke every tick.
         for &(pos, _, _) in &self.tnt {
             self.particles
@@ -1537,6 +1576,12 @@ impl Game {
                         self.hit_delay = 0;
                         self.tick_digging();
                     }
+                    1 if self.target_mob.is_some() => {
+                        let (id, _) = self.target_mob.unwrap();
+                        let _ = self.sim.commands.send(Command::Interact { id });
+                        self.swing_item();
+                        self.right_delay = 4;
+                    }
                     1 => self.use_item(),
                     _ => {
                         if let Some((b, _)) = self.selected {
@@ -2019,6 +2064,7 @@ impl Game {
 
         // --- Dropped items, crack overlay, hand ---
         let mut dynamic: Vec<crate::render::mesher::Vertex> = Vec::new();
+        let mut translucent: Vec<crate::render::mesher::Vertex> = Vec::new();
         for m in &self.mobs {
             let t = partial as f64;
             let p = [
@@ -2034,6 +2080,12 @@ impl Game {
             if rel[0] * rel[0] + rel[2] * rel[2] > (rd * 16.0) * (rd * 16.0) {
                 continue;
             }
+            // Entity.isInRangeToRenderDist: 64 blocks per block of box size
+            let edge =
+                ((m.bb[3] - m.bb[0]) + (m.bb[4] - m.bb[1]) + (m.bb[5] - m.bb[2])) / 3.0 * 64.0;
+            if (rel[0] * rel[0] + rel[1] * rel[1] + rel[2] * rel[2]) as f64 > edge * edge {
+                continue;
+            }
             // Entity.getBrightnessForRender
             let ly = math::floor_double(p[1] + (m.bb[4] - m.bb[1]) * 0.66);
             let (lx, lz) = (math::floor_double(p[0]), math::floor_double(p[2]));
@@ -2044,7 +2096,16 @@ impl Game {
             let blk = if m.fire { 15 } else { blk };
             let light = [(blk << 4) as u8, (sky << 4) as u8, 0, 0];
             let atlas = &self.atlas;
-            crate::render::model::mob(&mut dynamic, &|n| atlas.mob_tex(n), m, rel, partial, light);
+            crate::render::model::mob(
+                &mut dynamic,
+                &mut translucent,
+                &|n| atlas.mob_tex(n),
+                &|o, id, meta, mat, l| entities::block_model(o, atlas, id, meta, mat, l),
+                m,
+                rel,
+                partial,
+                light,
+            );
         }
         {
             let w = &self.world;
@@ -2348,7 +2409,8 @@ impl Game {
         } else {
             None
         };
-        let weather = self.weather_quads(eye, partial);
+        let mut weather = self.weather_quads(eye, partial);
+        weather.extend_from_slice(&translucent);
         if std::env::var_os("MINERUST_DEBUG_WEATHER").is_some() && self.ticks % 40 == 0 {
             eprintln!(
                 "weather: rain {} quads {} tex {:?}",

@@ -24,15 +24,15 @@ struct Bx {
 }
 
 #[derive(Clone)]
-struct Part {
-    pivot: [f32; 3],
-    rot: [f32; 3],
+pub(super) struct Part {
+    pub(super) pivot: [f32; 3],
+    pub(super) rot: [f32; 3],
     boxes: Vec<Bx>,
-    children: Vec<Part>,
+    pub(super) children: Vec<Part>,
 }
 
 impl Part {
-    fn new(pivot: [f32; 3]) -> Part {
+    pub(super) fn new(pivot: [f32; 3]) -> Part {
         Part {
             pivot,
             rot: [0.0; 3],
@@ -40,7 +40,7 @@ impl Part {
             children: Vec::new(),
         }
     }
-    fn bx(mut self, u: f32, v: f32, o: [f32; 3], s: [f32; 3], g: f32) -> Part {
+    pub(super) fn bx(mut self, u: f32, v: f32, o: [f32; 3], s: [f32; 3], g: f32) -> Part {
         self.boxes.push(Bx {
             u,
             v,
@@ -51,7 +51,7 @@ impl Part {
         });
         self
     }
-    fn mbx(mut self, u: f32, v: f32, o: [f32; 3], s: [f32; 3], g: f32) -> Part {
+    pub(super) fn mbx(mut self, u: f32, v: f32, o: [f32; 3], s: [f32; 3], g: f32) -> Part {
         self.boxes.push(Bx {
             u,
             v,
@@ -62,7 +62,7 @@ impl Part {
         });
         self
     }
-    fn r(mut self, x: f32, y: f32, z: f32) -> Part {
+    pub(super) fn r(mut self, x: f32, y: f32, z: f32) -> Part {
         self.rot = [x, y, z];
         self
     }
@@ -216,13 +216,13 @@ fn render(d: &mut Draw, parent: &Mat4, p: &Part) {
     }
 }
 
-fn cos(x: f32) -> f32 {
+pub(super) fn cos(x: f32) -> f32 {
     crate::util::math::cos(x)
 }
-fn sin(x: f32) -> f32 {
+pub(super) fn sin(x: f32) -> f32 {
     crate::util::math::sin(x)
 }
-const PI: f32 = std::f32::consts::PI;
+pub(super) const PI: f32 = std::f32::consts::PI;
 
 /// Animation inputs of `ModelBase.render`.
 pub struct Anim {
@@ -358,8 +358,17 @@ fn villager(a: &Anim, witch: bool, ticks: f32, id: u32) -> Vec<Part> {
     vec![head, body, rl, ll, arms]
 }
 
-fn parts(kind: Kind, a: &Anim, ticks: f32, id: u32, layer: u8) -> Vec<Part> {
-    match kind {
+fn parts(mv: &MobView, a: &Anim, ticks: f32, layer: u8, partial: f32) -> Vec<Part> {
+    let id = mv.id;
+    match mv.kind {
+        Kind::Slime
+        | Kind::Enderman
+        | Kind::Squid
+        | Kind::Bat
+        | Kind::Wolf
+        | Kind::Ocelot
+        | Kind::Horse
+        | Kind::IronGolem => super::model2::parts(mv, a, layer, partial),
         Kind::Pig => {
             let mut v = quadruped(6.0, a);
             v[0] = v[0]
@@ -657,6 +666,7 @@ pub fn texture(kind: Kind, variant: i32, layer: u8) -> &'static str {
         ][variant.clamp(0, 4) as usize],
         Kind::Witch => "witch",
         Kind::Silverfish => "silverfish",
+        _ => "pig/pig",
     }
 }
 
@@ -720,9 +730,12 @@ fn lerp_angle(a: f32, b: f32, t: f32) -> f32 {
 }
 
 /// `RendererLivingEntity.doRender` for one mob, at `rel` (camera-relative feet).
+#[allow(clippy::too_many_arguments)]
 pub fn mob(
     out: &mut Vec<Vertex>,
+    translucent: &mut Vec<Vertex>,
     tex: &dyn Fn(&str) -> Option<Tex>,
+    block: &dyn Fn(&mut Vec<Vertex>, u8, u8, &Mat4, [u8; 4]),
     m: &MobView,
     rel: [f32; 3],
     partial: f32,
@@ -733,7 +746,36 @@ pub fn mob(
     let pitch = m.prev_pitch + (m.pitch - m.prev_pitch) * partial;
     let age = m.ticks as f32 + partial;
     let mut mat = translate(rel[0], rel[1], rel[2]);
-    mat = mul(&mat, &rot_y(180.0 - body));
+    match m.kind {
+        Kind::Squid => {
+            // RenderSquid.rotateCorpse
+            let sp = m.sq[0][0] + (m.sq[1][0] - m.sq[0][0]) * partial;
+            let sy = m.sq[0][1] + (m.sq[1][1] - m.sq[0][1]) * partial;
+            mat = mul(&mat, &translate(0.0, 0.5, 0.0));
+            mat = mul(&mat, &rot_y(180.0 - body));
+            mat = mul(&mat, &super::rot_x(sp));
+            mat = mul(&mat, &rot_y(sy));
+            mat = mul(&mat, &translate(0.0, -1.2, 0.0));
+        }
+        Kind::Bat => {
+            // RenderBat.rotateCorpse
+            let dy = if m.flags & 8 != 0 {
+                -0.1
+            } else {
+                cos(age * 0.3) * 0.1
+            };
+            mat = mul(&mat, &translate(0.0, dy, 0.0));
+            mat = mul(&mat, &rot_y(180.0 - body));
+        }
+        _ => mat = mul(&mat, &rot_y(180.0 - body)),
+    }
+    if m.kind == Kind::IronGolem && m.limb_amount >= 0.01 {
+        // RenderIronGolem.rotateCorpse: the swaying walk
+        let p = 13.0f32;
+        let f5 = m.limb_swing - m.limb_amount * (1.0 - partial) + 6.0;
+        let f6 = ((f5 % p - p * 0.5).abs() - p * 0.25) / (p * 0.25);
+        mat = mul(&mat, &rot_z(6.5 * f6));
+    }
     if m.death_time > 0 {
         let f = ((m.death_time as f32 + partial - 1.0) / 20.0 * 1.6)
             .sqrt()
@@ -755,6 +797,26 @@ pub fn mob(
         }
         Kind::Witch | Kind::Villager => {
             mat = mul(&mat, &super::entities::scale(0.9375, 0.9375, 0.9375))
+        }
+        Kind::Slime => {
+            // RenderSlime.preRenderCallback
+            let size = m.variant.max(1) as f32;
+            let sq = (m.squish[0] + (m.squish[1] - m.squish[0]) * partial) / (size * 0.5 + 1.0);
+            let f3 = 1.0 / (sq + 1.0);
+            mat = mul(
+                &mat,
+                &super::entities::scale(f3 * size, 1.0 / f3 * size, f3 * size),
+            );
+        }
+        Kind::Bat => mat = mul(&mat, &super::entities::scale(0.35, 0.35, 0.35)),
+        Kind::Ocelot if m.flags & 1 != 0 => mat = mul(&mat, &super::entities::scale(0.8, 0.8, 0.8)),
+        Kind::Horse => {
+            let f = match m.variant >> 16 {
+                1 => 0.87,
+                2 => 0.92,
+                _ => 1.0,
+            };
+            mat = mul(&mat, &super::entities::scale(f, f, f));
         }
         _ => {}
     }
@@ -809,29 +871,74 @@ pub fn mob(
             [c[0], c[1], c[2], 1.0]
         }
     };
-    let layers: &[u8] = if m.kind == Kind::Sheep && !m.sheared {
+    let newer = matches!(
+        m.kind,
+        Kind::Slime
+            | Kind::Enderman
+            | Kind::Squid
+            | Kind::Bat
+            | Kind::Wolf
+            | Kind::Ocelot
+            | Kind::Horse
+            | Kind::IronGolem
+    );
+    let layers: &[u8] = if newer {
+        super::model2::layers(m)
+    } else if m.kind == Kind::Sheep && !m.sheared {
         &[0, 1]
     } else {
         &[0]
     };
     for &layer in layers {
-        let Some(t) = tex(texture(m.kind, m.variant, layer)) else {
+        let name = if newer {
+            match super::model2::texture(m, layer) {
+                Some(n) => n,
+                None => continue,
+            }
+        } else {
+            texture(m.kind, m.variant, layer)
+        };
+        let Some(t) = tex(name) else {
             continue;
         };
-        let col = if layer == 1 {
+        let col = if layer == 1 && m.kind == Kind::Sheep {
+            FLEECE[(m.variant & 15) as usize]
+        } else if layer == 1 && m.kind == Kind::Wolf {
+            // the collar takes the dye colour
             FLEECE[(m.variant & 15) as usize]
         } else {
             [1.0; 3]
         };
+        // RenderEnderman: the eyes glow at full brightness.
+        let lt = if m.kind == Kind::Enderman && layer == 1 {
+            [240, 240, 0, 0]
+        } else {
+            light
+        };
+        // RenderSlime: the outer jelly is blended.
+        let target: &mut Vec<Vertex> = if m.kind == Kind::Slime && layer == 1 {
+            &mut *translucent
+        } else {
+            &mut *out
+        };
         let mut d = Draw {
-            out,
+            out: target,
             tex: t,
-            light,
+            light: lt,
             tint: tint(col),
         };
-        for p in parts(m.kind, &a, age, m.id, layer) {
+        for p in parts(m, &a, age, layer, partial) {
             render(&mut d, &mat, &p);
         }
+    }
+    // RenderEnderman.renderEquippedItems: the carried block
+    if m.kind == Kind::Enderman && m.carried[0] != 0 {
+        let mut b = mul(&mat, &translate(0.0, 0.6875, -0.75));
+        b = mul(&b, &super::rot_x(20.0));
+        b = mul(&b, &rot_y(45.0));
+        b = mul(&b, &super::entities::scale(-0.5, -0.5, 0.5));
+        b = mul(&b, &translate(-0.5, -0.5, -0.5));
+        block(out, m.carried[0], m.carried[1], &b, light);
     }
 }
 
