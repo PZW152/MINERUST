@@ -15,12 +15,12 @@
 
 | Gate | 狀態 | 依據 |
 |---|---|---|
-| G0 Build / startup | PASS（部分） | `cargo build --release` 乾淨通過；冷啟動多次無當機。Vulkan validation layer：**UNKNOWN**，本機未安裝 `VK_LAYER_KHRONOS_validation`（`--validate` 已支援，裝了 SDK 就會啟用並計數訊息）。讀取 Java 版舊存檔：N/A，存檔是自有格式 |
+| G0 Build / startup | PASS（部分） | `cargo build --release` 乾淨通過；冷啟動多次無當機。Vulkan validation layer：**UNKNOWN**，本機未安裝 `VK_LAYER_KHRONOS_validation`（`--validate` 已支援，裝了 SDK 就會啟用並計數訊息）。讀取 Java 版存檔：PASS，含 `level.dat` 的資料夾以 Anvil 區域檔開啟與存回；`tools/AnvilHarness.java` 雙向比對方塊、中繼值、光照、高度圖全部一致 |
 | G1 Deterministic replay | PASS（伺服端） | `sim::tests::replay_is_deterministic`：同種子＋同指令腳本跑三次，世界狀態雜湊一致，換種子則不同。腳本只有 120 tick，不是報告要求的 10 分鐘；玩家物理在客戶端依本機時鐘推進，未納入雜湊 |
-| G2 Tick-order / redstone / rail | PASS（部分） | 鐵軌形狀推導（`BlockRailBase$Rail`）、絆線鉤、門與火把的鄰近更新已實作，結構比對中逐格與原版一致。紅石訊號傳遞、活塞推動、漏斗：N/A |
-| G3 Chunk streaming | PASS（部分） | 區塊卸載／重載後方塊一致（`sim::tests::save_and_reload_round_trips`）。生物只在已載入區塊內 tick，存檔另寫 `data/entities.txt`；跨維度：N/A |
+| G2 Tick-order / redstone / rail | PASS（部分） | 鐵軌形狀推導（`BlockRailBase$Rail`）、絆線鉤、門與火把的鄰近更新已實作，結構比對中逐格與原版一致。紅石（導線、火把、中繼器、拉桿、按鈕、壓力板、紅石燈、活塞、TNT、音符盒、發射器、門）已實作並有測試（`sim::tests` 的紅石項目）。比較器、漏斗：N/A；活塞為瞬間推動，沒有移動中方塊的過渡狀態，也不推實體 |
+| G3 Chunk streaming | PASS（部分） | 區塊卸載／重載後方塊一致（`sim::tests::save_and_reload_round_trips`）。生物只在已載入區塊內 tick，存檔另寫 `data/entities.txt`（Anvil 模式寫進區域檔的 `Entities`／`TileEntities`／`TileTicks`）。跨維度：PASS，地獄傳送門往返、終界傳送門與擊敗終界龍後返回皆有測試，各維度的世界分開保存 |
 | G4 Vulkan render correctness | PASS（部分） | 2560×720 超寬畫面無透視；視窗縮放／最小化會重建 swapchain；座標 ±3,000,000 處渲染正常。都是人工看截圖，**沒有** golden screenshot 自動比對；device lost 未測；validation 見 G0 |
-| G5 Save / crash consistency | PASS | `world::save::tests`：暫存檔＋fsync＋rename；寫到一半留下的暫存檔不影響舊檔；截斷、位元翻轉、長度欄位造假一律拒收且不 panic；未知欄位原樣保留。NBT：N/A |
+| G5 Save / crash consistency | PASS | `world::save::tests`：暫存檔＋fsync＋rename；寫到一半留下的暫存檔不影響舊檔；截斷、位元翻轉、長度欄位造假一律拒收且不 panic；未知欄位原樣保留。NBT：區域檔寫入用暫存檔＋rename，讀到損壞的區塊時當作不存在而重新生成，不 panic |
 | G6 Network / fuzz | N/A | 無網路層 |
 | G7 Audio | PASS（部分） | 同時發聲上限 64，超過則丟棄新聲音而不中斷舊的；混音後軟限幅（MC-1538）；找不到裝置或資源時靜音而不 panic（`audio::tests`）。預設裝置熱切換未處理 |
 | G8 GUI / DPI / IME | PASS（部分） | HUD、物品欄、容器、選單依 GUI scale 縮放，人工截圖檢查。文字輸入、聊天、IME：N/A |
@@ -55,7 +55,9 @@
 | BUG-ID | CLASS | STATUS | 說明 |
 |---|---|---|---|
 | MC-201, MC-14, MC-868, MC-957, MC-3430, MC-9551, MC-40042, MC-42269 | R | N/A | 礦車與鐵軌未實作 |
-| MC-10653, MC-62492, MC-67641 | R | N/A | 比較器、活塞推動未實作 |
+| MC-10653 | R | N/A | 比較器未實作 |
+| MC-62492 | R | N/A | 活塞已實作，但為瞬間推動、不移動實體，所以不會累積墜落傷害；等實作實體推動時必須補測試 |
+| MC-67641 | R | N/A | 活塞已實作；沒有 `/setblock`、`/fill` 指令 |
 | MC-12642 | R | NOT FIXED | 樓梯轉角形狀是 `BlockStairs` 的逐行移植（含此行為）；改用後來版本的規則會讓結構裡的樓梯外觀與原版不同 |
 | MC-1531 | R | N/A | 物品展示框與畫未實作 |
 | MC-1874, MC-19676 | R | N/A | 破壞粒子、裂痕、冒險模式未實作 |
@@ -66,11 +68,11 @@
 | MC-61489, MC-64947, MC-2488, MC-30217, MC-3900, MC-46901, MC-56416, MC-64867 | R | N/A | 無 GUI、文字輸入、聊天 |
 | MC-72028 | R | N/A | 生命與傷害已實作；閃電未實作 |
 | MC-12918 | R | FIXED | 結構箱子在整個構件建好後重新決定朝向，不再朝向牆壁；`--vanilla-parity` 保留原版朝向（比對時一致） |
-| MC-2110 | R | N/A | 無傳送門與投射物 |
+| MC-2110 | R | N/A | 傳送門與投射物（箭、火球）已實作，但只有玩家會穿越傳送門，投射物直接飛過，不會出現此票的畫面 |
 | MC-34756, MC-36093, MC-4890, MC-39583, MC-45602 | R | N/A | 無網路／伺服器清單。存檔已採原子寫入，同一類風險（MC-39583）在世界存檔上有測試 |
 | MC-779, MC-32110, MC-65065 | R | N/A | 生怪磚只記錄生物種類，尚不在方塊內顯示旋轉的生物，也沒有生怪礦車 |
 | MC-13937, MC-38278, MC-14395 | R | N/A | 生物已實作，但沒有可騎乘的礦車與拴繩 |
-| MC-29512 | R | N/A | 無火 |
+| MC-29512 | R | PASS（構造上） | 火已實作，雙層植物可燃。上半燒掉時下半在鄰近更新中直接移除，不產生掉落物；此行為沒有 `--vanilla-parity` 開關 |
 | MC-8684 | R | PASS（人工） | 見第 2 節 |
 
 ## 4. G10：與原版的一致性
@@ -103,3 +105,6 @@
 - 生物 AI 以行為對齊為準：每隻生物有自己的亂數（原版 `new Random()` 本來就不可重現），所以生物的移動路線不會與原版逐 tick 相同；
   世界生成時放置的動物位置則用原版的裝飾亂數決定，與原版相同。
 - 區塊載入順序固定為由近到遠的全序，原版取決於玩家移動與執行緒時序。
+- 地獄生成與要塞以 `PopHarness`（`DIM=-1`）逐格比對，方塊與中繼值一致；邊緣少數岩漿穴與岩漿海的方塊光仍有差異，原因是原版裝飾順序取決於區塊載入時機。
+- 終界傳送門方塊借用地獄傳送門材質；凋零效果以中毒近似；馬可以生成與餵食，但無法騎乘。
+- `makePortal` 建的傳送門把軸向存在中繼值裡（原版中繼值為 0，軸向由周圍方塊推得），讀原版存檔時兩者都能處理。
