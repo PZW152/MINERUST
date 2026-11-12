@@ -136,6 +136,7 @@ impl BlockView for ClientWorld {
 
 struct Job(Box<[MeshChunk; 9]>);
 
+#[derive(Clone)]
 pub struct Config {
     pub save_dir: Option<std::path::PathBuf>,
     pub seed: i64,
@@ -166,6 +167,8 @@ pub enum Request {
     /// Capture the mouse again.
     Grab,
     Quit,
+    /// `menu.returnToMenu`: save, leave the world, the title screen.
+    QuitToTitle,
 }
 
 /// `PlayerControllerMP` digging state.
@@ -247,6 +250,11 @@ pub struct Game {
     moving_mesh: HashMap<MovingKey, Vec<crate::render::mesher::Vertex>>,
     /// Sound output (absent when no asset directory or device was found).
     pub audio: Option<crate::audio::Audio>,
+    /// The settings, languages and saves (`Minecraft` outside the world).
+    pub shell: Option<crate::front::Shell>,
+    /// `currentScreen` when it is one of the menus (`GuiIngameMenu` ...).
+    menu: Option<crate::menu::Menu>,
+    menu_size: (f32, f32),
     weather: crate::sim::Weather,
     rain_sound: i32,
     particle_rand: crate::java::JavaRandom,
@@ -502,6 +510,9 @@ impl Game {
             started: Instant::now(),
             moving_mesh: HashMap::new(),
             audio: None,
+            shell: None,
+            menu: None,
+            menu_size: (0.0, 0.0),
             weather: Default::default(),
             rain_sound: 0,
             particle_rand: crate::java::JavaRandom::new(77),
@@ -558,7 +569,10 @@ impl Game {
                     let _ = self.sim.commands.send(Command::OpenInventory);
                     self.screen = Screen::Window;
                 }
-                "pause" => self.screen = Screen::Paused,
+                "pause" => {
+                    self.screen = Screen::Paused;
+                    self.menu = Some(crate::menu::Menu::ingame());
+                }
                 "dead" => {
                     self.stats.health = 0.0;
                     self.stats.dead = true;
@@ -2116,12 +2130,13 @@ impl Game {
                 }
                 Request::None
             }
-            Screen::Paused | Screen::Dead => match self.menu_hit() {
+            Screen::Paused => self.menu_mouse(button, true),
+            Screen::Dead => match self.menu_hit() {
                 Some(MenuAction::BackToGame) => {
                     self.screen = Screen::Playing;
                     Request::Grab
                 }
-                Some(MenuAction::SaveAndQuit) => Request::Quit,
+                Some(MenuAction::SaveAndQuit) => Request::QuitToTitle,
                 Some(MenuAction::Respawn) => {
                     let _ = self.sim.commands.send(Command::Respawn);
                     Request::Grab
@@ -2138,13 +2153,17 @@ impl Game {
         }
         match (self.screen, code) {
             (Screen::Playing, K::Escape) => {
+                // Minecraft.displayInGameMenu
                 self.screen = Screen::Paused;
+                self.menu = Some(crate::menu::Menu::ingame());
+                self.menu_size = (0.0, 0.0);
                 self.input = Input::default();
                 Request::Release
             }
-            (Screen::Paused, K::Escape) => {
-                self.screen = Screen::Playing;
-                Request::Grab
+            (Screen::Paused, _) => {
+                let c = if code == K::Escape { '\u{1b}' } else { '\0' };
+                let _ = c;
+                self.menu_key('\0', crate::settings::lwjgl_code(code))
             }
             (Screen::Playing, K::KeyE) => {
                 let _ = self.sim.commands.send(Command::OpenInventory);
@@ -2230,8 +2249,8 @@ impl Game {
             r = r.min(1.0);
             g = g.min(1.0);
             b = b.min(1.0);
-            // Gamma setting 0.0 ("Moody", the 1.7.10 default).
-            let gamma = 0.0f32;
+            // gameSettings.gammaSetting (0.0 "Moody" by default)
+            let gamma = self.shell.as_ref().map_or(0.0, |s| s.settings.gamma);
             let curve = |c: f32| {
                 let mut inv = 1.0f32 - c;
                 inv = 1.0f32 - inv * inv * inv * inv;
@@ -2450,8 +2469,10 @@ impl Game {
         };
 
         // --- Camera (EntityRenderer.setupCameraTransform) ---
+        // EntityRenderer.getFOVModifier(partial, true): gameSettings.fovSetting
+        let fov_setting = self.shell.as_ref().map_or(70.0, |s| s.settings.fov);
         let mut fov =
-            70.0f32 * (self.fov_hand_prev + (self.fov_hand - self.fov_hand_prev) * partial);
+            fov_setting * (self.fov_hand_prev + (self.fov_hand - self.fov_hand_prev) * partial);
         if eye_mat == Material::Water {
             fov = fov * 60.0f32 / 70.0f32;
         }
@@ -2637,10 +2658,16 @@ impl Game {
         self.lightmap(&mut g.lightmap);
 
         // GUI scale (ScaledResolution, "Auto").
-        let mut scale = 1u32;
-        while window_size.0 / (scale + 1) >= 320 && window_size.1 / (scale + 1) >= 240 {
-            scale += 1;
-        }
+        let scale = match &self.shell {
+            Some(sh) => sh.scale(&self.atlas, window_size),
+            None => {
+                let mut scale = 1u32;
+                while window_size.0 / (scale + 1) >= 320 && window_size.1 / (scale + 1) >= 240 {
+                    scale += 1;
+                }
+                scale
+            }
+        };
         // --- GUI (GuiIngame) ---
         self.fps_frames += 1;
         if self.fps_since.elapsed().as_secs_f32() >= 1.0 {
@@ -3000,10 +3027,11 @@ impl Game {
             );
         }
 
+        let ui_atlas = self.atlas.clone();
         let mut ui = crate::gui::Ui::new(
-            &self.atlas,
-            window_size.0 as f32 / scale as f32,
-            window_size.1 as f32 / scale as f32,
+            &ui_atlas,
+            (window_size.0 as f64 / scale as f64).ceil() as f32,
+            (window_size.1 as f64 / scale as f64).ceil() as f32,
         );
         // ItemRenderer.renderWarpedTextureOverlay: the water texture, repeated four
         // times across the screen and scrolled by the view direction.
@@ -3175,7 +3203,7 @@ impl Game {
                 screens::container(&mut ui, &self.view, m, &lines);
             }
             Screen::Paused => {
-                screens::pause_menu(&mut ui, m);
+                self.draw_menu(&mut ui, partial);
             }
             Screen::Dead => {
                 screens::death_screen(&mut ui, &self.stats, m);
@@ -3242,6 +3270,249 @@ impl Game {
             sunrise,
             clouds: if self.dim == 0 { Some(clouds) } else { None },
         };
+        self.renderer.sync_glyphs(&self.atlas);
         self.renderer.render(&frame, window_size);
+    }
+}
+
+/// A frame with no world: only GUI triangles over a black screen (the
+/// menus before a world is loaded).
+pub fn draw_ui_only(
+    renderer: &mut Renderer,
+    atlas: &Atlas,
+    ui: &[crate::render::mesher::Vertex],
+    gui_scale: f32,
+    window_size: (u32, u32),
+    screenshot: Option<std::path::PathBuf>,
+) {
+    let black = [0.0, 0.0, 0.0, 1.0];
+    let g = Globals {
+        view_proj: render::IDENTITY,
+        sky_rot: render::IDENTITY,
+        hand_proj: render::IDENTITY,
+        cam_right: [1.0, 0.0, 0.0, 0.0],
+        cam_up: [0.0, 1.0, 0.0, 0.0],
+        cam_fwd: [0.0, 0.0, -1.0, 0.0],
+        fog_color: black,
+        sky_color: black,
+        fog_params: [0.0, 1.0, 0.0, 0.0],
+        sun_dir: [0.0, -1.0, 0.0, -1000.0],
+        sky_params: [1.0, 0.0, 0.0, 0.0],
+        sun_rect: atlas.rects[atlas.sun as usize],
+        moon_rect: atlas.rects[atlas.moon[0] as usize],
+        void_color: black,
+        lightmap: [[1.0; 4]; 256],
+        portal_layers: [[0.0; 4]; 16],
+        portal_cam: [0.0; 4],
+        portal_obj: [0.0; 4],
+        end_sky_rect: atlas.rects[atlas.end_sky as usize],
+        end_portal_rect: atlas.rects[atlas.end_portal as usize],
+    };
+    let frame = Frame {
+        globals: &g,
+        cam: [0.0, -1000.0, 0.0],
+        outline: None,
+        gui_scale,
+        screenshot,
+        star_brightness: 0.0,
+        sunrise: None,
+        clouds: None,
+        ui,
+        dynamic: &[],
+        crack: &[],
+        hand: &[],
+        weather: &[],
+        end_portals: &[],
+        crosshair: false,
+    };
+    renderer.render(&frame, window_size);
+}
+
+impl Game {
+    fn menu_ctx<'a>(
+        shell: &'a mut crate::front::Shell,
+        lang: &'a crate::lang::Lang,
+        sounds: &'a mut Vec<&'static str>,
+    ) -> crate::menu::Ctx<'a> {
+        crate::menu::Ctx {
+            settings: &mut shell.settings,
+            lang,
+            languages: &shell.languages,
+            saves: &shell.saves,
+            in_world: true,
+            hardcore: false,
+            clipboard: &mut shell.clipboard,
+            sounds,
+            ctrl: shell.ctrl,
+            shift: shell.shift,
+        }
+    }
+
+    /// `GuiScreen.drawScreen` of the open menu.
+    fn draw_menu(&mut self, ui: &mut crate::gui::Ui, partial: f32) {
+        let (Some(menu), Some(shell)) = (self.menu.as_mut(), self.shell.as_mut()) else {
+            return;
+        };
+        let mut sounds = Vec::new();
+        let size = (ui.w, ui.h);
+        if size != self.menu_size {
+            self.menu_size = size;
+            let mut ctx = Self::menu_ctx(shell, &self.lang, &mut sounds);
+            menu.resize(ui, &mut ctx, size.0, size.1);
+        }
+        menu.mouse = (
+            (self.mouse_px.0 / self.gui_scale).floor(),
+            (self.mouse_px.1 / self.gui_scale).floor(),
+        );
+        let mut ctx = Self::menu_ctx(shell, &self.lang, &mut sounds);
+        menu.draw(ui, &mut ctx, partial);
+        let a = menu.take_pending();
+        self.play_ui_sounds(sounds);
+        let _ = self.menu_action(a);
+    }
+
+    fn play_ui_sounds(&mut self, sounds: Vec<&'static str>) {
+        if let Some(a) = self.audio.as_mut() {
+            for s in sounds {
+                a.play(s, None, 1.0, 1.0);
+            }
+        }
+    }
+
+    fn menu_mouse(&mut self, button: u8, pressed: bool) -> Request {
+        let (w, h) = self.menu_size;
+        let a = {
+            let (Some(menu), Some(shell)) = (self.menu.as_mut(), self.shell.as_mut()) else {
+                return Request::None;
+            };
+            let mut sounds = Vec::new();
+            menu.mouse = (
+                (self.mouse_px.0 / self.gui_scale).floor(),
+                (self.mouse_px.1 / self.gui_scale).floor(),
+            );
+            let ui = crate::gui::Ui::new(&self.atlas, w, h);
+            let a = {
+                let mut ctx = Self::menu_ctx(shell, &self.lang, &mut sounds);
+                if pressed {
+                    menu.mouse_down(&ui, &mut ctx, button)
+                } else {
+                    menu.mouse_up(&mut ctx, button);
+                    crate::menu::Action::None
+                }
+            };
+            drop(ui);
+            self.play_ui_sounds(sounds);
+            a
+        };
+        self.menu_action(a)
+    }
+
+    /// A key typed while a menu is open: character and LWJGL code.
+    pub fn menu_key(&mut self, c: char, code: i32) -> Request {
+        let (w, h) = self.menu_size;
+        let a = {
+            let (Some(menu), Some(shell)) = (self.menu.as_mut(), self.shell.as_mut()) else {
+                return Request::None;
+            };
+            let mut sounds = Vec::new();
+            let ui = crate::gui::Ui::new(&self.atlas, w, h);
+            let a = {
+                let mut ctx = Self::menu_ctx(shell, &self.lang, &mut sounds);
+                menu.key(&ui, &mut ctx, c, code)
+            };
+            drop(ui);
+            self.play_ui_sounds(sounds);
+            a
+        };
+        self.menu_action(a)
+    }
+
+    /// Text typed while a menu is open (`keyTyped` with a character).
+    pub fn char_typed(&mut self, c: char) -> Request {
+        if self.screen == Screen::Paused {
+            return self.menu_key(c, 0);
+        }
+        Request::None
+    }
+
+    pub fn menu_wheel(&mut self, up: bool) {
+        if let Some(m) = self.menu.as_mut() {
+            m.wheel(up);
+        }
+    }
+
+    pub fn menu_open(&self) -> bool {
+        self.screen == Screen::Paused && self.menu.is_some()
+    }
+
+    fn menu_action(&mut self, a: crate::menu::Action) -> Request {
+        use crate::menu::Action;
+        match a {
+            Action::Resume => {
+                self.menu = None;
+                self.screen = Screen::Playing;
+                Request::Grab
+            }
+            Action::QuitToTitle => Request::QuitToTitle,
+            Action::Quit => Request::Quit,
+            Action::Language => {
+                if let Some(sh) = &self.shell {
+                    self.lang = sh.load_lang(&self.atlas);
+                }
+                self.menu_size = (0.0, 0.0);
+                Request::None
+            }
+            Action::Settings => {
+                self.apply_settings();
+                self.menu_size = (0.0, 0.0);
+                Request::None
+            }
+            _ => Request::None,
+        }
+    }
+
+    /// The game side of a changed `options.txt`.
+    pub fn apply_settings(&mut self) {
+        let Some(sh) = &self.shell else { return };
+        let s = &sh.settings;
+        // IntegratedServer.tick follows renderDistanceChunks
+        let rd = s.render_distance.clamp(2, 16);
+        if rd != self.render_distance {
+            self.render_distance = rd;
+            let mut offsets = Vec::new();
+            for dx in -rd..=rd {
+                for dz in -rd..=rd {
+                    offsets.push((dx, dz));
+                }
+            }
+            offsets.sort_by_key(|&(x, z)| (x * x + z * z, x, z));
+            self.offsets = offsets;
+            let _ = self.sim.commands.send(Command::ViewDistance(rd));
+        }
+        let d = s.difficulty;
+        let _ = self.sim.commands.send(Command::Difficulty(d));
+    }
+
+    /// Takes the renderer back for the title screen: the world's meshes go.
+    pub fn into_parts(
+        mut self,
+    ) -> (
+        Renderer,
+        Option<crate::front::Shell>,
+        crate::lang::Lang,
+        Option<crate::audio::Audio>,
+    ) {
+        let keys: Vec<(i32, i32)> = self.world.chunks.keys().copied().collect();
+        let (pcx, pcz) = self.player_chunk();
+        let r = self.render_distance + 8;
+        for dx in -r..=r {
+            for dz in -r..=r {
+                self.renderer.remove_mesh((pcx + dx, pcz + dz));
+            }
+        }
+        for k in keys {
+            self.renderer.remove_mesh(k);
+        }
+        (self.renderer, self.shell, self.lang, self.audio)
     }
 }

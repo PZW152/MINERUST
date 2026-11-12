@@ -2,11 +2,13 @@
 
 #![allow(dead_code)]
 
+mod assets;
 mod audio;
 mod block;
 mod compat;
 mod dimension;
 mod entity;
+mod front;
 mod game;
 mod gui;
 mod inventory;
@@ -15,11 +17,14 @@ mod item_table;
 mod item_use;
 mod java;
 mod lang;
+mod menu;
+mod panorama;
 mod particles;
 mod play;
 mod potion;
 mod render;
 mod screens;
+mod settings;
 mod shapes;
 mod sim;
 mod util;
@@ -436,6 +441,11 @@ struct Options {
     seed_given: bool,
     /// Automated capture: file, seconds to wait.
     auto_shot: Option<(PathBuf, f64)>,
+    /// Straight into a world (a seed, world, position or capture was given)
+    /// instead of the title screen.
+    direct: bool,
+    /// `--title`: the title screen even with the options above.
+    title: bool,
 }
 
 fn find_jar(explicit: &Option<PathBuf>) -> Result<PathBuf, String> {
@@ -496,6 +506,8 @@ fn parse_args() -> Options {
         save_dir: None,
         seed_given: false,
         auto_shot: None,
+        direct: false,
+        title: false,
     };
     let mut i = 1;
     let num = |s: &String| s.parse::<f64>().unwrap_or(0.0);
@@ -583,16 +595,30 @@ fn parse_args() -> Options {
                 o.auto_shot = Some((args[i + 1].clone().into(), num(&args[i + 2])));
                 i += 2;
             }
+            "--title" => o.title = true,
+            "--menu" if i + 1 < args.len() => {
+                std::env::set_var("MINERUST_MENU", &args[i + 1]);
+                o.title = true;
+                i += 1;
+            }
             other => eprintln!("unknown argument: {other}"),
         }
         i += 1;
     }
+    o.direct = !o.title
+        && (o.seed_given
+            || o.save_dir.is_some()
+            || o.auto_shot.is_some()
+            || o.cfg.pos.is_some()
+            || o.no_save);
     o
 }
 
 struct App {
     opts: Options,
     game: Option<Game>,
+    /// The title screen and its menus while no world is loaded.
+    front: Option<front::Front>,
     window: Option<Arc<Window>>,
     grabbed: bool,
     focused: bool,
@@ -601,6 +627,7 @@ struct App {
     ctrl: bool,
     shot_taken: Option<Instant>,
     error: Option<String>,
+    atlas: Option<Arc<render::atlas::Atlas>>,
 }
 
 impl App {
@@ -620,9 +647,7 @@ impl App {
         }
         self.grabbed = grab;
     }
-}
 
-impl App {
     fn handle(&mut self, req: Request, el: &ActiveEventLoop) {
         match req {
             Request::None => {}
@@ -635,7 +660,78 @@ impl App {
                 self.game = None;
                 el.exit();
             }
+            Request::QuitToTitle => {
+                // Minecraft.loadWorld(null): save, then GuiMainMenu
+                let Some(mut g) = self.game.take() else {
+                    return;
+                };
+                g.shutdown();
+                let (renderer, shell, lang, audio) = g.into_parts();
+                let atlas = self.atlas.clone().unwrap();
+                if let Some(shell) = shell {
+                    self.front = Some(front::Front::new(renderer, atlas, shell, lang, audio));
+                }
+                self.set_grab(false);
+            }
         }
+    }
+
+    /// `Minecraft.launchIntegratedServer` from the menus.
+    fn launch(&mut self, folder: PathBuf, new: Option<menu::NewWorld>) {
+        let Some(f) = self.front.take() else { return };
+        let front::Front {
+            renderer,
+            atlas,
+            shell,
+            lang,
+            audio,
+            ..
+        } = f;
+        let mut cfg = self.opts.cfg.clone();
+        cfg.save_dir = Some(folder.clone());
+        cfg.render_distance = shell.settings.render_distance.clamp(2, 16);
+        cfg.pos = None;
+        cfg.look = None;
+        if let Some(n) = &new {
+            let _ = front::new_level_dat(&folder, n);
+            cfg.seed = n.seed;
+            cfg.mode = if n.mode == "creative" {
+                entity::survival::GameMode::Creative
+            } else {
+                entity::survival::GameMode::Survival
+            };
+        }
+        let mut game = Game::new(renderer, atlas, &cfg);
+        game.lang = lang;
+        game.audio = audio;
+        game.shell = Some(shell);
+        game.apply_settings();
+        game.apply_start_screen();
+        println!("World: {}", folder.display());
+        self.game = Some(game);
+        self.set_grab(true);
+    }
+
+    fn front_action(&mut self, a: menu::Action, el: &ActiveEventLoop) {
+        match a {
+            menu::Action::Quit => {
+                self.front = None;
+                el.exit();
+            }
+            menu::Action::Play { folder, new } => self.launch(folder, new),
+            _ => {}
+        }
+    }
+
+    /// The bound key or button of a `KeyBinding` (LWJGL code).
+    fn bound(&self, d: &str) -> i32 {
+        self.game
+            .as_ref()
+            .and_then(|g| g.shell.as_ref())
+            .map_or_else(
+                || settings::GameSettings::default().key(d),
+                |s| s.settings.key(d),
+            )
     }
 }
 
@@ -658,15 +754,75 @@ impl ApplicationHandler for App {
                 return;
             }
         };
-        let result = (|| -> Result<Game, String> {
+        let result = (|| -> Result<(), String> {
             let jar_path = find_jar(&self.opts.jar)?;
             let file = std::fs::File::open(&jar_path)
                 .map_err(|e| format!("{}: {e}", jar_path.display()))?;
             let mut jar =
                 zip::ZipArchive::new(file).map_err(|e| format!("{}: {e}", jar_path.display()))?;
             let atlas = Arc::new(render::atlas::Atlas::load(&mut jar)?);
+            atlas.glyphs.lock().unwrap().set_jar(jar_path.clone());
+            self.atlas = Some(atlas.clone());
             let renderer = render::vk::Renderer::new(&window, &atlas)?;
             println!("Vulkan device: {}", renderer.device_name);
+            // The launcher keeps assets next to versions/: <root>/assets.
+            let root = jar_path
+                .parent()
+                .and_then(|p| p.parent())
+                .and_then(|p| p.parent())
+                .map(|p| p.to_path_buf());
+            let assets = root
+                .as_ref()
+                .and_then(|r| assets::Assets::open(&r.join("assets")));
+            let game_dir = std::env::current_dir().unwrap_or_default();
+            let settings = settings::GameSettings::load(&game_dir);
+            let mut splashes = Vec::new();
+            if let Ok(mut f) = jar.by_name("assets/minecraft/texts/splashes.txt") {
+                use std::io::Read;
+                let mut s = String::new();
+                let _ = f.read_to_string(&mut s);
+                splashes = s
+                    .lines()
+                    .map(|l| l.trim().to_string())
+                    .filter(|l| !l.is_empty())
+                    .collect();
+            }
+            let shell = front::Shell {
+                languages: lang::languages(assets.as_ref()),
+                settings,
+                assets,
+                jar_path: jar_path.clone(),
+                saves: game_dir.join("saves"),
+                clipboard: String::new(),
+                splashes,
+                ctrl: false,
+                shift: false,
+            };
+            let lang = shell.load_lang(&atlas);
+            let audio = if self.opts.auto_shot.is_none() {
+                root.as_ref()
+                    .and_then(|r| audio::Audio::new(&r.join("assets")))
+            } else {
+                None
+            };
+            println!(
+                "Sound: {}",
+                if audio.is_some() {
+                    "on"
+                } else {
+                    "off (assets not found)"
+                }
+            );
+            if !self.opts.direct {
+                let mut f = front::Front::new(renderer, atlas, shell, lang, audio);
+                if let Ok(m) = std::env::var("MINERUST_MENU") {
+                    for name in m.split(',') {
+                        f.menu.open_named(name, &f.lang);
+                    }
+                }
+                self.front = Some(f);
+                return Ok(());
+            }
             // Worlds live in `saves/<name>`; automated captures never save.
             if !self.opts.no_save && self.opts.auto_shot.is_none() {
                 let dir = self.opts.save_dir.clone().unwrap_or_else(|| {
@@ -678,27 +834,10 @@ impl ApplicationHandler for App {
                 });
                 self.opts.cfg.save_dir = Some(dir);
             }
-            let lang = lang::Lang::load(&mut jar);
             let mut game = Game::new(renderer, atlas, &self.opts.cfg);
             game.lang = lang;
-            // The launcher keeps assets next to versions/: <root>/assets.
-            if self.opts.auto_shot.is_none() {
-                if let Some(root) = jar_path
-                    .parent()
-                    .and_then(|p| p.parent())
-                    .and_then(|p| p.parent())
-                {
-                    game.audio = audio::Audio::new(&root.join("assets"));
-                    println!(
-                        "Sound: {}",
-                        if game.audio.is_some() {
-                            "on"
-                        } else {
-                            "off (assets not found)"
-                        }
-                    );
-                }
-            }
+            game.audio = audio;
+            game.shell = Some(shell);
             game.apply_start_screen();
             println!(
                 "Seed: {}{}",
@@ -709,11 +848,11 @@ impl ApplicationHandler for App {
                 println!("World: {}", d.display());
             }
             println!("Spawn: {}", game.spawn_info());
-            Ok(game)
+            self.game = Some(game);
+            Ok(())
         })();
         match result {
-            Ok(g) => {
-                self.game = Some(g);
+            Ok(()) => {
                 self.window = Some(window);
                 self.started = Instant::now();
             }
@@ -731,11 +870,15 @@ impl ApplicationHandler for App {
                     g.shutdown();
                 }
                 self.game = None;
+                self.front = None;
                 el.exit();
             }
             WindowEvent::Resized(_) => {
                 if let Some(g) = &mut self.game {
                     g.renderer.resize();
+                }
+                if let Some(f) = &mut self.front {
+                    f.renderer.resize();
                 }
             }
             WindowEvent::Focused(f) => {
@@ -748,21 +891,49 @@ impl ApplicationHandler for App {
                 if let Some(g) = &mut self.game {
                     g.mouse_px = (position.x as f32, position.y as f32);
                 }
+                if let Some(f) = &mut self.front {
+                    f.mouse_px = (position.x as f32, position.y as f32);
+                }
             }
             WindowEvent::MouseInput { state, button, .. } => {
                 let pressed = state == ElementState::Pressed;
-                let Some(g) = &mut self.game else { return };
-                if pressed && g.wants_grab() && !self.grabbed {
-                    // The first click only captures the mouse.
-                    self.set_grab(true);
-                    return;
-                }
                 let b = match button {
                     MouseButton::Left => 0,
                     MouseButton::Right => 1,
                     MouseButton::Middle => 2,
                     _ => return,
                 };
+                if let Some(f) = &mut self.front {
+                    let a = f.mouse_button(b, pressed);
+                    self.front_action(a, el);
+                    return;
+                }
+                let Some(g) = &mut self.game else { return };
+                if pressed && g.wants_grab() && !self.grabbed {
+                    // The first click only captures the mouse.
+                    self.set_grab(true);
+                    return;
+                }
+                // KeyBinding: the mouse buttons bound to attack, use, pick
+                let mut b = b;
+                if g.wants_grab() {
+                    let code = -100 + b as i32;
+                    let (attack, use_, pick) = (
+                        self.bound("key.attack"),
+                        self.bound("key.use"),
+                        self.bound("key.pickItem"),
+                    );
+                    b = if code == attack {
+                        0
+                    } else if code == use_ {
+                        1
+                    } else if code == pick {
+                        2
+                    } else {
+                        return;
+                    };
+                }
+                let Some(g) = &mut self.game else { return };
                 let shift = self.shift;
                 let req = g.mouse_button(b, pressed, shift);
                 self.handle(req, el);
@@ -774,8 +945,15 @@ impl ApplicationHandler for App {
                     winit::event::MouseScrollDelta::PixelDelta(p) => p.y as f32,
                 };
                 if d != 0.0 {
+                    if let Some(f) = &mut self.front {
+                        f.wheel(d > 0.0);
+                    }
                     if let Some(g) = &mut self.game {
-                        g.scroll(d > 0.0);
+                        if g.menu_open() {
+                            g.menu_wheel(d > 0.0);
+                        } else {
+                            g.scroll(d > 0.0);
+                        }
                     }
                 }
             }
@@ -789,8 +967,51 @@ impl ApplicationHandler for App {
                     KeyCode::ControlLeft | KeyCode::ControlRight => self.ctrl = pressed,
                     _ => {}
                 }
+                let (ctrl, shift) = (self.ctrl, self.shift);
+                // GuiScreen.handleKeyboardInput: the character and the key
+                let ch = |e: &winit::event::KeyEvent| -> char {
+                    if ctrl {
+                        // Ctrl+A/C/V/X as control characters
+                        match code {
+                            KeyCode::KeyA => return '\u{1}',
+                            KeyCode::KeyC => return '\u{3}',
+                            KeyCode::KeyV => return '\u{16}',
+                            KeyCode::KeyX => return '\u{18}',
+                            _ => {}
+                        }
+                    }
+                    e.text
+                        .as_ref()
+                        .and_then(|t| t.chars().next())
+                        .filter(|c| !c.is_control())
+                        .unwrap_or('\0')
+                };
+                if let Some(f) = &mut self.front {
+                    f.shell.ctrl = ctrl;
+                    f.shell.shift = shift;
+                    if pressed {
+                        let c = ch(&event);
+                        let a = f.key(c, settings::lwjgl_code(code));
+                        self.front_action(a, el);
+                    }
+                    return;
+                }
                 let Some(g) = &mut self.game else { return };
-                if code == KeyCode::F2 && pressed && !event.repeat {
+                if let Some(s) = g.shell.as_mut() {
+                    s.ctrl = ctrl;
+                    s.shift = shift;
+                }
+                if g.menu_open() {
+                    if pressed {
+                        let c = ch(&event);
+                        let req = g.menu_key(c, settings::lwjgl_code(code));
+                        self.handle(req, el);
+                    }
+                    return;
+                }
+                let lw = settings::lwjgl_code(code);
+                if lw == self.bound("key.screenshot") && pressed && !event.repeat {
+                    let Some(g) = &mut self.game else { return };
                     let _ = std::fs::create_dir_all("screenshots");
                     let t = std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)
@@ -799,36 +1020,75 @@ impl ApplicationHandler for App {
                     g.screenshot = Some(PathBuf::from(format!("screenshots/{t}.png")));
                     return;
                 }
+                let Some(g) = &mut self.game else { return };
                 if code == KeyCode::F3 && pressed && !event.repeat {
                     g.show_debug = !g.show_debug;
                     return;
                 }
                 if pressed && !event.repeat {
-                    let ctrl = self.ctrl;
                     let req = g.key(code, true, ctrl);
                     if req != Request::None {
                         self.handle(req, el);
                         return;
                     }
                 }
+                let bind = |d: &str| self.bound(d);
+                let (fw, lf, bk, rt, jm, sn, sp) = (
+                    bind("key.forward"),
+                    bind("key.left"),
+                    bind("key.back"),
+                    bind("key.right"),
+                    bind("key.jump"),
+                    bind("key.sneak"),
+                    bind("key.sprint"),
+                );
                 let Some(g) = &mut self.game else { return };
                 if !g.wants_grab() {
                     return;
                 }
-                match code {
-                    KeyCode::KeyW => g.input.forward = pressed,
-                    KeyCode::KeyS => g.input.back = pressed,
-                    KeyCode::KeyA => g.input.left = pressed,
-                    KeyCode::KeyD => g.input.right = pressed,
-                    KeyCode::Space => g.input.jump = pressed,
-                    KeyCode::ShiftLeft => g.input.sneak = pressed,
-                    KeyCode::ControlLeft => g.input.sprint = pressed,
-                    _ => {}
+                if lw == fw {
+                    g.input.forward = pressed;
+                }
+                if lw == bk {
+                    g.input.back = pressed;
+                }
+                if lw == lf {
+                    g.input.left = pressed;
+                }
+                if lw == rt {
+                    g.input.right = pressed;
+                }
+                if lw == jm {
+                    g.input.jump = pressed;
+                }
+                if lw == sn {
+                    g.input.sneak = pressed;
+                }
+                if lw == sp {
+                    g.input.sprint = pressed;
                 }
             }
             WindowEvent::RedrawRequested => {
                 let Some(w) = self.window.clone() else { return };
                 let size = w.inner_size();
+                if let Some(f) = &mut self.front {
+                    if let Some((path, wait)) = &self.opts.auto_shot {
+                        let elapsed = self.started.elapsed().as_secs_f64();
+                        if self.shot_taken.is_none() && elapsed >= *wait {
+                            f.screenshot = Some(path.clone());
+                            self.shot_taken = Some(Instant::now());
+                        } else if let Some(t) = self.shot_taken {
+                            if t.elapsed().as_secs_f64() > 0.5 {
+                                self.front = None;
+                                el.exit();
+                                return;
+                            }
+                        }
+                    }
+                    let a = f.frame((size.width, size.height));
+                    self.front_action(a, el);
+                    return;
+                }
                 if let Some(g) = &mut self.game {
                     if let Some((path, wait)) = &self.opts.auto_shot {
                         let elapsed = self.started.elapsed().as_secs_f64();
@@ -859,8 +1119,15 @@ impl ApplicationHandler for App {
         if let DeviceEvent::MouseMotion { delta } = event {
             if self.grabbed && self.focused {
                 if let Some(g) = &mut self.game {
-                    // Sensitivity 0.5 (default): f = 0.5 * 0.6 + 0.2; f^3 * 8 = 1.0
-                    g.player.turn(delta.0 as f32, -delta.1 as f32);
+                    // EntityRenderer.updateCameraAndRender: mouseSensitivity
+                    // * 0.6 + 0.2, cubed, times 8; invertMouse flips y
+                    let (sens, inv) = g.shell.as_ref().map_or((0.5, false), |s| {
+                        (s.settings.mouse_sensitivity, s.settings.invert_mouse)
+                    });
+                    let f = sens * 0.6 + 0.2;
+                    let k = f * f * f * 8.0;
+                    let dy = -(delta.1 as f32) * k * if inv { -1.0 } else { 1.0 };
+                    g.player.turn(delta.0 as f32 * k, -dy);
                 }
             }
         }
@@ -934,6 +1201,8 @@ fn main() {
     let mut app = App {
         opts,
         game: None,
+        front: None,
+        atlas: None,
         window: None,
         grabbed: false,
         focused: true,
@@ -946,6 +1215,7 @@ fn main() {
     let _ = el.run_app(&mut app);
     // The renderer must go before the window it presents to.
     app.game = None;
+    app.front = None;
     app.window = None;
     if std::env::var_os("MINERUST_VALIDATE").is_some() {
         println!(

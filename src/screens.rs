@@ -337,7 +337,9 @@ pub fn container(
     // Titles (drawGuiContainerForegroundLayer), colour 0x404040.
     let fg = 0x404040;
     match &view.open {
-        Open::Inventory | Open::None => ui.text("Crafting", left + 86.0, top + 16.0, fg, false),
+        Open::Inventory | Open::None => {
+            ui.text("Crafting", left + 86.0, top + 16.0, fg, false);
+        }
         Open::Workbench(_) => {
             ui.text("Crafting", left + 28.0, top + 6.0, fg, false);
             ui.text("Inventory", left + 8.0, top + ys - 96.0 + 2.0, fg, false);

@@ -103,6 +103,10 @@ pub enum Command {
         jump: bool,
         sneak: bool,
     },
+    /// `IntegratedServer`: the view distance follows the client's setting.
+    ViewDistance(i32),
+    /// `gameSettings.difficulty` (`IntegratedServer.tick`), by id.
+    Difficulty(i32),
     /// The use key was let go while using an item
     /// (`C07PacketPlayerDigging` 5, `onPlayerStoppedUsing`).
     StopUsing,
@@ -781,6 +785,19 @@ impl Sim {
     fn apply(&mut self, cmd: &Command) {
         match *cmd {
             Command::Center(x, z) => self.centre = (x, z),
+            Command::ViewDistance(v) => {
+                self.view = v;
+                self.offsets = spiral(v + 2);
+            }
+            Command::Difficulty(d) => {
+                use crate::entity::living::Difficulty as D;
+                self.difficulty = match d {
+                    0 => D::Peaceful,
+                    1 => D::Easy,
+                    3 => D::Hard,
+                    _ => D::Normal,
+                };
+            }
             Command::Motion {
                 on_ground,
                 sneaking,
@@ -1434,6 +1451,15 @@ impl Sim {
         let sy = d.int("SpawnY").unwrap_or(64) as f64;
         let sz = d.int("SpawnZ").unwrap_or(0) as f64 + 0.5;
         self.spawn = [sx, sy, sz];
+        // WorldServer.initialize: a new world (WorldInfo.isInitialized false)
+        // gets createSpawnPosition
+        let initialized = match d.get("initialized") {
+            Some(_) => d.int("initialized").unwrap_or(1) != 0,
+            None => d.get("SpawnX").is_some(),
+        };
+        if !initialized {
+            self.spawn = self.find_spawn();
+        }
         let mut pos = self.spawn;
         let mut rot = [0.0f32; 2];
         let mut flying = false;
@@ -1646,6 +1672,7 @@ impl Sim {
         );
         player.set("abilities", ab);
         d.set("Player", player);
+        d.set("initialized", Nbt::Byte(1));
         d.set(
             "LastPlayed",
             Nbt::Long(

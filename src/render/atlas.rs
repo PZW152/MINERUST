@@ -8,7 +8,127 @@ pub const ATLAS_SIZE: u32 = 1024;
 /// Atlas width in 16px cells.
 const GRID: usize = (ATLAS_SIZE / 16) as usize;
 pub const MIP_LEVELS: u32 = 5;
-pub const UI_SIZE: u32 = 1024;
+pub const UI_SIZE: u32 = 2048;
+
+/// Where the Unicode glyph cache starts in the GUI sheet: a 64 by 64 grid
+/// of 16-pixel cells.
+pub const GLYPH_X: u32 = 1024;
+pub const GLYPH_Y: u32 = 1024;
+
+/// GUI textures beyond the original sheet: path under `textures/` and the
+/// pixel position in the sheet.
+pub const GUI_TEXTURES: [(&str, u32, u32); 26] = [
+    ("gui/title/minecraft.png", 1024, 0),
+    ("gui/title/background/panorama_0.png", 1280, 0),
+    ("gui/title/background/panorama_1.png", 1536, 0),
+    ("gui/title/background/panorama_2.png", 1792, 0),
+    ("gui/title/background/panorama_3.png", 1024, 256),
+    ("gui/title/background/panorama_4.png", 1280, 256),
+    ("gui/title/background/panorama_5.png", 1536, 256),
+    ("gui/container/creative_inventory/tabs.png", 1792, 256),
+    ("gui/container/creative_inventory/tab_items.png", 1024, 512),
+    (
+        "gui/container/creative_inventory/tab_inventory.png",
+        1280,
+        512,
+    ),
+    (
+        "gui/container/creative_inventory/tab_item_search.png",
+        1536,
+        512,
+    ),
+    ("gui/container/dispenser.png", 1792, 512),
+    ("gui/container/enchanting_table.png", 1024, 768),
+    ("gui/container/anvil.png", 1280, 768),
+    ("gui/container/beacon.png", 1536, 768),
+    ("gui/container/hopper.png", 1792, 768),
+    ("gui/container/horse.png", 0, 1024),
+    ("gui/container/villager.png", 256, 1024),
+    ("gui/book.png", 512, 1024),
+    ("gui/achievement/achievement_background.png", 768, 1024),
+    ("gui/container/stats_icons.png", 0, 1280),
+    ("gui/resource_packs.png", 256, 1280),
+    ("gui/demo_background.png", 512, 1280),
+    ("gui/stream_indicator.png", 768, 1280),
+    ("gui/container/generic_54.png", 0, 1536),
+    ("gui/presets/isles.png", 256, 1536),
+];
+
+/// The sheet position of a GUI texture by its path under `textures/`.
+pub fn gui_pos(path: &str) -> (f32, f32) {
+    GUI_TEXTURES
+        .iter()
+        .find(|t| t.0 == path)
+        .map_or((0.0, 0.0), |t| (t.1 as f32, t.2 as f32))
+}
+
+/// `FontRenderer`'s Unicode pages, cached glyph by glyph in the sheet.
+pub struct GlyphCache {
+    /// `glyph_sizes.bin`
+    pub sizes: Vec<u8>,
+    /// char to its cell in the cache grid
+    slots: HashMap<u32, u16>,
+    pages: HashMap<u32, Option<Image>>,
+    /// The cache region's pixels (1024 by 1024 RGBA).
+    pub pixels: Vec<u8>,
+    /// Cells changed since the renderer last uploaded the region.
+    pub dirty: bool,
+    jar: Option<std::path::PathBuf>,
+    /// `unicodeFlag`
+    pub unicode: bool,
+}
+
+impl GlyphCache {
+    pub fn set_jar(&mut self, p: std::path::PathBuf) {
+        self.jar = Some(p);
+    }
+
+    /// The sheet pixel position of `c`'s 16x16 cell, loading its page.
+    pub fn cell(&mut self, c: u32) -> Option<(f32, f32)> {
+        if let Some(&s) = self.slots.get(&c) {
+            return Some(slot_pos(s));
+        }
+        let n = self.slots.len();
+        if n >= 64 * 64 {
+            return None;
+        }
+        let page = c / 256;
+        if !self.pages.contains_key(&page) {
+            let img = self.jar.as_ref().and_then(|j| {
+                let f = std::fs::File::open(j).ok()?;
+                let mut z = zip::ZipArchive::new(f).ok()?;
+                read_png(
+                    &mut z,
+                    &format!("assets/minecraft/textures/font/unicode_page_{page:02x}.png"),
+                )
+                .ok()
+            });
+            self.pages.insert(page, img);
+        }
+        let img = self.pages.get(&page)?.as_ref()?;
+        let slot = n as u16;
+        let (sx, sy) = ((c % 16) * img.w / 16, ((c & 255) / 16) * img.h / 16);
+        let cell = img.w / 16;
+        let (dx, dy) = ((slot as u32 % 64) * 16, (slot as u32 / 64) * 16);
+        for y in 0..cell.min(16) {
+            for x in 0..cell.min(16) {
+                let s = (((sy + y) * img.w + sx + x) * 4) as usize;
+                let d = (((dy + y) * 1024 + dx + x) * 4) as usize;
+                self.pixels[d..d + 4].copy_from_slice(&img.rgba[s..s + 4]);
+            }
+        }
+        self.slots.insert(c, slot);
+        self.dirty = true;
+        Some(slot_pos(slot))
+    }
+}
+
+fn slot_pos(s: u16) -> (f32, f32) {
+    (
+        (GLYPH_X + (s as u32 % 64) * 16) as f32,
+        (GLYPH_Y + (s as u32 / 64) * 16) as f32,
+    )
+}
 
 pub struct Atlas {
     /// RGBA8 pixels per mip level.
@@ -43,6 +163,8 @@ pub struct Atlas {
     pub ui: Vec<u8>,
     /// `FontRenderer.charWidth` for the ASCII sheet.
     pub char_width: [u8; 256],
+    /// The Unicode font (`glyphWidth` and the glyph cells).
+    pub glyphs: std::sync::Mutex<GlyphCache>,
     /// Animated tiles (`.png.mcmeta`).
     pub anims: Vec<Anim>,
     /// `destroy_stage_0` .. `destroy_stage_9`.
@@ -510,6 +632,25 @@ impl Atlas {
                 y,
             );
         }
+        for (path, x, y) in GUI_TEXTURES {
+            if let Ok(img) = read_png(jar, &format!("assets/minecraft/textures/{path}")) {
+                blit(&img, x, y);
+            }
+        }
+        let mut sizes = vec![0u8; 65536];
+        if let Ok(mut f) = jar.by_name("assets/minecraft/font/glyph_sizes.bin") {
+            use std::io::Read;
+            let _ = f.read_exact(&mut sizes);
+        }
+        let glyphs = std::sync::Mutex::new(GlyphCache {
+            sizes,
+            slots: HashMap::new(),
+            pages: HashMap::new(),
+            pixels: vec![0u8; 1024 * 1024 * 4],
+            dirty: false,
+            jar: None,
+            unicode: false,
+        });
         let mut char_width = [0u8; 256];
         let cell = font.w / 16;
         for (k, w) in char_width.iter_mut().enumerate() {
@@ -525,10 +666,8 @@ impl Atlas {
                 used -= 1;
             }
             used += 1;
-            if k == 32 {
-                used = 3;
-            }
-            *w = ((0.5 + used as f64 * (8.0 / cell as f64)) as i32 + 1) as u8;
+            // readFontTexture: (int)(0.5 + ++var12 * (8.0F / cell)) + 1
+            *w = ((0.5 + (used as f32 * (8.0f32 / cell as f32)) as f64) as i32 + 1) as u8;
         }
         Ok(Atlas {
             skin,
@@ -537,6 +676,7 @@ impl Atlas {
             mobs,
             ui,
             char_width,
+            glyphs,
             anims,
             clouds,
             mips: b.mips,

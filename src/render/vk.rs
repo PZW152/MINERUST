@@ -39,6 +39,7 @@ struct Push {
 @group(0) @binding(1) var tex: texture_2d<f32>;
 @group(0) @binding(2) var samp: sampler;
 @group(0) @binding(3) var ui_tex: texture_2d<f32>;
+@group(0) @binding(4) var samp_linear: sampler;
 var<push_constant> pc: Push;
 
 struct TerrainOut {
@@ -173,12 +174,16 @@ fn vs_ui(@location(0) pos: vec3<f32>, @location(1) uv: vec2<f32>, @location(2) c
 fn fs_ui(i: UiOut) -> @location(0) vec4<f32> {
     let a = textureSampleLevel(tex, samp, i.uv, 0.0);
     let b = textureSampleLevel(ui_tex, samp, i.uv, 0.0);
+    let l = textureSampleLevel(ui_tex, samp_linear, i.uv, 0.0);
     var t = a;
     if (i.sel > 0.5) {
         t = b;
     }
     if (i.sel > 1.5) {
         t = vec4<f32>(1.0, 1.0, 1.0, 1.0);
+    }
+    if (i.sel > 2.5) {
+        t = l;
     }
     let c = t * i.color;
     if (c.a < 0.004) {
@@ -489,6 +494,7 @@ pub struct Renderer {
     frame_no: u64,
     atlas: (vk::Image, vk::DeviceMemory, vk::ImageView),
     sampler: vk::Sampler,
+    sampler_linear: vk::Sampler,
     index_buf: (vk::Buffer, vk::DeviceMemory),
     index_quads: u32,
     meshes: HashMap<(i32, i32), GpuMesh>,
@@ -800,6 +806,11 @@ impl Renderer {
                     .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
                     .descriptor_count(1)
                     .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+                vk::DescriptorSetLayoutBinding::default()
+                    .binding(4)
+                    .descriptor_type(vk::DescriptorType::SAMPLER)
+                    .descriptor_count(1)
+                    .stage_flags(vk::ShaderStageFlags::FRAGMENT),
             ];
             let set_layout = device
                 .create_descriptor_set_layout(
@@ -832,7 +843,7 @@ impl Renderer {
                 },
                 vk::DescriptorPoolSize {
                     ty: vk::DescriptorType::SAMPLER,
-                    descriptor_count: FRAMES as u32,
+                    descriptor_count: 2 * FRAMES as u32,
                 },
             ];
             let desc_pool = device
@@ -1081,6 +1092,19 @@ impl Renderer {
                     None,
                 )
                 .map_err(|e| e.to_string())?;
+            let sampler_linear = device
+                .create_sampler(
+                    &vk::SamplerCreateInfo::default()
+                        .mag_filter(vk::Filter::LINEAR)
+                        .min_filter(vk::Filter::LINEAR)
+                        .mipmap_mode(vk::SamplerMipmapMode::NEAREST)
+                        .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+                        .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+                        .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+                        .max_lod(0.0),
+                    None,
+                )
+                .map_err(|e| e.to_string())?;
 
             let mut r = Renderer {
                 _entry: entry,
@@ -1137,6 +1161,7 @@ impl Renderer {
                     vk::ImageView::null(),
                 ),
                 sampler,
+                sampler_linear,
                 index_buf: (vk::Buffer::null(), vk::DeviceMemory::null()),
                 index_quads: 0,
                 meshes: HashMap::new(),
@@ -1233,6 +1258,11 @@ impl Renderer {
                     image_view: vk::ImageView::null(),
                     image_layout: vk::ImageLayout::UNDEFINED,
                 }];
+                let sl = [vk::DescriptorImageInfo {
+                    sampler: r.sampler_linear,
+                    image_view: vk::ImageView::null(),
+                    image_layout: vk::ImageLayout::UNDEFINED,
+                }];
                 let writes = [
                     vk::WriteDescriptorSet::default()
                         .dst_set(sets[i])
@@ -1254,6 +1284,11 @@ impl Renderer {
                         .dst_binding(3)
                         .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
                         .image_info(&ui_info),
+                    vk::WriteDescriptorSet::default()
+                        .dst_set(sets[i])
+                        .dst_binding(4)
+                        .descriptor_type(vk::DescriptorType::SAMPLER)
+                        .image_info(&sl),
                 ];
                 r.device.update_descriptor_sets(&writes, &[]);
                 let sem = vk::SemaphoreCreateInfo::default();
@@ -1451,6 +1486,108 @@ impl Renderer {
                 )
                 .unwrap();
             self.atlas = (image, mem, view);
+        }
+    }
+
+    /// Uploads the Unicode glyph cache region of the GUI sheet when
+    /// `FontRenderer` loaded new glyphs.
+    pub fn sync_glyphs(&mut self, atlas: &Atlas) {
+        use super::atlas::{GLYPH_X, GLYPH_Y};
+        let pixels = {
+            let mut g = atlas.glyphs.lock().unwrap();
+            if !g.dirty {
+                return;
+            }
+            g.dirty = false;
+            g.pixels.clone()
+        };
+        self.upload_ui_region(GLYPH_X, GLYPH_Y, 1024, 1024, &pixels);
+    }
+
+    /// Replaces a `w` x `h` RGBA region of the GUI sheet at (`x`, `y`).
+    pub fn upload_ui_region(&mut self, x: u32, y: u32, w: u32, h: u32, pixels: &[u8]) {
+        unsafe {
+            let host =
+                vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT;
+            let (sb, sm) = self.create_buffer(
+                pixels.len() as u64,
+                vk::BufferUsageFlags::TRANSFER_SRC,
+                host,
+            );
+            self.write_buffer(sm, pixels);
+            let range = vk::ImageSubresourceRange {
+                aspect_mask: vk::ImageAspectFlags::COLOR,
+                base_mip_level: 0,
+                level_count: 1,
+                base_array_layer: 0,
+                layer_count: 1,
+            };
+            let image = self.ui_tex.0;
+            let dev = &self.device;
+            self.one_shot(|cmd| {
+                let b1 = [vk::ImageMemoryBarrier::default()
+                    .old_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                    .new_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
+                    .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                    .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                    .image(image)
+                    .subresource_range(range)
+                    .src_access_mask(vk::AccessFlags::SHADER_READ)
+                    .dst_access_mask(vk::AccessFlags::TRANSFER_WRITE)];
+                dev.cmd_pipeline_barrier(
+                    cmd,
+                    vk::PipelineStageFlags::FRAGMENT_SHADER,
+                    vk::PipelineStageFlags::TRANSFER,
+                    vk::DependencyFlags::empty(),
+                    &[],
+                    &[],
+                    &b1,
+                );
+                let region = [vk::BufferImageCopy::default()
+                    .image_subresource(vk::ImageSubresourceLayers {
+                        aspect_mask: vk::ImageAspectFlags::COLOR,
+                        mip_level: 0,
+                        base_array_layer: 0,
+                        layer_count: 1,
+                    })
+                    .image_offset(vk::Offset3D {
+                        x: x as i32,
+                        y: y as i32,
+                        z: 0,
+                    })
+                    .image_extent(vk::Extent3D {
+                        width: w,
+                        height: h,
+                        depth: 1,
+                    })];
+                dev.cmd_copy_buffer_to_image(
+                    cmd,
+                    sb,
+                    image,
+                    vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                    &region,
+                );
+                let b2 = [vk::ImageMemoryBarrier::default()
+                    .old_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
+                    .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                    .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                    .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                    .image(image)
+                    .subresource_range(range)
+                    .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
+                    .dst_access_mask(vk::AccessFlags::SHADER_READ)];
+                dev.cmd_pipeline_barrier(
+                    cmd,
+                    vk::PipelineStageFlags::TRANSFER,
+                    vk::PipelineStageFlags::FRAGMENT_SHADER,
+                    vk::DependencyFlags::empty(),
+                    &[],
+                    &[],
+                    &b2,
+                );
+            });
+            self.device.destroy_buffer(sb, None);
+            self.device.free_memory(sm, None);
         }
     }
 
@@ -2737,6 +2874,7 @@ impl Drop for Renderer {
             self.device.destroy_image(self.atlas.0, None);
             self.device.free_memory(self.atlas.1, None);
             self.device.destroy_sampler(self.sampler, None);
+            self.device.destroy_sampler(self.sampler_linear, None);
             self.device.destroy_image_view(self.ui_tex.2, None);
             self.device.destroy_image(self.ui_tex.0, None);
             self.device.free_memory(self.ui_tex.1, None);
