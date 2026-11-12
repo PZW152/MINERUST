@@ -10,7 +10,8 @@
 - [ ] 終界傳送門：`TileEntityEndPortalRenderer`（16 層星空視差）
 - [x] `Potion` / `PotionEffect` / `PotionHelper` 與玩家身上的效果（凋零、中毒、抗性、速度、跳躍、生命提升、吸收……）
 - [x] 藥水物品（飲用）、釀造台（方塊、`TileEntityBrewingStand`、介面、存檔）、牛奶、金蘋果
-- [ ] 生物身上的藥水效果、噴濺藥水 `EntityPotion`、玻璃瓶裝水
+- [x] `EntityThrowable`：雪球、蛋（孵小雞）、終界珍珠、噴濺藥水（`playAuxSFX(2002)`、`EntitySpellParticleFX`），女巫照原版選藥水並投擲
+- [ ] 生物身上的持續藥水效果、玻璃瓶裝水、幼年生物的大小與模型
 - [ ] 容器點擊一律改為 `Container.slotClick` / `mergeItemStack` / `transferStackInSlot` 逐行移植；方塊破壞時內容物的散落方式
 - [ ] 騎乘：`Entity.mountEntity`、`updateRidden`，馬（跳躍、鞍、馬鎧、箱子、馬的物品欄）、豬＋鞍＋胡蘿蔔釣竿
 - [ ] 傳送門建造時的中繼值與原版一致
@@ -46,7 +47,7 @@
 
 - [x] 玩家生存狀態移到伺服端（`EntityPlayerMP`）：`FoodStats`、傷害流程（難度縮放、護甲、抗性、吸收、擊退）、`CombatTracker` 死亡訊息（`en_US.lang`）
 - [x] 物品使用（`setItemInUse`：吃、喝藥水、牛奶、拉弓、劍格擋的動畫），全部 `ItemFood` 數值與效果
-- [ ] 劍格擋的減傷（`isBlocking`）、噴濺藥水 `EntityPotion`、雪球／蛋／終界珍珠
+- [ ] 劍格擋的減傷（`isBlocking`）
 - [ ] 經驗球 `EntityXPOrb`（現在直接加經驗）
 - [ ] 難度設定與 `level.dat` 的 `Difficulty`、遊戲規則
 

@@ -57,6 +57,8 @@ enum Kind {
     Heart,
     Bubble,
     Reddust,
+    /// `EntitySpellParticleFX` with its base texture index
+    Spell(i32),
 }
 
 pub struct Particles {
@@ -418,6 +420,33 @@ impl Particles {
         self.add(p);
     }
 
+    /// `EntitySpellParticleFX`: "spell" (base 128), "instantSpell" and
+    /// "witchMagic" (144), "mobSpell" (motion 0, coloured).
+    pub fn spell(&mut self, pos: [f64; 3], m: [f64; 3], base: i32, rgb: [f32; 3], alpha: f32) {
+        let mut p = self.moving(pos, m);
+        p.motion[1] *= 0.2f32 as f64;
+        if m[0] == 0.0 && m[2] == 0.0 {
+            p.motion[0] *= 0.1f32 as f64;
+            p.motion[2] *= 0.1f32 as f64;
+        }
+        p.scale *= 0.75;
+        p.base_scale = p.scale;
+        p.max_age = (8.0 / (self.rnd() * 0.8 + 0.2)) as i32;
+        p.color = [rgb[0], rgb[1], rgb[2], alpha];
+        p.kind = Kind::Spell(base);
+        p.sprite = Sprite::Index(base + 7);
+        self.add(p);
+    }
+
+    /// `EntityFX.multiplyVelocity` on the newest particle.
+    pub fn scale_last_motion(&mut self, f: f32) {
+        if let Some(p) = self.list.last_mut() {
+            p.motion[0] *= f as f64;
+            p.motion[1] = (p.motion[1] - 0.1f32 as f64) * f as f64 + 0.1f32 as f64;
+            p.motion[2] *= f as f64;
+        }
+    }
+
     /// `EntityReddustFX` (red by default)
     pub fn reddust(&mut self, pos: [f64; 3], rgb: [f32; 3]) {
         let mut p = self.moving(pos, [0.0; 3]);
@@ -515,6 +544,10 @@ impl Particles {
                 Kind::Reddust => {
                     p.sprite = Sprite::Index(7 - p.age * 8 / p.max_age);
                 }
+                Kind::Spell(base) => {
+                    p.sprite = Sprite::Index(base + (7 - p.age * 8 / p.max_age));
+                    p.motion[1] += 0.004;
+                }
                 Kind::Smoke => {
                     p.sprite = Sprite::Index(7 - p.age * 8 / p.max_age);
                     p.motion[1] += 0.004;
@@ -543,7 +576,7 @@ impl Particles {
                 move_particle(p, w);
             }
             let damp = match p.kind {
-                Kind::Smoke | Kind::Explode | Kind::Reddust => 0.96,
+                Kind::Smoke | Kind::Explode | Kind::Reddust | Kind::Spell(_) => 0.96,
                 Kind::Flame => 0.96,
                 Kind::Lava => 0.999,
                 Kind::Crit => 0.7,
@@ -564,7 +597,12 @@ impl Particles {
             }
             if matches!(
                 p.kind,
-                Kind::Smoke | Kind::Explode | Kind::Note | Kind::Heart | Kind::Reddust
+                Kind::Smoke
+                    | Kind::Explode
+                    | Kind::Note
+                    | Kind::Heart
+                    | Kind::Reddust
+                    | Kind::Spell(_)
             ) && p.pos[1] == p.prev[1]
             {
                 p.motion[0] *= 1.1;

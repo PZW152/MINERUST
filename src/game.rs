@@ -219,6 +219,8 @@ pub struct Game {
     using: Option<(crate::item::Stack, i32)>,
     /// `EntityPickupFX`: collected items flying to the player, with age.
     pickups: Vec<(ItemView, i32)>,
+    /// Throwables: position, previous position, item, damage.
+    throwables: Vec<([f64; 3], [f64; 3], u16, i32)>,
     /// `EntityFallingBlock`s from the server.
     falling: Vec<crate::entity::falling::FallingView>,
     /// Origin of `Minecraft.getSystemTime`.
@@ -474,6 +476,7 @@ impl Game {
             lang: crate::lang::Lang::default(),
             using: None,
             falling: Vec::new(),
+            throwables: Vec::new(),
             started: Instant::now(),
             moving_mesh: HashMap::new(),
             audio: None,
@@ -830,6 +833,62 @@ impl Game {
                 }
                 Event::Items(v) => self.items = v,
                 Event::Falling(v) => self.falling = v,
+                Event::Throwables(v) => self.throwables = v,
+                Event::Teleport(p) => {
+                    self.player.set_position(p[0], p[1], p[2]);
+                    self.player.prev_pos = self.player.pos;
+                }
+                Event::Splashes(v) => {
+                    // RenderGlobal.playAuxSFX(2002)
+                    let bottle = self
+                        .atlas
+                        .items
+                        .get(&(373, 0))
+                        .map(|&t| self.atlas.rects[t as usize]);
+                    for (pos, meta) in v {
+                        for _ in 0..8 {
+                            let r = &mut self.particle_rand;
+                            let m = [
+                                r.next_gaussian() * 0.15,
+                                r.next_double() * 0.2,
+                                r.next_gaussian() * 0.15,
+                            ];
+                            if let Some(rect) = bottle {
+                                self.particles.item_crack(pos, m, rect);
+                            }
+                        }
+                        let c = crate::potion::liquid_color(meta);
+                        let (cr, cg, cb) = (
+                            (c >> 16 & 255) as f32 / 255.0,
+                            (c >> 8 & 255) as f32 / 255.0,
+                            (c & 255) as f32 / 255.0,
+                        );
+                        let instant = crate::potion::effects_of(meta, false)
+                            .iter()
+                            .any(|e| e.potion().instant);
+                        let base = if instant { 144 } else { 128 };
+                        for _ in 0..100 {
+                            let r = &mut self.particle_rand;
+                            let d = r.next_double() * 4.0;
+                            let a = r.next_double() * std::f64::consts::PI * 2.0;
+                            let (mx, mz) = (a.cos() * d, a.sin() * d);
+                            let my = 0.01 + r.next_double() * 0.5;
+                            let f = 0.75 + r.next_float() * 0.25;
+                            let start = [pos[0] + mx * 0.1, pos[1] + 0.3, pos[2] + mz * 0.1];
+                            self.particles.spell(
+                                start,
+                                [mx, my, mz],
+                                base,
+                                [cr * f, cg * f, cb * f],
+                                1.0,
+                            );
+                            // multiplyVelocity(d)
+                            self.particles.scale_last_motion(d as f32);
+                        }
+                        let p = self.particle_rand.next_float() * 0.1 + 0.9;
+                        self.sound("game.potion.smash", Some(pos), 1.0, p);
+                    }
+                }
                 Event::Moving(v) => {
                     self.world.moving = v;
                     let live: HashSet<[i32; 3]> = self.world.moving.iter().map(|m| m.0).collect();
@@ -951,6 +1010,26 @@ impl Game {
                             "portal" => self.particles.portal(p, m),
                             "heart" => self.particles.heart(p, m),
                             "bubble" => self.particles.bubble(p, m),
+                            "mobSpell" => self.particles.spell(
+                                p,
+                                [0.0; 3],
+                                128,
+                                [m[0] as f32, m[1] as f32, m[2] as f32],
+                                1.0,
+                            ),
+                            "mobSpellAmbient" => self.particles.spell(
+                                p,
+                                [0.0; 3],
+                                128,
+                                [m[0] as f32, m[1] as f32, m[2] as f32],
+                                0.15,
+                            ),
+                            "snowballpoof" => {
+                                if let Some(&t) = self.atlas.items.get(&(332, 0)) {
+                                    let rect = self.atlas.rects[t as usize];
+                                    self.particles.item_break(p, rect);
+                                }
+                            }
                             "splash" => self.particles.splash(p, m),
                             "reddust" => self
                                 .particles
@@ -2615,6 +2694,43 @@ impl Game {
                 partial,
                 light,
             );
+        }
+        // RenderSnowball
+        for &(pos, prev, id, meta) in &self.throwables {
+            let t = partial as f64;
+            let p = [
+                prev[0] + (pos[0] - prev[0]) * t,
+                prev[1] + (pos[1] - prev[1]) * t,
+                prev[2] + (pos[2] - prev[2]) * t,
+            ];
+            let (lx, ly, lz) = (
+                math::floor_double(p[0]),
+                math::floor_double(p[1]),
+                math::floor_double(p[2]),
+            );
+            let light = (
+                self.world.light(true, lx, ly, lz),
+                self.world.light(false, lx, ly, lz),
+            );
+            let rel = [
+                (p[0] - eye[0]) as f32,
+                (p[1] - eye[1]) as f32,
+                (p[2] - eye[2]) as f32,
+            ];
+            // potions: getIconFromDamage(16384), the splash bottle
+            let m = if id == 373 { meta | 16384 } else { meta };
+            for (rect, col) in self.atlas.item_passes(id, m) {
+                entities::billboard_lit(
+                    &mut dynamic,
+                    rect,
+                    rel,
+                    0.5,
+                    self.player.yaw,
+                    self.player.pitch,
+                    light,
+                    col,
+                );
+            }
         }
         // RenderFallingBlock
         for f in &self.falling {

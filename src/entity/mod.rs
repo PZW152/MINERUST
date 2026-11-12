@@ -10,3 +10,4 @@ pub mod player;
 pub mod raytrace;
 pub mod server_player;
 pub mod survival;
+pub mod throwable;

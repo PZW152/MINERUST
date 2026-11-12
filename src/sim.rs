@@ -154,6 +154,13 @@ pub enum Event {
     UseFinished(crate::item::Stack),
     /// The player died: `CombatTracker.getDeathMessage` (key, arguments).
     Died(crate::entity::server_player::Message),
+    /// `S08PacketPlayerPosLook`: the server moved the player (feet).
+    Teleport([f64; 3]),
+    /// `playAuxSFX(2002)`: splash potions broke (position, damage value).
+    Splashes(Vec<([f64; 3], i32)>),
+    /// Snowballs, eggs, pearls and potions in flight: position, previous
+    /// position, item and damage.
+    Throwables(Vec<([f64; 3], [f64; 3], u16, i32)>),
     /// Falling blocks near the player, sent each tick.
     Falling(Vec<crate::entity::falling::FallingView>),
     /// The player picked these items up (`S0DPacketCollectItem`).
@@ -271,6 +278,8 @@ pub struct Sim {
     offsets: Vec<(i32, i32)>,
     /// The last `Event::Moving` listed some blocks.
     sent_moving: bool,
+    /// An ender pearl landed: the player is moved there.
+    teleport_to: Option<[f64; 3]>,
     /// The item in use started or stopped this tick.
     using_changed: bool,
     /// `S27PacketExplosion` pushes for the client this tick.
@@ -468,6 +477,7 @@ impl Sim {
             motion_flags: (false, false, false),
             push_add: [0.0; 3],
             using_changed: false,
+            teleport_to: None,
             sent: Default::default(),
             unsaved: Default::default(),
             world_time: cfg.start_time,
@@ -1220,6 +1230,16 @@ impl Sim {
             events.push(Event::Inventory(Box::new(self.play.view())));
         }
         events.push(Event::Items(self.play.item_views()));
+        events.push(Event::Throwables(
+            self.mobs
+                .throwables
+                .iter()
+                .map(|t| {
+                    let (id, m) = t.kind.item();
+                    (t.e.pos, t.e.prev, id, m)
+                })
+                .collect(),
+        ));
         events.push(Event::Falling(
             self.play.falling.iter().map(|f| f.view()).collect(),
         ));
@@ -1599,6 +1619,35 @@ impl Sim {
         let Some(held) = self.play.inv.held() else {
             return;
         };
+        // ItemSnowball, ItemEgg, ItemEnderPearl, ItemPotion (splash)
+        {
+            use crate::entity::throwable::Kind as TK;
+            let creative = self.play.mode == GameMode::Creative;
+            let kind = match held.id {
+                332 => Some(TK::Snowball),
+                344 => Some(TK::Egg),
+                // ItemEnderPearl: not in creative
+                368 if !creative => Some(TK::EnderPearl),
+                373 if crate::item_use::is_splash(held.meta) => Some(TK::Potion(held.meta)),
+                _ => None,
+            };
+            if let Some(k) = kind {
+                if !creative {
+                    self.play.inv.consume_held();
+                    self.play.inv_dirty = true;
+                }
+                let (feet, yaw) = self.play.player;
+                let p = 0.4 / (self.world.rand.next_float() * 0.4 + 0.8);
+                let pitch_snd = if held.id == 373 { 0.5 } else { 0.5 };
+                self.pending_out.push(crate::entity::mob::Outcome {
+                    sounds: vec![("random.bow", [feet[0], feet[1], feet[2]], pitch_snd, p)],
+                    ..Default::default()
+                });
+                let pitch = self.play.pitch;
+                self.mobs.throw_from_player(k, feet, yaw, pitch);
+                return;
+            }
+        }
         // ItemFood, ItemPotion, ItemBucketMilk, ItemBow, ItemSword.onItemRightClick
         if self.splayer.using.is_none() && !self.splayer.dead {
             use crate::item_use::{action, food, is_splash, max_duration, Action};
@@ -2318,7 +2367,14 @@ impl Sim {
         use crate::entity::mob;
         let (feet, yaw) = play.player;
         let held = play.inv.held().map(|s| s.id);
+        let mut effect_bits = 0u32;
+        for e in self.splayer.living.effects.iter() {
+            effect_bits |= 1 << e.id;
+        }
         let info = mob::PlayerInfo {
+            motion: self.splayer.e.motion,
+            health: self.splayer.living.health,
+            effects: effect_bits,
             hurt_resistant_time: self.splayer.living.hurt_resistant_time,
             last_damage: self.splayer.living.last_damage,
             difficulty: self.difficulty as i32,
@@ -2681,6 +2737,16 @@ impl Sim {
                     }
                 }
                 Hit::Xp(n) => self.splayer.add_xp(n),
+                Hit::Teleport(p) => {
+                    // EntityEnderPearl.onImpact: setPositionAndUpdate, then
+                    // fallDistance = 0 and 5 fall damage
+                    self.teleport_to = Some(p);
+                    self.splayer.e.fall_distance = 0.0;
+                    let src = crate::entity::living::Source::named(
+                        crate::entity::living::SourceKind::Fall,
+                    );
+                    self.splayer.attack(&self.world, src, 5.0, d);
+                }
                 Hit::Burn(t) => self.splayer.e.set_fire(t / 20),
             }
         }
@@ -2754,6 +2820,14 @@ impl Sim {
         }
         if std::mem::take(&mut self.splayer.hurt_anim) {
             events.push(Event::Hurt);
+        }
+        if let Some(p) = self.teleport_to.take() {
+            self.play.player.0 = p;
+            events.push(Event::Teleport(p));
+        }
+        let splashes = std::mem::take(&mut self.mobs.splashes);
+        if !splashes.is_empty() {
+            events.push(Event::Splashes(splashes));
         }
         if std::mem::take(&mut self.using_changed) {
             events.push(Event::Using(self.splayer.using.map(|(_, st, n)| (st, n))));
@@ -3550,6 +3624,61 @@ mod tests {
         };
         let e = crate::potion::effects_of(slots[0].unwrap().meta, false);
         assert_eq!(e[0].id, crate::potion::MOVE_SPEED);
+    }
+
+    /// EntityEnderPearl moves the thrower and costs 5 health; a splash
+    /// potion of harming thrown straight down hurts the thrower.
+    #[test]
+    fn pearls_and_splash_potions() {
+        let (mut sim, x, y, z) = redstone_sim();
+        sim.play.mode = GameMode::Survival;
+        let feet = [x as f64 + 0.5, y as f64, z as f64 + 0.5];
+        for _ in 0..2 {
+            sim.step(&[Command::Player(feet, [0.0, 0.0], false)], &mut Vec::new());
+        }
+        sim.play.inv.selected = 0;
+        sim.play.inv.main[0] = Some(crate::item::Stack::new(368, 0, 1));
+        sim.play.pitch = 0.0;
+        let mut moved = None;
+        let mut ev = Vec::new();
+        sim.step(&[Command::UseAir], &mut ev);
+        for e in ev {
+            if let Event::Teleport(p) = e {
+                moved = Some(p);
+            }
+        }
+        for _ in 0..60 {
+            if moved.is_some() {
+                break;
+            }
+            let mut ev = Vec::new();
+            sim.step(&[], &mut ev);
+            for e in ev {
+                if let Event::Teleport(p) = e {
+                    moved = Some(p);
+                }
+            }
+            if moved.is_some() {
+                break;
+            }
+        }
+        let p = moved.expect("the pearl landed");
+        assert!((p[2] - feet[2]).abs() > 1.0, "moved along the throw");
+        assert_eq!(sim.splayer.living.health, 15.0);
+
+        // Splash Potion of Harming (16396) at the feet
+        sim.splayer.living.hurt_resistant_time = 0;
+        let before = sim.splayer.living.health;
+        sim.play.inv.main[0] = Some(crate::item::Stack::new(373, 16396, 1));
+        sim.play.pitch = 90.0;
+        sim.step(
+            &[Command::Player(p, [0.0, 90.0], false), Command::UseAir],
+            &mut Vec::new(),
+        );
+        for _ in 0..10 {
+            sim.step(&[Command::Player(p, [0.0, 90.0], false)], &mut Vec::new());
+        }
+        assert!(sim.splayer.living.health < before, "harmed by the splash");
     }
 
     /// TileEntityPiston.launchWithSlimeBlock moves an item lying in front.

@@ -309,6 +309,8 @@ enum Task {
 pub struct Mob {
     pub id: u32,
     pub kind: Kind,
+    /// `EntityAgeable.getGrowingAge`: below 0 a child
+    pub growing_age: i32,
     /// `posX`, `posY` (feet), `posZ`
     pub pos: [f64; 3],
     pub prev_pos: [f64; 3],
@@ -423,6 +425,11 @@ pub struct Mob {
 /// What the player looks like to the mobs.
 #[derive(Clone, Copy)]
 pub struct PlayerInfo {
+    /// The server-side motion, health and active effects (a bit per
+    /// potion id), for the witch's choice.
+    pub motion: [f64; 3],
+    pub health: f32,
+    pub effects: u32,
     /// `EntityPlayer.attackEntityFrom` would take damage now: hurt
     /// resistance ticks, the last damage taken and the difficulty (0..3).
     pub hurt_resistant_time: i32,
@@ -509,7 +516,9 @@ pub enum Hit {
         knock: [f64; 3],
         from: Option<[f64; 3]>,
     },
-    /// A splash potion of the witch hit the player.
+    /// `EntityEnderPearl`: the player lands here.
+    Teleport([f64; 3]),
+    /// A splash potion hit the player (`EntityPotion.onImpact`).
     Potion {
         effects: Vec<crate::potion::Effect>,
         scale: f64,
@@ -585,6 +594,7 @@ impl Mob {
             move_strafe: 0.0,
             ai_speed: 0.0,
             rand: JavaRandom::new(seed),
+            growing_age: 0,
             task: Task::Idle,
             task_ticks: 0,
             path: Vec::new(),
@@ -1223,6 +1233,29 @@ impl Mob {
     // ------------------------------------------------------------ combat
 
     /// `EntityLivingBase.attackEntityFrom` (without the attacker part).
+    /// `EntityPotion.onImpact` on a mob: the instant potions act now
+    /// (`Potion.affectEntity`, undead swapped).
+    pub fn splash(&mut self, effects: &[crate::potion::Effect], k: f64, from: Option<[f64; 3]>) {
+        use crate::potion::{HARM, HEAL};
+        let undead = matches!(self.kind, Kind::Zombie | Kind::Skeleton | Kind::PigZombie);
+        for e in effects {
+            if !e.potion().instant {
+                continue;
+            }
+            let hurts = (e.id == HARM && !undead) || (e.id == HEAL && undead);
+            let heals = (e.id == HEAL && !undead) || (e.id == HARM && undead);
+            if hurts {
+                let n = (k * (6 << e.amplifier) as f64 + 0.5) as i32;
+                self.damage(n as f32, from);
+            } else if heals {
+                let n = (k * (4 << e.amplifier) as f64 + 0.5) as i32;
+                if self.health > 0.0 {
+                    self.health = (self.health + n as f32).min(self.kind.max_health());
+                }
+            }
+        }
+    }
+
     pub fn damage(&mut self, amount: f32, from: Option<[f64; 3]>) -> bool {
         if self.health <= 0.0 {
             return false;
@@ -1496,6 +1529,10 @@ pub struct Tnt {
 pub struct Mobs {
     pub list: Vec<Mob>,
     pub arrows: Vec<Arrow>,
+    /// Snowballs, eggs, ender pearls and splash potions in flight.
+    pub throwables: Vec<super::throwable::Throwable>,
+    /// `playAuxSFX(2002)`: splash potions that broke (position, damage value).
+    pub splashes: Vec<([f64; 3], i32)>,
     pub tnt: Vec<Tnt>,
     pub fireballs: Vec<Fireball>,
     next_id: u32,
@@ -1507,6 +1544,8 @@ impl Default for Mobs {
         Mobs {
             list: Vec::new(),
             arrows: Vec::new(),
+            throwables: Vec::new(),
+            splashes: Vec::new(),
             tnt: Vec::new(),
             fireballs: Vec::new(),
             next_id: 1,
@@ -1518,6 +1557,8 @@ impl Default for Mobs {
 /// Output of a tick: damage to the player, dropped items, sounds.
 #[derive(Default)]
 pub struct Outcome {
+    /// Throwables spawned this tick (the witch's potions).
+    pub thrown: Vec<super::throwable::Throwable>,
     pub hits: Vec<Hit>,
     pub drops: Vec<([f64; 3], Stack)>,
     pub sounds: Vec<(&'static str, [f64; 3], f32, f32)>,
@@ -1585,6 +1626,110 @@ impl Mobs {
             fuse,
             on_ground: false,
         });
+    }
+
+    /// `ItemSnowball`, `ItemEgg`, `ItemEnderPearl`, `ItemPotion` (splash):
+    /// `new EntityXxx(world, player)` from the server-side player.
+    pub fn throw_from_player(
+        &mut self,
+        kind: super::throwable::Kind,
+        feet: [f64; 3],
+        yaw: f32,
+        pitch: f32,
+    ) {
+        let id = self.rand.next_int() as u32;
+        let t = super::throwable::Throwable::thrown(
+            id,
+            kind,
+            super::arrow::Shooter::Player,
+            feet,
+            feet[1] + 0.12f32 as f64,
+            yaw,
+            pitch,
+        );
+        self.throwables.push(t);
+    }
+
+    /// `EntityThrowable.onUpdate` for everything thrown, and the impacts.
+    fn tick_throwables(&mut self, w: &mut ServerWorld, player: &PlayerInfo, out: &mut Outcome) {
+        use super::arrow::{Shooter, Target};
+        use super::base::Fx;
+        use super::throwable::{Impact, Kind as TK};
+        let mut targets: Vec<(Target, Aabb)> = Vec::new();
+        if player.attackable {
+            targets.push((Target::Player, player.bb()));
+        }
+        for m in self.list.iter() {
+            if m.health > 0.0 {
+                targets.push((Target::Mob(m.id), m.bb));
+            }
+        }
+        let mut list = std::mem::take(&mut self.throwables);
+        for t in list.iter_mut() {
+            let mut fx = Vec::new();
+            let impacts = t.tick(&*w as &dyn crate::world::BlockView, &targets, &mut fx);
+            let from = match t.thrower {
+                Shooter::Player => Some(player.feet),
+                Shooter::Mob(id) => self.list.iter().find(|m| m.id == id).map(|m| m.pos),
+                Shooter::None => None,
+            };
+            for imp in impacts {
+                match imp {
+                    Impact::Hurt(Target::Mob(id), mut amount) => {
+                        if let Some(m) = self.list.iter_mut().find(|m| m.id == id) {
+                            // EntitySnowball: blazes take 3
+                            if t.kind == TK::Snowball && m.kind == Kind::Blaze {
+                                amount = 3.0;
+                            }
+                            m.damage(amount, from);
+                        }
+                    }
+                    // EntityPlayer.attackEntityFrom returns at once for 0
+                    Impact::Hurt(Target::Player, _) => {}
+                    Impact::Chickens(p, yaw, n) => {
+                        for _ in 0..n {
+                            let cid = self.spawn(
+                                Kind::Chicken,
+                                p,
+                                yaw,
+                                &mut JavaRandom::new(t.id as i64),
+                            );
+                            if let Some(c) = self.list.iter_mut().find(|m| m.id == cid) {
+                                c.growing_age = -24000;
+                            }
+                        }
+                    }
+                    Impact::Teleport(p) => out.hits.push(Hit::Teleport(p)),
+                    Impact::Splash(p, meta, hits) => {
+                        let effects = crate::potion::effects_of(meta, false);
+                        for (tg, k) in hits {
+                            match tg {
+                                Target::Player => out.hits.push(Hit::Potion {
+                                    effects: effects.clone(),
+                                    scale: k,
+                                    from: from.unwrap_or(p),
+                                }),
+                                Target::Mob(id) => {
+                                    if let Some(m) = self.list.iter_mut().find(|m| m.id == id) {
+                                        m.splash(&effects, k, from);
+                                    }
+                                }
+                            }
+                        }
+                        self.splashes.push((p, meta));
+                    }
+                }
+            }
+            for f in fx {
+                match f {
+                    Fx::Sound(n, p, v, pi) => out.sounds.push((n, p, v, pi)),
+                    Fx::Particle(n, p, mo) => out.particles.push((n, p, mo)),
+                    _ => {}
+                }
+            }
+        }
+        list.retain(|t| !t.e.dead);
+        self.throwables.extend(list);
     }
 
     /// `ItemBow.onPlayerStoppedUsing`: `new EntityArrow(world, player, f * 2)`
@@ -1874,7 +2019,9 @@ impl Mobs {
             m.set_slime_size(size);
             self.list.push(m);
         }
+        self.throwables.append(&mut out.thrown);
         tick_arrows(&mut self.arrows, w, player, out, &mut self.list);
+        self.tick_throwables(w, player, out);
     }
 
     /// `EntityPlayer.attackTargetEntityWithCurrentItem`
@@ -2527,6 +2674,12 @@ fn tick_mob(
     strikes: &mut Vec<Strike>,
     balls: &mut Vec<Fireball>,
 ) {
+    // EntityAgeable.onLivingUpdate
+    if m.growing_age < 0 {
+        m.growing_age += 1;
+    } else if m.growing_age > 0 {
+        m.growing_age -= 1;
+    }
     m.prev_pos = m.pos;
     m.prev_body_yaw = m.body_yaw;
     m.prev_head_yaw = m.head_yaw;
@@ -3085,20 +3238,34 @@ fn ranged(
                 1.0 / (m.rand.next_float() * 0.4 + 0.8),
             ));
         } else {
-            // EntityWitch throws a splash potion of harming (6 damage) at range.
-            // EntityPotion of Harming (16396) breaking on the player:
-            // affectEntity at full strength for a direct hit.
-            out.hits.push(Hit::Potion {
-                effects: crate::potion::effects_of(16396, false),
-                scale: 1.0,
-                from: m.pos,
-            });
-            out.sounds.push((
-                "random.bow",
+            // EntityWitch.attackEntityWithRangedAttack
+            let id = m.rand.next_int() as u32;
+            let eye = m.pos[1] + (m.dims().1 * 0.85) as f64;
+            let mut t = super::throwable::Throwable::thrown(
+                id,
+                super::throwable::Kind::Potion(32732),
+                super::arrow::Shooter::Mob(m.id),
                 m.pos,
-                0.5,
-                0.4 / (m.rand.next_float() * 0.4 + 0.8),
-            ));
+                eye,
+                m.yaw,
+                0.0,
+            );
+            let dx = player.feet[0] + player.motion[0] - m.pos[0];
+            let dy = player.feet[1] + 0.12f32 as f64 - 1.1f32 as f64 - m.pos[1];
+            let dz = player.feet[2] + player.motion[2] - m.pos[2];
+            let d = math::sqrt_double(dx * dx + dz * dz);
+            let has = |id: i32| player.effects & 1 << id != 0;
+            let mut meta = 32732;
+            if d >= 8.0 && !has(crate::potion::MOVE_SLOWDOWN) {
+                meta = 32698;
+            } else if player.health >= 8.0 && !has(crate::potion::POISON) {
+                meta = 32660;
+            } else if d <= 3.0 && !has(crate::potion::WEAKNESS) && m.rand.next_float() < 0.25 {
+                meta = 32696;
+            }
+            t.kind = super::throwable::Kind::Potion(meta);
+            t.set_heading(dx, dy + (d * 0.2) as f64, dz, 0.75, 8.0);
+            out.thrown.push(t);
         }
     }
 }

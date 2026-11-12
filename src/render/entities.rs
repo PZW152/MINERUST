@@ -309,6 +309,34 @@ pub fn billboard(
     out.extend_from_slice(&[vs[3], vs[2], vs[1], vs[0]]);
 }
 
+/// `RenderSnowball.func_77026_a`: an item icon facing the camera, lit by
+/// the entity's brightness and tinted.
+#[allow(clippy::too_many_arguments)]
+pub fn billboard_lit(
+    out: &mut Vec<Vertex>,
+    rect: [f32; 4],
+    c: [f32; 3],
+    size: f32,
+    yaw: f32,
+    pitch: f32,
+    light: (i32, i32),
+    tint: [f32; 3],
+) {
+    let start = out.len();
+    billboard(out, rect, c, size, yaw, pitch);
+    let l = light_bytes(light.0, light.1);
+    let col = [
+        (tint[0] * 255.0) as u8,
+        (tint[1] * 255.0) as u8,
+        (tint[2] * 255.0) as u8,
+        255,
+    ];
+    for v in &mut out[start..] {
+        v.light = l;
+        v.color = col;
+    }
+}
+
 /// A unit block (`RenderBlocks.renderBlockAsItem`) transformed by `m`.
 pub fn block_model(
     out: &mut Vec<Vertex>,
