@@ -200,6 +200,9 @@ pub struct Game {
     pub audio: Option<crate::audio::Audio>,
     weather: crate::sim::Weather,
     rain_sound: i32,
+    particle_rand: crate::java::JavaRandom,
+    particles: crate::particles::Particles,
+    dying: std::collections::HashSet<u32>,
     next_step: f32,
     mobs: Vec<crate::sim::MobView>,
     arrows: Vec<crate::sim::ArrowView>,
@@ -425,6 +428,9 @@ impl Game {
             audio: None,
             weather: Default::default(),
             rain_sound: 0,
+            particle_rand: crate::java::JavaRandom::new(77),
+            particles: Default::default(),
+            dying: Default::default(),
             next_step: 1.0,
             mobs: Vec::new(),
             arrows: Vec::new(),
@@ -557,6 +563,32 @@ impl Game {
                 }
                 Event::Items(v) => self.items = v,
                 Event::Mobs(m, a) => {
+                    // EntityLivingBase.onDeathUpdate: a puff of smoke when the body vanishes
+                    for v in &m {
+                        if v.death_time >= 18 && self.dying.insert(v.id) {
+                            for _ in 0..20 {
+                                let r = &mut self.particle_rand;
+                                let p = [
+                                    v.pos[0]
+                                        + (r.next_float() as f64 * 2.0 - 1.0) * (v.bb[3] - v.bb[0]),
+                                    v.pos[1] + r.next_float() as f64 * (v.bb[4] - v.bb[1]),
+                                    v.pos[2]
+                                        + (r.next_float() as f64 * 2.0 - 1.0) * (v.bb[3] - v.bb[0]),
+                                ];
+                                let mv = [
+                                    r.next_gaussian() * 0.02,
+                                    r.next_gaussian() * 0.02,
+                                    r.next_gaussian() * 0.02,
+                                ];
+                                self.particles.explode(p, mv);
+                            }
+                        }
+                    }
+                    if self.dying.len() > 256 {
+                        let alive: std::collections::HashSet<u32> =
+                            m.iter().map(|v| v.id).collect();
+                        self.dying.retain(|i| alive.contains(i));
+                    }
                     self.mobs = m;
                     self.arrows = a;
                 }
@@ -566,7 +598,16 @@ impl Game {
                         self.sound(name, Some(pos), vol, pitch);
                     }
                 }
-                Event::Explosions(_) => {}
+                Event::Explosions(list) => {
+                    for e in list {
+                        let c = [e[0], e[1], e[2]];
+                        if e[3] >= 2.0 {
+                            self.particles.huge_explosion(c);
+                        } else {
+                            self.particles.large_explode(c, 1.0);
+                        }
+                    }
+                }
                 Event::Weather(w) => self.weather = w,
                 Event::Respawn(p) => {
                     self.player = Player::new(p[0], p[1], p[2]);
@@ -637,6 +678,7 @@ impl Game {
 
     /// `TextureAtlasSprite.updateAnimation` for every animated tile.
     fn tick_animations(&mut self) {
+        self.tick_particles();
         if self.anim_state.len() != self.atlas.anims.len() {
             self.anim_state = vec![(0, 0); self.atlas.anims.len()];
         }
@@ -929,6 +971,93 @@ impl Game {
         [(f2 * f3) as f64, f4 as f64, (f1 * f3) as f64]
     }
 
+    /// Texture and tint of the particles a block breaks into (`EntityDiggingFX`).
+    fn debris(&self, pos: [i32; 3]) -> (Option<[f32; 4]>, [f32; 3]) {
+        let id = self.world.peek_block(pos[0], pos[1], pos[2]);
+        let meta = self.world.peek_meta(pos[0], pos[1], pos[2]);
+        let face = if id == block::GRASS {
+            0
+        } else if id == block::LOG || id == block::LOG2 {
+            2
+        } else {
+            0
+        };
+        let tex = self
+            .atlas
+            .tile(id, meta, face)
+            .or_else(|| self.atlas.tile(id, meta, 2));
+        let tint = match id {
+            block::LEAVES | block::LEAVES2 | block::VINE | block::TALLGRASS => [0.28, 0.71, 0.09],
+            _ => [1.0; 3],
+        };
+        (tex, tint)
+    }
+
+    /// Per-tick particle spawning around the player.
+    fn tick_particles(&mut self) {
+        self.particles.tick(&self.world);
+        let eye = self.player.pos;
+        self.particles.display_ticks(&self.world, eye);
+        // EntityRenderer.addRainParticles
+        let rain = self.weather.rain;
+        if rain > 0.0 {
+            let n = (100.0 * rain * rain) as i32;
+            let (px, py, pz) = (
+                math::floor_double(eye[0]),
+                math::floor_double(eye[1]),
+                math::floor_double(eye[2]),
+            );
+            for _ in 0..n {
+                let r = &mut self.particle_rand;
+                let x = px + r.next_int_n(10) - r.next_int_n(10);
+                let z = pz + r.next_int_n(10) - r.next_int_n(10);
+                let (fx, fz) = (r.next_float() as f64, r.next_float() as f64);
+                let y = self.world.precipitation_height(x, z);
+                if y > py + 10 || y < py - 10 {
+                    continue;
+                }
+                let b = self.world.biome(x, z);
+                if !b.can_rain_or_snow() || b.float_temperature(&self.noise, x, y, z) < 0.2 {
+                    continue;
+                }
+                let below = self.world.peek_block(x, y - 1, z);
+                if block::material(below) == Material::Lava {
+                    self.particles.smoke(
+                        [x as f64 + fx, y as f64 + 0.1, z as f64 + fz],
+                        [0.0; 3],
+                        false,
+                    );
+                } else if below != block::AIR {
+                    self.particles
+                        .rain([x as f64 + fx, y as f64 + 0.1, z as f64 + fz]);
+                }
+            }
+        }
+        // Entity.func_110120_aR: dust behind a sprinting player
+        if self.player.sprinting && self.player.on_ground && !self.player.in_water {
+            let (x, y, z) = (
+                math::floor_double(self.player.pos[0]),
+                math::floor_double(self.player.bb.min[1] - 0.2),
+                math::floor_double(self.player.pos[2]),
+            );
+            if self.world.peek_block(x, y, z) != block::AIR {
+                let (tex, tint) = self.debris([x, y, z]);
+                let r = &mut self.particle_rand;
+                let p = [
+                    self.player.pos[0] + (r.next_float() as f64 - 0.5) * 0.6,
+                    self.player.bb.min[1] + 0.1,
+                    self.player.pos[2] + (r.next_float() as f64 - 0.5) * 0.6,
+                ];
+                let m = [
+                    -self.player.motion[0] * 4.0,
+                    1.5,
+                    -self.player.motion[2] * 4.0,
+                ];
+                self.particles.dust(p, m, tex, tint);
+            }
+        }
+    }
+
     fn rain(&self, partial: f32) -> f32 {
         self.weather.prev_rain + (self.weather.rain - self.weather.prev_rain) * partial
     }
@@ -1152,6 +1281,20 @@ impl Game {
             self.player.sprinting = false;
         }
         self.stats.add_exhaustion(0.3);
+        if crit {
+            if let Some(m) = self.mobs.iter().find(|m| m.id == id) {
+                let c = [m.pos[0], (m.bb[1] + m.bb[4]) / 2.0, m.pos[2]];
+                for _ in 0..16 {
+                    let r = &mut self.particle_rand;
+                    let mv = [
+                        r.next_float() as f64 * 2.0 - 1.0,
+                        r.next_float() as f64 * 2.0 - 1.0 + 0.2,
+                        r.next_float() as f64 * 2.0 - 1.0,
+                    ];
+                    self.particles.crit(c, mv);
+                }
+            }
+        }
         let _ = self.sim.commands.send(Command::Attack {
             id,
             damage: dmg,
@@ -1258,11 +1401,17 @@ impl Game {
         if self.mode == GameMode::Creative {
             self.hit_delay = 5;
             self.block_sound(id, pos, "dig", 1.0, 0.8);
+            let (dt, dti) = self.debris(pos);
+            self.particles.destroy(pos, dt, dti);
             let _ = self.sim.commands.send(Command::Dig(pos));
             return;
         }
         if self.ticks % 4 == 0 {
             self.block_sound(id, pos, "step", 0.25, 0.5);
+        }
+        if let Some((_, side)) = self.selected {
+            let (dt, dti) = self.debris(pos);
+            self.particles.hit(pos, side, dt, dti);
         }
         let in_water = self.player.eye_material(&self.world, self.eye(0.0)) == Material::Water;
         let step =
@@ -1272,6 +1421,8 @@ impl Game {
                 let damage = d.damage + step;
                 if damage >= 1.0 {
                     self.block_sound(id, pos, "dig", 1.0, 0.8);
+                    let (dt, dti) = self.debris(pos);
+                    self.particles.destroy(pos, dt, dti);
                     let _ = self.sim.commands.send(Command::Dig(pos));
                     self.stats.add_exhaustion(0.025);
                     self.dig = None;
@@ -1283,6 +1434,8 @@ impl Game {
             _ => {
                 if step >= 1.0 {
                     self.block_sound(id, pos, "dig", 1.0, 0.8);
+                    let (dt, dti) = self.debris(pos);
+                    self.particles.destroy(pos, dt, dti);
                     let _ = self.sim.commands.send(Command::Dig(pos));
                     self.stats.add_exhaustion(0.025);
                     self.dig = None;
@@ -1875,6 +2028,20 @@ impl Game {
             let atlas = &self.atlas;
             crate::render::model::mob(&mut dynamic, &|n| atlas.mob_tex(n), m, rel, partial, light);
         }
+        {
+            let w = &self.world;
+            let lf = |x: i32, y: i32, z: i32| (w.light(true, x, y, z), w.light(false, x, y, z));
+            self.particles.render(
+                &mut dynamic,
+                &lf,
+                eye,
+                self.player.yaw,
+                self.player.pitch,
+                partial,
+                self.atlas.mob_tex("../particle/particles"),
+                self.atlas.mob_tex("explosion"),
+            );
+        }
         if let Some(at) = self.atlas.mob_tex("arrow") {
             for a in &self.arrows {
                 let t = partial as f64;
@@ -1981,6 +2148,67 @@ impl Game {
             window_size.0 as f32 / scale as f32,
             window_size.1 as f32 / scale as f32,
         );
+        // ItemRenderer.renderWarpedTextureOverlay: the water texture, repeated four
+        // times across the screen and scrolled by the view direction.
+        if eye_mat == Material::Water {
+            if let Some(t) = self.atlas.mob_tex("../misc/underwater") {
+                let (sw, sh) = (ui.w, ui.h);
+                let (lx, ly, lz) = (
+                    math::floor_double(eye[0]),
+                    math::floor_double(eye[1]),
+                    math::floor_double(eye[2]),
+                );
+                let l = self
+                    .world
+                    .light(true, lx, ly, lz)
+                    .max(self.world.light(false, lx, ly, lz));
+                let f = 1.0 - l as f32 / 15.0;
+                let br = (1.0 - f) / (f * 3.0 + 1.0);
+                let g = (br.clamp(0.0, 1.0) * 255.0) as u32;
+                let color = g << 16 | g << 8 | g;
+                let su = (-self.player.yaw / 64.0).rem_euclid(1.0);
+                let sv = (self.player.pitch / 64.0).rem_euclid(1.0);
+                let (cw, ch) = (sw / 4.0, sh / 4.0);
+                let (tw, th) = (
+                    (t.rect[2] - t.rect[0]) * 16.0 / t.size,
+                    (t.rect[3] - t.rect[1]) * 16.0 / t.size,
+                );
+                for i in -1..5 {
+                    for j in -1..5 {
+                        let mut x0 = (i as f32 - su) * cw;
+                        let mut y0 = (j as f32 - sv) * ch;
+                        let (mut x1, mut y1) = (x0 + cw, y0 + ch);
+                        let (mut u0, mut v0, mut u1, mut v1) = (0.0f32, 0.0f32, 1.0f32, 1.0f32);
+                        if x0 < 0.0 {
+                            u0 = -x0 / cw;
+                            x0 = 0.0;
+                        }
+                        if y0 < 0.0 {
+                            v0 = -y0 / ch;
+                            y0 = 0.0;
+                        }
+                        if x1 > sw {
+                            u1 = 1.0 - (x1 - sw) / cw;
+                            x1 = sw;
+                        }
+                        if y1 > sh {
+                            v1 = 1.0 - (y1 - sh) / ch;
+                            y1 = sh;
+                        }
+                        if x1 <= x0 || y1 <= y0 {
+                            continue;
+                        }
+                        let uv = [
+                            t.rect[0] + u0 * tw,
+                            t.rect[1] + v0 * th,
+                            t.rect[0] + u1 * tw,
+                            t.rect[1] + v1 * th,
+                        ];
+                        ui.atlas_rect(x0, y0, x1 - x0, y1 - y0, uv, color, 0.5);
+                    }
+                }
+            }
+        }
         screens::hotbar(&mut ui, &self.view.inv);
         if self.mode == GameMode::Survival {
             let under = eye_mat == Material::Water;

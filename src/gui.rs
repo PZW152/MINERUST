@@ -49,6 +49,30 @@ impl<'a> Ui<'a> {
             .extend_from_slice(&[vert(0), vert(1), vert(2), vert(0), vert(2), vert(3)]);
     }
 
+    /// A block-atlas region (`uv` = u0, v0, u1, v1) drawn into a GUI rectangle.
+    pub fn atlas_rect(
+        &mut self,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        uv: [f32; 4],
+        color: u32,
+        alpha: f32,
+    ) {
+        self.quad(
+            [[x, y], [x, y + h], [x + w, y + h], [x + w, y]],
+            [
+                [uv[0], uv[1]],
+                [uv[0], uv[3]],
+                [uv[2], uv[3]],
+                [uv[2], uv[1]],
+            ],
+            rgba(color, alpha),
+            BLOCKS,
+        );
+    }
+
     /// `Gui.drawRect`
     pub fn rect(&mut self, x: f32, y: f32, w: f32, h: f32, color: u32, alpha: f32) {
         self.quad(

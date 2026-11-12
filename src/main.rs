@@ -12,6 +12,7 @@ mod inventory;
 mod item;
 mod item_table;
 mod java;
+mod particles;
 mod play;
 mod render;
 mod screens;
