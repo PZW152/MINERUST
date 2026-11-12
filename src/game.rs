@@ -27,6 +27,8 @@ type MovingKey = ([i32; 3], u8, u8, crate::render::mesher::MovingDraw);
 
 struct ClientChunk {
     mc: MeshChunk,
+    /// End portal blocks (their `TileEntityEndPortal`s).
+    portals: Vec<[i32; 3]>,
     /// Everything that can write into it has been populated.
     ready: bool,
 }
@@ -213,6 +215,10 @@ pub struct Game {
     items: Vec<ItemView>,
     /// `EntityPickupFX`: collected items flying to the player, with age.
     pickups: Vec<(ItemView, i32)>,
+    /// `EntityFallingBlock`s from the server.
+    falling: Vec<crate::entity::falling::FallingView>,
+    /// Origin of `Minecraft.getSystemTime`.
+    started: Instant,
     /// `TileEntityRendererPiston` geometry by position, block, metadata and draw mode.
     moving_mesh: HashMap<MovingKey, Vec<crate::render::mesher::Vertex>>,
     /// Sound output (absent when no asset directory or device was found).
@@ -461,6 +467,8 @@ impl Game {
             },
             items: Vec::new(),
             pickups: Vec::new(),
+            falling: Vec::new(),
+            started: Instant::now(),
             moving_mesh: HashMap::new(),
             audio: None,
             weather: Default::default(),
@@ -657,9 +665,22 @@ impl Game {
         while let Ok(e) = self.sim.events.try_recv() {
             match e {
                 Event::Chunk { key, chunk, ready } => {
-                    self.world
-                        .chunks
-                        .insert(key, ClientChunk { mc: chunk, ready });
+                    let mut portals = Vec::new();
+                    for (i, &b) in chunk.data.blocks.iter().enumerate() {
+                        if b == block::END_PORTAL {
+                            // index ((x << 4 | z) << 8) | y
+                            let (x, z, y) = ((i >> 12) as i32, (i >> 8 & 15) as i32, (i & 255) as i32);
+                            portals.push([key.0 * 16 + x, y, key.1 * 16 + z]);
+                        }
+                    }
+                    self.world.chunks.insert(
+                        key,
+                        ClientChunk {
+                            mc: chunk,
+                            ready,
+                            portals,
+                        },
+                    );
                     // Faces and light on the border depend on the neighbours.
                     for dx in -1..=1 {
                         for dz in -1..=1 {
@@ -716,6 +737,7 @@ impl Game {
                     }
                 }
                 Event::Items(v) => self.items = v,
+                Event::Falling(v) => self.falling = v,
                 Event::Moving(v) => {
                     self.world.moving = v;
                     let live: HashSet<[i32; 3]> = self.world.moving.iter().map(|m| m.0).collect();
@@ -2238,7 +2260,46 @@ impl Game {
                 before_terrain: eye[1] < 128.0,
             }
         };
+        // RenderEndPortal: layer colours from Random(31100), reset every frame.
+        let mut portal_layers = [[0.0f32; 4]; 16];
+        {
+            let mut r = crate::java::JavaRandom::new(31100);
+            for (l, c) in portal_layers.iter_mut().enumerate() {
+                let depth = 16.0 - l as f32;
+                let mut k = 1.0 / (depth + 1.0);
+                if l == 0 {
+                    k = 0.1;
+                }
+                let mut a = r.next_float() * 0.5 + 0.1;
+                let mut b = r.next_float() * 0.5 + 0.4;
+                let mut d = r.next_float() * 0.5 + 0.5;
+                if l == 0 {
+                    a = 1.0;
+                    b = 1.0;
+                    d = 1.0;
+                }
+                *c = [a * k, b * k, d * k, 1.0];
+            }
+        }
+        // ActiveRenderInfo.objectX/Y/Z: the screen centre on the near plane
+        // (gluUnProject at depth 0), in camera-relative world space.
+        let portal_obj = {
+            let p = [0.0f32, 0.0, -0.05];
+            let t = [view[12], view[13], view[14]];
+            let d = [p[0] - t[0], p[1] - t[1], p[2] - t[2]];
+            let mut o = [0.0f32; 4];
+            for (c, oc) in o.iter_mut().enumerate().take(3) {
+                *oc = view[c * 4] * d[0] + view[c * 4 + 1] * d[1] + view[c * 4 + 2] * d[2];
+            }
+            o
+        };
+        let portal_time = (self.started.elapsed().as_millis() % 700000) as f32 / 700000.0;
         let mut g = Globals {
+            portal_layers,
+            portal_cam: [eye[0] as f32, eye[1] as f32, eye[2] as f32, portal_time],
+            portal_obj,
+            end_sky_rect: self.atlas.rects[self.atlas.end_sky as usize],
+            end_portal_rect: self.atlas.rects[self.atlas.end_portal as usize],
             view_proj,
             sky_rot: render::mul(&render::rot_y(-90.0), &render::rot_x(angle * 360.0)),
             hand_proj: render::mul(
@@ -2442,6 +2503,37 @@ impl Game {
                 partial,
                 light,
             );
+        }
+        // RenderFallingBlock
+        for f in &self.falling {
+            let t = partial as f64;
+            let p = [
+                f.prev[0] + (f.pos[0] - f.prev[0]) * t,
+                f.prev[1] + (f.pos[1] - f.prev[1]) * t,
+                f.prev[2] + (f.pos[2] - f.prev[2]) * t,
+            ];
+            // posX/Y/Z, not interpolated, choose the light and the skip test
+            let (bx, by, bz) = (
+                math::floor_double(f.pos[0]),
+                math::floor_double(f.pos[1]),
+                math::floor_double(f.pos[2]),
+            );
+            if self.world.peek_block(bx, by, bz) == f.block {
+                continue;
+            }
+            let lv = block::info(f.block).light_value as i32;
+            let bright = self.world.light(true, bx, by, bz) << 20
+                | self.world.light(false, bx, by, bz).max(lv) << 4;
+            let start = dynamic.len();
+            crate::render::mesher::rb::Rb::bare(&self.atlas, &mut dynamic, f.block, f.meta as i32)
+                .render_sand_falling(bright);
+            for v in &mut dynamic[start..] {
+                v.pos = [
+                    (v.pos[0] as f64 + p[0] - eye[0]) as f32,
+                    (v.pos[1] as f64 + p[1] - eye[1]) as f32,
+                    (v.pos[2] as f64 + p[2] - eye[2]) as f32,
+                ];
+            }
         }
         // TileEntityRendererPiston
         self.render_moving(&mut dynamic, eye, partial);
@@ -2740,7 +2832,35 @@ impl Game {
                 self.atlas.mob_tex("../environment/rain").map(|t| t.rect)
             );
         }
+        // TileEntityEndPortal: drawn within 64 blocks.
+        let mut end_portals: Vec<crate::render::mesher::Vertex> = Vec::new();
+        for c in self.world.chunks.values() {
+            for &[x, y, z] in &c.portals {
+                let d = [
+                    x as f64 + 0.5 - eye[0],
+                    y as f64 + 0.5 - eye[1],
+                    z as f64 + 0.5 - eye[2],
+                ];
+                if d[0] * d[0] + d[1] * d[1] + d[2] * d[2] >= 4096.0 {
+                    continue;
+                }
+                let (bx, by, bz) = (
+                    (x as f64 - eye[0]) as f32,
+                    (y as f64 - eye[1] + 0.75) as f32,
+                    (z as f64 - eye[2]) as f32,
+                );
+                for (dx, dz) in [(0.0, 0.0), (0.0, 1.0), (1.0, 1.0), (1.0, 0.0)] {
+                    end_portals.push(crate::render::mesher::Vertex {
+                        pos: [bx + dx, by, bz + dz],
+                        uv: [0.0; 2],
+                        color: [255; 4],
+                        light: [0; 4],
+                    });
+                }
+            }
+        }
         let frame = Frame {
+            end_portals: &end_portals,
             crosshair: self.screen == Screen::Playing,
             dynamic: &dynamic,
             crack: &crack,

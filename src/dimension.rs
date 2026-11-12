@@ -212,7 +212,6 @@ pub fn make_portal(w: &mut ServerWorld, r: &mut JavaRandom, pos: [f64; 3]) {
             }
         }
     }
-    let axis = if a != 0 { 1 } else { 2 };
     for _ in 0..4 {
         for wdt in 0..4 {
             for h in -1..4 {
@@ -222,7 +221,9 @@ pub fn make_portal(w: &mut ServerWorld, r: &mut JavaRandom, pos: [f64; 3]) {
                 if frame {
                     w.set_block(cx, y + h, cz, block::OBSIDIAN, 0, 2);
                 } else {
-                    w.set_block(cx, y + h, cz, block::PORTAL, axis, 2);
+                    // Teleporter.makePortal places metadata 0; BlockPortal
+                    // works the axis out from its neighbours.
+                    w.set_block(cx, y + h, cz, block::PORTAL, 0, 2);
                 }
             }
         }

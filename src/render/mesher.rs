@@ -516,6 +516,14 @@ fn mesh_block(cx: &Ctx, out: &mut Vec<Vertex>, id: u8, meta: i32, x: i32, y: i32
                 _ => rb.render_standard(x, y, z),
             };
         }
+        Shape::Boxes if id == block::PORTAL => {
+            // render type 0 with BlockPortal.setBlockBoundsBasedOnState
+            let get = |x: i32, y: i32, z: i32| (r.block(x, y, z), r.meta(x, y, z) as u8);
+            let axis = crate::shapes::portal_axis(&get, x, y, z, meta as u8);
+            let mut rb = rb::Rb::new(cx, out, id, meta);
+            rb.set_bounds(crate::shapes::portal_bounds(axis));
+            rb.render_standard(x, y, z);
+        }
         Shape::Boxes if id == block::PISTON_HEAD => {
             // renderPistonExtension (17)
             rb::Rb::new(cx, out, id, meta).render_piston_extension(x, y, z, true);

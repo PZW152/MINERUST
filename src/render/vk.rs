@@ -25,6 +25,11 @@ struct Globals {
     moon_rect: vec4<f32>,
     void_color: vec4<f32>,
     lightmap: array<vec4<f32>, 256>,
+    portal_layers: array<vec4<f32>, 16>,
+    portal_cam: vec4<f32>,
+    portal_obj: vec4<f32>,
+    end_sky_rect: vec4<f32>,
+    end_portal_rect: vec4<f32>,
 }
 struct Push {
     offset: vec4<f32>,
@@ -221,6 +226,90 @@ fn fs_color_fog(i: ColorOut) -> @location(0) vec4<f32> {
     return vec4<f32>(mix(g.fog_color.rgb, i.color.rgb, f), i.color.a);
 }
 
+struct PortalOut {
+    @builtin(position) pos: vec4<f32>,
+    @location(0) rel: vec3<f32>,
+}
+
+@vertex
+fn vs_portal(@location(0) pos: vec3<f32>) -> PortalOut {
+    var o: PortalOut;
+    o.pos = g.view_proj * vec4<f32>(pos, 1.0);
+    o.rel = pos;
+    return o;
+}
+
+fn rect_sample(r: vec4<f32>, uv: vec2<f32>) -> vec4<f32> {
+    // GL_REPEAT inside one atlas tile
+    let f = uv - floor(uv);
+    return textureSampleLevel(tex, samp, r.xy + f * (r.zw - r.xy), 0.0);
+}
+
+// RenderEndPortal: sixteen layers with object-linear S/T, eye-linear Q and
+// a texture matrix per layer; layer 0 is alpha-blended, the rest added.
+@fragment
+fn fs_portal(i: PortalOut) -> @location(0) vec4<f32> {
+    let cam = g.portal_cam.xyz;
+    let obj = g.portal_obj.xyz;
+    let time = g.portal_cam.w;
+    let y0 = i.rel.y;
+    let f = fog_factor(length(i.rel));
+    var add = vec3<f32>(0.0, 0.0, 0.0);
+    var base = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+    for (var l: i32 = 0; l < 16; l = l + 1) {
+        var depth = f32(16 - l);
+        var scale = 0.0625;
+        if (l == 0) {
+            depth = 65.0;
+            scale = 0.125;
+        }
+        if (l == 1) {
+            scale = 0.5;
+        }
+        let v17 = -y0;
+        let v18 = v17 + obj.y;
+        let v19 = v17 + depth + obj.y;
+        let v20 = y0 + v18 / v19;
+        // glTexGen: S = x, T = z, R = 1 (object linear), Q = eye-space y
+        // relative to the plane translated to v20.
+        let q = y0 - v20;
+        var s = i.rel.x;
+        var t = i.rel.z;
+        var r = 1.0;
+        // texture matrix, applied right to left
+        let k = depth / v18;
+        s = s + obj.x * k * q;
+        t = t + obj.z * k * q;
+        r = r - cam.y * q;
+        s = s - cam.x * q;
+        t = t - cam.z * q;
+        r = r - cam.y * q;
+        s = s - 0.5 * q;
+        t = t - 0.5 * q;
+        let ang = radians(f32(l * l * 4321 + l * 9) * 2.0);
+        let cs = cos(ang);
+        let sn = sin(ang);
+        let s4 = cs * s - sn * t;
+        let t4 = sn * s + cs * t;
+        s = s4 + 0.5 * q;
+        t = t4 + 0.5 * q;
+        s = s * scale;
+        t = t * scale;
+        t = t + time * q;
+        let uv = vec2<f32>(s / q, t / q);
+        let c = g.portal_layers[l];
+        if (l == 0) {
+            let tx = rect_sample(g.end_sky_rect, uv);
+            let col = mix(g.fog_color.rgb, tx.rgb * c.rgb, f);
+            base = vec4<f32>(col * tx.a, tx.a);
+        } else {
+            let tx = rect_sample(g.end_portal_rect, uv);
+            add = add + mix(g.fog_color.rgb, tx.rgb * c.rgb, f);
+        }
+    }
+    return vec4<f32>(base.rgb + add, base.a);
+}
+
 @vertex
 fn vs_line(@location(0) pos: vec3<f32>) -> @builtin(position) vec4<f32> {
     if (pc.offset.w > 0.5) {
@@ -258,6 +347,14 @@ pub struct Globals {
     pub moon_rect: [f32; 4],
     pub void_color: [f32; 4],
     pub lightmap: [[f32; 4]; 256],
+    /// `RenderEndPortal` layer colours (`Random(31100)`, times `var16`).
+    pub portal_layers: [[f32; 4]; 16],
+    /// Camera world position (as floats) and `getSystemTime() % 700000 / 700000`.
+    pub portal_cam: [f32; 4],
+    /// `ActiveRenderInfo.objectX/Y/Z`
+    pub portal_obj: [f32; 4],
+    pub end_sky_rect: [f32; 4],
+    pub end_portal_rect: [f32; 4],
 }
 
 pub struct Frame<'a> {
@@ -282,6 +379,8 @@ pub struct Frame<'a> {
     pub hand: &'a [Vertex],
     /// Rain and snow streaks (camera-relative, alpha blended).
     pub weather: &'a [Vertex],
+    /// `RenderEndPortal` quads (camera-relative, at y + 0.75).
+    pub end_portals: &'a [Vertex],
     pub crosshair: bool,
 }
 
@@ -368,6 +467,7 @@ pub struct Renderer {
     set_layout: vk::DescriptorSetLayout,
     desc_pool: vk::DescriptorPool,
     pipe_sky: vk::Pipeline,
+    pipe_portal: vk::Pipeline,
     pipe_opaque: vk::Pipeline,
     pipe_translucent: vk::Pipeline,
     pipe_line: vk::Pipeline,
@@ -826,7 +926,7 @@ impl Renderer {
                     vi = vi
                         .vertex_binding_descriptions(&vb)
                         .vertex_attribute_descriptions(&va_terrain);
-                } else if kind == 3 || kind == 4 {
+                } else if kind == 3 || kind == 4 || kind == 12 {
                     vi = vi
                         .vertex_binding_descriptions(&vb)
                         .vertex_attribute_descriptions(&va_terrain[..1]);
@@ -849,7 +949,7 @@ impl Renderer {
                     .depth_bias_constant_factor(-3.0)
                     .depth_bias_slope_factor(-3.0)
                     .polygon_mode(vk::PolygonMode::FILL)
-                    .cull_mode(if kind == 1 || kind == 2 {
+                    .cull_mode(if kind == 1 || kind == 2 || kind == 12 {
                         vk::CullModeFlags::BACK
                     } else {
                         vk::CullModeFlags::NONE
@@ -864,9 +964,10 @@ impl Renderer {
                             || kind == 7
                             || kind == 8
                             || kind == 10
-                            || kind == 11,
+                            || kind == 11
+                            || kind == 12,
                     )
-                    .depth_write_enable(kind == 1 || kind == 2 || kind == 7 || kind == 11)
+                    .depth_write_enable(kind == 1 || kind == 2 || kind == 7 || kind == 11 || kind == 12)
                     .depth_compare_op(vk::CompareOp::LESS_OR_EQUAL);
                 let mut att = vk::PipelineColorBlendAttachmentState::default()
                     .color_write_mask(vk::ColorComponentFlags::RGBA);
@@ -882,6 +983,18 @@ impl Renderer {
                         .color_blend_op(vk::BlendOp::ADD)
                         .src_alpha_blend_factor(vk::BlendFactor::ZERO)
                         .dst_alpha_blend_factor(vk::BlendFactor::ONE)
+                        .alpha_blend_op(vk::BlendOp::ADD);
+                }
+                if kind == 12 {
+                    // layer 0 (SRC_ALPHA, ONE_MINUS_SRC_ALPHA) then (ONE, ONE)
+                    // layers, folded into one premultiplied output
+                    att = att
+                        .blend_enable(true)
+                        .src_color_blend_factor(vk::BlendFactor::ONE)
+                        .dst_color_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
+                        .color_blend_op(vk::BlendOp::ADD)
+                        .src_alpha_blend_factor(vk::BlendFactor::ONE)
+                        .dst_alpha_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
                         .alpha_blend_op(vk::BlendOp::ADD);
                 }
                 if kind == 6 {
@@ -950,6 +1063,7 @@ impl Renderer {
             let pipe_gui = mk(c"vs_ui", c"fs_ui", 9);
             let pipe_crack = mk(c"vs_terrain", c"fs_crack", 10);
             let pipe_hand = mk(c"vs_terrain", c"fs_terrain", 11);
+            let pipe_portal = mk(c"vs_portal", c"fs_portal", 12);
             device.destroy_shader_module(module, None);
 
             let sampler = device
@@ -991,6 +1105,7 @@ impl Renderer {
                 set_layout,
                 desc_pool,
                 pipe_sky,
+                pipe_portal,
                 pipe_opaque,
                 pipe_translucent,
                 pipe_line,
@@ -2277,6 +2392,10 @@ impl Renderer {
             let n_crack = frame.crack.len().min(cap - n_dyn);
             let n_hand = frame.hand.len().min(cap - n_dyn - n_crack);
             let n_weather = frame.weather.len().min(cap - n_dyn - n_crack - n_hand);
+            let n_portal = frame
+                .end_portals
+                .len()
+                .min(cap - n_dyn - n_crack - n_hand - n_weather);
             let wptr = self.frames[fi].world_ptr;
             let wbuf = self.frames[fi].world_buf;
             std::ptr::copy_nonoverlapping(frame.dynamic.as_ptr() as *const u8, wptr, n_dyn * vsz);
@@ -2295,11 +2414,24 @@ impl Renderer {
                 wptr.add((n_dyn + n_crack + n_hand) * vsz),
                 n_weather * vsz,
             );
+            let portal_at = n_dyn + n_crack + n_hand + n_weather;
+            std::ptr::copy_nonoverlapping(
+                frame.end_portals.as_ptr() as *const u8,
+                wptr.add(portal_at * vsz),
+                n_portal * vsz,
+            );
             if n_dyn >= 4 {
                 dev.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, self.pipe_opaque);
                 push([0.0; 4], [0.0; 4]);
                 dev.cmd_bind_vertex_buffers(cmd, 0, &[wbuf], &[0]);
                 dev.cmd_draw_indexed(cmd, (n_dyn / 4) as u32 * 6, 1, 0, 0, 0);
+            }
+            // Tile entity renderers after the entities (RenderEndPortal).
+            if n_portal >= 4 {
+                dev.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, self.pipe_portal);
+                push([0.0; 4], [0.0; 4]);
+                dev.cmd_bind_vertex_buffers(cmd, 0, &[wbuf], &[(portal_at * vsz) as u64]);
+                dev.cmd_draw_indexed(cmd, (n_portal / 4) as u32 * 6, 1, 0, 0, 0);
             }
             if n_crack >= 4 {
                 dev.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, self.pipe_crack);
@@ -2609,6 +2741,7 @@ impl Drop for Renderer {
             self.device.destroy_pipeline(self.pipe_gui, None);
             self.device.destroy_pipeline(self.pipe_crack, None);
             self.device.destroy_pipeline(self.pipe_hand, None);
+            self.device.destroy_pipeline(self.pipe_portal, None);
             self.device.destroy_buffer(self.stars.0, None);
             self.device.free_memory(self.stars.1, None);
             if let Some((b, m, _)) = self.cloud_mesh.take() {

@@ -128,6 +128,8 @@ pub enum Event {
     /// Moving piston blocks (`TileEntityPiston`), sent while any exist and
     /// once more when the last one stops.
     Moving(Vec<([i32; 3], crate::world::redstone::MovingView)>),
+    /// Falling blocks near the player, sent each tick.
+    Falling(Vec<crate::entity::falling::FallingView>),
     /// The player picked these items up (`S0DPacketCollectItem`).
     Collect(Vec<crate::play::ItemView>),
     /// `TileEntityPiston.launchWithSlimeBlock` boxes and displacements, for
@@ -157,6 +159,7 @@ struct Parked {
     unsaved: std::collections::BTreeSet<(i32, i32)>,
     tiles: std::collections::BTreeMap<[i32; 3], crate::play::Tile>,
     items: Vec<crate::entity::item::ItemEntity>,
+    falling: Vec<crate::entity::falling::FallingBlock>,
     teleport_rand: JavaRandom,
 }
 
@@ -459,6 +462,10 @@ impl Sim {
                     let _ = sim.mobs.decode(line);
                 }
             }
+            if let Ok(b) = std::fs::read(d.join("data").join("drops.dat")) {
+                let mut r = JavaRandom::new(cfg.seed);
+                sim.play.load_drops(&b, &mut r);
+            }
         }
         let mut saved_dim = 0;
         sim.anvil_level = anvil;
@@ -577,6 +584,7 @@ impl Sim {
                 unsaved: std::mem::replace(&mut sim.unsaved, next.unsaved),
                 tiles: std::mem::replace(&mut sim.play.tiles, next.tiles),
                 items: std::mem::replace(&mut sim.play.items, next.items),
+                falling: std::mem::replace(&mut sim.play.falling, next.falling),
                 teleport_rand: std::mem::replace(&mut sim.teleport_rand, next.teleport_rand),
             };
             sim.world.total_time = old.world.total_time;
@@ -1119,6 +1127,9 @@ impl Sim {
             events.push(Event::Inventory(Box::new(self.play.view())));
         }
         events.push(Event::Items(self.play.item_views()));
+        events.push(Event::Falling(
+            self.play.falling.iter().map(|f| f.view()).collect(),
+        ));
         if self.respawn_pending {
             self.respawn_pending = false;
             self.centre = (
@@ -1264,6 +1275,7 @@ impl Sim {
             .map(crate::entity::mob::Mobs::to_nbt)
             .collect();
         entities.extend(play.items_nbt(cx, cz, dim));
+        entities.extend(play.falling_nbt(cx, cz, dim));
         (tiles, entities)
     }
 
@@ -1479,6 +1491,8 @@ impl Sim {
             for e in &entities {
                 if e.string("id") == Some("Item") {
                     self.play.item_from_nbt(e, &mut rnd);
+                } else if e.string("id") == Some("FallingSand") {
+                    self.play.falling_from_nbt(e);
                 } else {
                     let _ = self.mobs.from_nbt(e);
                 }
@@ -1620,6 +1634,7 @@ impl Sim {
         world.anvil = self.world.anvil;
         let mut mobs = crate::entity::mob::Mobs::default();
         let mut tiles = std::collections::BTreeMap::new();
+        let mut drops = Play::new(GameMode::Survival);
         if let Some(d) = &world.save_dir {
             if let Ok(text) = std::fs::read_to_string(d.join("data").join("structures.txt")) {
                 if let Some(st) = world.structures.as_mut() {
@@ -1638,6 +1653,10 @@ impl Sim {
                 }
                 tiles = tmp.tiles;
             }
+            if let Ok(b) = std::fs::read(d.join("data").join("drops.dat")) {
+                let mut r = JavaRandom::new(seed);
+                drops.load_drops(&b, &mut r);
+            }
         }
         Parked {
             dim,
@@ -1645,7 +1664,8 @@ impl Sim {
             mobs,
             unsaved: Default::default(),
             tiles,
-            items: Vec::new(),
+            items: drops.items,
+            falling: drops.falling,
             teleport_rand: JavaRandom::new(seed),
         }
     }
@@ -1666,6 +1686,7 @@ impl Sim {
             unsaved: std::mem::replace(&mut self.unsaved, next.unsaved),
             tiles: std::mem::replace(&mut self.play.tiles, next.tiles),
             items: std::mem::replace(&mut self.play.items, next.items),
+            falling: std::mem::replace(&mut self.play.falling, next.falling),
             teleport_rand: std::mem::replace(&mut self.teleport_rand, next.teleport_rand),
         };
         // Unloaded chunks of the old dimension go to disk now.
@@ -1769,6 +1790,16 @@ impl Sim {
             }
         }
         DONE.store(true, std::sync::atomic::Ordering::Relaxed);
+        // CommandSetBlock: x y z id [meta]
+        if let Ok(list) = std::env::var("MINERUST_SETBLOCK") {
+            for cmd in list.split(';') {
+                let v: Vec<i32> = cmd.split_whitespace().filter_map(|t| t.parse().ok()).collect();
+                if v.len() >= 4 && (0..256).contains(&v[1]) {
+                    let meta = v.get(4).copied().unwrap_or(0);
+                    self.world.set_block(v[0], v[1], v[2], v[3] as u8, meta, 3);
+                }
+            }
+        }
         let Ok(list) = std::env::var("MINERUST_SUMMON") else {
             return;
         };
@@ -1855,6 +1886,10 @@ impl Sim {
                 &data.join("entities.txt"),
                 p.mobs.encode().join("\n").as_bytes(),
             )?;
+            save::write_atomic(
+                &data.join("drops.dat"),
+                &Play::drops_nbt(&p.items, &p.falling, p.dim),
+            )?;
             if p.dim != 0 {
                 let mut tmp = Play::new(GameMode::Survival);
                 tmp.tiles = p.tiles.clone();
@@ -1938,6 +1973,10 @@ impl Sim {
             save::write_atomic(
                 &data.join("entities.txt"),
                 self.mobs.encode().join("\n").as_bytes(),
+            )?;
+            save::write_atomic(
+                &data.join("drops.dat"),
+                &Play::drops_nbt(&self.play.items, &self.play.falling, self.dim),
             )?;
         }
         save::write_level(&base, &level)
@@ -2812,6 +2851,43 @@ mod tests {
         let w = &mut sim.world;
         assert_eq!(w.block(x + 1, y, sz), block::COBBLESTONE);
         assert_eq!(w.block(x, y, sz), block::STICKY_PISTON);
+    }
+
+    /// BlockFalling.tryFall spawns an EntityFallingBlock that lands two
+    /// blocks lower; drops.dat keeps items over a save.
+    #[test]
+    fn sand_falls_as_an_entity() {
+        let (mut sim, x, y, z) = redstone_sim();
+        sim.world.set_block(x, y + 3, z, block::SAND, 1, 3);
+        assert_eq!(sim.world.block(x, y + 3, z), block::SAND);
+        assert_eq!(sim.world.meta(x, y + 3, z), 1);
+        let mut seen = false;
+        for _ in 0..40 {
+            steps(&mut sim, 1);
+            // Exposed cave gravel falls too (WorldGenMinable scheduled it).
+            if let Some(f) = sim.play.falling.iter().find(|f| f.block == block::SAND) {
+                seen = true;
+                assert_eq!(f.meta, 1);
+            }
+        }
+        assert!(seen, "an EntityFallingBlock appeared");
+        assert!(!sim.play.falling.iter().any(|f| f.block == block::SAND));
+        assert_eq!(sim.world.block(x, y + 3, z), block::AIR);
+        assert_eq!(sim.world.block(x, y, z), block::SAND);
+        assert_eq!(sim.world.meta(x, y, z), 1, "red sand stays red");
+
+        let mut r = JavaRandom::new(3);
+        let it = crate::entity::item::ItemEntity::new(
+            7,
+            crate::item::Stack::new(crate::item::STICK, 0, 5),
+            [x as f64 + 0.5, y as f64 + 1.0, z as f64 + 0.5],
+            &mut r,
+        );
+        let bytes = Play::drops_nbt(&[it], &[], 0);
+        let mut back = Play::new(GameMode::Survival);
+        back.load_drops(&bytes, &mut r);
+        assert_eq!(back.items.len(), 1);
+        assert_eq!(back.items[0].stack.count, 5);
     }
 
     /// TileEntityPiston.launchWithSlimeBlock moves an item lying in front.

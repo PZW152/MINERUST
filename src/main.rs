@@ -531,6 +531,11 @@ fn parse_args() -> Options {
                 std::env::set_var("MINERUST_DIM", &args[i + 1]);
                 i += 1;
             }
+            "--setblock" if i + 1 < args.len() => {
+                // `/setblock x y z id meta`, several separated by ';'
+                std::env::set_var("MINERUST_SETBLOCK", &args[i + 1]);
+                i += 1;
+            }
             "--summon" if i + 1 < args.len() => {
                 std::env::set_var("MINERUST_SUMMON", &args[i + 1]);
                 i += 1;

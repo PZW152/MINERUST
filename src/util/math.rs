@@ -116,3 +116,13 @@ pub fn wrap_angle_180(mut a: f32) -> f32 {
 pub fn java_round(d: f64) -> i64 {
     (d + 0.5).floor() as i64
 }
+
+/// `MathHelper.ceiling_float_int`
+pub fn ceiling_float_int(f: f32) -> i32 {
+    let i = f as i32;
+    if f > i as f32 {
+        i + 1
+    } else {
+        i
+    }
+}

@@ -68,6 +68,8 @@ pub struct Play {
     pub open: Open,
     pub mode: GameMode,
     pub items: Vec<ItemEntity>,
+    /// `EntityFallingBlock`s
+    pub falling: Vec<crate::entity::falling::FallingBlock>,
     next_item: u32,
     /// Sounds and particles of the item entities this tick.
     pub fx: Vec<crate::entity::base::Fx>,
@@ -305,6 +307,7 @@ impl Play {
             open: Open::None,
             mode,
             items: Vec::new(),
+            falling: Vec::new(),
             next_item: 1,
             pitch: 0.0,
             fx: Vec::new(),
@@ -390,6 +393,12 @@ impl Play {
     pub fn add_gen_entity(&mut self, e: crate::world::server::GenEntity, r: &mut JavaRandom) {
         use crate::world::server::GenEntity;
         match e {
+            GenEntity::FallingBlock { pos, block, meta } => {
+                let id = self.next_item;
+                self.next_item += 1;
+                self.falling
+                    .push(crate::entity::falling::FallingBlock::new(id, pos, block, meta));
+            }
             GenEntity::Item { pos, stack } => {
                 let id = self.next_item;
                 self.next_item += 1;
@@ -1319,6 +1328,24 @@ impl Play {
             }
         }
 
+        // EntityFallingBlock.onUpdate
+        let mut falling = std::mem::take(&mut self.falling);
+        let mut drops = Vec::new();
+        for f in falling.iter_mut() {
+            f.tick(w, &mut drops, &mut self.fx);
+        }
+        falling.retain(|f| !f.e.dead);
+        self.falling = falling;
+        // Entity.entityDropItem(stack, 0): delayBeforeCanPickup 10
+        let mut rnd = std::mem::replace(&mut w.rand, JavaRandom::new(0));
+        for (p, st) in drops {
+            let id = self.next_item;
+            self.next_item += 1;
+            let mut e = ItemEntity::new(id, st, p, &mut rnd);
+            e.pickup_delay = 10;
+            self.spawn(e);
+        }
+        w.rand = rnd;
         // EntityItem.onUpdate (merging included), then the player's
         // EntityPlayer.onLivingUpdate pickup of the items in reach.
         let mut items = std::mem::take(&mut self.items);
@@ -1512,6 +1539,107 @@ impl Play {
                 compound(v)
             })
             .collect()
+    }
+
+    /// Dropped items and falling blocks of one dimension for the project's
+    /// own save format (`data/drops.dat`), as entity NBT.
+    pub fn drops_nbt(
+        items: &[ItemEntity],
+        falling: &[crate::entity::falling::FallingBlock],
+        dim: i32,
+    ) -> Vec<u8> {
+        use crate::world::anvil::{compound, Nbt};
+        let mut tmp = Play::new(GameMode::Survival);
+        tmp.items = items.to_vec();
+        tmp.falling = falling.to_vec();
+        let mut keys = std::collections::BTreeSet::new();
+        for e in &tmp.items {
+            keys.insert(((e.e.pos[0].floor() as i32) >> 4, (e.e.pos[2].floor() as i32) >> 4));
+        }
+        for f in &tmp.falling {
+            keys.insert(((f.e.pos[0].floor() as i32) >> 4, (f.e.pos[2].floor() as i32) >> 4));
+        }
+        let mut list = Vec::new();
+        for (cx, cz) in keys {
+            list.extend(tmp.items_nbt(cx, cz, dim));
+            list.extend(tmp.falling_nbt(cx, cz, dim));
+        }
+        crate::world::anvil::write_nbt(&compound(vec![("Entities", Nbt::List(10, list))]))
+    }
+
+    /// Reads `data/drops.dat` back.
+    pub fn load_drops(&mut self, bytes: &[u8], r: &mut JavaRandom) {
+        let Ok(root) = crate::world::anvil::read_nbt(bytes) else {
+            return;
+        };
+        for e in root.list("Entities") {
+            match e.string("id") {
+                Some("Item") => self.item_from_nbt(e, r),
+                Some("FallingSand") => self.falling_from_nbt(e),
+                _ => {}
+            }
+        }
+    }
+
+    /// `EntityFallingBlock.writeEntityToNBT` for the falling blocks of a chunk.
+    pub fn falling_nbt(&self, cx: i32, cz: i32, dim: i32) -> Vec<crate::world::anvil::Nbt> {
+        use crate::world::anvil::{compound, Nbt};
+        self.falling
+            .iter()
+            .filter(|f| {
+                (f.e.pos[0].floor() as i32) >> 4 == cx && (f.e.pos[2].floor() as i32) >> 4 == cz
+            })
+            .map(|f| {
+                let mut v = vec![("id", Nbt::String("FallingSand".into()))];
+                v.extend(f.e.nbt_fields(dim, f.id));
+                v.push(("Tile", Nbt::Byte(f.block as i8)));
+                v.push(("TileID", Nbt::Int(f.block as i32)));
+                v.push(("Data", Nbt::Byte(f.meta as i8)));
+                v.push(("Time", Nbt::Byte(f.fall_time as i8)));
+                v.push(("DropItem", Nbt::Byte(f.drop_item as i8)));
+                v.push(("HurtEntities", Nbt::Byte(f.hurt_entities as i8)));
+                v.push(("FallHurtAmount", Nbt::Float(f.fall_hurt_amount)));
+                v.push(("FallHurtMax", Nbt::Int(f.fall_hurt_max)));
+                compound(v)
+            })
+            .collect()
+    }
+
+    /// `EntityFallingBlock.readEntityFromNBT`
+    pub fn falling_from_nbt(&mut self, t: &crate::world::anvil::Nbt) {
+        use crate::world::anvil::Nbt;
+        let pos = t.list("Pos");
+        let p = |i: usize| match pos.get(i) {
+            Some(Nbt::Double(v)) => *v,
+            _ => 0.0,
+        };
+        let mut block = match t.get("TileID") {
+            Some(Nbt::Int(v)) => *v as u8,
+            _ => (t.int("Tile").unwrap_or(12) & 255) as u8,
+        };
+        if block::material(block) == block::Material::Air {
+            block = block::SAND;
+        }
+        let id = self.next_item;
+        self.next_item += 1;
+        let meta = (t.int("Data").unwrap_or(0) & 255) as i32;
+        let mut f = crate::entity::falling::FallingBlock::new(id, [p(0), p(1), p(2)], block, meta);
+        let mo = t.list("Motion");
+        let m = |i: usize| match mo.get(i) {
+            Some(Nbt::Double(v)) => *v,
+            _ => 0.0,
+        };
+        f.e.motion = [m(0), m(1), m(2)];
+        f.fall_time = (t.int("Time").unwrap_or(0) & 255) as i32;
+        if t.get("HurtEntities").is_some() {
+            f.hurt_entities = t.int("HurtEntities").unwrap_or(0) != 0;
+            f.fall_hurt_amount = t.float("FallHurtAmount").unwrap_or(2.0) as f32;
+            f.fall_hurt_max = t.int("FallHurtMax").unwrap_or(40) as i32;
+        }
+        if t.get("DropItem").is_some() {
+            f.drop_item = t.int("DropItem").unwrap_or(1) != 0;
+        }
+        self.falling.push(f);
     }
 
     /// An `EntityItem` from a region file.

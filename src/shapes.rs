@@ -427,6 +427,32 @@ pub fn piston_head(meta: u8) -> Vec<Bx> {
     }
 }
 
+/// `BlockPortal.setBlockBoundsBasedOnState`: metadata 0 takes the axis
+/// from the neighbouring portal blocks.
+pub fn portal_axis(get: Get, x: i32, y: i32, z: i32, meta: u8) -> i32 {
+    let a = (meta & 3) as i32;
+    if a != 0 {
+        return a;
+    }
+    if get(x - 1, y, z).0 != block::PORTAL && get(x + 1, y, z).0 != block::PORTAL {
+        2
+    } else {
+        1
+    }
+}
+
+/// `BlockPortal` bounds for an axis.
+pub fn portal_bounds(axis: i32) -> Bx {
+    let (mut a, mut b) = (0.125f32, 0.125f32);
+    if axis == 1 {
+        a = 0.5;
+    }
+    if axis == 2 {
+        b = 0.5;
+    }
+    [0.5 - a, 0.0, 0.5 - b, 0.5 + a, 1.0, 0.5 + b]
+}
+
 /// Boxes of the blocks whose shape only depends on their own metadata.
 pub fn static_boxes(id: u8, meta: u8) -> Vec<Bx> {
     match id {
@@ -453,13 +479,7 @@ pub fn static_boxes(id: u8, meta: u8) -> Vec<Bx> {
         block::CAULDRON => vec![FULL],
         block::TRAPDOOR => vec![trapdoor(meta)],
         // BlockPortal.setBlockBoundsBasedOnState: axis 1 spans x, 2 spans z
-        block::PORTAL => {
-            if meta & 3 == 2 {
-                vec![[0.375, 0.0, 0.0, 0.625, 1.0, 1.0]]
-            } else {
-                vec![[0.0, 0.0, 0.375, 1.0, 1.0, 0.625]]
-            }
-        }
+        block::PORTAL => vec![portal_bounds(if meta & 3 == 0 { 2 } else { (meta & 3) as i32 })],
         block::END_PORTAL => vec![[0.0, 0.0, 0.0, 1.0, 0.75, 1.0]],
         block::DRAGON_EGG => vec![[0.0625, 0.0, 0.0625, 0.9375, 1.0, 0.9375]],
         block::PISTON_HEAD => piston_head(meta),
@@ -521,6 +541,9 @@ fn union(v: &[Bx]) -> Bx {
 
 /// Selection bounds (`getSelectedBoundingBoxFromPool`), block space.
 pub fn selection(get: Get, id: u8, meta: u8, x: i32, y: i32, z: i32) -> Bx {
+    if id == block::PORTAL {
+        return portal_bounds(portal_axis(get, x, y, z, meta));
+    }
     let b = block::info(id);
     match b.shape {
         block::Shape::Stairs => FULL,

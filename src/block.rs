@@ -566,8 +566,8 @@ fn build() -> [BlockInfo; 256] {
     t[PORTAL as usize] = portal;
     t[NETHER_BRICK_FENCE as usize] = base(Shape::Fence, M::Rock, false);
     t[NETHER_WART as usize] = base(Shape::Crops, M::Plants, false);
-    // BlockEndPortal: 0.75 high, light 15, no collision.
-    let mut end_portal = base(Shape::Boxes, M::Portal, false);
+    // BlockEndPortal: render type -1 (RenderEndPortal), light 15, no collision.
+    let mut end_portal = base(Shape::None, M::Portal, false);
     end_portal.light_value = 15;
     t[END_PORTAL as usize] = end_portal;
     let mut egg = base(Shape::Boxes, M::DragonEgg, false);

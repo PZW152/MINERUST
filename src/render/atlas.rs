@@ -15,9 +15,9 @@ pub struct Atlas {
     pub mips: Vec<Vec<u8>>,
     /// `[u0, v0, u1, v1]` per tile.
     pub rects: Vec<[f32; 4]>,
-    /// Tile for `(id, meta, face)`: index `(id * 16 + meta) * 6 + face`; `u16::MAX` if none.
     /// Block texture name -> tile (`TextureMap.registerIcon`).
     pub names: HashMap<&'static str, u16>,
+    /// Tile for `(id, meta, face)`: index `(id * 16 + meta) * 6 + face`; `u16::MAX` if none.
     pub face_tile: Vec<u16>,
     pub grass_overlay: u16,
     pub grass_side_snowed: u16,
@@ -26,6 +26,10 @@ pub struct Atlas {
     pub water_flow: u16,
     pub lava_flow: u16,
     pub sun: u16,
+    /// `textures/environment/end_sky.png` and `textures/entity/end_portal.png`
+    /// (`RenderEndPortal`).
+    pub end_sky: u16,
+    pub end_portal: u16,
     pub moon: [u16; 8],
     /// `colormap/grass.png` as 256x256 RGB.
     pub grass_map: Vec<u32>,
@@ -308,6 +312,13 @@ impl Atlas {
             let img = read_png(jar, "assets/minecraft/textures/environment/sun.png")?;
             b.add(crop(&img, 0, 0, 32), 32)
         };
+        let whole = |b: &mut Builder, jar: &mut Jar, path: &str| -> Result<u16, String> {
+            let img = read_png(jar, path)?;
+            let size = img.w.min(img.h);
+            Ok(b.add(crop(&img, 0, 0, size), size))
+        };
+        let end_portal = whole(&mut b, jar, "assets/minecraft/textures/entity/end_portal.png")?;
+        let end_sky = whole(&mut b, jar, "assets/minecraft/textures/environment/end_sky.png")?;
         let mut moon = [0u16; 8];
         {
             let img = read_png(jar, "assets/minecraft/textures/environment/moon_phases.png")?;
@@ -512,6 +523,8 @@ impl Atlas {
             water_flow,
             lava_flow,
             sun,
+            end_sky,
+            end_portal,
             moon,
             grass_map: color_map(jar, "assets/minecraft/textures/colormap/grass.png")?,
             foliage_map: color_map(jar, "assets/minecraft/textures/colormap/foliage.png")?,
