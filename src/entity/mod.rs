@@ -6,4 +6,5 @@ pub mod living;
 pub mod mob;
 pub mod path;
 pub mod player;
+pub mod server_player;
 pub mod survival;

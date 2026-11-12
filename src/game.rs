@@ -213,6 +213,8 @@ pub struct Game {
     /// Server view of the inventory and open window.
     pub view: InvView,
     items: Vec<ItemView>,
+    /// `en_US.lang`
+    pub lang: crate::lang::Lang,
     /// `EntityPickupFX`: collected items flying to the player, with age.
     pickups: Vec<(ItemView, i32)>,
     /// `EntityFallingBlock`s from the server.
@@ -467,6 +469,7 @@ impl Game {
             },
             items: Vec::new(),
             pickups: Vec::new(),
+            lang: crate::lang::Lang::default(),
             falling: Vec::new(),
             started: Instant::now(),
             moving_mesh: HashMap::new(),
@@ -788,7 +791,43 @@ impl Game {
                     self.mobs = m;
                     self.arrows = a;
                 }
-                Event::Hits(hits) => self.apply_hits(hits),
+                Event::Hits(_) => {}
+                Event::PlayerStats(v) => {
+                    self.stats.apply_view(&v);
+                    self.player.speed_attr = v.speed;
+                    self.player.jump_boost = v
+                        .effects
+                        .iter()
+                        .find(|e| e.id == crate::potion::JUMP)
+                        .map(|e| e.amplifier);
+                }
+                Event::Velocity { set, add } => {
+                    // S27PacketExplosion adds, S12PacketEntityVelocity sets
+                    for a in 0..3 {
+                        self.player.motion[a] += add[a];
+                    }
+                    if let Some(v) = set {
+                        self.player.motion = v;
+                    }
+                }
+                Event::Hurt => {
+                    // EntityLivingBase.handleHealthUpdate(2)
+                    self.stats.hurt_time = crate::entity::survival::MAX_HURT_TIME;
+                    self.stats.hurt_resistance = 20;
+                    let r = &mut self.particle_rand;
+                    let p = (r.next_float() - r.next_float()) * 0.2 + 1.0;
+                    self.sound("game.player.hurt", None, 1.0, p);
+                }
+                Event::Died(msg) => {
+                    self.stats.health = 0.0;
+                    self.stats.dead = true;
+                    self.stats.death_time = 0;
+                    self.stats.death_text = self.lang.format(&msg.key, &msg.args);
+                    self.death_sent = true;
+                    self.screen = Screen::Dead;
+                    self.input = Input::default();
+                    self.dig = None;
+                }
                 Event::Sounds(list) => {
                     for (name, pos, vol, pitch) in list {
                         self.sound(name, Some(pos), vol, pitch);
@@ -1125,30 +1164,18 @@ impl Game {
             after[1] - before[1],
             after[2] - before[2],
         ];
-        let eye_mat = self.player.eye_material(&self.world, self.player.pos);
-        let lava = self.player.in_lava_now;
-        let jumped = self.player.jumped;
-        self.stats
-            .tick(&self.player, moved, jumped, eye_mat, lava, self.mode);
-        if self.stats.dead && !self.death_sent {
-            self.death_sent = true;
-            let _ = self.sim.commands.send(Command::Died);
-            self.screen = Screen::Dead;
-            self.input = Input::default();
-            self.dig = None;
-        }
+        self.stats.client_tick(&self.player, moved);
         {
             let p = &self.player;
+            let _ = self.sim.commands.send(Command::Motion {
+                on_ground: p.on_ground,
+                sneaking: p.sneaking,
+                sprinting: p.sprinting,
+            });
             let _ = self
                 .sim
                 .commands
                 .send(Command::Player(after, [p.yaw, p.pitch], p.flying));
-        }
-        if self.ticks % 100 == 0 {
-            let _ = self
-                .sim
-                .commands
-                .send(Command::Stats(encode_stats(&self.stats)));
         }
         // Digging, right-click repeat, arm swing, equip animation.
         self.tick_digging();
@@ -1485,44 +1512,6 @@ impl Game {
     }
 
     /// Damage, knockback and experience from mobs.
-    fn apply_hits(&mut self, hits: Vec<crate::entity::mob::Hit>) {
-        use crate::entity::mob::Hit;
-        use crate::entity::survival::Damage;
-        for h in hits {
-            let (cause, amount, knock) = match h {
-                Hit::Melee {
-                    kind,
-                    amount,
-                    knock,
-                    poison,
-                } => {
-                    if poison > 0 {
-                        self.stats.poison = self.stats.poison.max(poison);
-                    }
-                    (Damage::Mob(kind), amount, knock)
-                }
-                Hit::Arrow { amount, knock } => (Damage::Arrow, amount, knock),
-                Hit::Explosion { amount, knock } => (Damage::Explosion, amount, knock),
-                Hit::Xp(n) => {
-                    self.stats.add_xp(n);
-                    continue;
-                }
-                Hit::Burn(t) => {
-                    if self.mode == GameMode::Survival {
-                        self.stats.fire = self.stats.fire.max(t);
-                    }
-                    continue;
-                }
-            };
-            if self.stats.damage(cause, amount, self.mode) {
-                self.sound("game.player.hurt", None, 1.0, 1.0);
-                self.player.motion[0] = self.player.motion[0] / 2.0 + knock[0];
-                self.player.motion[1] = (self.player.motion[1] / 2.0 + knock[1]).min(0.4);
-                self.player.motion[2] = self.player.motion[2] / 2.0 + knock[2];
-            }
-        }
-    }
-
     /// `EntityPlayer.attackTargetEntityWithCurrentItem` on the client side:
     /// damage of the held item, critical hits and sprint knockback.
     fn attack_mob(&mut self, id: u32) {
@@ -1555,7 +1544,6 @@ impl Game {
             self.player.motion[2] *= 0.6;
             self.player.sprinting = false;
         }
-        self.stats.add_exhaustion(0.3);
         if crit {
             if let Some(m) = self.mobs.iter().find(|m| m.id == id) {
                 let c = [m.pos[0], (m.bb[1] + m.bb[4]) / 2.0, m.pos[2]];
@@ -1699,7 +1687,6 @@ impl Game {
                     let (dt, dti) = self.debris(pos);
                     self.particles.destroy(pos, dt, dti);
                     let _ = self.sim.commands.send(Command::Dig(pos));
-                    self.stats.add_exhaustion(0.025);
                     self.dig = None;
                     self.hit_delay = 5;
                 } else {
@@ -1712,7 +1699,6 @@ impl Game {
                     let (dt, dti) = self.debris(pos);
                     self.particles.destroy(pos, dt, dti);
                     let _ = self.sim.commands.send(Command::Dig(pos));
-                    self.stats.add_exhaustion(0.025);
                     self.dig = None;
                 } else {
                     self.dig = Some(Digging { pos, damage: 0.0 });

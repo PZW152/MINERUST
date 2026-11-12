@@ -13,6 +13,7 @@ mod inventory;
 mod item;
 mod item_table;
 mod java;
+mod lang;
 mod particles;
 mod play;
 mod potion;
@@ -671,7 +672,9 @@ impl ApplicationHandler for App {
                 });
                 self.opts.cfg.save_dir = Some(dir);
             }
+            let lang = lang::Lang::load(&mut jar);
             let mut game = Game::new(renderer, atlas, &self.opts.cfg);
+            game.lang = lang;
             // The launcher keeps assets next to versions/: <root>/assets.
             if self.opts.auto_shot.is_none() {
                 if let Some(root) = jar_path

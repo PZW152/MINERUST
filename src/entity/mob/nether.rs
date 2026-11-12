@@ -17,6 +17,11 @@ pub struct Fireball {
 }
 
 impl Fireball {
+    /// `shootingEntity`
+    pub fn shooter_id(&self) -> u32 {
+        self.shooter
+    }
+
     pub fn ticks_alive(&self) -> i32 {
         self.ticks
     }
@@ -290,11 +295,13 @@ pub fn blaze(
             m.attack_cooldown = 20;
             let (dx, dz) = (player.feet[0] - m.pos[0], player.feet[2] - m.pos[2]);
             let f = (dx * dx + dz * dz).sqrt().max(1e-4);
+            let _ = f;
             out.hits.push(Hit::Melee {
                 kind: Kind::Blaze,
                 amount: 6.0,
-                knock: [dx / f * 0.4, 0.4, dz / f * 0.4],
-                poison: 0,
+                knock: [0.0; 3],
+                from: m.pos,
+                effect: None,
             });
             out.attacker = Some(m.id);
         } else if d2 < 30.0 * 30.0 {

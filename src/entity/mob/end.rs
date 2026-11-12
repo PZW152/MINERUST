@@ -278,11 +278,13 @@ pub fn dragon(
                 let (cx, cz) = (parts[1].pos[0], parts[1].pos[2]);
                 let (dx, dz) = (player.feet[0] - cx, player.feet[2] - cz);
                 let d2 = (dx * dx + dz * dz).max(0.1);
+                // EntityDragon.collideWithEntities: addVelocity only
                 out.hits.push(Hit::Melee {
                     kind: Kind::EnderDragon,
                     amount: 0.0,
                     knock: [dx / d2 * 4.0, 0.2f32 as f64, dz / d2 * 4.0],
-                    poison: 0,
+                    from: m.pos,
+                    effect: None,
                 });
             }
         }
@@ -294,7 +296,8 @@ pub fn dragon(
                 kind: Kind::EnderDragon,
                 amount: 10.0,
                 knock: [0.0, 0.0, 0.0],
-                poison: 0,
+                from: m.pos,
+                effect: None,
             });
             out.attacker = Some(m.id);
         }

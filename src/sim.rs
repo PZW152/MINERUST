@@ -35,8 +35,15 @@ pub enum Command {
         id: u8,
         meta: i32,
     },
-    /// Position, rotation and flying state, kept for the save file.
+    /// Position, rotation and flying state (`C03PacketPlayer`).
     Player([f64; 3], [f32; 2], bool),
+    /// `onGround`, sneaking and sprinting, sent before `Player`
+    /// (`C03PacketPlayer.onGround`, `C0BPacketEntityAction`).
+    Motion {
+        on_ground: bool,
+        sneaking: bool,
+        sprinting: bool,
+    },
     /// Survival digging finished (or a creative click) at the block.
     Dig([i32; 3]),
     /// Right click on a block face.
@@ -128,6 +135,18 @@ pub enum Event {
     /// Moving piston blocks (`TileEntityPiston`), sent while any exist and
     /// once more when the last one stops.
     Moving(Vec<([i32; 3], crate::world::redstone::MovingView)>),
+    /// The player's health, food, air, experience and effects
+    /// (`S06PacketUpdateHealth`, `S1F`, `S1D`), when they change.
+    PlayerStats(crate::entity::server_player::PlayerStatsView),
+    /// `S12PacketEntityVelocity` (`set`) and `S27PacketExplosion`'s push (`add`).
+    Velocity {
+        set: Option<[f64; 3]>,
+        add: [f64; 3],
+    },
+    /// `S19PacketEntityStatus` 2: the hurt animation and sound.
+    Hurt,
+    /// The player died: `CombatTracker.getDeathMessage` (key, arguments).
+    Died(crate::entity::server_player::Message),
     /// Falling blocks near the player, sent each tick.
     Falling(Vec<crate::entity::falling::FallingView>),
     /// The player picked these items up (`S0DPacketCollectItem`).
@@ -245,6 +264,14 @@ pub struct Sim {
     offsets: Vec<(i32, i32)>,
     /// The last `Event::Moving` listed some blocks.
     sent_moving: bool,
+    /// `S27PacketExplosion` pushes for the client this tick.
+    push_add: [f64; 3],
+    /// `EntityPlayerMP`: the server side of the player.
+    pub splayer: crate::entity::server_player::ServerPlayer,
+    /// `World.difficultySetting`
+    pub difficulty: crate::entity::living::Difficulty,
+    /// The last `Command::Motion`.
+    motion_flags: (bool, bool, bool),
     /// Chunks the client currently holds, with the `ready` flag last sent.
     sent: std::collections::BTreeMap<(i32, i32), bool>,
     /// Chunks changed since they were last written to disk.
@@ -427,6 +454,10 @@ impl Sim {
             view: cfg.view,
             offsets: spiral(cfg.view + 2),
             sent_moving: false,
+            splayer: crate::entity::server_player::ServerPlayer::new(),
+            difficulty: crate::entity::living::Difficulty::Normal,
+            motion_flags: (false, false, false),
+            push_add: [0.0; 3],
             sent: Default::default(),
             unsaved: Default::default(),
             world_time: cfg.start_time,
@@ -512,7 +543,10 @@ impl Sim {
                                 spawn = Some([f[0], f[1], f[2]]);
                             }
                         }
-                        "stats" => sim.stats = Some(v.clone()),
+                        "stats" => {
+                            sim.stats = Some(v.clone());
+                            sim.splayer.decode(v);
+                        }
                         "weather" => {
                             if let Some(w) = Weather::decode(v) {
                                 sim.weather = w;
@@ -677,10 +711,17 @@ impl Sim {
     fn apply(&mut self, cmd: &Command) {
         match *cmd {
             Command::Center(x, z) => self.centre = (x, z),
+            Command::Motion {
+                on_ground,
+                sneaking,
+                sprinting,
+            } => self.motion_flags = (on_ground, sneaking, sprinting),
             Command::Player(p, r, f) => {
                 if self.await_ack {
                     return;
                 }
+                let (g, sn, sp) = self.motion_flags;
+                self.splayer.moved(&self.world, p, g, f, sn, sp);
                 self.player = Some((p, r, f));
                 self.play.player = (p, r[0]);
                 self.play.pitch = r[1];
@@ -727,7 +768,15 @@ impl Sim {
             }
             Command::Dig(p) => {
                 let mut play = std::mem::replace(&mut self.play, Play::new(GameMode::Survival));
+                let id = self.world.block(p[0], p[1], p[2]);
                 play.dig(&mut self.world, p);
+                // Block.harvestBlock: player.addExhaustion(0.025)
+                if play.mode == GameMode::Survival
+                    && id != crate::block::AIR
+                    && self.world.block(p[0], p[1], p[2]) != id
+                {
+                    self.splayer.food.add_exhaustion(0.025);
+                }
                 self.play = play;
             }
             Command::Use {
@@ -777,8 +826,24 @@ impl Sim {
                 self.play.mode = m;
                 self.play.inv_dirty = true;
             }
-            Command::Stats(ref s) => self.stats = Some(s.clone()),
-            Command::Died => {
+            Command::Stats(_) => {}
+            Command::Died => {}
+            Command::Respawn => {
+                self.splayer.respawn();
+                self.respawn_pending = true;
+                if self.dim != 0 {
+                    self.pending_travel = Some(0);
+                }
+            }
+            Command::Shutdown => {}
+            _ => self.apply_more(cmd),
+        }
+    }
+
+    /// `EntityPlayer.onDeath`: the inventory spills out.
+    fn drop_inventory(&mut self) {
+        {
+            {
                 let mut play = std::mem::replace(&mut self.play, Play::new(GameMode::Survival));
                 if play.mode == GameMode::Survival {
                     let mut rnd =
@@ -794,12 +859,11 @@ impl Sim {
                 }
                 self.play = play;
             }
-            Command::Respawn => {
-                self.respawn_pending = true;
-                if self.dim != 0 {
-                    self.pending_travel = Some(0);
-                }
-            }
+        }
+    }
+
+    fn apply_more(&mut self, cmd: &Command) {
+        match *cmd {
             Command::Attack {
                 id,
                 damage,
@@ -807,6 +871,8 @@ impl Sim {
                 knockback,
             } => {
                 self.last_attacked = Some(id);
+                // attackTargetEntityWithCurrentItem: addExhaustion(0.3)
+                self.splayer.food.add_exhaustion(0.3);
                 let mut out = crate::entity::mob::Outcome::default();
                 let (feet, yaw) = self.play.player;
                 self.mobs
@@ -834,6 +900,7 @@ impl Sim {
                 }
             }
             Command::Shutdown => {}
+            _ => {}
         }
     }
 
@@ -920,6 +987,11 @@ impl Sim {
     pub fn step(&mut self, commands: &[Command], events: &mut Vec<Event>) {
         for c in commands {
             self.apply(c);
+        }
+        self.splayer.creative = self.play.mode == GameMode::Creative;
+        if !self.respawn_pending {
+            let d = self.difficulty;
+            self.splayer.tick(&self.world, d, true);
         }
         self.load_chunks();
         if self.world.anvil {
@@ -1122,6 +1194,7 @@ impl Sim {
             events.push(Event::Moving(moving));
         }
         self.play = play;
+        self.player_events(events);
         if self.play.inv_dirty {
             self.play.inv_dirty = false;
             events.push(Event::Inventory(Box::new(self.play.view())));
@@ -1956,9 +2029,7 @@ impl Sim {
                         self.spawn[0], self.spawn[1], self.spawn[2]
                     ),
                 ));
-                if let Some(st) = &self.stats {
-                    u.push(("stats".into(), st.clone()));
-                }
+                u.push(("stats".into(), self.splayer.encode()));
                 for t in overworld_tiles {
                     u.push(("tile".into(), t));
                 }
@@ -1994,7 +2065,9 @@ impl Sim {
             feet,
             yaw,
             pitch: self.player.map_or(0.0, |p| p.1[1]),
-            attackable: self.player_attackable && play.mode == GameMode::Survival,
+            attackable: self.player_attackable
+                && play.mode == GameMode::Survival
+                && !self.splayer.dead,
             held,
             last_attacked: self.last_attacked,
             last_attacker: self.last_attacker,
@@ -2076,9 +2149,7 @@ impl Sim {
             explosions.extend(o.explosions);
         }
         self.world.rand = rnd;
-        if !hits.is_empty() {
-            events.push(Event::Hits(hits));
-        }
+        self.apply_player_hits(hits);
         if !sounds.is_empty() {
             events.push(Event::Sounds(sounds));
         }
@@ -2219,6 +2290,196 @@ impl Sim {
             .collect();
         shots.extend(self.eyes.iter().map(|e| (e.pos, e.prev, 2u8)));
         events.push(Event::Fireballs(shots));
+    }
+
+    /// Damage from mobs, projectiles, explosions and potions, as their
+    /// `attackEntityFrom(source, amount)` calls on the player.
+    fn apply_player_hits(&mut self, hits: Vec<crate::entity::mob::Hit>) {
+        use crate::entity::living::{Difficulty, Source};
+        use crate::entity::mob::Hit;
+        use crate::potion;
+        let d = self.difficulty;
+        let pos_of = |mobs: &crate::entity::mob::Mobs, id: Option<u32>| {
+            id.and_then(|i| mobs.list.iter().find(|m| m.id == i).map(|m| (i, m.pos)))
+        };
+        for h in hits {
+            match h {
+                Hit::Melee {
+                    kind,
+                    amount,
+                    knock,
+                    from,
+                    effect,
+                } => {
+                    if amount <= 0.0 {
+                        // Entity.addVelocity: the server-side motion only
+                        for a in 0..3 {
+                            self.splayer.e.motion[a] += knock[a];
+                        }
+                        continue;
+                    }
+                    let src = Source::mob(kind, 0, from);
+                    if self.splayer.attack(&self.world, src, amount, d) {
+                        if knock != [0.0; 3] {
+                            for a in 0..3 {
+                                self.splayer.e.motion[a] += knock[a];
+                            }
+                            self.splayer.velocity = Some(self.splayer.e.motion);
+                        }
+                        match effect {
+                            // EntityCaveSpider.attackEntityAsMob
+                            Some((potion::POISON, -1)) => {
+                                let s = match d {
+                                    Difficulty::Normal => 7,
+                                    Difficulty::Hard => 15,
+                                    _ => 0,
+                                };
+                                if s > 0 {
+                                    self.splayer.living.add_effect(potion::Effect::new(
+                                        potion::POISON,
+                                        s * 20,
+                                        0,
+                                    ));
+                                }
+                            }
+                            Some((id, dur)) => self
+                                .splayer
+                                .living
+                                .add_effect(potion::Effect::new(id, dur, 0)),
+                            None => {}
+                        }
+                    }
+                }
+                Hit::Arrow {
+                    amount, shooter, ..
+                } => {
+                    let src = Source::arrow(pos_of(&self.mobs, shooter));
+                    self.splayer.attack(&self.world, src, amount, d);
+                }
+                Hit::Fireball {
+                    amount,
+                    shooter,
+                    small,
+                } => {
+                    let src = Source::fireball(pos_of(&self.mobs, Some(shooter)));
+                    // EntitySmallFireball.onImpact: the target is set on fire
+                    if self.splayer.attack(&self.world, src, amount, d) && small {
+                        self.splayer.e.set_fire(5);
+                    }
+                }
+                Hit::Explosion {
+                    amount,
+                    knock,
+                    from,
+                } => {
+                    let src = Source::explosion(from.map(|p| (0, p)));
+                    self.splayer.attack(&self.world, src, amount, d);
+                    for a in 0..3 {
+                        self.splayer.e.motion[a] += knock[a];
+                    }
+                    if self.splayer.velocity.is_some() {
+                        self.splayer.velocity = Some(self.splayer.e.motion);
+                    }
+                    self.push_add = [
+                        self.push_add[0] + knock[0],
+                        self.push_add[1] + knock[1],
+                        self.push_add[2] + knock[2],
+                    ];
+                }
+                Hit::Potion {
+                    effects,
+                    scale,
+                    from,
+                } => {
+                    // EntityPotion.onImpact
+                    for e in effects {
+                        let pt = e.potion();
+                        if pt.instant {
+                            // Potion.affectEntity
+                            if e.id == potion::HARM {
+                                let n = (scale * (6 << e.amplifier) as f64 + 0.5) as i32;
+                                self.splayer.attack(
+                                    &self.world,
+                                    Source::indirect_magic(Some((0, from))),
+                                    n as f32,
+                                    d,
+                                );
+                            } else if e.id == potion::HEAL {
+                                let n = (scale * (4 << e.amplifier) as f64 + 0.5) as i32;
+                                self.splayer.living.heal(n as f32);
+                            }
+                        } else {
+                            let dur = (scale * e.duration as f64 + 0.5) as i32;
+                            if dur > 20 {
+                                self.splayer.living.add_effect(potion::Effect::new(
+                                    e.id,
+                                    dur,
+                                    e.amplifier,
+                                ));
+                            }
+                        }
+                    }
+                }
+                Hit::Xp(n) => self.splayer.add_xp(n),
+                Hit::Burn(t) => self.splayer.e.set_fire(t / 20),
+            }
+        }
+    }
+
+    /// The player's state for the client, and the consequences of dying.
+    fn player_events(&mut self, events: &mut Vec<Event>) {
+        let fx = std::mem::take(&mut self.splayer.fx);
+        let mut sounds = Vec::new();
+        let mut parts = Vec::new();
+        for f in fx {
+            match f {
+                crate::entity::base::Fx::Sound(n, p, v, pi) => sounds.push((n, p, v, pi)),
+                crate::entity::base::Fx::Particle(n, p, m) => parts.push((n, p, m)),
+                // Block.onFallenUpon: farmland is trampled
+                crate::entity::base::Fx::Walk(x, y, z, id) => {
+                    if id == crate::block::FARMLAND
+                        && self.world.rand.next_float() < self.splayer.e.fall_distance - 0.5
+                    {
+                        self.world.set_block(x, y, z, crate::block::DIRT, 0, 3);
+                    }
+                }
+                _ => {}
+            }
+        }
+        if !sounds.is_empty() {
+            events.push(Event::Sounds(sounds));
+        }
+        if !parts.is_empty() {
+            events.push(Event::Particles(parts));
+        }
+        if std::mem::take(&mut self.splayer.hurt_anim) {
+            events.push(Event::Hurt);
+        }
+        let set = self.splayer.velocity.take();
+        let add = std::mem::take(&mut self.push_add);
+        if set.is_some() || add != [0.0; 3] {
+            events.push(Event::Velocity { set, add });
+        }
+        if self.splayer.dead && !self.splayer.death_reported {
+            self.splayer.death_reported = true;
+            self.drop_inventory();
+            let names = |s: &crate::entity::living::Source| -> Option<String> {
+                use crate::entity::living::SourceKind as K;
+                match s.kind {
+                    K::Mob(k) => Some(format!("entity.{}.name", k.id())),
+                    K::Arrow if s.attacker.is_some() => Some("entity.Skeleton.name".into()),
+                    K::Fireball if s.attacker.is_some() => Some("entity.Ghast.name".into()),
+                    _ => None,
+                }
+            };
+            let msg = self.splayer.death_message(&names);
+            events.push(Event::Died(msg));
+        }
+        let v = self.splayer.view();
+        if self.splayer.last_sent.as_ref() != Some(&v) {
+            self.splayer.last_sent = Some(v.clone());
+            events.push(Event::PlayerStats(v));
+        }
     }
 
     /// `TileEntityPiston.launchWithSlimeBlock`: every entity in a moving

@@ -196,11 +196,13 @@ pub fn slime(m: &mut Mob, player: &PlayerInfo, out: &mut Outcome) {
             m.attack_cooldown = 10;
             let (dx, dz) = (player.feet[0] - m.pos[0], player.feet[2] - m.pos[2]);
             let f = (dx * dx + dz * dz).sqrt().max(1e-4);
+            let _ = f;
             out.hits.push(Hit::Melee {
                 kind: Kind::Slime,
                 amount: size as f32,
-                knock: [dx / f * 0.4, 0.4, dz / f * 0.4],
-                poison: 0,
+                knock: [0.0; 3],
+                from: m.pos,
+                effect: None,
             });
             out.attacker = Some(m.id);
             let p = (m.rand.next_float() - m.rand.next_float()) * 0.2 + 1.0;
@@ -743,11 +745,14 @@ pub fn golem(
             m.attack_timer = 10;
             let (dx, dz) = (player.feet[0] - m.pos[0], player.feet[2] - m.pos[2]);
             let f = (dx * dx + dz * dz).sqrt().max(1e-4);
+            // EntityIronGolem.attackEntityAsMob: motionY += 0.4 after the hit
+            let _ = f;
             out.hits.push(Hit::Melee {
                 kind: Kind::IronGolem,
                 amount: 7.0 + m.rand.next_int_n(15) as f32,
-                knock: [dx / f * 0.4, 0.4 + 0.4, dz / f * 0.4],
-                poison: 0,
+                knock: [0.0, 0.4f32 as f64, 0.0],
+                from: m.pos,
+                effect: None,
             });
             out.attacker = Some(m.id);
             out.sounds.push(("mob.irongolem.throw", m.pos, 1.0, 1.0));

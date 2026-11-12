@@ -8,7 +8,8 @@
 - [x] 活塞：`BlockPistonMoving` + `TileEntityPiston`（兩 tick 的移動、推動實體、`TileEntityRendererPiston` 動畫）、
       `World.addBlockEvent` 佇列
 - [ ] 終界傳送門：`TileEntityEndPortalRenderer`（16 層星空視差）
-- [ ] 凋零效果與整套 `Potion` / `PotionEffect`（現在以中毒代替）
+- [x] `Potion` / `PotionEffect` / `PotionHelper` 與玩家身上的效果（凋零、中毒、抗性、速度、跳躍、生命提升、吸收……）
+- [ ] 生物身上的藥水效果、藥水物品（飲用、噴濺）、釀造台、牛奶、金蘋果
 - [ ] 騎乘：`Entity.mountEntity`、`updateRidden`，馬（跳躍、鞍、馬鎧、箱子、馬的物品欄）、豬＋鞍＋胡蘿蔔釣竿
 - [ ] 傳送門建造時的中繼值與原版一致
 - [ ] 實體（生物、掉落物、箭、礦車）穿越傳送門 `Entity.travelToDimension`
@@ -40,6 +41,11 @@
 生物穿戴裝備與撿拾物品、村民交易與繁殖、動物繁殖與幼年
 
 ## E. 系統
+
+- [x] 玩家生存狀態移到伺服端（`EntityPlayerMP`）：`FoodStats`、傷害流程（難度縮放、護甲、抗性、吸收、擊退）、`CombatTracker` 死亡訊息（`en_US.lang`）
+- [ ] 物品使用（`setItemInUse`：吃、喝、拉弓、格擋）
+- [ ] 經驗球 `EntityXPOrb`（現在直接加經驗）
+- [ ] 難度設定與 `level.dat` 的 `Difficulty`、遊戲規則
 
 附魔（附魔台、所有附魔效果）、鐵砧（修理、命名）、釀造、信標、成就與統計、指令與聊天、遊戲模式（創造、冒險、
 極限）、難度、世界建立選單、選項選單、資源包、語言、地圖資料、終界詩與製作人員名單、多人與區域網路（協定 5）

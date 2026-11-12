@@ -455,7 +455,11 @@ pub fn death_screen(ui: &mut Ui, stats: &Stats, mouse: (f32, f32)) -> Option<Men
         2.0,
         0xFFFFFF,
     );
-    let msg = stats.death_message();
+    let msg: &str = if stats.death_text.is_empty() {
+        stats.death_message()
+    } else {
+        &stats.death_text
+    };
     ui.text(
         msg,
         w / 2.0 - ui.text_width(msg) / 2.0,

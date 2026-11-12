@@ -450,20 +450,40 @@ impl PlayerInfo {
 /// Things that happened to the player this tick.
 #[derive(Clone, Debug)]
 pub enum Hit {
-    /// Damage with the attacker kind and the knockback motion to add.
+    /// `attackEntityFrom(causeMobDamage(attacker), amount)`: the knockback
+    /// comes from the attacker's position `from`; `knock` is extra
+    /// velocity added afterwards (`addVelocity`), `effect` a potion
+    /// effect given on a hit (duration -1: the cave spider's, by difficulty).
     Melee {
         kind: Kind,
         amount: f32,
         knock: [f64; 3],
-        poison: i32,
+        from: [f64; 3],
+        effect: Option<(i32, i32)>,
     },
+    /// `causeArrowDamage(arrow, shooter)`
     Arrow {
         amount: f32,
         knock: [f64; 3],
+        shooter: Option<u32>,
     },
+    /// `causeFireballDamage(fireball, shooter)`
+    Fireball {
+        amount: f32,
+        shooter: u32,
+        small: bool,
+    },
+    /// `Explosion.doExplosionA`: damage and the push (`knock`).
     Explosion {
         amount: f32,
         knock: [f64; 3],
+        from: Option<[f64; 3]>,
+    },
+    /// A splash potion of the witch hit the player.
+    Potion {
+        effects: Vec<crate::potion::Effect>,
+        scale: f64,
+        from: [f64; 3],
     },
     Xp(i32),
     /// Set on fire for this many ticks (small fireballs).
@@ -480,6 +500,8 @@ pub struct Arrow {
     pub ticks: i32,
     pub stuck: bool,
     damage: f64,
+    /// `shootingEntity`
+    pub shooter: Option<u32>,
 }
 
 /// `wrapAngleTo180_float`
@@ -1564,6 +1586,7 @@ impl Mobs {
         let yaw = (v[0].atan2(v[2]) * 180.0 / std::f64::consts::PI) as f32;
         let pitch = (v[1].atan2(h) * 180.0 / std::f64::consts::PI) as f32;
         self.arrows.push(Arrow {
+            shooter: None,
             pos,
             prev_pos: pos,
             motion: v,
@@ -1615,7 +1638,7 @@ impl Mobs {
             .map(|m| m.pos)
             .collect();
         let mut new_arrows = Vec::new();
-        let mut explosions: Vec<([f64; 3], f32, bool)> = Vec::new();
+        let mut explosions: Vec<([f64; 3], f32, bool, bool)> = Vec::new();
         let mut balls: Vec<Fireball> = Vec::new();
         let others: Vec<Other> = self
             .list
@@ -1659,15 +1682,11 @@ impl Mobs {
                     let f = self.fireballs.remove(k);
                     match imp {
                         nether::Impact::Player => {
-                            out.hits.push(Hit::Melee {
-                                kind: if f.small { Kind::Blaze } else { Kind::Ghast },
+                            out.hits.push(Hit::Fireball {
                                 amount: if f.small { 5.0 } else { 6.0 },
-                                knock: [0.0, 0.0, 0.0],
-                                poison: 0,
+                                shooter: f.shooter_id(),
+                                small: f.small,
                             });
-                            if f.small {
-                                out.hits.push(Hit::Burn(100));
-                            }
                         }
                         nether::Impact::Mob(id) => {
                             if let Some(t) = self.list.iter_mut().find(|m| m.id == id) {
@@ -1691,7 +1710,7 @@ impl Mobs {
                         }
                     }
                     if !f.small {
-                        explosions.push((at, 1.0, true));
+                        explosions.push((at, 1.0, true, false));
                     }
                 }
                 None if gone => {
@@ -1735,13 +1754,22 @@ impl Mobs {
             if f <= 0 {
                 let c = t.pos;
                 self.tnt.remove(k);
-                explosions.push((c, 4.0, false));
+                explosions.push((c, 4.0, false, false));
             } else {
                 k += 1;
             }
         }
-        for (c, size, fire) in explosions {
-            explode(w, self, player, c, size, fire, out);
+        for (c, size, fire, living) in explosions {
+            explode(
+                w,
+                self,
+                player,
+                c,
+                size,
+                fire,
+                if living { Some(c) } else { None },
+                out,
+            );
         }
         // deaths
         let mut splits: Vec<([f64; 3], i32, f32)> = Vec::new();
@@ -1809,7 +1837,7 @@ impl Mobs {
             }
         }
         for c in blasts {
-            explode(w, self, player, c, 6.0, true, out);
+            explode(w, self, player, c, 6.0, true, None, out);
         }
         for (pos, size, yaw) in splits {
             let id = self.next_id;
@@ -2467,7 +2495,7 @@ fn tick_mob(
     zombies: &[[f64; 3]],
     out: &mut Outcome,
     arrows: &mut Vec<Arrow>,
-    explosions: &mut Vec<([f64; 3], f32, bool)>,
+    explosions: &mut Vec<([f64; 3], f32, bool, bool)>,
     others: &[Other],
     strikes: &mut Vec<Strike>,
     balls: &mut Vec<Fireball>,
@@ -2956,11 +2984,18 @@ fn chase(m: &mut Mob, w: &mut ServerWorld, player: &PlayerInfo, out: &mut Outcom
             // golden sword
             amount += 4.0;
         }
+        let effect = match poison {
+            0 => None,
+            200 => Some((crate::potion::WITHER, 200)),
+            _ => Some((crate::potion::POISON, -1)),
+        };
+        let _ = knock;
         out.hits.push(Hit::Melee {
             kind: m.kind,
             amount,
-            knock,
-            poison,
+            knock: [0.0; 3],
+            from: m.pos,
+            effect,
         });
         out.attacker = Some(m.id);
     }
@@ -3016,6 +3051,7 @@ fn ranged(
                     let _ = i;
                 }
                 arrows.push(Arrow {
+                    shooter: Some(m.id),
                     pos,
                     prev_pos: pos,
                     motion: v,
@@ -3034,11 +3070,12 @@ fn ranged(
             }
         } else {
             // EntityWitch throws a splash potion of harming (6 damage) at range.
-            out.hits.push(Hit::Melee {
-                kind: Kind::Witch,
-                amount: 6.0,
-                knock: [0.0, 0.0, 0.0],
-                poison: 0,
+            // EntityPotion of Harming (16396) breaking on the player:
+            // affectEntity at full strength for a direct hit.
+            out.hits.push(Hit::Potion {
+                effects: crate::potion::effects_of(16396, false),
+                scale: 1.0,
+                from: m.pos,
             });
             out.sounds.push((
                 "random.bow",
@@ -3056,7 +3093,7 @@ fn creeper(
     w: &mut ServerWorld,
     player: &PlayerInfo,
     out: &mut Outcome,
-    explosions: &mut Vec<([f64; 3], f32, bool)>,
+    explosions: &mut Vec<([f64; 3], f32, bool, bool)>,
 ) {
     let d2 = m.dist2(player.feet);
     let swelling = m.target_player && d2 < 9.0 && m.can_see(w, player.eye());
@@ -3085,7 +3122,8 @@ fn creeper(
     }
     if m.fuse >= 30 {
         m.fuse = 30;
-        explosions.push((m.pos, 3.0, false));
+        // the creeper is the exploder (getExplosivePlacedBy)
+        explosions.push((m.pos, 3.0, false, true));
         m.health = 0.0;
         m.death_time = 19;
         m.dead = true;
@@ -3144,13 +3182,12 @@ fn tick_arrows(
             if ray_box(a.pos, a.motion, &grown).map_or(false, |t| t <= 1.0) {
                 let dmg = (len * a.damage).ceil() as f32;
                 let h = (a.motion[0].powi(2) + a.motion[2].powi(2)).sqrt().max(1e-4);
+                // knockbackStrength is 0 for skeleton arrows: no extra push
+                let _ = h;
                 out.hits.push(Hit::Arrow {
                     amount: dmg,
-                    knock: [
-                        a.motion[0] * 0.6 / h * 0.0,
-                        0.1,
-                        a.motion[2] * 0.6 / h * 0.0,
-                    ],
+                    knock: [0.0; 3],
+                    shooter: a.shooter,
                 });
                 out.sounds.push(("random.bowhit", a.pos, 1.0, 1.2));
                 return false;
@@ -3219,6 +3256,7 @@ fn explode(
     c: [f64; 3],
     size: f32,
     flaming: bool,
+    exploder: Option<[f64; 3]>,
     out: &mut Outcome,
 ) {
     let r = &mut mobs.rand;
@@ -3288,6 +3326,7 @@ fn explode(
             out.hits.push(Hit::Explosion {
                 amount: dmg,
                 knock: k,
+                from: exploder,
             });
         }
     }

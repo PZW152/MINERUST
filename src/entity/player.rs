@@ -161,6 +161,10 @@ pub struct Player {
     move_strafe: f32,
     move_forward: f32,
     ai_move_speed: f32,
+    /// `movementSpeed` attribute without the sprint modifier (from the server).
+    pub speed_attr: f64,
+    /// `Potion.jump` amplifier, if active.
+    pub jump_boost: Option<i32>,
     jump_movement_factor: f32,
     pub distance_walked: f32,
     pub prev_distance_walked: f32,
@@ -204,6 +208,8 @@ impl Player {
             move_strafe: 0.0,
             move_forward: 0.0,
             ai_move_speed: 0.1,
+            speed_attr: 0.10000000149011612,
+            jump_boost: None,
             jump_movement_factor: 0.02,
             distance_walked: 0.0,
             prev_distance_walked: 0.0,
@@ -239,12 +245,23 @@ impl Player {
         if self.flying {
             f *= 1.1f32;
         }
-        let speed = if self.sprinting {
-            0.1f64 * (1.0 + 0.30000001192092896)
+        // movementSpeed with the sprinting modifier (operation 2)
+        let speed = self.speed_value();
+        let f = (f as f64 * ((speed / 0.1f32 as f64 + 1.0) / 2.0)) as f32;
+        if f.is_nan() {
+            1.0
         } else {
-            0.1f32 as f64
-        };
-        (f as f64 * ((speed / 0.1f32 as f64 + 1.0) / 2.0)) as f32
+            f
+        }
+    }
+
+    /// `getEntityAttribute(movementSpeed).getAttributeValue()`
+    pub fn speed_value(&self) -> f64 {
+        if self.sprinting {
+            self.speed_attr * (1.0 + 0.30000001192092896)
+        } else {
+            self.speed_attr
+        }
     }
 
     fn material_in_bb(world: &dyn BlockView, bb: &Aabb, m: Material) -> bool {
@@ -745,7 +762,11 @@ impl Player {
             if self.in_water || self.in_lava(world) {
                 self.motion[1] += 0.04f32 as f64;
             } else if self.on_ground && self.jump_ticks == 0 {
+                // EntityLivingBase.jump
                 self.motion[1] = 0.42f32 as f64;
+                if let Some(a) = self.jump_boost {
+                    self.motion[1] += ((a + 1) as f32 * 0.1f32) as f64;
+                }
                 self.jumped = true;
                 if self.sprinting {
                     let f = self.yaw * 0.017453292f32;
@@ -779,11 +800,8 @@ impl Player {
             self.jump_movement_factor =
                 (self.jump_movement_factor as f64 + 0.02f32 as f64 * 0.3) as f32;
         }
-        self.ai_move_speed = if self.sprinting {
-            (0.1f32 as f64 * (1.0 + 0.30000001192092896)) as f32
-        } else {
-            0.1
-        };
+        // landMovementFactor = movementSpeed attribute
+        self.ai_move_speed = self.speed_value() as f32;
         let mut f =
             math::sqrt_double(self.motion[0] * self.motion[0] + self.motion[2] * self.motion[2]);
         let mut f1 = ((-self.motion[1] * 0.2f32 as f64).atan() as f32) * 15.0f32;
