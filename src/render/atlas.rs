@@ -372,6 +372,7 @@ impl Atlas {
             .into_iter()
             .chain(crate::render::model2::TEXTURES)
             .chain(crate::render::model2::TEXTURES2)
+            .chain(crate::render::model3::TEXTURES)
         {
             let path = match name.strip_prefix("../") {
                 Some(rest) => format!("assets/minecraft/textures/{rest}.png"),

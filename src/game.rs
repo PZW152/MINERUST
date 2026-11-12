@@ -216,6 +216,8 @@ pub struct Game {
     arrows: Vec<crate::sim::ArrowView>,
     /// Primed TNT: position, previous position, fuse.
     tnt: Vec<([f64; 3], [f64; 3], i32)>,
+    /// Fireballs and thrown eyes: position, previous position, kind.
+    fireballs: Vec<([f64; 3], [f64; 3], u8)>,
     /// Mob under the crosshair and its distance.
     target_mob: Option<(u32, f64)>,
     pub stats: Stats,
@@ -457,6 +459,7 @@ impl Game {
             mobs: Vec::new(),
             arrows: Vec::new(),
             tnt: Vec::new(),
+            fireballs: Vec::new(),
             target_mob: None,
             stats,
             mode,
@@ -655,6 +658,7 @@ impl Game {
                     }
                 }
                 Event::Tnt(list) => self.tnt = list,
+                Event::Fireballs(list) => self.fireballs = list,
                 Event::Particles(list) => {
                     let slime = self
                         .atlas
@@ -1359,6 +1363,12 @@ impl Game {
                     self.stats.add_xp(n);
                     continue;
                 }
+                Hit::Burn(t) => {
+                    if self.mode == GameMode::Survival {
+                        self.stats.fire = self.stats.fire.max(t);
+                    }
+                    continue;
+                }
             };
             if self.stats.damage(cause, amount, self.mode) {
                 self.sound("game.player.hurt", None, 1.0, 1.0);
@@ -1584,6 +1594,8 @@ impl Game {
                 });
                 self.swing_item();
             }
+        } else {
+            let _ = self.sim.commands.send(Command::UseAir);
         }
         self.right_delay = 4;
     }
@@ -2245,6 +2257,40 @@ impl Game {
                     0,
                 ];
                 crate::render::model::arrow(&mut dynamic, at, rel, a.yaw, a.pitch, light);
+            }
+        }
+        let fire_tex = self.atlas.mob_tex("../items/fireball");
+        let eye_tex = self.atlas.mob_tex("../items/ender_eye");
+        {
+            for &(pos, prev, kind) in &self.fireballs {
+                let Some(t) = (if kind == 2 { eye_tex } else { fire_tex }) else {
+                    continue;
+                };
+                let tp = partial as f64;
+                let c = [
+                    (prev[0] + (pos[0] - prev[0]) * tp - eye[0]) as f32,
+                    (prev[1] + (pos[1] - prev[1]) * tp - eye[1]) as f32,
+                    (prev[2] + (pos[2] - prev[2]) * tp - eye[2]) as f32,
+                ];
+                let rect = [
+                    t.rect[0],
+                    t.rect[1],
+                    t.rect[0] + (t.rect[2] - t.rect[0]) * 16.0 / t.size,
+                    t.rect[1] + (t.rect[3] - t.rect[1]) * 16.0 / t.size,
+                ];
+                let size = match kind {
+                    0 => 2.0,
+                    1 => 0.5,
+                    _ => 0.5,
+                };
+                entities::billboard(
+                    &mut dynamic,
+                    rect,
+                    c,
+                    size,
+                    self.player.yaw,
+                    self.player.pitch,
+                );
             }
         }
         for &(pos, prev, fuse) in &self.tnt {

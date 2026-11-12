@@ -10,8 +10,11 @@ use crate::java::JavaRandom;
 use crate::util::math;
 use crate::world::server::ServerWorld;
 
+mod end;
 mod extra;
+mod nether;
 pub use extra::{village_golems, Other, Puff, Strike};
+pub use nether::Fireball;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 pub enum Kind {
@@ -36,9 +39,15 @@ pub enum Kind {
     Ocelot,
     Horse,
     IronGolem,
+    Ghast,
+    PigZombie,
+    Blaze,
+    MagmaCube,
+    EnderDragon,
+    EnderCrystal,
 }
 
-pub const ALL_KINDS: [Kind; 21] = [
+pub const ALL_KINDS: [Kind; 27] = [
     Kind::Pig,
     Kind::Cow,
     Kind::Sheep,
@@ -60,6 +69,12 @@ pub const ALL_KINDS: [Kind; 21] = [
     Kind::Ocelot,
     Kind::Horse,
     Kind::IronGolem,
+    Kind::Ghast,
+    Kind::PigZombie,
+    Kind::Blaze,
+    Kind::MagmaCube,
+    Kind::EnderDragon,
+    Kind::EnderCrystal,
 ];
 
 impl Kind {
@@ -79,6 +94,10 @@ impl Kind {
             Kind::Wolf | Kind::Ocelot => (0.6, 0.8),
             Kind::Horse => (1.4, 1.6),
             Kind::IronGolem => (1.4, 2.9),
+            Kind::Ghast => (4.0, 4.0),
+            Kind::MagmaCube => (0.6, 0.6),
+            Kind::EnderDragon => (16.0, 8.0),
+            Kind::EnderCrystal => (2.0, 2.0),
             _ => (0.6, 1.8),
         }
     }
@@ -98,6 +117,10 @@ impl Kind {
             Kind::Wolf => 8.0,
             Kind::Horse => 15.0,
             Kind::IronGolem => 100.0,
+            Kind::Ghast => 10.0,
+            Kind::MagmaCube => 1.0,
+            Kind::EnderDragon => 200.0,
+            Kind::EnderCrystal => 5.0,
             _ => 20.0,
         }
     }
@@ -115,6 +138,9 @@ impl Kind {
             Kind::Squid | Kind::Bat => 0.7,
             Kind::Horse => 0.225,
             Kind::IronGolem => 0.25,
+            Kind::PigZombie => 0.5,
+            Kind::Blaze | Kind::Ghast | Kind::MagmaCube => 0.7,
+            Kind::EnderDragon | Kind::EnderCrystal => 0.7,
         }
     }
     pub fn hostile(self) -> bool {
@@ -129,6 +155,23 @@ impl Kind {
                 | Kind::Silverfish
                 | Kind::Slime
                 | Kind::Enderman
+                | Kind::Ghast
+                | Kind::PigZombie
+                | Kind::Blaze
+                | Kind::MagmaCube
+                | Kind::EnderDragon
+        )
+    }
+    /// `isImmuneToFire`
+    pub fn fireproof(self) -> bool {
+        matches!(
+            self,
+            Kind::Ghast
+                | Kind::PigZombie
+                | Kind::Blaze
+                | Kind::MagmaCube
+                | Kind::EnderDragon
+                | Kind::EnderCrystal
         )
     }
     /// `EnumCreatureType.creature` (counts towards the animal cap).
@@ -149,7 +192,14 @@ impl Kind {
     fn old_ai(self) -> bool {
         matches!(
             self,
-            Kind::Spider | Kind::CaveSpider | Kind::Silverfish | Kind::Slime | Kind::Enderman
+            Kind::Spider
+                | Kind::CaveSpider
+                | Kind::Silverfish
+                | Kind::Slime
+                | Kind::Enderman
+                | Kind::PigZombie
+                | Kind::Blaze
+                | Kind::MagmaCube
         )
     }
     pub fn name(self) -> &'static str {
@@ -175,6 +225,12 @@ impl Kind {
             Kind::Ocelot => "Ocelot",
             Kind::Horse => "Horse",
             Kind::IronGolem => "Iron Golem",
+            Kind::Ghast => "Ghast",
+            Kind::PigZombie => "Zombie Pigman",
+            Kind::Blaze => "Blaze",
+            Kind::MagmaCube => "Magma Cube",
+            Kind::EnderDragon => "Ender Dragon",
+            Kind::EnderCrystal => "Ender Crystal",
         }
     }
     /// `EntityList` string id.
@@ -201,6 +257,12 @@ impl Kind {
             Kind::Ocelot => "Ozelot",
             Kind::Horse => "EntityHorse",
             Kind::IronGolem => "VillagerGolem",
+            Kind::Ghast => "Ghast",
+            Kind::PigZombie => "PigZombie",
+            Kind::Blaze => "Blaze",
+            Kind::MagmaCube => "LavaSlime",
+            Kind::EnderDragon => "EnderDragon",
+            Kind::EnderCrystal => "EnderCrystal",
         }
     }
     pub fn from_id(s: &str) -> Option<Kind> {
@@ -216,6 +278,8 @@ impl Kind {
             Kind::Spider | Kind::CaveSpider => 2.0,
             Kind::Silverfish => 1.0,
             Kind::Enderman | Kind::IronGolem => 7.0,
+            Kind::PigZombie => 5.0,
+            Kind::Blaze => 6.0,
             _ => 2.0,
         }
     }
@@ -346,6 +410,14 @@ pub struct Mob {
     pub player_made: bool,
     /// Another mob this one is after (wolves, golems).
     target_mob: Option<u32>,
+    /// Ghast `waypointX/Y/Z`.
+    waypoint: [f64; 3],
+    /// Zombie pigman `angerLevel` and `randomSoundDelay`.
+    pub anger: i32,
+    anger_sound: i32,
+    /// `EntityDragon.ringBuffer` (yaw, y) and `ringBufferIndex`.
+    pub ring: [[f64; 2]; 64],
+    pub ring_index: i32,
 }
 
 /// What the player looks like to the mobs.
@@ -394,6 +466,8 @@ pub enum Hit {
         knock: [f64; 3],
     },
     Xp(i32),
+    /// Set on fire for this many ticks (small fireballs).
+    Burn(i32),
 }
 
 #[derive(Clone, Debug)]
@@ -520,10 +594,18 @@ impl Mob {
             attack_timer: 0,
             player_made: false,
             target_mob: None,
+            waypoint: pos,
+            anger: 0,
+            anger_sound: 0,
+            ring: [[0.0; 2]; 64],
+            ring_index: -1,
         };
+        if kind == Kind::EnderDragon {
+            m.waypoint = [pos[0], 100.0, pos[2]];
+        }
         m.egg_timer = m.rand.next_int_n(6000) + 6000;
         match kind {
-            Kind::Slime => {
+            Kind::Slime | Kind::MagmaCube => {
                 // EntitySlime(World): size 1 << nextInt(3)
                 let size = 1 << m.rand.next_int_n(3);
                 m.jump_delay = m.rand.next_int_n(20) + 10;
@@ -545,17 +627,20 @@ impl Mob {
 
     /// Width and height of the box (slimes scale with their size).
     pub fn dims(&self) -> (f32, f32) {
-        if self.kind == Kind::Slime {
-            let s = 0.6 * self.variant.max(1) as f32;
-            (s, s)
-        } else {
-            self.kind.size()
+        match self.kind {
+            Kind::Slime | Kind::MagmaCube => {
+                let s = 0.6 * self.variant.max(1) as f32;
+                (s, s)
+            }
+            // EntitySkeleton.setSkeletonType(1)
+            Kind::Skeleton if self.variant == 1 => (0.72, 2.34),
+            k => k.size(),
         }
     }
 
     pub fn max_health(&self) -> f32 {
         match self.kind {
-            Kind::Slime => (self.variant * self.variant) as f32,
+            Kind::Slime | Kind::MagmaCube => (self.variant * self.variant) as f32,
             Kind::Wolf if self.tamed => 20.0,
             _ => self.kind.max_health(),
         }
@@ -1189,6 +1274,16 @@ impl Mob {
                     }
                 }
             }
+            Kind::Skeleton if self.variant == 1 => {
+                // wither skeletons: coal instead of arrows, now and then a skull
+                let n = r.next_int_n(3) - 1;
+                add(263, 0, n);
+                let n = r.next_int_n(3);
+                add(352, 0, n);
+                if by_player && r.next_int_n(200) < 5 {
+                    add(397, 1, 1);
+                }
+            }
             Kind::Skeleton => {
                 let n = r.next_int_n(3);
                 add(262, 0, n);
@@ -1238,7 +1333,40 @@ impl Mob {
                 let n = 3 + r.next_int_n(3);
                 add(265, 0, n);
             }
-            Kind::Villager | Kind::Silverfish | Kind::Bat | Kind::Wolf | Kind::Ocelot => {}
+            Kind::Ghast => {
+                let n = r.next_int_n(2);
+                add(370, 0, n);
+                let n = r.next_int_n(3);
+                add(289, 0, n);
+            }
+            Kind::PigZombie => {
+                let n = r.next_int_n(2);
+                add(367, 0, n);
+                let n = r.next_int_n(2);
+                add(371, 0, n);
+                if by_player && r.next_int_n(200) < 5 {
+                    add(266, 0, 1);
+                }
+            }
+            Kind::Blaze => {
+                if by_player {
+                    let n = r.next_int_n(2);
+                    add(369, 0, n);
+                }
+            }
+            Kind::MagmaCube => {
+                if self.variant > 1 {
+                    let n = r.next_int_n(4) - 2;
+                    add(378, 0, n);
+                }
+            }
+            Kind::Villager
+            | Kind::Silverfish
+            | Kind::Bat
+            | Kind::Wolf
+            | Kind::Ocelot
+            | Kind::EnderDragon
+            | Kind::EnderCrystal => {}
         }
         if self.kind == Kind::Enderman && self.carried != 0 {
             v.push(Stack::new(self.carried as u16, self.carried_meta as i32, 1));
@@ -1248,7 +1376,9 @@ impl Mob {
 
     fn xp(&mut self) -> i32 {
         match self.kind {
-            Kind::Slime => return self.variant,
+            Kind::Slime | Kind::MagmaCube => return self.variant,
+            Kind::Blaze => return 10,
+            Kind::EnderCrystal | Kind::EnderDragon => return 0,
             Kind::Squid => return 1 + self.rand.next_int_n(3),
             Kind::Bat | Kind::IronGolem => return 0,
             _ => {}
@@ -1322,6 +1452,7 @@ pub struct Mobs {
     pub list: Vec<Mob>,
     pub arrows: Vec<Arrow>,
     pub tnt: Vec<Tnt>,
+    pub fireballs: Vec<Fireball>,
     next_id: u32,
     pub rand: JavaRandom,
 }
@@ -1332,6 +1463,7 @@ impl Default for Mobs {
             list: Vec::new(),
             arrows: Vec::new(),
             tnt: Vec::new(),
+            fireballs: Vec::new(),
             next_id: 1,
             rand: JavaRandom::new(0x6D6F62),
         }
@@ -1478,7 +1610,8 @@ impl Mobs {
             .map(|m| m.pos)
             .collect();
         let mut new_arrows = Vec::new();
-        let mut explosions: Vec<([f64; 3], f32)> = Vec::new();
+        let mut explosions: Vec<([f64; 3], f32, bool)> = Vec::new();
+        let mut balls: Vec<Fireball> = Vec::new();
         let others: Vec<Other> = self
             .list
             .iter()
@@ -1507,7 +1640,60 @@ impl Mobs {
                 &mut explosions,
                 &others,
                 &mut strikes,
+                &mut balls,
             );
+        }
+        self.fireballs.extend(balls);
+        // EntityFireball.onUpdate
+        let mut k = 0;
+        while k < self.fireballs.len() {
+            let hit = nether::tick_fireball(&mut self.fireballs[k], w, player, &self.list);
+            let gone = self.fireballs[k].ticks_alive() > 600;
+            match hit {
+                Some((imp, at)) => {
+                    let f = self.fireballs.remove(k);
+                    match imp {
+                        nether::Impact::Player => {
+                            out.hits.push(Hit::Melee {
+                                kind: if f.small { Kind::Blaze } else { Kind::Ghast },
+                                amount: if f.small { 5.0 } else { 6.0 },
+                                knock: [0.0, 0.0, 0.0],
+                                poison: 0,
+                            });
+                            if f.small {
+                                out.hits.push(Hit::Burn(100));
+                            }
+                        }
+                        nether::Impact::Mob(id) => {
+                            if let Some(t) = self.list.iter_mut().find(|m| m.id == id) {
+                                let dmg = if f.small { 5.0 } else { 6.0 };
+                                if !(f.small && t.kind.fireproof()) && t.damage(dmg, Some(f.pos)) {
+                                    if f.small && !t.kind.fireproof() {
+                                        t.fire = 100;
+                                    }
+                                    out.sounds.push((mob_sound(t, false), t.pos, 1.0, 1.0));
+                                }
+                            }
+                        }
+                        nether::Impact::Block(c, side) => {
+                            if f.small {
+                                // EntitySmallFireball: fire on the side that was hit
+                                let p = [c[0] + side[0], c[1] + side[1], c[2] + side[2]];
+                                if w.is_air(p[0], p[1], p[2]) {
+                                    w.set_block(p[0], p[1], p[2], block::FIRE, 0, 3);
+                                }
+                            }
+                        }
+                    }
+                    if !f.small {
+                        explosions.push((at, 1.0, true));
+                    }
+                }
+                None if gone => {
+                    self.fireballs.remove(k);
+                }
+                None => k += 1,
+            }
         }
         self.arrows.extend(new_arrows);
         for st in strikes {
@@ -1544,16 +1730,17 @@ impl Mobs {
             if f <= 0 {
                 let c = t.pos;
                 self.tnt.remove(k);
-                explosions.push((c, 4.0));
+                explosions.push((c, 4.0, false));
             } else {
                 k += 1;
             }
         }
-        for (c, size) in explosions {
-            explode(w, self, player, c, size, out);
+        for (c, size, fire) in explosions {
+            explode(w, self, player, c, size, fire, out);
         }
         // deaths
         let mut splits: Vec<([f64; 3], i32, f32)> = Vec::new();
+        let mut blasts: Vec<[f64; 3]> = Vec::new();
         let mut i = 0;
         while i < self.list.len() {
             let m = &mut self.list[i];
@@ -1589,9 +1776,25 @@ impl Mobs {
                 }
             }
             if m.health <= 0.0 {
-                m.death_time += 1;
-                if m.death_time >= 20 {
-                    m.dead = true;
+                match m.kind {
+                    Kind::EnderDragon => {
+                        if end::dragon_dying(m, w, out) {
+                            m.dead = true;
+                        }
+                    }
+                    Kind::EnderCrystal => {
+                        // EntityEnderCrystal.attackEntityFrom: a 6-strong fiery blast
+                        if !m.dead {
+                            blasts.push([m.pos[0], m.pos[1] + 1.0, m.pos[2]]);
+                        }
+                        m.dead = true;
+                    }
+                    _ => {
+                        m.death_time += 1;
+                        if m.death_time >= 20 {
+                            m.dead = true;
+                        }
+                    }
                 }
             }
             if m.dead {
@@ -1599,6 +1802,9 @@ impl Mobs {
             } else {
                 i += 1;
             }
+        }
+        for c in blasts {
+            explode(w, self, player, c, 6.0, true, out);
         }
         for (pos, size, yaw) in splits {
             let id = self.next_id;
@@ -1632,6 +1838,45 @@ impl Mobs {
         if crit {
             dmg += m.rand.next_int_n((dmg / 2.0) as i32 + 2) as f32;
         }
+        if m.kind == Kind::EnderDragon {
+            // attackEntityFromPart: only the head takes full damage, and the
+            // dragon breaks off to a point just ahead of itself
+            let head = m.dragon_parts()[0].pos;
+            let d = (head[0] - attacker[0]).powi(2) + (head[2] - attacker[2]).powi(2);
+            if d > 25.0 {
+                dmg = dmg / 4.0 + 1.0;
+            }
+            let yr = m.yaw.to_radians();
+            m.waypoint = [
+                m.pos[0]
+                    + (math::sin(yr) * 5.0) as f64
+                    + ((m.rand.next_float() - 0.5) * 2.0) as f64,
+                m.pos[1] + (m.rand.next_float() * 3.0) as f64 + 1.0,
+                m.pos[2] - (math::cos(yr) * 5.0) as f64
+                    + ((m.rand.next_float() - 0.5) * 2.0) as f64,
+            ];
+            m.target_player = false;
+        }
+        if m.kind == Kind::EnderCrystal {
+            dmg = 100.0;
+        }
+        if m.kind == Kind::PigZombie {
+            // EntityPigZombie.attackEntityFrom: every pigman within 32 joins in
+            let at = m.pos;
+            for p in self.list.iter_mut() {
+                if p.kind == Kind::PigZombie
+                    && (p.pos[0] - at[0]).abs() <= 32.0
+                    && (p.pos[1] - at[1]).abs() <= 32.0
+                    && (p.pos[2] - at[2]).abs() <= 32.0
+                {
+                    p.anger = 400 + p.rand.next_int_n(400);
+                    p.anger_sound = p.rand.next_int_n(40);
+                }
+            }
+        }
+        let Some(m) = self.list.iter_mut().find(|m| m.id == id) else {
+            return;
+        };
         if m.damage(dmg, Some(attacker)) {
             m.recently_hit = 100;
             if m.kind.hostile() {
@@ -1820,6 +2065,7 @@ impl Mobs {
         let rand = &mut self.rand;
         self.list.retain_mut(|m| {
             if m.persistent
+                || matches!(m.kind, Kind::EnderDragon | Kind::EnderCrystal)
                 || m.kind.animal()
                 || m.kind == Kind::Villager
                 || m.kind == Kind::IronGolem
@@ -1952,6 +2198,12 @@ pub fn hurt_sound(k: Kind) -> &'static str {
         Kind::Ocelot => "mob.cat.hitt",
         Kind::Horse => "mob.horse.hit",
         Kind::IronGolem => "mob.irongolem.hit",
+        Kind::Ghast => "mob.ghast.scream",
+        Kind::PigZombie => "mob.zombiepig.zpighurt",
+        Kind::Blaze => "mob.blaze.hit",
+        Kind::MagmaCube => "mob.slime.small",
+        Kind::EnderDragon => "mob.enderdragon.hit",
+        Kind::EnderCrystal => "",
     }
 }
 
@@ -1976,13 +2228,19 @@ pub fn death_sound(k: Kind) -> &'static str {
         Kind::Ocelot => "mob.cat.hitt",
         Kind::Horse => "mob.horse.death",
         Kind::IronGolem => "mob.irongolem.death",
+        Kind::Ghast => "mob.ghast.death",
+        Kind::PigZombie => "mob.zombiepig.zpigdeath",
+        Kind::Blaze => "mob.blaze.death",
+        Kind::MagmaCube => "mob.slime.small",
+        Kind::EnderDragon => "mob.enderdragon.end",
+        Kind::EnderCrystal => "",
     }
 }
 
 /// Hurt or death sound of this particular mob (slime size, donkeys).
 pub fn mob_sound(m: &Mob, death: bool) -> &'static str {
     match m.kind {
-        Kind::Slime if m.variant > 1 => "mob.slime.big",
+        Kind::Slime | Kind::MagmaCube if m.variant > 1 => "mob.slime.big",
         Kind::Horse if (m.variant >> 16) == 1 => {
             if death {
                 "mob.horse.donkey.death"
@@ -2011,7 +2269,17 @@ pub fn idle_sound(k: Kind) -> Option<&'static str> {
         Kind::Bat => "mob.bat.idle",
         Kind::Wolf => "mob.wolf.bark",
         Kind::Horse => "mob.horse.idle",
-        Kind::Creeper | Kind::Slime | Kind::Squid | Kind::Ocelot | Kind::IronGolem => return None,
+        Kind::Ghast => "mob.ghast.moan",
+        Kind::PigZombie => "mob.zombiepig.zpig",
+        Kind::Blaze => "mob.blaze.breathe",
+        Kind::EnderDragon => "mob.enderdragon.growl",
+        Kind::Creeper
+        | Kind::Slime
+        | Kind::Squid
+        | Kind::Ocelot
+        | Kind::IronGolem
+        | Kind::MagmaCube
+        | Kind::EnderCrystal => return None,
     })
 }
 
@@ -2055,9 +2323,10 @@ fn tick_mob(
     zombies: &[[f64; 3]],
     out: &mut Outcome,
     arrows: &mut Vec<Arrow>,
-    explosions: &mut Vec<([f64; 3], f32)>,
+    explosions: &mut Vec<([f64; 3], f32, bool)>,
     others: &[Other],
     strikes: &mut Vec<Strike>,
+    balls: &mut Vec<Fireball>,
 ) {
     m.prev_pos = m.pos;
     m.prev_body_yaw = m.body_yaw;
@@ -2105,9 +2374,12 @@ fn tick_mob(
         m.fall_distance = 0.0;
         m.fire = 0;
     }
-    if m.in_material(w, &m.bb, Material::Lava) {
+    if m.in_material(w, &m.bb, Material::Lava) && !m.kind.fireproof() {
         m.damage(4.0, None);
         m.fire = 300;
+    }
+    if m.kind.fireproof() {
+        m.fire = 0;
     }
     if m.fire > 0 {
         if m.fire % 20 == 0 {
@@ -2116,7 +2388,7 @@ fn tick_mob(
         m.fire -= 1;
     }
     // undead burn in daylight
-    if day && matches!(m.kind, Kind::Zombie | Kind::Skeleton) {
+    if day && (m.kind == Kind::Zombie || m.kind == Kind::Skeleton && m.variant != 1) {
         let (x, y, z) = m.feet_block();
         let f = brightness(w, x, y, z);
         if f > 0.5 && m.rand.next_float() * 30.0 < (f - 0.4) * 2.0 && w.can_see_sky(x, y, z) {
@@ -2168,6 +2440,23 @@ fn tick_mob(
         extra::bat(m, w, player, out);
         return;
     }
+    if m.kind == Kind::Ghast {
+        nether::ghast(m, w, player, balls, out);
+        return;
+    }
+    if m.kind == Kind::EnderCrystal {
+        end::crystal(m, w);
+        return;
+    }
+    if m.kind == Kind::EnderDragon {
+        let crystals: Vec<(u32, [f64; 3])> = others
+            .iter()
+            .filter(|o| o.kind == Kind::EnderCrystal)
+            .map(|o| (o.id, o.pos))
+            .collect();
+        end::dragon(m, w, player, &crystals, out);
+        return;
+    }
 
     // ---------------------------------------------------------------- AI
     let pdist2 = m.dist2(player.feet);
@@ -2175,7 +2464,26 @@ fn tick_mob(
         && pdist2 < (m.kind.follow_range() as f64).powi(2)
         && m.can_see(w, player.eye());
     // targeting
-    if m.kind.hostile() && !matches!(m.kind, Kind::Enderman | Kind::Slime) {
+    if m.kind == Kind::PigZombie {
+        // EntityPigZombie: neutral until angered
+        if m.anger_sound > 0 {
+            m.anger_sound -= 1;
+            if m.anger_sound == 0 {
+                let p = ((m.rand.next_float() - m.rand.next_float()) * 0.2 + 1.0) * 1.8;
+                out.sounds.push(("mob.zombiepig.zpigangry", m.pos, 2.0, p));
+            }
+        }
+        if m.anger > 0 {
+            m.anger -= 1;
+        }
+        m.target_player = m.anger > 0 && player.attackable;
+    }
+    if m.kind.hostile()
+        && !matches!(
+            m.kind,
+            Kind::Enderman | Kind::Slime | Kind::PigZombie | Kind::EnderDragon
+        )
+    {
         let spider_calm = matches!(m.kind, Kind::Spider | Kind::CaveSpider) && {
             let (x, y, z) = m.feet_block();
             brightness(w, x, y, z) > 0.5
@@ -2214,6 +2522,13 @@ fn tick_mob(
                 } else {
                     wander(m, w, 1.0, 120);
                 }
+            } else {
+                wander(m, w, 1.0, 120);
+            }
+        }
+        Kind::Skeleton if m.variant == 1 => {
+            if m.target_player {
+                chase(m, w, player, out);
             } else {
                 wander(m, w, 1.0, 120);
             }
@@ -2257,7 +2572,25 @@ fn tick_mob(
                 wander(m, w, 0.6, 120);
             }
         }
-        Kind::Slime => extra::slime(m, player, out),
+        Kind::Slime | Kind::MagmaCube => extra::slime(m, player, out),
+        Kind::PigZombie => {
+            if m.target_player {
+                chase(m, w, player, out);
+            } else {
+                wander(m, w, 1.0, 120);
+            }
+        }
+        Kind::Blaze => {
+            nether::blaze(m, w, player, balls, out);
+            if m.target_player {
+                m.look_at = Some(player.eye());
+                if m.no_path() || m.ticks % 20 == 0 {
+                    m.path_to(w, player.feet[0], player.feet[1], player.feet[2], 1.0);
+                }
+            } else {
+                wander(m, w, 1.0, 120);
+            }
+        }
         Kind::Enderman => extra::enderman(m, w, player, day, out),
         Kind::Wolf | Kind::Ocelot => extra::tameable(m, w, player, others, strikes, out),
         Kind::Horse => extra::horse(m, w, player, out),
@@ -2274,7 +2607,7 @@ fn tick_mob(
             m.task_ticks -= 1;
         }
     }
-    if m.kind != Kind::Slime {
+    if !matches!(m.kind, Kind::Slime | Kind::MagmaCube) {
         m.follow_path();
         m.move_helper();
     }
@@ -2306,7 +2639,7 @@ fn tick_mob(
     let (s, f) = (m.move_strafe, m.move_forward);
     let was_on_ground = m.on_ground;
     m.move_with_heading(w, s, f);
-    if m.kind == Kind::Slime {
+    if matches!(m.kind, Kind::Slime | Kind::MagmaCube) {
         extra::slime_landed(m, was_on_ground, out);
     }
     // push out of the player (Entity.applyEntityCollision, mobs side only)
@@ -2464,14 +2797,24 @@ fn chase(m: &mut Mob, w: &mut ServerWorld, player: &PlayerInfo, out: &mut Outcom
         let (dx, dz) = (player.feet[0] - m.pos[0], player.feet[2] - m.pos[2]);
         let f = (dx * dx + dz * dz).sqrt().max(1e-4);
         let knock = [dx / f * 0.4, 0.4, dz / f * 0.4];
-        let poison = if m.kind == Kind::CaveSpider {
+        let mut poison = if m.kind == Kind::CaveSpider {
             7 * 20
         } else {
             0
         };
+        let mut amount = m.kind.attack_damage();
+        if m.kind == Kind::Skeleton && m.variant == 1 {
+            // stone sword, and the wither effect for 10 seconds
+            amount = 2.0 + 5.0;
+            poison = 200;
+        }
+        if m.kind == Kind::PigZombie {
+            // golden sword
+            amount += 4.0;
+        }
         out.hits.push(Hit::Melee {
             kind: m.kind,
-            amount: m.kind.attack_damage(),
+            amount,
             knock,
             poison,
         });
@@ -2569,7 +2912,7 @@ fn creeper(
     w: &mut ServerWorld,
     player: &PlayerInfo,
     out: &mut Outcome,
-    explosions: &mut Vec<([f64; 3], f32)>,
+    explosions: &mut Vec<([f64; 3], f32, bool)>,
 ) {
     let d2 = m.dist2(player.feet);
     let swelling = m.target_player && d2 < 9.0 && m.can_see(w, player.eye());
@@ -2598,7 +2941,7 @@ fn creeper(
     }
     if m.fuse >= 30 {
         m.fuse = 30;
-        explosions.push((m.pos, 3.0));
+        explosions.push((m.pos, 3.0, false));
         m.health = 0.0;
         m.death_time = 19;
         m.dead = true;
@@ -2724,12 +3067,14 @@ pub fn explosion_resistance(id: u8) -> f32 {
 }
 
 /// `Explosion.doExplosionA` + `doExplosionB(true)`
+#[allow(clippy::too_many_arguments)]
 fn explode(
     w: &mut ServerWorld,
     mobs: &mut Mobs,
     player: &PlayerInfo,
     c: [f64; 3],
     size: f32,
+    flaming: bool,
     out: &mut Outcome,
 ) {
     let r = &mut mobs.rand;
@@ -2844,6 +3189,17 @@ fn explode(
         }
         w.set_block(x, y, z, block::AIR, 0, 3);
     }
+    if flaming {
+        // Explosion.doExplosionB with isFlaming
+        for &(x, y, z) in hit.iter() {
+            if w.is_air(x, y, z)
+                && block::info(w.block(x, y - 1, z)).full_block
+                && r.next_int_n(3) == 0
+            {
+                w.set_block(x, y, z, block::FIRE, 0, 3);
+            }
+        }
+    }
     out.explosions.push([c[0], c[1], c[2], size as f64]);
     out.sounds.push((
         "random.explode",
@@ -2874,6 +3230,9 @@ type Entry = (Option<Kind>, i32, i32, i32);
 /// `BiomeGenBase.spawnableCreatureList` by biome id.
 pub fn creature_list(biome: i32) -> Vec<Entry> {
     let base = biome & 127;
+    if base == 8 || base == 9 {
+        return Vec::new();
+    }
     let default = vec![
         (Some(Kind::Sheep), 12, 4, 4),
         (Some(Kind::Pig), 10, 4, 4),
@@ -2895,6 +3254,19 @@ pub fn creature_list(biome: i32) -> Vec<Entry> {
 /// `BiomeGenBase.spawnableMonsterList`
 pub fn monster_list(biome: i32) -> Vec<Entry> {
     let base = biome & 127;
+    match base {
+        // BiomeGenHell
+        8 => {
+            return vec![
+                (Some(Kind::Ghast), 50, 4, 4),
+                (Some(Kind::PigZombie), 100, 4, 4),
+                (Some(Kind::MagmaCube), 1, 4, 4),
+            ]
+        }
+        // BiomeGenEnd
+        9 => return vec![(Some(Kind::Enderman), 10, 4, 4)],
+        _ => {}
+    }
     if base == 14 || base == 15 {
         return Vec::new();
     }
@@ -2919,15 +3291,28 @@ pub fn monster_list(biome: i32) -> Vec<Entry> {
 /// `BiomeGenBase.spawnableWaterCreatureList`
 pub fn water_list(biome: i32) -> Vec<Entry> {
     let base = biome & 127;
-    if base == 14 || base == 15 {
+    if base == 14 || base == 15 || base == 8 || base == 9 {
         return Vec::new();
     }
     vec![(Some(Kind::Squid), 10, 4, 4)]
 }
 
 /// `BiomeGenBase.spawnableCaveCreatureList`
-pub fn ambient_list(_biome: i32) -> Vec<Entry> {
+pub fn ambient_list(biome: i32) -> Vec<Entry> {
+    if biome == 8 || biome == 9 {
+        return Vec::new();
+    }
     vec![(Some(Kind::Bat), 10, 8, 8)]
+}
+
+/// `MapGenNetherBridge.getSpawnList`
+pub fn fortress_list() -> Vec<Entry> {
+    vec![
+        (Some(Kind::Blaze), 10, 2, 3),
+        (Some(Kind::PigZombie), 5, 4, 4),
+        (Some(Kind::Skeleton), 10, 4, 4),
+        (Some(Kind::MagmaCube), 3, 4, 4),
+    ]
 }
 
 /// `Chunk.getRandomWithSeed(987234911)`: one chunk in ten has slimes.
@@ -2993,6 +3378,9 @@ fn can_spawn_here(w: &mut ServerWorld, m: &mut Mob, r: &mut JavaRandom) -> bool 
             )
         }
         Kind::Squid => m.pos[1] > 45.0 && m.pos[1] < 63.0 && colliding_boxes(w, &m.bb).is_empty(),
+        Kind::Ghast => r.next_int_n(20) == 0 && free(w, m),
+        Kind::PigZombie | Kind::MagmaCube => free(w, m),
+        Kind::Blaze => m.path_weight(w, px, py, pz) >= 0.0 && free(w, m),
         Kind::Bat => {
             if py >= 63 {
                 return false;
@@ -3161,7 +3549,16 @@ pub fn natural_spawning(
                     }
                     if entry.is_none() {
                         let biome = w.biome(px, pz).id as i32;
+                        // ChunkProviderHell.getPossibleCreatures: fortresses
+                        let in_fortress = ty == 0
+                            && w.provider.dim == -1
+                            && w.structures.as_ref().map_or(false, |st| {
+                                st.fortress_piece_at(px, py, pz)
+                                    || st.fortress_bounds_at(px, py, pz)
+                                        && w.peek_block(px, py - 1, pz) == block::NETHER_BRICK
+                            });
                         let list = match ty {
+                            0 if in_fortress => fortress_list(),
                             0 => monster_list(biome),
                             1 => creature_list(biome),
                             2 => ambient_list(biome),
@@ -3180,6 +3577,15 @@ pub fn natural_spawning(
                     let mut m = mobs.make(kind, [fx, fy, fz], yaw);
                     if can_spawn_here(w, &mut m, &mut rand) {
                         m.on_spawn(&mut rand);
+                        // EntitySkeleton.onSpawnWithEgg in the Nether
+                        if m.kind == Kind::Skeleton
+                            && w.provider.dim == -1
+                            && m.rand.next_int_n(5) > 0
+                        {
+                            m.variant = 1;
+                            let p = m.pos;
+                            m.set_position(p[0], p[1], p[2]);
+                        }
                         mobs.list.push(m);
                         spawned += 1;
                         if spawned >= 4 {

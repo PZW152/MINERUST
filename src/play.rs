@@ -223,6 +223,62 @@ fn click_slot(
 }
 
 /// `BlockChest` / `BlockFurnace` facing from the placer's yaw.
+/// `ItemEnderEye.onItemUse`: with all twelve eyes in place, the 3x3 inside
+/// of the ring becomes an End portal.
+fn fill_end_portal(w: &mut ServerWorld, x: i32, y: i32, z: i32, dir: i32) {
+    const OX: [i32; 4] = [0, -1, 0, 1];
+    const OZ: [i32; 4] = [1, 0, -1, 0];
+    const ROT_RIGHT: [usize; 4] = [1, 2, 3, 0];
+    let d = dir as usize;
+    let r = ROT_RIGHT[d];
+    let eye = |w: &mut ServerWorld, x: i32, z: i32| {
+        w.block(x, y, z) == block::END_PORTAL_FRAME && w.meta(x, y, z) & 4 != 0
+    };
+    let (mut first, mut last, mut seen, mut ok) = (0, 0, false, true);
+    for l in -2..=2 {
+        let (px, pz) = (x + OX[r] * l, z + OZ[r] * l);
+        if w.block(px, y, pz) == block::END_PORTAL_FRAME {
+            if !eye(w, px, pz) {
+                ok = false;
+                break;
+            }
+            last = l;
+            if !seen {
+                first = l;
+                seen = true;
+            }
+        }
+    }
+    if !ok || last != first + 2 {
+        return;
+    }
+    for l in first..=last {
+        let px = x + OX[r] * l + OX[d] * 4;
+        let pz = z + OZ[r] * l + OZ[d] * 4;
+        if !eye(w, px, pz) {
+            return;
+        }
+    }
+    let mut l = first - 1;
+    while l <= last + 1 {
+        for i in 1..=3 {
+            let px = x + OX[r] * l + OX[d] * i;
+            let pz = z + OZ[r] * l + OZ[d] * i;
+            if !eye(w, px, pz) {
+                return;
+            }
+        }
+        l += 4;
+    }
+    for l in first..=last {
+        for i in 1..=3 {
+            let px = x + OX[r] * l + OX[d] * i;
+            let pz = z + OZ[r] * l + OZ[d] * i;
+            w.set_block(px, y, pz, block::END_PORTAL, 0, 2);
+        }
+    }
+}
+
 fn facing_meta(yaw: f32) -> i32 {
     match (((yaw * 4.0 / 360.0) as f64 + 0.5).floor() as i32) & 3 {
         0 => 2,
@@ -536,6 +592,19 @@ impl Play {
                     self.tiles
                         .entry(target)
                         .or_insert(Tile::Dispenser { slots: [None; 9] });
+                    return;
+                }
+                block::END_PORTAL_FRAME if self.inv.held().map(|s| s.id) == Some(381) => {
+                    let [x, y, z] = target;
+                    let m = w.meta(x, y, z);
+                    if m & 4 == 0 {
+                        w.set_meta(x, y, z, m | 4, 2);
+                        if self.mode == GameMode::Survival {
+                            self.inv.consume_held();
+                            self.inv_dirty = true;
+                        }
+                        fill_end_portal(w, x, y, z, m & 3);
+                    }
                     return;
                 }
                 block::TNT if self.inv.held().map(|s| s.id) == Some(259) => {

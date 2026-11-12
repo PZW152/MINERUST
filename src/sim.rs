@@ -83,6 +83,8 @@ pub enum Command {
     },
     /// The client has switched to the dimension it was sent.
     DimensionAck,
+    /// Right click with nothing targeted (`Item.onItemRightClick`).
+    UseAir,
     Shutdown,
 }
 
@@ -123,6 +125,20 @@ pub enum Event {
     },
     /// Ticks spent in a Nether portal (`Entity.portalCounter`).
     Portal(i32),
+    /// Fireballs and thrown eyes: position, previous position, kind
+    /// (0 large fireball, 1 small fireball, 2 eye of ender).
+    Fireballs(Vec<([f64; 3], [f64; 3], u8)>),
+}
+
+/// `EntityEnderEye`: floats towards the stronghold for four seconds.
+#[derive(Clone, Debug)]
+pub struct EnderEye {
+    pos: [f64; 3],
+    prev: [f64; 3],
+    motion: [f64; 3],
+    target: [f64; 3],
+    timer: i32,
+    drop: bool,
 }
 
 /// A dimension the player is not in, kept loaded and saved with the rest.
@@ -177,6 +193,9 @@ pub struct MobView {
     /// Iron golem `attackTimer`.
     pub attack_timer: i32,
     pub health: f32,
+    /// Ender dragon movement history (yaw, y), newest at `ring_index`.
+    pub ring: Vec<[f64; 2]>,
+    pub ring_index: i32,
 }
 
 #[derive(Clone, Debug)]
@@ -248,6 +267,7 @@ pub struct Sim {
     pending_travel: Option<i32>,
     /// Tell the client on the first tick which dimension the save is in.
     announce_dim: bool,
+    eyes: Vec<EnderEye>,
 }
 
 /// Level keys owned by the gameplay state (kept out of `unknown`).
@@ -399,6 +419,7 @@ impl Sim {
             base_dir: cfg.save_dir.clone(),
             pending_travel: None,
             announce_dim: false,
+            eyes: Vec::new(),
         };
         if let Some(d) = &cfg.save_dir {
             if let Ok(text) = std::fs::read_to_string(d.join("data").join("entities.txt")) {
@@ -618,6 +639,7 @@ impl Sim {
                 self.play.player = (p, r[0]);
             }
             Command::DimensionAck => self.await_ack = false,
+            Command::UseAir => self.use_air(),
             Command::Break(p) => {
                 let id = self.world.block(p[0], p[1], p[2]);
                 if id != block::AIR && id != block::BEDROCK && !block::material(id).is_liquid() {
@@ -978,6 +1000,29 @@ impl Sim {
                         m.persistent = true;
                     }
                 }
+                GenEntity::Dragon { pos, yaw } => {
+                    let id =
+                        self.mobs
+                            .spawn(crate::entity::mob::Kind::EnderDragon, pos, yaw, &mut rnd);
+                    if let Some(m) = self.mobs.list.iter_mut().find(|m| m.id == id) {
+                        m.persistent = true;
+                    }
+                }
+                GenEntity::Crystal { pos, yaw } => {
+                    let id =
+                        self.mobs
+                            .spawn(crate::entity::mob::Kind::EnderCrystal, pos, yaw, &mut rnd);
+                    if let Some(m) = self.mobs.list.iter_mut().find(|m| m.id == id) {
+                        m.persistent = true;
+                    }
+                }
+                GenEntity::Mob { kind, pos, variant } => {
+                    let id = self.mobs.spawn(kind, pos, 0.0, &mut rnd);
+                    if let Some(m) = self.mobs.list.iter_mut().find(|m| m.id == id) {
+                        m.variant = variant;
+                        m.persistent = true;
+                    }
+                }
                 GenEntity::Animal { kind, pos, yaw } => {
                     let id = self.mobs.spawn(kind, pos, yaw, &mut rnd);
                     if let Some(m) = self.mobs.list.iter_mut().find(|m| m.id == id) {
@@ -1054,6 +1099,52 @@ impl Sim {
             if let Err(e) = self.save() {
                 eprintln!("autosave failed: {e}");
             }
+        }
+    }
+
+    /// `ItemEnderEye.onItemRightClick`: thrown towards the nearest stronghold.
+    fn use_air(&mut self) {
+        let Some(held) = self.play.inv.held() else {
+            return;
+        };
+        if held.id != 381 || self.dim != 0 {
+            return;
+        }
+        let (feet, _) = self.play.player;
+        let Some(target) = self
+            .world
+            .structures
+            .as_ref()
+            .and_then(|s| s.nearest_stronghold(feet[0] as i32, feet[1] as i32, feet[2] as i32))
+        else {
+            return;
+        };
+        let pos = [feet[0], feet[1] + 1.62 - 0.0, feet[2]];
+        // EntityEnderEye.moveTowards
+        let (dx, dz) = (target[0] as f64 - pos[0], target[2] as f64 - pos[2]);
+        let d = (dx * dx + dz * dz).sqrt();
+        let t = if d > 12.0 {
+            [pos[0] + dx / d * 12.0, pos[1] + 8.0, pos[2] + dz / d * 12.0]
+        } else {
+            [target[0] as f64, target[1] as f64, target[2] as f64]
+        };
+        let drop = self.world.rand.next_int_n(5) > 0;
+        self.eyes.push(EnderEye {
+            pos,
+            prev: pos,
+            motion: [0.0; 3],
+            target: t,
+            timer: 0,
+            drop,
+        });
+        let p = 0.4 / (self.world.rand.next_float() * 0.4 + 0.8);
+        self.pending_out.push(crate::entity::mob::Outcome {
+            sounds: vec![("random.bow", feet, 0.5, p)],
+            ..Default::default()
+        });
+        if self.play.mode == GameMode::Survival {
+            self.play.inv.consume_held();
+            self.play.inv_dirty = true;
         }
     }
 
@@ -1608,6 +1699,12 @@ impl Sim {
                 carried: [m.carried, m.carried_meta],
                 attack_timer: m.attack_timer,
                 health: m.health,
+                ring: if m.kind == crate::entity::mob::Kind::EnderDragon {
+                    m.ring.to_vec()
+                } else {
+                    Vec::new()
+                },
+                ring_index: m.ring_index,
                 bb: [
                     m.bb.min[0],
                     m.bb.min[1],
@@ -1637,6 +1734,60 @@ impl Sim {
                 .map(|t| (t.pos, t.prev_pos, t.fuse))
                 .collect(),
         ));
+        // EntityEnderEye.onUpdate
+        let mut drops = Vec::new();
+        let mut eye_sounds = Vec::new();
+        self.eyes.retain_mut(|e| {
+            e.prev = e.pos;
+            for k in 0..3 {
+                e.pos[k] += e.motion[k];
+            }
+            let (dx, dz) = (e.target[0] - e.pos[0], e.target[2] - e.pos[2]);
+            let dist = (dx * dx + dz * dz).sqrt() as f32;
+            let ang = dz.atan2(dx) as f32;
+            let speed = (e.motion[0] * e.motion[0] + e.motion[2] * e.motion[2]).sqrt();
+            let mut v = speed + (dist as f64 - speed) * 0.0025;
+            if dist < 1.0 {
+                v *= 0.8;
+                e.motion[1] *= 0.8;
+            }
+            e.motion[0] = (ang.cos() as f64) * v;
+            e.motion[2] = (ang.sin() as f64) * v;
+            if e.pos[1] < e.target[1] {
+                e.motion[1] += (1.0 - e.motion[1]) * 0.015f32 as f64;
+            } else {
+                e.motion[1] += (-1.0 - e.motion[1]) * 0.015f32 as f64;
+            }
+            e.timer += 1;
+            if e.timer > 80 {
+                if e.drop {
+                    drops.push((e.pos, crate::item::Stack::new(381, 0, 1)));
+                } else {
+                    eye_sounds.push(("random.glass", e.pos, 1.0, 1.0));
+                }
+                return false;
+            }
+            true
+        });
+        if !eye_sounds.is_empty() {
+            events.push(Event::Sounds(eye_sounds));
+        }
+        let mut rnd = std::mem::replace(&mut self.world.rand, JavaRandom::new(0));
+        for (p, st) in drops {
+            play.add_gen_entity(
+                crate::world::server::GenEntity::Item { pos: p, stack: st },
+                &mut rnd,
+            );
+        }
+        self.world.rand = rnd;
+        let mut shots: Vec<([f64; 3], [f64; 3], u8)> = self
+            .mobs
+            .fireballs
+            .iter()
+            .map(|f| (f.pos, f.prev_pos, f.small as u8))
+            .collect();
+        shots.extend(self.eyes.iter().map(|e| (e.pos, e.prev, 2u8)));
+        events.push(Event::Fireballs(shots));
     }
 
     /// Order-independent digest of the whole simulation state.
@@ -2331,5 +2482,84 @@ mod tests {
             (ppos[0] - inside[0]).abs() < 3.0 && (ppos[2] - inside[2]).abs() < 3.0,
             "{ppos:?}"
         );
+    }
+
+    #[test]
+    fn end_portal_and_dragon_exit() {
+        let (mut sim, x, y, z) = redstone_sim();
+        // a ring of twelve frames around a 3x3 hole (frames face inwards)
+        let (cx, cz) = (x + 3, z + 3);
+        let w = &mut sim.world;
+        for i in -1..=1 {
+            w.set_block(cx + i, y, cz - 2, block::END_PORTAL_FRAME, 0 | 4, 3); // facing +z
+            w.set_block(cx + i, y, cz + 2, block::END_PORTAL_FRAME, 2 | 4, 3); // facing -z
+            w.set_block(cx - 2, y, cz + i, block::END_PORTAL_FRAME, 3 | 4, 3); // facing +x
+            w.set_block(cx + 2, y, cz + i, block::END_PORTAL_FRAME, 1, 3); // facing -x
+        }
+        w.set_meta(cx + 2, y, cz - 1, 1 | 4, 3);
+        w.set_meta(cx + 2, y, cz + 1, 1 | 4, 3);
+        let mut ev = Vec::new();
+        let eye = crate::item::Stack::new(381, 0, 1);
+        sim.step(
+            &[
+                Command::Give(eye),
+                Command::Select(0),
+                Command::Use {
+                    target: [cx + 2, y, cz],
+                    face: [0, 1, 0],
+                    sneaking: false,
+                },
+            ],
+            &mut ev,
+        );
+        for i in -1..=1 {
+            for j in -1..=1 {
+                assert_eq!(
+                    sim.world.block(cx + i, y, cz + j),
+                    block::END_PORTAL,
+                    "{i},{j}"
+                );
+            }
+        }
+        // jump in
+        let feet = [cx as f64 + 0.5, y as f64, cz as f64 + 0.5];
+        sim.step(&[Command::Player(feet, [0.0, 0.0], false)], &mut ev);
+        sim.step(&[Command::Player(feet, [0.0, 0.0], false)], &mut ev);
+        assert_eq!(sim.dim, 1);
+        assert_eq!(
+            sim.world.block(100, 48, 0),
+            block::OBSIDIAN,
+            "the landing platform"
+        );
+        // a dead dragon leaves the way home
+        let mut r = JavaRandom::new(1);
+        let id = sim.mobs.spawn(
+            crate::entity::mob::Kind::EnderDragon,
+            [0.5, 80.0, 0.5],
+            0.0,
+            &mut r,
+        );
+        sim.mobs
+            .list
+            .iter_mut()
+            .find(|m| m.id == id)
+            .unwrap()
+            .health = 0.0;
+        ev.clear();
+        sim.step(&[Command::DimensionAck], &mut ev);
+        for _ in 0..210 {
+            sim.step(&[], &mut ev);
+        }
+        assert!(!sim.mobs.list.iter().any(|m| m.id == id));
+        let mut found = false;
+        for px in -6..=6 {
+            for pz in -6..=6 {
+                if sim.world.block(px, 64, pz) == block::END_PORTAL {
+                    found = true;
+                }
+            }
+        }
+        assert!(found, "exit portal at y 64");
+        assert!((0..256).any(|py| sim.world.block(0, py, 0) == block::DRAGON_EGG));
     }
 }

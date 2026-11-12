@@ -193,7 +193,7 @@ fn draw_box(d: &mut Draw, m: &Mat4, b: &Bx) {
 }
 
 /// `ModelRenderer.render`
-fn render(d: &mut Draw, parent: &Mat4, p: &Part) {
+pub(super) fn render(d: &mut Draw, parent: &Mat4, p: &Part) {
     let mut m = mul(
         parent,
         &translate(p.pivot[0] / 16.0, p.pivot[1] / 16.0, p.pivot[2] / 16.0),
@@ -369,6 +369,13 @@ fn parts(mv: &MobView, a: &Anim, ticks: f32, layer: u8, partial: f32) -> Vec<Par
         | Kind::Ocelot
         | Kind::Horse
         | Kind::IronGolem => super::model2::parts(mv, a, layer, partial),
+        Kind::Ghast => super::model3::ghast(ticks),
+        Kind::Blaze => super::model3::blaze(a),
+        Kind::MagmaCube => {
+            super::model3::magma_cube(mv.squish[0] + (mv.squish[1] - mv.squish[0]) * partial)
+        }
+        Kind::PigZombie => biped(a, false, true),
+        Kind::EnderDragon | Kind::EnderCrystal => Vec::new(),
         Kind::Pig => {
             let mut v = quadruped(6.0, a);
             v[0] = v[0]
@@ -490,7 +497,7 @@ fn parts(mv: &MobView, a: &Anim, ticks: f32, layer: u8, partial: f32) -> Vec<Par
             ]
         }
         Kind::Zombie => biped(a, false, true),
-        Kind::Skeleton => biped(a, true, true),
+        Kind::Skeleton => biped(a, mv.variant != 1, true),
         Kind::Creeper => {
             let hr = [a.head_pitch / (180.0 / PI), a.head_yaw / (180.0 / PI), 0.0];
             let mut head =
@@ -653,7 +660,26 @@ pub fn texture(kind: Kind, variant: i32, layer: u8) -> &'static str {
         }
         Kind::Chicken => "chicken",
         Kind::Zombie => "zombie/zombie",
+        Kind::Skeleton if variant == 1 => "skeleton/wither_skeleton",
         Kind::Skeleton => "skeleton/skeleton",
+        Kind::Ghast => {
+            if layer == 1 {
+                "ghast/ghast_shooting"
+            } else {
+                "ghast/ghast"
+            }
+        }
+        Kind::Blaze => "blaze",
+        Kind::MagmaCube => "slime/magmacube",
+        Kind::PigZombie => "zombie_pigman",
+        Kind::EnderDragon => {
+            if layer == 1 {
+                "enderdragon/dragon_eyes"
+            } else {
+                "enderdragon/dragon"
+            }
+        }
+        Kind::EnderCrystal => "endercrystal/endercrystal",
         Kind::Creeper => "creeper/creeper",
         Kind::Spider => "spider/spider",
         Kind::CaveSpider => "spider/cave_spider",
@@ -769,6 +795,53 @@ pub fn mob(
         }
         _ => mat = mul(&mat, &rot_y(180.0 - body)),
     }
+    if m.kind == Kind::EnderCrystal {
+        // RenderEnderCrystal: not a living renderer at all
+        let Some(t) = tex("endercrystal/endercrystal") else {
+            return;
+        };
+        let mut d = Draw {
+            out,
+            tex: t,
+            light,
+            tint: [1.0; 4],
+        };
+        super::model3::crystal(&mut d, rel, m.sq[1][2] + partial);
+        return;
+    }
+    if m.kind == Kind::EnderDragon {
+        // RenderDragon.rotateCorpse
+        let f3 = super::model3::ring(m, 7, partial)[0] as f32;
+        let f4 =
+            (super::model3::ring(m, 5, partial)[1] - super::model3::ring(m, 10, partial)[1]) as f32;
+        mat = translate(rel[0], rel[1], rel[2]);
+        mat = mul(&mat, &rot_y(-f3));
+        mat = mul(&mat, &super::rot_x(f4 * 10.0));
+        mat = mul(&mat, &translate(0.0, 0.0, 1.0));
+        mat = mul(&mat, &super::entities::scale(-1.0, -1.0, 1.0));
+        mat = mul(&mat, &translate(0.0, -24.0 / 16.0 - 0.0078125, 0.0));
+        let hurt = m.hurt_time > 0;
+        for layer in [0u8, 1] {
+            let name = if layer == 0 {
+                "enderdragon/dragon"
+            } else {
+                "enderdragon/dragon_eyes"
+            };
+            let Some(t) = tex(name) else { continue };
+            let mut d = Draw {
+                out,
+                tex: t,
+                light: if layer == 1 { [240, 240, 0, 0] } else { light },
+                tint: if hurt && layer == 0 {
+                    [1.0, 0.6, 0.6, 1.0]
+                } else {
+                    [1.0; 4]
+                },
+            };
+            super::model3::dragon(&mut d, &mat, m, partial);
+        }
+        return;
+    }
     if m.kind == Kind::IronGolem && m.limb_amount >= 0.01 {
         // RenderIronGolem.rotateCorpse: the swaying walk
         let p = 13.0f32;
@@ -776,7 +849,7 @@ pub fn mob(
         let f6 = ((f5 % p - p * 0.5).abs() - p * 0.25) / (p * 0.25);
         mat = mul(&mat, &rot_z(6.5 * f6));
     }
-    if m.death_time > 0 {
+    if m.death_time > 0 && m.kind != Kind::EnderDragon {
         let f = ((m.death_time as f32 + partial - 1.0) / 20.0 * 1.6)
             .sqrt()
             .min(1.0);
@@ -809,6 +882,28 @@ pub fn mob(
             );
         }
         Kind::Bat => mat = mul(&mat, &super::entities::scale(0.35, 0.35, 0.35)),
+        // RenderSkeleton: wither skeletons are 1.2 times larger
+        Kind::Skeleton if m.variant == 1 => mat = mul(&mat, &super::entities::scale(1.2, 1.2, 1.2)),
+        Kind::Ghast => {
+            // RenderGhast.preRenderCallback: swells before shooting
+            let mut f = (m.prev_fuse as f32 + (m.fuse - m.prev_fuse) as f32 * partial) / 20.0;
+            if f < 0.0 {
+                f = 0.0;
+            }
+            let f = 1.0 / (f * f * f * f * f * 2.0 + 1.0);
+            let y = (8.0 + f) / 2.0;
+            let xz = (8.0 + 1.0 / f) / 2.0;
+            mat = mul(&mat, &super::entities::scale(xz, y, xz));
+        }
+        Kind::MagmaCube => {
+            let size = m.variant.max(1) as f32;
+            let sq = (m.squish[0] + (m.squish[1] - m.squish[0]) * partial) / (size * 0.5 + 1.0);
+            let f = 1.0 / (sq + 1.0);
+            mat = mul(
+                &mat,
+                &super::entities::scale(f * size, 1.0 / f * size, f * size),
+            );
+        }
         Kind::Ocelot if m.flags & 1 != 0 => mat = mul(&mat, &super::entities::scale(0.8, 0.8, 0.8)),
         Kind::Horse => {
             let f = match m.variant >> 16 {
@@ -882,7 +977,9 @@ pub fn mob(
             | Kind::Horse
             | Kind::IronGolem
     );
-    let layers: &[u8] = if newer {
+    let layers: &[u8] = if m.kind == Kind::Ghast && m.flags & 4 != 0 {
+        &[1]
+    } else if newer {
         super::model2::layers(m)
     } else if m.kind == Kind::Sheep && !m.sheared {
         &[0, 1]
@@ -909,8 +1006,11 @@ pub fn mob(
         } else {
             [1.0; 3]
         };
-        // RenderEnderman: the eyes glow at full brightness.
-        let lt = if m.kind == Kind::Enderman && layer == 1 {
+        // RenderEnderman: the eyes glow at full brightness; blazes and
+        // magma cubes are always lit (getBrightnessForRender).
+        let lt = if (m.kind == Kind::Enderman && layer == 1)
+            || matches!(m.kind, Kind::Blaze | Kind::MagmaCube)
+        {
             [240, 240, 0, 0]
         } else {
             light

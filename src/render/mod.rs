@@ -3,6 +3,7 @@ pub mod entities;
 pub mod mesher;
 pub mod model;
 pub mod model2;
+pub mod model3;
 pub mod vk;
 
 /// Column-major 4x4 matrix (OpenGL convention).

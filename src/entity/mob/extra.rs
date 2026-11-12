@@ -43,7 +43,7 @@ const CARRIABLE: [u8; 14] = [
 ];
 
 impl Mob {
-    fn wet(&self, w: &mut ServerWorld) -> bool {
+    pub(super) fn wet(&self, w: &mut ServerWorld) -> bool {
         if self.in_water {
             return true;
         }

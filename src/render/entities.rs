@@ -273,6 +273,42 @@ fn sprite_rect(atlas: &Atlas, s: &Stack) -> Option<[f32; 4]> {
 /// One dropped item, relative to the camera. `light` is `(sky, block)` at
 /// the item, already combined with the sky darkening by the shader.
 #[allow(clippy::too_many_arguments)]
+/// `RenderFireball`: the fire charge sprite facing the camera.
+pub fn billboard(
+    out: &mut Vec<Vertex>,
+    rect: [f32; 4],
+    c: [f32; 3],
+    size: f32,
+    yaw: f32,
+    pitch: f32,
+) {
+    let mut m = translate(c[0], c[1], c[2]);
+    m = mul(&m, &rot_y(180.0 - yaw));
+    m = mul(&m, &rot_x(-pitch));
+    m = mul(&m, &scale(size, size, size));
+    let p = |x: f32, y: f32| transform(&m, [x, y, 0.0, 1.0]);
+    let (u0, v0, u1, v1) = (rect[0], rect[1], rect[2], rect[3]);
+    let l = [240u8, 240, 0, 0];
+    let c4 = [255u8; 4];
+    let q = [
+        (p(-0.5, -0.25), [u0, v1]),
+        (p(0.5, -0.25), [u1, v1]),
+        (p(0.5, 0.75), [u1, v0]),
+        (p(-0.5, 0.75), [u0, v0]),
+    ];
+    let vs: Vec<Vertex> = q
+        .iter()
+        .map(|(o, uv)| Vertex {
+            pos: [o[0], o[1], o[2]],
+            uv: *uv,
+            color: c4,
+            light: l,
+        })
+        .collect();
+    out.extend_from_slice(&vs);
+    out.extend_from_slice(&[vs[3], vs[2], vs[1], vs[0]]);
+}
+
 /// A unit block (`RenderBlocks.renderBlockAsItem`) transformed by `m`.
 pub fn block_model(
     out: &mut Vec<Vertex>,
