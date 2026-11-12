@@ -33,7 +33,7 @@ pub struct Stats {
     pub saturation: f32,
     pub exhaustion: f32,
     food_timer: i32,
-    prev_food: i32,
+    pub prev_food: i32,
     pub air: i32,
     pub fall_distance: f32,
     pub fire: i32,
@@ -96,6 +96,14 @@ impl Default for Stats {
 impl Stats {
     /// `S06PacketUpdateHealth`, `S1FPacketSetExperience`, the effect packets.
     pub fn apply_view(&mut self, v: &crate::entity::server_player::PlayerStatsView) {
+        // EntityPlayerSP.setPlayerSPHealth
+        let d = self.health - v.health;
+        if d < 0.0 {
+            self.hurt_resistance = 10;
+        } else if d > 0.0 {
+            self.hurt_resistance = 20;
+        }
+        self.prev_food = self.food;
         self.health = v.health;
         self.max_health = v.max_health;
         self.absorption = v.absorption;

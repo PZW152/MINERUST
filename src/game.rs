@@ -215,6 +215,8 @@ pub struct Game {
     items: Vec<ItemView>,
     /// `en_US.lang`
     pub lang: crate::lang::Lang,
+    /// `itemInUse` / `itemInUseCount` as the client sees them.
+    using: Option<(crate::item::Stack, i32)>,
     /// `EntityPickupFX`: collected items flying to the player, with age.
     pickups: Vec<(ItemView, i32)>,
     /// `EntityFallingBlock`s from the server.
@@ -470,6 +472,7 @@ impl Game {
             items: Vec::new(),
             pickups: Vec::new(),
             lang: crate::lang::Lang::default(),
+            using: None,
             falling: Vec::new(),
             started: Instant::now(),
             moving_mesh: HashMap::new(),
@@ -558,6 +561,59 @@ impl Game {
             math::floor_double(self.player.pos[0]) >> 4,
             math::floor_double(self.player.pos[2]) >> 4,
         )
+    }
+
+    /// `EntityPlayer.updateItemUse`: drinking sounds, eating crumbs.
+    fn update_item_use(&mut self, st: crate::item::Stack, n: i32) {
+        use crate::item_use::{action, Action};
+        let act = action(st.id, st.meta);
+        if act == Action::Drink {
+            let p = self.particle_rand.next_float() * 0.1 + 0.9;
+            self.sound("random.drink", None, 0.5, p);
+        }
+        if act == Action::Eat {
+            let rect = self
+                .atlas
+                .items
+                .get(&(st.id, st.meta))
+                .or_else(|| self.atlas.items.get(&(st.id, 0)))
+                .map(|&t| self.atlas.rects[t as usize]);
+            let (yaw, pitch) = (self.player.yaw, self.player.pitch);
+            let rot = |v: [f64; 3]| {
+                // Vec3.rotateAroundX(-pitch), rotateAroundY(-yaw)
+                let (ax, ay) = ((-pitch).to_radians(), (-yaw).to_radians());
+                let (cx, sx) = (ax.cos() as f64, ax.sin() as f64);
+                let y = v[1] * cx + v[2] * sx;
+                let z = v[2] * cx - v[1] * sx;
+                let (cy, sy) = (ay.cos() as f64, ay.sin() as f64);
+                let x = v[0] * cy + z * sy;
+                let z = z * cy - v[0] * sy;
+                [x, y, z]
+            };
+            for _ in 0..n {
+                let r = &mut self.particle_rand;
+                let v = rot([
+                    (r.next_float() as f64 - 0.5) * 0.1,
+                    r.next_double() * 0.1 + 0.1,
+                    0.0,
+                ]);
+                let p = rot([
+                    (r.next_float() as f64 - 0.5) * 0.3,
+                    -(r.next_float() as f64) * 0.6 - 0.3,
+                    0.6,
+                ]);
+                let e = self.player.pos;
+                let at = [p[0] + e[0], p[1] + e[1], p[2] + e[2]];
+                if let Some(rect) = rect {
+                    self.particles
+                        .item_crack(at, [v[0], v[1] + 0.05, v[2]], rect);
+                }
+            }
+            let r = &mut self.particle_rand;
+            let vol = 0.5 + 0.5 * r.next_int_n(2) as f32;
+            let pi = (r.next_float() - r.next_float()) * 0.2 + 1.0;
+            self.sound("random.eat", None, vol, pi);
+        }
     }
 
     /// `TileEntityRendererPiston.renderTileEntityAt` for every moving block.
@@ -795,6 +851,8 @@ impl Game {
                 Event::PlayerStats(v) => {
                     self.stats.apply_view(&v);
                     self.player.speed_attr = v.speed;
+                    self.player.food_level = v.food;
+                    self.player.blind = v.effects.iter().any(|e| e.id == crate::potion::BLINDNESS);
                     self.player.jump_boost = v
                         .effects
                         .iter()
@@ -808,6 +866,21 @@ impl Game {
                     }
                     if let Some(v) = set {
                         self.player.motion = v;
+                    }
+                }
+                Event::Using(u) => {
+                    self.using = u;
+                    self.player.using_item = u.is_some();
+                }
+                Event::UseFinished(st) => {
+                    // handleHealthUpdate(9) -> onItemUseFinish on the client
+                    self.update_item_use(st, 16);
+                    self.using = None;
+                    self.player.using_item = false;
+                    if crate::item_use::food(st.id, st.meta).is_some() {
+                        let r = &mut self.particle_rand;
+                        let p = r.next_float() * 0.1 + 0.9;
+                        self.sound("random.burp", None, 0.5, p);
                     }
                 }
                 Event::Hurt => {
@@ -1177,6 +1250,24 @@ impl Game {
                 .commands
                 .send(Command::Player(after, [p.yaw, p.pitch], p.flying));
         }
+        // EntityPlayer.onUpdate: the item in use (client side)
+        if let Some((st, n)) = self.using {
+            if self.view.inv.held() == Some(st) {
+                if n <= 25 && n % 4 == 0 {
+                    self.update_item_use(st, 5);
+                }
+                self.using = Some((st, (n - 1).max(1)));
+            } else {
+                self.using = None;
+                self.player.using_item = false;
+            }
+            // Minecraft.runTick: the use key let go
+            if !self.right_down && self.using.is_some() {
+                let _ = self.sim.commands.send(Command::StopUsing);
+                self.using = None;
+                self.player.using_item = false;
+            }
+        }
         // Digging, right-click repeat, arm swing, equip animation.
         self.tick_digging();
         if self.right_delay > 0 {
@@ -1186,6 +1277,7 @@ impl Game {
             && self.right_delay == 0
             && self.screen == Screen::Playing
             && !self.stats.dead
+            && self.using.is_none()
         {
             self.use_item();
         }
@@ -2635,7 +2727,22 @@ impl Game {
             );
             let equip = self.prev_equip + (self.equip - self.prev_equip) * partial;
             let swing = self.prev_swing_f + (self.swing_f - self.prev_swing_f) * partial;
-            entities::hand(&mut hand, &self.atlas, self.equipped, equip, swing, light);
+            let using = self.using.map(|(st, n)| {
+                (
+                    crate::item_use::action(st.id, st.meta),
+                    n as f32 - partial + 1.0,
+                    crate::item_use::max_duration(st.id, st.meta),
+                )
+            });
+            entities::hand(
+                &mut hand,
+                &self.atlas,
+                self.equipped,
+                equip,
+                swing,
+                light,
+                using,
+            );
         }
 
         let mut ui = crate::gui::Ui::new(

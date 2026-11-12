@@ -1,3 +1,4 @@
+pub mod arrow;
 pub mod base;
 pub mod collide;
 pub mod falling;
@@ -6,5 +7,6 @@ pub mod living;
 pub mod mob;
 pub mod path;
 pub mod player;
+pub mod raytrace;
 pub mod server_player;
 pub mod survival;

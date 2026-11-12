@@ -362,6 +362,20 @@ impl Particles {
         self.add(p);
     }
 
+    /// `"iconcrack_<id>"`: `EntityBreakingFX(world, x, y, z, mx, my, mz, item)`
+    pub fn item_crack(&mut self, pos: [f64; 3], m: [f64; 3], rect: [f32; 4]) {
+        let mut p = self.moving(pos, [0.0; 3]);
+        let jitter = [self.r.next_float() * 3.0, self.r.next_float() * 3.0];
+        p.sprite = Sprite::Block { rect, jitter };
+        p.gravity = 1.0;
+        p.scale /= 2.0;
+        p.kind = Kind::Dust;
+        for a in 0..3 {
+            p.motion[a] = p.motion[a] * 0.1f32 as f64 + m[a];
+        }
+        self.add(p);
+    }
+
     /// `EntityRainFX` splash
     pub fn rain(&mut self, pos: [f64; 3]) {
         let mut p = self.base(pos);

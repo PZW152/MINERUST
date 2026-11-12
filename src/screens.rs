@@ -534,51 +534,136 @@ pub fn survival_bars(
         }
         ui.text(&t, x, y, 0x80FF20, false);
     }
-    let left = w / 2.0 - 91.0;
-    let right = w / 2.0 + 91.0;
-    let top = h - 39.0;
-    let health = s.health.ceil() as i32;
-    let flash = s.hurt_resistance >= 10 && s.hurt_resistance / 3 % 2 == 1;
+    render_icons(ui, s, tick, jitter, underwater);
+}
+
+/// `GuiIngame.renderIcons`: armour, health (with poison, wither,
+/// absorption, regeneration and Health Boost rows), food (hunger) and air.
+fn render_icons(
+    ui: &mut Ui,
+    s: &Stats,
+    tick: u32,
+    rand: &mut crate::java::JavaRandom,
+    underwater: bool,
+) {
+    use crate::potion;
+    use crate::util::math::ceiling_float_int;
+    let (w, h) = (ui.w as i32, ui.h as i32);
+    let active = |id: i32| s.effects.iter().any(|e| e.id == id);
+    let mut flash = s.hurt_resistance / 3 % 2 == 1;
+    if s.hurt_resistance < 10 {
+        flash = false;
+    }
+    let health = ceiling_float_int(s.health);
+    // prevHealth is only set by the server's attackEntityFrom: 0 here
+    let prev_health = 0;
+    let food = s.food;
+    let left = w / 2 - 91;
+    let right = w / 2 + 91;
+    let top = h - 39;
+    let max = s.max_health;
+    let absorption = s.absorption;
+    let rows = ceiling_float_int((max + absorption) / 2.0 / 10.0);
+    let step = (10 - (rows - 2)).max(3);
+    let armor_y = top - (rows - 1) * step - 10;
+    let mut left_abs = absorption;
+    let armor = 0;
+    let mut regen = -1;
+    if active(potion::REGENERATION) {
+        regen = tick as i32 % ceiling_float_int(max + 5.0);
+    }
+    let icon = |ui: &mut Ui, x: i32, y: i32, u: i32, v: i32| {
+        ui.icon(x as f32, y as f32, u as f32, v as f32, 9.0, 9.0);
+    };
     for i in 0..10 {
-        let x = left + i as f32 * 8.0;
-        let mut y = top;
+        if armor > 0 {
+            let x = left + i * 8;
+            if i * 2 + 1 < armor {
+                icon(ui, x, armor_y, 34, 9);
+            }
+            if i * 2 + 1 == armor {
+                icon(ui, x, armor_y, 25, 9);
+            }
+            if i * 2 + 1 > armor {
+                icon(ui, x, armor_y, 16, 9);
+            }
+        }
+    }
+    let mut i = ceiling_float_int((max + absorption) / 2.0) - 1;
+    while i >= 0 {
+        let mut u = 16;
+        if active(potion::POISON) {
+            u += 36;
+        } else if active(potion::WITHER) {
+            u += 72;
+        }
+        let f = if flash { 1 } else { 0 };
+        let row = ceiling_float_int((i + 1) as f32 / 10.0) - 1;
+        let x = left + i % 10 * 8;
+        let mut y = top - row * step;
         if health <= 4 {
-            y += jitter.next_int_n(2) as f32;
+            y += rand.next_int_n(2);
         }
-        ui.icon(x, y, 16.0 + if flash { 9.0 } else { 0.0 }, 0.0, 9.0, 9.0);
-        let base = if flash { 54.0 } else { 36.0 };
-        if i * 2 + 1 < health {
-            ui.icon(x, y, 16.0 + base, 0.0, 9.0, 9.0);
-        } else if i * 2 + 1 == health {
-            ui.icon(x, y, 16.0 + base + 9.0, 0.0, 9.0, 9.0);
+        if i == regen {
+            y -= 2;
         }
+        let hc = 0;
+        icon(ui, x, y, 16 + f * 9, 9 * hc);
+        if flash {
+            if i * 2 + 1 < prev_health {
+                icon(ui, x, y, u + 54, 9 * hc);
+            }
+            if i * 2 + 1 == prev_health {
+                icon(ui, x, y, u + 63, 9 * hc);
+            }
+        }
+        if left_abs > 0.0 {
+            if left_abs == absorption && absorption % 2.0 == 1.0 {
+                icon(ui, x, y, u + 153, 9 * hc);
+            } else {
+                icon(ui, x, y, u + 144, 9 * hc);
+            }
+            left_abs -= 2.0;
+        } else {
+            if i * 2 + 1 < health {
+                icon(ui, x, y, u + 36, 9 * hc);
+            }
+            if i * 2 + 1 == health {
+                icon(ui, x, y, u + 45, 9 * hc);
+            }
+        }
+        i -= 1;
     }
     for i in 0..10 {
-        let x = right - i as f32 * 8.0 - 9.0;
         let mut y = top;
-        if s.saturation <= 0.0 && tick % (s.food as u32 * 3 + 1) == 0 {
-            y += (jitter.next_int_n(3) - 1) as f32;
+        let mut u = 16;
+        let mut bg = 0;
+        if active(potion::HUNGER) {
+            u += 36;
+            bg = 13;
         }
-        ui.icon(x, y, 16.0, 27.0, 9.0, 9.0);
-        if i * 2 + 1 < s.food {
-            ui.icon(x, y, 52.0, 27.0, 9.0, 9.0);
-        } else if i * 2 + 1 == s.food {
-            ui.icon(x, y, 61.0, 27.0, 9.0, 9.0);
+        if s.saturation <= 0.0 && tick % (food as u32 * 3 + 1) == 0 {
+            y += rand.next_int_n(3) - 1;
+        }
+        let x = right - i * 8 - 9;
+        icon(ui, x, y, 16 + bg * 9, 27);
+        if i * 2 + 1 < food {
+            icon(ui, x, y, u + 36, 27);
+        }
+        if i * 2 + 1 == food {
+            icon(ui, x, y, u + 45, 27);
         }
     }
-    if underwater && s.air < 300 {
-        let full = ((s.air - 2) as f32 * 10.0 / 300.0).ceil() as i32;
-        let popping = (s.air as f32 * 10.0 / 300.0).ceil() as i32 - full;
+    if underwater {
+        let air = s.air;
+        let full = ((air - 2) as f64 * 10.0 / 300.0).ceil() as i32;
+        let popping = (air as f64 * 10.0 / 300.0).ceil() as i32 - full;
         for i in 0..(full + popping) {
-            let x = right - i as f32 * 8.0 - 9.0;
-            ui.icon(
-                x,
-                h - 49.0,
-                if i < full { 16.0 } else { 25.0 },
-                18.0,
-                9.0,
-                9.0,
-            );
+            if i < full {
+                icon(ui, right - i * 8 - 9, armor_y, 16, 18);
+            } else {
+                icon(ui, right - i * 8 - 9, armor_y, 25, 18);
+            }
         }
     }
 }

@@ -165,6 +165,12 @@ pub struct Player {
     pub speed_attr: f64,
     /// `Potion.jump` amplifier, if active.
     pub jump_boost: Option<i32>,
+    /// `isUsingItem()`
+    pub using_item: bool,
+    /// `getFoodStats().getFoodLevel()`
+    pub food_level: i32,
+    /// `isPotionActive(Potion.blindness)`
+    pub blind: bool,
     jump_movement_factor: f32,
     pub distance_walked: f32,
     pub prev_distance_walked: f32,
@@ -210,6 +216,9 @@ impl Player {
             ai_move_speed: 0.1,
             speed_attr: 0.10000000149011612,
             jump_boost: None,
+            using_item: false,
+            food_level: 20,
+            blind: false,
             jump_movement_factor: 0.02,
             distance_walked: 0.0,
             prev_distance_walked: 0.0,
@@ -710,20 +719,40 @@ impl Player {
             forward = (forward as f64 * 0.3) as f32;
         }
         self.prev_jump = input.jump;
+        // EntityPlayerSP.onLivingUpdate
+        if self.using_item {
+            strafe *= 0.2;
+            forward *= 0.2;
+            self.sprint_toggle_timer = 0;
+        }
         if input.sneak && self.y_size < 0.2f32 {
             self.y_size = 0.2f32;
         }
-        if self.on_ground && !was_forward && forward >= 0.8f32 && !self.sprinting {
+        let can_sprint = self.food_level > 6 || self.allow_flying;
+        if self.on_ground
+            && !was_forward
+            && forward >= 0.8f32
+            && !self.sprinting
+            && can_sprint
+            && !self.using_item
+            && !self.blind
+        {
             if self.sprint_toggle_timer <= 0 && !input.sprint {
                 self.sprint_toggle_timer = 7;
             } else {
                 self.sprinting = true;
             }
         }
-        if !self.sprinting && forward >= 0.8f32 && input.sprint {
+        if !self.sprinting
+            && forward >= 0.8f32
+            && can_sprint
+            && !self.using_item
+            && !self.blind
+            && input.sprint
+        {
             self.sprinting = true;
         }
-        if self.sprinting && (forward < 0.8f32 || self.collided_horizontally) {
+        if self.sprinting && (forward < 0.8f32 || self.collided_horizontally || !can_sprint) {
             self.sprinting = false;
         }
         if self.allow_flying && !was_jump && input.jump {

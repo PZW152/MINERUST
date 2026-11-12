@@ -119,6 +119,9 @@ pub struct ServerPlayer {
     pub last_sent: Option<PlayerStatsView>,
     /// Ticks since the last attack from an entity (`entityAge`).
     pub entity_age: i32,
+    /// `itemInUse` / `itemInUseCount`: the hotbar slot, the stack as it was
+    /// when use began, and the ticks left.
+    pub using: Option<(usize, crate::item::Stack, i32)>,
 }
 
 impl ServerPlayer {
@@ -156,7 +159,13 @@ impl ServerPlayer {
             on_ground: false,
             last_sent: None,
             entity_age: 0,
+            using: None,
         }
+    }
+
+    /// `EntityPlayer.canEat`
+    pub fn can_eat(&self, always: bool) -> bool {
+        (always || self.food.need_food()) && !self.creative
     }
 
     pub fn view(&self) -> PlayerStatsView {

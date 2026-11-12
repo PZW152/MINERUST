@@ -16,7 +16,7 @@
 - [ ] 落沙／礫石／鐵砧／龍蛋的 `EntityFallingBlock`
 - [ ] 雙層植物上半燒掉時的掉落行為放到 `--vanilla-parity` 開關後
 - [x] 掉落物：`EntityItem` 逐行重寫（`pushOutOfBlocks`、水流、岩漿燃燒、合併、撿拾音效與飛向玩家的動畫）
-- [ ] 箭的命中判定簡化（`EntityArrow.onUpdate` 的 `rayTrace` + 實體 AABB 射線）
+- [x] `EntityArrow` 逐行移植（`World.rayTraceBlocks`、`collisionRayTrace` 含樓梯八格、`calculateIntercept`、撿回、燃燒箭點燃 TNT）
 - [ ] 爆炸的 `getBlockDensity` 當成無遮蔽
 - [ ] GUI 漸層用兩個矩形近似（`drawGradientRect`）
 
@@ -43,7 +43,8 @@
 ## E. 系統
 
 - [x] 玩家生存狀態移到伺服端（`EntityPlayerMP`）：`FoodStats`、傷害流程（難度縮放、護甲、抗性、吸收、擊退）、`CombatTracker` 死亡訊息（`en_US.lang`）
-- [ ] 物品使用（`setItemInUse`：吃、喝、拉弓、格擋）
+- [x] 物品使用（`setItemInUse`：吃、喝藥水、牛奶、拉弓、劍格擋的動畫），全部 `ItemFood` 數值與效果
+- [ ] 劍格擋的減傷（`isBlocking`）、噴濺藥水 `EntityPotion`、雪球／蛋／終界珍珠
 - [ ] 經驗球 `EntityXPOrb`（現在直接加經驗）
 - [ ] 難度設定與 `level.dat` 的 `Difficulty`、遊戲規則
 

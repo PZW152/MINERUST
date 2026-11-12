@@ -238,6 +238,9 @@ pub fn variant(id: ItemId, meta: i32) -> Option<(&'static str, &'static str)> {
     let m = meta.clamp(0, 15) as usize;
     Some(match id {
         263 if meta == 1 => ("charcoal", "Charcoal"),
+        261 if meta == 1000 => ("bow_pulling_0", "Bow"),
+        261 if meta == 1001 => ("bow_pulling_1", "Bow"),
+        261 if meta == 1002 => ("bow_pulling_2", "Bow"),
         349 => [
             ("fish_cod_raw", "Raw Fish"),
             ("fish_salmon_raw", "Raw Salmon"),

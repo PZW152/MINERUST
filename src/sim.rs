@@ -92,6 +92,9 @@ pub enum Command {
     DimensionAck,
     /// Right click with nothing targeted (`Item.onItemRightClick`).
     UseAir,
+    /// The use key was let go while using an item
+    /// (`C07PacketPlayerDigging` 5, `onPlayerStoppedUsing`).
+    StopUsing,
     Shutdown,
 }
 
@@ -145,6 +148,10 @@ pub enum Event {
     },
     /// `S19PacketEntityStatus` 2: the hurt animation and sound.
     Hurt,
+    /// `setItemInUse` started (stack, ticks) or `clearItemInUse` (None).
+    Using(Option<(crate::item::Stack, i32)>),
+    /// `S19PacketEntityStatus` 9: the item use finished.
+    UseFinished(crate::item::Stack),
     /// The player died: `CombatTracker.getDeathMessage` (key, arguments).
     Died(crate::entity::server_player::Message),
     /// Falling blocks near the player, sent each tick.
@@ -264,6 +271,8 @@ pub struct Sim {
     offsets: Vec<(i32, i32)>,
     /// The last `Event::Moving` listed some blocks.
     sent_moving: bool,
+    /// The item in use started or stopped this tick.
+    using_changed: bool,
     /// `S27PacketExplosion` pushes for the client this tick.
     push_add: [f64; 3],
     /// `EntityPlayerMP`: the server side of the player.
@@ -458,6 +467,7 @@ impl Sim {
             difficulty: crate::entity::living::Difficulty::Normal,
             motion_flags: (false, false, false),
             push_add: [0.0; 3],
+            using_changed: false,
             sent: Default::default(),
             unsaved: Default::default(),
             world_time: cfg.start_time,
@@ -728,6 +738,12 @@ impl Sim {
             }
             Command::DimensionAck => self.await_ack = false,
             Command::UseAir => self.use_air(),
+            Command::StopUsing => {
+                // EntityPlayer.stopUsingItem
+                if let Some((_, st, left)) = self.splayer.using.take() {
+                    self.stopped_using(st, left);
+                }
+            }
             Command::Break(p) => {
                 let id = self.world.block(p[0], p[1], p[2]);
                 if id != block::AIR && id != block::BEDROCK && !block::material(id).is_liquid() {
@@ -993,6 +1009,9 @@ impl Sim {
             let d = self.difficulty;
             self.splayer.tick(&self.world, d, true);
         }
+        let mut use_events = Vec::new();
+        self.tick_item_use(&mut use_events);
+        events.extend(use_events);
         self.load_chunks();
         if self.world.anvil {
             self.import_anvil();
@@ -1082,8 +1101,8 @@ impl Sim {
             for a in &self.mobs.arrows {
                 occ.push(Occupant {
                     bb: Aabb6 {
-                        min: [a.pos[0] - 0.25, a.pos[1], a.pos[2] - 0.25],
-                        max: [a.pos[0] + 0.25, a.pos[1] + 0.5, a.pos[2] + 0.25],
+                        min: a.e.bb.min,
+                        max: a.e.bb.max,
                     },
                     living: false,
                 });
@@ -1194,6 +1213,7 @@ impl Sim {
             events.push(Event::Moving(moving));
         }
         self.play = play;
+        self.pick_up_arrows(events);
         self.player_events(events);
         if self.play.inv_dirty {
             self.play.inv_dirty = false;
@@ -1579,6 +1599,29 @@ impl Sim {
         let Some(held) = self.play.inv.held() else {
             return;
         };
+        // ItemFood, ItemPotion, ItemBucketMilk, ItemBow, ItemSword.onItemRightClick
+        if self.splayer.using.is_none() && !self.splayer.dead {
+            use crate::item_use::{action, food, is_splash, max_duration, Action};
+            let start = match action(held.id, held.meta) {
+                Action::Eat => {
+                    let f = food(held.id, held.meta).unwrap();
+                    self.splayer.can_eat(f.always_edible)
+                }
+                Action::Drink => !(held.id == 373 && is_splash(held.meta)),
+                Action::Bow => {
+                    self.play.mode == GameMode::Creative
+                        || self.play.inv.main.iter().flatten().any(|s| s.id == 262)
+                }
+                Action::Block => true,
+                Action::None => false,
+            };
+            if start {
+                let n = max_duration(held.id, held.meta);
+                self.splayer.using = Some((self.play.inv.selected, held, n));
+                self.using_changed = true;
+                return;
+            }
+        }
         if held.id != 381 || self.dim != 0 {
             return;
         }
@@ -1616,6 +1659,203 @@ impl Sim {
         });
         if self.play.mode == GameMode::Survival {
             self.play.inv.consume_held();
+            self.play.inv_dirty = true;
+        }
+    }
+
+    /// `EntityPlayer.onUpdate`: the item in use counts down; at 0
+    /// `onItemUseFinish` eats, drinks or empties it.
+    fn tick_item_use(&mut self, events: &mut Vec<Event>) {
+        let Some((slot, st, left)) = self.splayer.using else {
+            return;
+        };
+        // getCurrentItem() == itemInUse
+        if self.play.inv.selected != slot || self.play.inv.main[slot] != Some(st) {
+            self.splayer.using = None;
+            self.using_changed = true;
+            return;
+        }
+        let left = left - 1;
+        if left == 0 {
+            self.splayer.using = None;
+            self.using_changed = true;
+            events.push(Event::UseFinished(st));
+            self.use_finished(slot, st);
+        } else {
+            self.splayer.using = Some((slot, st, left));
+        }
+    }
+
+    /// `onItemUseFinish` -> `ItemStack.onFoodEaten`
+    fn use_finished(&mut self, slot: usize, st: crate::item::Stack) {
+        use crate::item::Stack;
+        use crate::potion::{self, Effect};
+        let creative = self.play.mode == GameMode::Creative;
+        let pos = self.splayer.e.pos;
+        let mut result = Some(st);
+        let dec = |s: Stack| {
+            if s.count > 1 {
+                Some(Stack {
+                    count: s.count - 1,
+                    ..s
+                })
+            } else {
+                None
+            }
+        };
+        if let Some(f) = crate::item_use::food(st.id, st.meta) {
+            // ItemFood.onEaten
+            result = dec(st);
+            self.splayer.food.add_stats(f.heal, f.saturation);
+            let p = self.world.rand.next_float() * 0.1 + 0.9;
+            self.pending_out.push(crate::entity::mob::Outcome {
+                sounds: vec![("random.burp", pos, 0.5, p)],
+                ..Default::default()
+            });
+            let l = &mut self.splayer.living;
+            if st.id == 322 {
+                // ItemAppleGold.onFoodEaten
+                l.add_effect(Effect::new(potion::ABSORPTION, 2400, 0));
+                if st.meta > 0 {
+                    l.add_effect(Effect::new(potion::REGENERATION, 600, 4));
+                    l.add_effect(Effect::new(potion::RESISTANCE, 6000, 0));
+                    l.add_effect(Effect::new(potion::FIRE_RESISTANCE, 6000, 0));
+                } else if self.world.rand.next_float() < 1.0 {
+                    l.add_effect(Effect::new(potion::REGENERATION, 5 * 20, 1));
+                }
+            } else {
+                if st.id == 349 && st.meta == 3 {
+                    // ItemFishFood: pufferfish
+                    l.add_effect(Effect::new(potion::POISON, 1200, 3));
+                    l.add_effect(Effect::new(potion::HUNGER, 300, 2));
+                    l.add_effect(Effect::new(potion::CONFUSION, 300, 1));
+                }
+                if let Some((id, secs, amp, prob)) = f.effect {
+                    if self.world.rand.next_float() < prob {
+                        l.add_effect(Effect::new(id, secs * 20, amp));
+                    }
+                }
+            }
+            if st.id == 282 {
+                // ItemSoup: a bowl comes back
+                result = Some(Stack::new(281, 0, 1));
+            }
+        } else if st.id == 373 {
+            // ItemPotion.onEaten
+            let mut left = st;
+            if !creative {
+                left.count -= 1;
+            }
+            for e in potion::effects_of(st.meta, false) {
+                if e.potion().instant {
+                    let ad = e.amplifier;
+                    if e.id == potion::HEAL {
+                        self.splayer.living.heal((4 << ad).max(0) as f32);
+                    } else if e.id == potion::HARM {
+                        let d = self.difficulty;
+                        let src = crate::entity::living::Source::named(
+                            crate::entity::living::SourceKind::Magic,
+                        );
+                        self.splayer.attack(&self.world, src, (6 << ad) as f32, d);
+                    }
+                } else {
+                    self.splayer.living.add_effect(e);
+                }
+            }
+            result = if creative {
+                Some(left)
+            } else if left.count == 0 {
+                Some(Stack::new(374, 0, 1))
+            } else {
+                if let Some(rest) = self.play.inv.add(Stack::new(374, 0, 1)) {
+                    let mut r = std::mem::replace(&mut self.world.rand, JavaRandom::new(0));
+                    self.play.throw(rest, &mut r);
+                    self.world.rand = r;
+                }
+                Some(left)
+            };
+        } else if st.id == 335 {
+            // ItemBucketMilk.onEaten
+            let mut left = st;
+            if !creative {
+                left.count -= 1;
+            }
+            self.splayer.living.clear_effects();
+            result = if left.count == 0 {
+                Some(Stack::new(325, 0, 1))
+            } else {
+                Some(left)
+            };
+        }
+        self.play.inv.main[slot] = result.filter(|s| s.count > 0);
+        self.play.inv_dirty = true;
+    }
+
+    /// `ItemStack.onPlayerStoppedUsing` (the bow fires; see `fire_bow`).
+    fn stopped_using(&mut self, st: crate::item::Stack, left: i32) {
+        self.using_changed = true;
+        if st.id == 261 {
+            self.fire_bow(st, left);
+        }
+    }
+
+    /// `ItemBow.onPlayerStoppedUsing`
+    fn fire_bow(&mut self, _st: crate::item::Stack, left: i32) {
+        let creative = self.play.mode == GameMode::Creative;
+        let has_arrow = self.play.inv.main.iter().flatten().any(|s| s.id == 262);
+        if !creative && !has_arrow {
+            return;
+        }
+        let j = 72000 - left;
+        let mut f = j as f32 / 20.0;
+        f = (f * f + f * 2.0) / 3.0;
+        if (f as f64) < 0.1 {
+            return;
+        }
+        if f > 1.0 {
+            f = 1.0;
+        }
+        let (feet, yaw) = self.play.player;
+        let pitch = self.play.pitch;
+        let crit = f == 1.0;
+        let p = 1.0 / (self.world.rand.next_float() * 0.4 + 1.2) + f * 0.5;
+        self.pending_out.push(crate::entity::mob::Outcome {
+            sounds: vec![("random.bow", [feet[0], feet[1] + 1.62, feet[2]], 1.0, p)],
+            ..Default::default()
+        });
+        self.mobs
+            .shoot_player_arrow(feet, yaw, pitch, f * 2.0, crit, creative);
+        if !creative {
+            // InventoryPlayer.consumeInventoryItem(Items.arrow)
+            if let Some(i) = self
+                .play
+                .inv
+                .main
+                .iter()
+                .position(|s| s.map_or(false, |s| s.id == 262))
+            {
+                let s = self.play.inv.main[i].unwrap();
+                self.play.inv.main[i] = if s.count > 1 {
+                    Some(crate::item::Stack {
+                        count: s.count - 1,
+                        ..s
+                    })
+                } else {
+                    None
+                };
+            }
+            // ItemStack.damageItem(1, player)
+            let sel = self.play.inv.selected;
+            if let Some(mut b) = self.play.inv.main[sel] {
+                if b.id == 261 {
+                    b.meta += 1;
+                    self.play.inv.main[sel] = if b.meta > crate::item::max_damage(261) {
+                        None
+                    } else {
+                        Some(b)
+                    };
+                }
+            }
             self.play.inv_dirty = true;
         }
     }
@@ -2062,6 +2302,9 @@ impl Sim {
         let (feet, yaw) = play.player;
         let held = play.inv.held().map(|s| s.id);
         let info = mob::PlayerInfo {
+            hurt_resistant_time: self.splayer.living.hurt_resistant_time,
+            last_damage: self.splayer.living.last_damage,
+            difficulty: self.difficulty as i32,
             feet,
             yaw,
             pitch: self.player.map_or(0.0, |p| p.1[1]),
@@ -2222,10 +2465,10 @@ impl Sim {
             .arrows
             .iter()
             .map(|a| ArrowView {
-                pos: a.pos,
-                prev: a.prev_pos,
-                yaw: a.yaw,
-                pitch: a.pitch,
+                pos: a.e.pos,
+                prev: a.e.prev,
+                yaw: a.e.yaw,
+                pitch: a.e.pitch,
             })
             .collect();
         events.push(Event::Mobs(views, arrows));
@@ -2426,6 +2669,46 @@ impl Sim {
         }
     }
 
+    /// `EntityArrow.onCollideWithPlayer` for the arrows in reach.
+    fn pick_up_arrows(&mut self, events: &mut Vec<Event>) {
+        if self.splayer.dead || self.respawn_pending {
+            return;
+        }
+        let (f, _) = self.play.player;
+        let reach = crate::entity::player::Aabb {
+            min: [f[0] - 0.3 - 1.0, f[1] - 0.5, f[2] - 0.3 - 1.0],
+            max: [f[0] + 0.3 + 1.0, f[1] + 1.8 + 0.5, f[2] + 0.3 + 1.0],
+        };
+        let creative = self.play.mode == GameMode::Creative;
+        let mut sounds = Vec::new();
+        for a in self.mobs.arrows.iter_mut() {
+            if a.e.dead || !a.in_ground || a.arrow_shake > 0 || !a.e.bb.intersects(&reach) {
+                continue;
+            }
+            let mut ok = a.pickup == 1 || (a.pickup == 2 && creative);
+            if a.pickup == 1
+                && self
+                    .play
+                    .inv
+                    .add(crate::item::Stack::new(262, 0, 1))
+                    .is_some()
+            {
+                ok = false;
+            }
+            if ok {
+                let r = &mut a.e.rand;
+                let p = ((r.next_float() - r.next_float()) * 0.7 + 1.0) * 2.0;
+                sounds.push(("random.pop", a.e.pos, 0.2, p));
+                a.e.dead = true;
+                self.play.inv_dirty = true;
+            }
+        }
+        self.mobs.arrows.retain(|a| !a.e.dead);
+        if !sounds.is_empty() {
+            events.push(Event::Sounds(sounds));
+        }
+    }
+
     /// The player's state for the client, and the consequences of dying.
     fn player_events(&mut self, events: &mut Vec<Event>) {
         let fx = std::mem::take(&mut self.splayer.fx);
@@ -2454,6 +2737,9 @@ impl Sim {
         }
         if std::mem::take(&mut self.splayer.hurt_anim) {
             events.push(Event::Hurt);
+        }
+        if std::mem::take(&mut self.using_changed) {
+            events.push(Event::Using(self.splayer.using.map(|(_, st, n)| (st, n))));
         }
         let set = self.splayer.velocity.take();
         let add = std::mem::take(&mut self.push_add);
@@ -3152,6 +3438,59 @@ mod tests {
         back.load_drops(&bytes, &mut r);
         assert_eq!(back.items.len(), 1);
         assert_eq!(back.items[0].stack.count, 5);
+    }
+
+    /// ItemFood, ItemPotion and ItemBow through setItemInUse.
+    #[test]
+    fn eat_drink_and_shoot() {
+        let (mut sim, x, y, z) = redstone_sim();
+        // EntityPlayer.canEat: not in creative
+        sim.play.mode = GameMode::Survival;
+        let feet = [x as f64 + 0.5, y as f64, z as f64 + 0.5];
+        sim.step(&[Command::Player(feet, [0.0, 0.0], false)], &mut Vec::new());
+        sim.splayer.food.level = 10;
+        sim.play.inv.selected = 0;
+        sim.play.inv.main[0] = Some(crate::item::Stack::new(364, 0, 2));
+        steps(&mut sim, 1);
+        sim.step(&[Command::UseAir], &mut Vec::new());
+        assert!(sim.splayer.using.is_some(), "steak is being eaten");
+        steps(&mut sim, 32);
+        assert!(sim.splayer.using.is_none());
+        assert_eq!(sim.splayer.food.level, 18);
+        assert_eq!(sim.play.inv.main[0].unwrap().count, 1);
+
+        // Potion of Swiftness (8194)
+        sim.play.inv.main[0] = Some(crate::item::Stack::new(373, 8194, 1));
+        sim.step(&[Command::UseAir], &mut Vec::new());
+        steps(&mut sim, 32);
+        assert!(sim.splayer.living.active(crate::potion::MOVE_SPEED));
+        assert_eq!(
+            sim.play.inv.main[0].unwrap().id,
+            374,
+            "a glass bottle is left"
+        );
+
+        // the bow, fully drawn, against the stone floor
+        sim.play.inv.main[0] = Some(crate::item::Stack::new(261, 0, 1));
+        sim.play.inv.main[1] = Some(crate::item::Stack::new(262, 0, 5));
+        sim.play.pitch = 60.0;
+        sim.step(&[Command::UseAir], &mut Vec::new());
+        steps(&mut sim, 25);
+        sim.step(&[Command::StopUsing], &mut Vec::new());
+        assert_eq!(sim.mobs.arrows.len(), 1);
+        // (crit is cleared once it sticks, on its first tick here)
+        assert_eq!(sim.play.inv.main[1].unwrap().count, 4);
+        assert_eq!(sim.play.inv.main[0].unwrap().meta, 1, "the bow wears");
+        for _ in 0..40 {
+            steps(&mut sim, 1);
+            if sim.mobs.arrows.first().is_some_and(|a| a.in_ground) {
+                break;
+            }
+        }
+        assert!(
+            sim.mobs.arrows.first().is_some_and(|a| a.in_ground),
+            "the arrow sticks in the ground"
+        );
     }
 
     /// TileEntityPiston.launchWithSlimeBlock moves an item lying in front.

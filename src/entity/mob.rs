@@ -423,6 +423,11 @@ pub struct Mob {
 /// What the player looks like to the mobs.
 #[derive(Clone, Copy)]
 pub struct PlayerInfo {
+    /// `EntityPlayer.attackEntityFrom` would take damage now: hurt
+    /// resistance ticks, the last damage taken and the difficulty (0..3).
+    pub hurt_resistant_time: i32,
+    pub last_damage: f32,
+    pub difficulty: i32,
     pub feet: [f64; 3],
     pub yaw: f32,
     pub pitch: f32,
@@ -436,6 +441,31 @@ pub struct PlayerInfo {
 }
 
 impl PlayerInfo {
+    /// Whether `attackEntityFrom(arrow from a mob, amount)` succeeds:
+    /// difficulty scaling, then the hurt-resistance window.
+    pub fn accepts(&self, amount: f32, scaled: bool) -> bool {
+        if !self.attackable {
+            return false;
+        }
+        let mut a = amount;
+        if scaled {
+            match self.difficulty {
+                0 => a = 0.0,
+                1 => a = a / 2.0 + 1.0,
+                3 => a = a * 3.0 / 2.0,
+                _ => {}
+            }
+        }
+        if a == 0.0 {
+            return false;
+        }
+        if self.hurt_resistant_time as f32 > 10.0 {
+            a > self.last_damage
+        } else {
+            true
+        }
+    }
+
     fn eye(&self) -> [f64; 3] {
         [self.feet[0], self.feet[1] + 1.62, self.feet[2]]
     }
@@ -490,19 +520,7 @@ pub enum Hit {
     Burn(i32),
 }
 
-#[derive(Clone, Debug)]
-pub struct Arrow {
-    pub pos: [f64; 3],
-    pub prev_pos: [f64; 3],
-    pub motion: [f64; 3],
-    pub yaw: f32,
-    pub pitch: f32,
-    pub ticks: i32,
-    pub stuck: bool,
-    damage: f64,
-    /// `shootingEntity`
-    pub shooter: Option<u32>,
-}
+pub use super::arrow::EntityArrow as Arrow;
 
 /// `wrapAngleTo180_float`
 fn wrap(a: f32) -> f32 {
@@ -1569,33 +1587,42 @@ impl Mobs {
         });
     }
 
+    /// `ItemBow.onPlayerStoppedUsing`: `new EntityArrow(world, player, f * 2)`
+    /// from the server-side player (whose `posY` is the feet, eye height 0.12).
+    pub fn shoot_player_arrow(
+        &mut self,
+        feet: [f64; 3],
+        yaw: f32,
+        pitch: f32,
+        v: f32,
+        crit: bool,
+        creative: bool,
+    ) {
+        let id = self.rand.next_int() as u32;
+        let mut a = Arrow::from_look(
+            id,
+            super::arrow::Shooter::Player,
+            feet,
+            feet[1] + 0.12f32 as f64,
+            yaw,
+            pitch,
+            v,
+        );
+        a.crit = crit;
+        if creative {
+            a.pickup = 2;
+        }
+        self.arrows.push(a);
+    }
+
     /// `BehaviorProjectileDispense` for arrows: `EntityArrow` launched along
     /// `dir` at 1.1 with inaccuracy 6.
     pub fn dispense_arrow(&mut self, pos: [f64; 3], dir: [f64; 3]) {
-        let mut v = [dir[0], dir[1] + 0.1, dir[2]];
-        let len = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
-        for c in v.iter_mut() {
-            *c /= len;
-            *c += self.rand.next_gaussian()
-                * (if self.rand.next_boolean() { -1.0 } else { 1.0 })
-                * 0.007499999832361937
-                * 6.0;
-            *c *= 1.1;
-        }
-        let h = (v[0] * v[0] + v[2] * v[2]).sqrt();
-        let yaw = (v[0].atan2(v[2]) * 180.0 / std::f64::consts::PI) as f32;
-        let pitch = (v[1].atan2(h) * 180.0 / std::f64::consts::PI) as f32;
-        self.arrows.push(Arrow {
-            shooter: None,
-            pos,
-            prev_pos: pos,
-            motion: v,
-            yaw,
-            pitch,
-            ticks: 0,
-            stuck: false,
-            damage: 2.0,
-        });
+        let id = self.rand.next_int() as u32;
+        let mut a = Arrow::at_pos(id, pos);
+        a.pickup = 1;
+        a.set_heading(dir[0], dir[1] + 0.1f32 as f64, dir[2], 1.1, 6.0);
+        self.arrows.push(a);
     }
 
     /// A new mob with its own random, not yet in the world.
@@ -3028,46 +3055,35 @@ fn ranged(
         };
         m.attack_cooldown = (f * (hi - lo) + lo).floor() as i32;
         if m.kind == Kind::Skeleton {
-            // EntitySkeleton.attackEntityWithRangedAttack: EntityArrow(world, this, target, 1.6, 14 - difficulty*4)
-            let start = [m.pos[0], m.eye()[1] - 0.1, m.pos[2]];
-            let dy = player.feet[1] + 1.62 * 0.333 - start[1];
-            let (dx, dz) = (player.feet[0] - start[0], player.feet[2] - start[2]);
-            let h = (dx * dx + dz * dz).sqrt();
-            if h >= 1.0e-7 {
-                let yaw = (dz.atan2(dx) * 180.0 / std::f64::consts::PI) as f32 - 90.0;
-                let pitch = -(dy.atan2(h) * 180.0 / std::f64::consts::PI) as f32;
-                let off = [dx / h, dz / h];
-                let pos = [start[0] + off[0], start[1], start[2] + off[1]];
-                let mut v = [dx, dy + h * 0.2f32 as f64, dz];
-                let len = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
-                let inacc = 10.0f64; // 14 - normal difficulty * 4
-                for (i, c) in v.iter_mut().enumerate() {
-                    *c /= len;
-                    *c += m.rand.next_gaussian()
-                        * (if m.rand.next_boolean() { -1.0 } else { 1.0 })
-                        * 0.007499999832361937
-                        * inacc;
-                    *c *= 1.6;
-                    let _ = i;
-                }
-                arrows.push(Arrow {
-                    shooter: Some(m.id),
-                    pos,
-                    prev_pos: pos,
-                    motion: v,
-                    yaw,
-                    pitch,
-                    ticks: 0,
-                    stuck: false,
-                    damage: 2.0 + m.rand.next_gaussian() * 0.25 + 2.0 * 0.11,
-                });
-                out.sounds.push((
-                    "random.bow",
-                    m.pos,
-                    1.0,
-                    1.0 / (m.rand.next_float() * 0.4 + 0.8),
-                ));
+            // EntitySkeleton.attackEntityWithRangedAttack
+            let k = f.clamp(0.1, 1.0);
+            let diff = player.difficulty;
+            let id = m.rand.next_int() as u32;
+            // posY + getEyeHeight (height * 0.85)
+            let eye = m.pos[1] + (m.dims().1 * 0.85) as f64;
+            let mut a = Arrow::at_target(
+                id,
+                super::arrow::Shooter::Mob(m.id),
+                m.pos,
+                eye,
+                player.feet,
+                player.feet[1],
+                1.8,
+                1.6,
+                (14 - diff * 4) as f32,
+            );
+            a.damage =
+                (k * 2.0) as f64 + (m.rand.next_gaussian() * 0.25 + (diff as f32 * 0.11f32) as f64);
+            if m.variant == 1 {
+                a.e.set_fire(100);
             }
+            arrows.push(a);
+            out.sounds.push((
+                "random.bow",
+                m.pos,
+                1.0,
+                1.0 / (m.rand.next_float() * 0.4 + 0.8),
+            ));
         } else {
             // EntityWitch throws a splash potion of harming (6 damage) at range.
             // EntityPotion of Harming (16396) breaking on the player:
@@ -3130,7 +3146,8 @@ fn creeper(
     }
 }
 
-/// `EntityArrow.onUpdate` (simplified hit test against the player and mobs).
+/// `EntityArrow.onUpdate` for every arrow: what it hits takes
+/// `attackEntityFrom(causeArrowDamage(arrow, shooter), damage)`.
 fn tick_arrows(
     arrows: &mut Vec<Arrow>,
     w: &mut ServerWorld,
@@ -3138,90 +3155,92 @@ fn tick_arrows(
     out: &mut Outcome,
     mobs: &mut [Mob],
 ) {
-    arrows.retain_mut(|a| {
-        a.ticks += 1;
-        a.prev_pos = a.pos;
-        if a.stuck {
-            return a.ticks < 1200;
+    use super::arrow::{Shooter, Target};
+    use super::base::Fx;
+    let mut targets: Vec<(Target, Aabb)> = Vec::new();
+    if player.attackable {
+        targets.push((Target::Player, player.bb()));
+    }
+    for m in mobs.iter() {
+        if m.health > 0.0 {
+            targets.push((Target::Mob(m.id), m.bb));
         }
-        let next = [
-            a.pos[0] + a.motion[0],
-            a.pos[1] + a.motion[1],
-            a.pos[2] + a.motion[2],
-        ];
-        // block hit
-        let steps = 8;
-        for i in 1..=steps {
-            let t = i as f64 / steps as f64;
-            let p = [
-                a.pos[0] + a.motion[0] * t,
-                a.pos[1] + a.motion[1] * t,
-                a.pos[2] + a.motion[2] * t,
-            ];
-            let id = w.peek_block(
-                math::floor_double(p[0]),
-                math::floor_double(p[1]),
-                math::floor_double(p[2]),
-            );
-            if block::info(id).solid {
-                a.pos = p;
-                a.stuck = true;
-                a.ticks = 0;
-                out.sounds.push(("random.bowhit", p, 1.0, 1.2));
-                return true;
-            }
-        }
-        // player hit
-        let pb = player.bb();
-        let len = (a.motion[0].powi(2) + a.motion[1].powi(2) + a.motion[2].powi(2)).sqrt();
-        if player.attackable {
-            let grown = Aabb {
-                min: [pb.min[0] - 0.3, pb.min[1] - 0.3, pb.min[2] - 0.3],
-                max: [pb.max[0] + 0.3, pb.max[1] + 0.3, pb.max[2] + 0.3],
+    }
+    let mut ar = std::mem::take(arrows);
+    for a in ar.iter_mut() {
+        let mut fx = Vec::new();
+        let pending = a.fly(&*w as &dyn crate::world::BlockView, &targets, &mut fx);
+        let mut result = None;
+        let mut enderman = false;
+        if let Some(h) = pending {
+            let from = match a.shooter {
+                Shooter::Mob(id) => mobs.iter().find(|m| m.id == id).map(|m| m.pos),
+                _ => None,
             };
-            if ray_box(a.pos, a.motion, &grown).map_or(false, |t| t <= 1.0) {
-                let dmg = (len * a.damage).ceil() as f32;
-                let h = (a.motion[0].powi(2) + a.motion[2].powi(2)).sqrt().max(1e-4);
-                // knockbackStrength is 0 for skeleton arrows: no extra push
-                let _ = h;
-                out.hits.push(Hit::Arrow {
-                    amount: dmg,
-                    knock: [0.0; 3],
-                    shooter: a.shooter,
-                });
-                out.sounds.push(("random.bowhit", a.pos, 1.0, 1.2));
-                return false;
+            match h.target {
+                Target::Player => {
+                    let ok = player.accepts(h.damage as f32, matches!(a.shooter, Shooter::Mob(_)));
+                    if h.burning {
+                        out.hits.push(Hit::Burn(5 * 20));
+                    }
+                    if ok {
+                        out.hits.push(Hit::Arrow {
+                            amount: h.damage as f32,
+                            knock: [0.0; 3],
+                            shooter: match a.shooter {
+                                Shooter::Mob(id) => Some(id),
+                                _ => None,
+                            },
+                        });
+                    }
+                    result = Some(ok);
+                }
+                Target::Mob(id) => {
+                    if let Some(m) = mobs.iter_mut().find(|m| m.id == id) {
+                        enderman = m.kind == Kind::Enderman;
+                        if h.burning && !enderman {
+                            m.fire = m.fire.max(5 * 20);
+                        }
+                        let src = match a.shooter {
+                            Shooter::Player => Some(player.feet),
+                            _ => from,
+                        };
+                        let ok = m.damage(h.damage as f32, src);
+                        result = Some(ok);
+                    }
+                }
             }
         }
-        for m in mobs.iter_mut() {
-            if m.health > 0.0
-                && a.ticks > 2
-                && ray_box(a.pos, a.motion, &m.bb).map_or(false, |t| t <= 1.0)
-            {
-                m.damage((len * a.damage).ceil() as f32, Some(a.pos));
-                return false;
+        let push = a.finish(
+            &*w as &dyn crate::world::BlockView,
+            result,
+            enderman,
+            &mut fx,
+        );
+        if let (Some(v), Some(Target::Mob(id))) = (push, pending.map(|p| p.target)) {
+            if let Some(m) = mobs.iter_mut().find(|m| m.id == id) {
+                for i in 0..3 {
+                    m.motion[i] += v[i];
+                }
             }
         }
-        a.pos = next;
-        let h = (a.motion[0].powi(2) + a.motion[2].powi(2)).sqrt();
-        a.yaw = (a.motion[0].atan2(a.motion[2]) * 180.0 / std::f64::consts::PI) as f32;
-        a.pitch = (a.motion[1].atan2(h) * 180.0 / std::f64::consts::PI) as f32;
-        let drag = if block::material(w.peek_block(
-            math::floor_double(a.pos[0]),
-            math::floor_double(a.pos[1]),
-            math::floor_double(a.pos[2]),
-        )) == Material::Water
-        {
-            0.8
-        } else {
-            0.99
-        };
-        for v in &mut a.motion {
-            *v *= drag;
+        for f in fx {
+            match f {
+                Fx::Sound(n, p, v, pi) => out.sounds.push((n, p, v, pi)),
+                Fx::Particle(n, p, mo) => out.particles.push((n, p, mo)),
+                Fx::Collide(x, y, z, id) => {
+                    // BlockTNT.onEntityCollidedWithBlock: a burning arrow lights it
+                    if id == block::TNT && a.e.fire > 0 {
+                        // ignite(world, x, y, z, 1, shooter): EntityTNTPrimed, fuse 80
+                        w.prime_tnt(x, y, z, 80);
+                    }
+                }
+                _ => {}
+            }
         }
-        a.motion[1] -= 0.05f32 as f64;
-        a.ticks < 1200 && a.pos[1] > -64.0
-    });
+    }
+    ar.retain(|a| !a.e.dead);
+    *arrows = ar;
 }
 
 /// `Block.getExplosionResistance(null)`: `blockResistance / 5`.

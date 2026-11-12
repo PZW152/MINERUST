@@ -12,6 +12,7 @@ mod gui;
 mod inventory;
 mod item;
 mod item_table;
+mod item_use;
 mod java;
 mod lang;
 mod particles;

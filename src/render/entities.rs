@@ -542,16 +542,41 @@ pub fn hand(
     equip: f32,
     swing: f32,
     light: (i32, i32),
+    using: Option<(crate::item_use::Action, f32, i32)>,
 ) {
+    use crate::item_use::Action;
     let l = light_bytes(light.0, light.1);
     let pi = std::f32::consts::PI;
     let f13 = 0.8f32;
     let f5 = swing;
     match held {
         Some(s) => {
-            let f6 = (f5 * pi).sin();
-            let f7 = (f5.sqrt() * pi).sin();
-            let mut m = translate(-f7 * 0.4, (f5.sqrt() * pi * 2.0).sin() * 0.2, -f6 * 0.2);
+            let mut m;
+            if let Some((act, count, max)) = using {
+                m = crate::render::IDENTITY;
+                if act == Action::Eat || act == Action::Drink {
+                    // the item comes up to the mouth and bobs
+                    let f34 = count;
+                    let f42 = 1.0 - f34 / max as f32;
+                    let mut f16 = 1.0 - f42;
+                    f16 = f16 * f16 * f16;
+                    f16 = f16 * f16 * f16;
+                    f16 = f16 * f16 * f16;
+                    let f17 = 1.0 - f16;
+                    let bob = (f34 / 4.0 * pi).cos().abs()
+                        * 0.1
+                        * if f42 as f64 > 0.2 { 1.0 } else { 0.0 };
+                    m = mul(&m, &translate(0.0, bob, 0.0));
+                    m = mul(&m, &translate(f17 * 0.6, -f17 * 0.5, 0.0));
+                    m = mul(&m, &rot_y(f17 * 90.0));
+                    m = mul(&m, &rot_x(f17 * 10.0));
+                    m = mul(&m, &rot_z(f17 * 30.0));
+                }
+            } else {
+                let f6 = (f5 * pi).sin();
+                let f7 = (f5.sqrt() * pi).sin();
+                m = translate(-f7 * 0.4, (f5.sqrt() * pi * 2.0).sin() * 0.2, -f6 * 0.2);
+            }
             m = mul(
                 &m,
                 &translate(0.7 * f13, -0.65 * f13 - (1.0 - equip) * 0.6, -0.9 * f13),
@@ -563,6 +588,56 @@ pub fn hand(
             m = mul(&m, &rot_z(-f7 * 20.0));
             m = mul(&m, &rot_x(-f7 * 80.0));
             m = mul(&m, &scale(0.4, 0.4, 0.4));
+            if let Some((act, count, max)) = using {
+                if act == Action::Block {
+                    m = mul(&m, &translate(-0.5, 0.2, 0.0));
+                    m = mul(&m, &rot_y(30.0));
+                    m = mul(&m, &rot_x(-80.0));
+                    m = mul(&m, &rot_y(60.0));
+                } else if act == Action::Bow {
+                    m = mul(&m, &rot_z(-18.0));
+                    m = mul(&m, &rot_y(-12.0));
+                    m = mul(&m, &rot_x(-8.0));
+                    m = mul(&m, &translate(-0.9, 0.2, 0.0));
+                    let f18 = max as f32 - count;
+                    let mut f19 = f18 / 20.0;
+                    f19 = (f19 * f19 + f19 * 2.0) / 3.0;
+                    if f19 > 1.0 {
+                        f19 = 1.0;
+                    }
+                    if f19 > 0.1 {
+                        m = mul(
+                            &m,
+                            &translate(0.0, ((f18 - 0.1) * 1.3).sin() * 0.01 * (f19 - 0.1), 0.0),
+                        );
+                    }
+                    m = mul(&m, &translate(0.0, 0.0, f19 * 0.1));
+                    m = mul(&m, &rot_z(-335.0));
+                    m = mul(&m, &rot_y(-50.0));
+                    m = mul(&m, &translate(0.0, 0.5, 0.0));
+                    m = mul(&m, &scale(1.0, 1.0, 1.0 + f19 * 0.2));
+                    m = mul(&m, &translate(0.0, -0.5, 0.0));
+                    m = mul(&m, &rot_y(50.0));
+                    m = mul(&m, &rot_z(335.0));
+                }
+            }
+            // ItemBow.getItemIconForUseDuration
+            let mut s = s;
+            if let Some((Action::Bow, count, max)) = using {
+                let j = max - count as i32 + 1;
+                let frame = if j >= 18 {
+                    2
+                } else if j > 13 {
+                    1
+                } else if j > 0 {
+                    0
+                } else {
+                    -1
+                };
+                if frame >= 0 {
+                    s.meta = 1000 + frame;
+                }
+            }
             match s.block().filter(|&b| is_3d(b)) {
                 Some(b) => {
                     let h = if block::info(b).shape == Shape::Slab {

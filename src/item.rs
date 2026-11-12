@@ -462,6 +462,10 @@ pub fn all_items() -> Vec<(ItemId, i32)> {
     for m in 1..5 {
         v.push((397, m));
     }
+    // ItemBow.getItemIconForUseDuration: bow_pulling_0..2
+    for m in 1000..1003 {
+        v.push((261, m));
+    }
     v
 }
 
