@@ -383,4 +383,17 @@ MINERUST_BENCH=10 minerust --seed 12345 --no-save --size 1920 1080 --distance 16
   **留下**：半磚的 `ItemSlab.onItemUse`（點上半部放上半磚、兩塊合成雙層）與樓梯倒放都需要點擊位置 `hitX/Y/Z`，
   但 `Command::Use` 沒有帶，石半磚也有同樣的缺口；染色玻璃片（160）要移植 `renderBlockStainedGlassPane`（與一般玻璃片不同的立體模型）；
   其餘未移植方塊：26, 36, 92, 104, 105, 107, 130, 137–139, 144, 146–151, 154, 157, 158, 160。
+- `本次（2026-11-14，放置方向與選取）`：
+  - **查到放置邏輯的大缺口**：`play.rs` 的 `use_block` 只處理了少數方塊的中繼值，樓梯一律朝同一個方向、梯子／南瓜／乾草捆／藤蔓／
+    絆線鉤／石英柱沒有照點擊面或玩家朝向設定，半磚不能放上半也不能合併成雙層。已照各自的 `onBlockPlaced` / `onBlockPlacedBy` 補上：
+    樓梯（朝向 + 倒放）、半磚（上下半 + `ItemSlab.onItemUse` 的兩種合併）、活板門上半、梯子、南瓜與南瓜燈、藤蔓、絆線鉤、
+    石英柱、乾草捆。測試 `stairs_face_the_player_and_slabs_join`。
+  - `Command::Use` 多了 `hit`（原版 `C08PacketPlayerBlockPlacement` 的 `hitX/Y/Z`，方塊內座標）。
+  - **客戶端選取方塊**原本是整格的 DDA，選取框永遠是整個方塊、火把和花旁邊的空氣也會被點到。改為
+    `raytrace::ray_trace_blocks`（`World.rayTraceBlocks` 的移植，逐方塊用自己的範圍做 `collisionRayTrace`），
+    觸及距離照 `getBlockReachDistance`（創造 5、生存 4.5），選取框畫 `shapes::selection` 的範圍（`Frame.outline` 改為最小／最大角）。
+    與生物比較遠近改用實際命中點的距離。
+  - 截圖模式的 `--open use:` 可用 `MINERUST_HIT=x,y,z`、`MINERUST_FACE=0..5` 指定命中點與面。
+  **驗證**：`cargo test --release` 87 項通過；截圖確認火把的選取框貼合其範圍。梯子、南瓜、藤蔓、絆線鉤的放置方向只照原始碼移植，
+  沒有個別測試。**還沒補放置規則的**：柵欄門、床、頭顱、可可、終界門框的朝向、鐵軌之外需要 `canPlaceBlockOnSide` 的檢查（火把、按鈕已有）。
   **查到的既有錯誤，待修**：武器附魔（鋒利系列、擊退、燃燒、掠奪）、保護系列、水下呼吸、荊棘、弓的附魔、附魔光澤都還沒接。

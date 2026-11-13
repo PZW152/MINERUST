@@ -365,8 +365,9 @@ pub struct Globals {
 pub struct Frame<'a> {
     pub globals: &'a Globals,
     pub cam: [f64; 3],
-    /// Selected block (world coordinates).
-    pub outline: Option<[i32; 3]>,
+    /// Selection box of the block under the crosshair: min and max corners
+    /// in world coordinates.
+    pub outline: Option<[f64; 6]>,
     pub gui_scale: f32,
     pub screenshot: Option<std::path::PathBuf>,
     /// `World.getStarBrightness`
@@ -2398,18 +2399,13 @@ impl Renderer {
             let mut outline_count = 0u32;
             if let Some(b) = frame.outline {
                 let e = 0.002f32;
-                let o = [
-                    (b[0] as f64 - frame.cam[0]) as f32,
-                    (b[1] as f64 - frame.cam[1]) as f32,
-                    (b[2] as f64 - frame.cam[2]) as f32,
-                ];
                 let (x0, y0, z0, x1, y1, z1) = (
-                    o[0] - e,
-                    o[1] - e,
-                    o[2] - e,
-                    o[0] + 1.0 + e,
-                    o[1] + 1.0 + e,
-                    o[2] + 1.0 + e,
+                    (b[0] - frame.cam[0]) as f32 - e,
+                    (b[1] - frame.cam[1]) as f32 - e,
+                    (b[2] - frame.cam[2]) as f32 - e,
+                    (b[3] - frame.cam[0]) as f32 + e,
+                    (b[4] - frame.cam[1]) as f32 + e,
+                    (b[5] - frame.cam[2]) as f32 + e,
                 );
                 let c = [
                     [x0, y0, z0],

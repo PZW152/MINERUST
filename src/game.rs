@@ -270,6 +270,8 @@ pub struct Game {
     /// Blocks the client changed ahead of the server, as the original's
     /// client does in `onPlayerDestroyBlock` and `ItemBlock.onItemUse`.
     predictions: Vec<Prediction>,
+    /// `objectMouseOver.hitVec`: where the crosshair's ray met the block.
+    hit: [f64; 3],
     pending_mesh: HashSet<(i32, i32)>,
     /// Chunks with render chunks to build again (bit per 16-high section).
     dirty: HashMap<(i32, i32), u16>,
@@ -596,6 +598,7 @@ impl Game {
             batch_done: 0,
             batch_open: false,
             predictions: Vec::new(),
+            hit: [0.0; 3],
             pending_mesh: HashSet::new(),
             dirty: HashMap::new(),
             offsets,
@@ -1749,7 +1752,24 @@ impl Game {
         }
         if self.ticks >= 60 {
             if let Some(t) = self.start_use.take() {
-                self.use_on(t, [0, 1, 0]);
+                // the middle of the top face, unless MINERUST_HIT=x,y,z
+                // (block space) and MINERUST_FACE=0..5 say otherwise
+                let mut h = [0.5f64, 1.0, 0.5];
+                if let Ok(v) = std::env::var("MINERUST_HIT") {
+                    for (k, part) in v.split(',').take(3).enumerate() {
+                        h[k] = part.parse().unwrap_or(h[k]);
+                    }
+                }
+                let n = match std::env::var("MINERUST_FACE").ok().as_deref() {
+                    Some("0") => [0, -1, 0],
+                    Some("2") => [0, 0, -1],
+                    Some("3") => [0, 0, 1],
+                    Some("4") => [-1, 0, 0],
+                    Some("5") => [1, 0, 0],
+                    _ => [0, 1, 0],
+                };
+                self.hit = [t[0] as f64 + h[0], t[1] as f64 + h[1], t[2] as f64 + h[2]];
+                self.use_on(t, n);
                 self.send_start_clicks();
             }
         }
@@ -2496,56 +2516,33 @@ impl Game {
     }
 
     /// Block under the crosshair within survival reach (4.5 blocks).
-    fn pick(&self, eye: [f64; 3]) -> Option<([i32; 3], [i32; 3])> {
+    /// `EntityLivingBase.rayTrace(reach, partial)`: the block under the
+    /// crosshair by `World.rayTraceBlocks`, which tests each block's own
+    /// bounds (`collisionRayTrace`), and where the ray met it.
+    fn pick(&self, eye: [f64; 3]) -> Option<([i32; 3], [i32; 3], [f64; 3])> {
         let d = self.look();
-        let reach = 4.5f64;
-        let mut cell = [
-            math::floor_double(eye[0]),
-            math::floor_double(eye[1]),
-            math::floor_double(eye[2]),
+        // PlayerControllerMP.getBlockReachDistance
+        let reach = if self.mode == GameMode::Creative {
+            5.0f32
+        } else {
+            4.5f32
+        } as f64;
+        let end = [
+            eye[0] + d[0] * reach,
+            eye[1] + d[1] * reach,
+            eye[2] + d[2] * reach,
         ];
-        let mut t_max = [0f64; 3];
-        let mut t_delta = [0f64; 3];
-        let mut step = [0i32; 3];
-        for i in 0..3 {
-            if d[i] > 0.0 {
-                step[i] = 1;
-                t_max[i] = (cell[i] as f64 + 1.0 - eye[i]) / d[i];
-                t_delta[i] = 1.0 / d[i];
-            } else if d[i] < 0.0 {
-                step[i] = -1;
-                t_max[i] = (cell[i] as f64 - eye[i]) / d[i];
-                t_delta[i] = -1.0 / d[i];
-            } else {
-                t_max[i] = f64::INFINITY;
-                t_delta[i] = f64::INFINITY;
-            }
-        }
-        let mut normal = [0i32; 3];
-        loop {
-            let id = self.world.peek_block(cell[0], cell[1], cell[2]);
-            if block::selectable(id) {
-                return Some((cell, normal));
-            }
-            let axis = if t_max[0] < t_max[1] {
-                if t_max[0] < t_max[2] {
-                    0
-                } else {
-                    2
-                }
-            } else if t_max[1] < t_max[2] {
-                1
-            } else {
-                2
-            };
-            if t_max[axis] > reach {
-                return None;
-            }
-            cell[axis] += step[axis];
-            t_max[axis] += t_delta[axis];
-            normal = [0; 3];
-            normal[axis] = -step[axis];
-        }
+        let h =
+            crate::entity::raytrace::ray_trace_blocks(&self.world, eye, end, false, false, false)?;
+        let n = match h.side {
+            0 => [0, -1, 0],
+            1 => [0, 1, 0],
+            2 => [0, 0, -1],
+            3 => [0, 0, 1],
+            4 => [-1, 0, 0],
+            _ => [1, 0, 0],
+        };
+        Some(([h.x, h.y, h.z], n, h.vec))
     }
 
     fn gui_mouse(&self) -> (f32, f32) {
@@ -2773,6 +2770,22 @@ impl Game {
     /// the original neither plays the sound nor tells the server.
     fn placement(&self, id: u8, meta: u8, b: [i32; 3], n: [i32; 3]) -> Option<[i32; 3]> {
         let tid = self.world.peek_block(b[0], b[1], b[2]);
+        // ItemSlab.func_150936_a: a slab may join the half it is put on,
+        // or the half in the block beside it
+        if id == block::STONE_SLAB || id == block::WOODEN_SLAB {
+            let tm = self.world.peek_meta(b[0], b[1], b[2]);
+            let top = tm & 8 != 0;
+            if (n == [0, 1, 0] && !top || n == [0, -1, 0] && top) && tid == id && tm & 7 == meta & 7
+            {
+                return Some(b);
+            }
+            let q = [b[0] + n[0], b[1] + n[1], b[2] + n[2]];
+            if self.world.peek_block(q[0], q[1], q[2]) == id
+                && self.world.peek_meta(q[0], q[1], q[2]) & 7 == meta & 7
+            {
+                return Some(q);
+            }
+        }
         let in_place = tid == block::SNOW_LAYER && self.world.peek_meta(b[0], b[1], b[2]) & 7 < 1
             || matches!(tid, block::VINE | block::TALLGRASS | block::DEADBUSH);
         let p = if in_place {
@@ -2911,6 +2924,11 @@ impl Game {
             target: b,
             face: n,
             sneaking: self.input.sneak,
+            hit: [
+                (self.hit[0] - b[0] as f64) as f32,
+                (self.hit[1] - b[1] as f64) as f32,
+                (self.hit[2] - b[2] as f64) as f32,
+            ],
         });
         if std::env::var_os("MINERUST_DEBUG_LATENCY").is_some() {
             self.latency = Some((Instant::now(), (b[0] >> 4, b[2] >> 4)));
@@ -4091,7 +4109,11 @@ impl Game {
         let partial = self.partial;
 
         let eye = self.eye(partial);
-        self.selected = self.pick(eye);
+        let picked = self.pick(eye);
+        self.selected = picked.map(|(b, n, _)| (b, n));
+        if let Some((_, _, v)) = picked {
+            self.hit = v;
+        }
         {
             // EntityRenderer.getMouseOver: a mob closer than the block wins.
             let look = self.look();
@@ -4100,10 +4122,9 @@ impl Game {
             } else {
                 3.0
             };
-            let block_d = self.selected.map(|(b, _)| {
-                let c = [b[0] as f64 + 0.5, b[1] as f64 + 0.5, b[2] as f64 + 0.5];
-                ((c[0] - eye[0]).powi(2) + (c[1] - eye[1]).powi(2) + (c[2] - eye[2]).powi(2)).sqrt()
-                    - 0.5
+            // objectMouseOver.hitVec.distanceTo(eye)
+            let block_d = picked.map(|(_, _, v)| {
+                ((v[0] - eye[0]).powi(2) + (v[1] - eye[1]).powi(2) + (v[2] - eye[2]).powi(2)).sqrt()
             });
             self.target_mob = None;
             for m in &self.mobs {
@@ -5223,8 +5244,22 @@ impl Game {
             Screen::Playing => {}
         }
         let ui_verts = ui.v;
+        // RenderGlobal.drawSelectionBox: getSelectedBoundingBoxFromPool
         let outline = if self.screen == Screen::Playing {
-            self.selected.map(|s| s.0)
+            self.selected.map(|(p, _)| {
+                let w = &self.world;
+                let get = |x: i32, y: i32, z: i32| (w.peek_block(x, y, z), w.peek_meta(x, y, z));
+                let (id, meta) = get(p[0], p[1], p[2]);
+                let b = crate::shapes::selection(&get, id, meta, p[0], p[1], p[2]);
+                [
+                    p[0] as f64 + b[0] as f64,
+                    p[1] as f64 + b[1] as f64,
+                    p[2] as f64 + b[2] as f64,
+                    p[0] as f64 + b[3] as f64,
+                    p[1] as f64 + b[4] as f64,
+                    p[2] as f64 + b[5] as f64,
+                ]
+            })
         } else {
             None
         };

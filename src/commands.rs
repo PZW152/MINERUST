@@ -749,6 +749,7 @@ mod enchant_tests {
                     target: p,
                     face: [0, 1, 0],
                     sneaking: false,
+                    hit: [0.5, 1.0, 0.5],
                 },
                 // hotbar 0 is slot 28 of ContainerEnchantment
                 Command::WindowClick {
@@ -805,6 +806,7 @@ mod enchant_tests {
                     target: p,
                     face: [0, 1, 0],
                     sneaking: false,
+                    hit: [0.5, 1.0, 0.5],
                 },
                 // hotbar 0 and 1 are slots 30 and 31 of ContainerRepair
                 Command::WindowClick {

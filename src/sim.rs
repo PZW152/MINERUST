@@ -56,6 +56,8 @@ pub enum Command {
         target: [i32; 3],
         face: [i32; 3],
         sneaking: bool,
+        /// Where on the block the click landed (`hitX`, `hitY`, `hitZ`).
+        hit: [f32; 3],
     },
     Select(usize),
     /// `C0EPacketClickWindow`: container slot number (-999 outside),
@@ -938,6 +940,7 @@ impl Sim {
                 target,
                 face,
                 sneaking,
+                hit,
             } => {
                 ACTIONS_DONE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 // ItemMinecart.onItemUse (rails have no onBlockActivated)
@@ -945,7 +948,7 @@ impl Sim {
                     return;
                 }
                 let mut play = std::mem::replace(&mut self.play, Play::new(GameMode::Survival));
-                let used = play.use_block(&mut self.world, target, face, sneaking);
+                let used = play.use_block(&mut self.world, target, face, sneaking, hit);
                 self.play = play;
                 if !used {
                     // Minecraft.func_147121_ag: sendUseItem
@@ -3799,6 +3802,7 @@ mod tests {
                     target: [bx + 3, by - 1, bz],
                     face: [0, 1, 0],
                     sneaking: false,
+                    hit: [0.5, 1.0, 0.5],
                 },
             ],
             &mut ev,
@@ -4314,6 +4318,7 @@ mod tests {
                 target: [rx, y, z + 1],
                 face: [0, 1, 0],
                 sneaking: false,
+                hit: [0.5, 1.0, 0.5],
             }],
             &mut Vec::new(),
         );
@@ -4398,6 +4403,7 @@ mod tests {
                 target: [rx, y, z + 1],
                 face: [0, 1, 0],
                 sneaking: false,
+                hit: [0.5, 1.0, 0.5],
             }],
             &mut Vec::new(),
         );
@@ -4695,6 +4701,60 @@ mod tests {
         assert_eq!(sim.world.meta(x, y, z) & 4, 4, "door opened");
     }
 
+    /// BlockStairs.onBlockPlaced / onBlockPlacedBy, BlockSlab.onBlockPlaced
+    /// and ItemSlab.onItemUse: the hit position and the player's yaw decide.
+    #[test]
+    fn stairs_face_the_player_and_slabs_join() {
+        let (mut sim, x, y, z) = redstone_sim();
+        for dx in 0..8 {
+            for dy in 1..4 {
+                for dz in 0..3 {
+                    sim.world
+                        .set_block(x + dx, y + dy, z + dz, block::AIR, 0, 3);
+                }
+            }
+            sim.world.set_block(x + dx, y, z, block::STONE, 0, 3);
+        }
+        sim.world.set_block(x + 2, y + 1, z, block::STONE, 0, 3);
+        sim.world.set_block(x + 6, y + 1, z, block::STONE, 0, 3);
+        let feet = [x as f64 + 0.5, (y + 1) as f64, z as f64 + 8.5];
+        let sel = sim.play.inv.selected;
+        let mut put =
+            |sim: &mut Sim, item: u16, yaw: f32, target: [i32; 3], face: [i32; 3], hy: f32| {
+                sim.play.inv.main[sel] = Some(crate::item::Stack::new(item, 0, 8));
+                sim.step(
+                    &[
+                        Command::Player(feet, [yaw, 0.0], false),
+                        Command::Use {
+                            target,
+                            face,
+                            sneaking: false,
+                            hit: [0.5, hy, 0.5],
+                        },
+                    ],
+                    &mut Vec::new(),
+                );
+            };
+        // on the floor, looking south: ascending to the north
+        put(&mut sim, 53, 0.0, [x, y, z], [0, 1, 0], 1.0);
+        assert_eq!(sim.world.block(x, y + 1, z), block::OAK_STAIRS);
+        assert_eq!(sim.world.meta(x, y + 1, z), 2);
+        // on the upper half of a side, looking west: upside down
+        put(&mut sim, 53, 90.0, [x + 2, y + 1, z], [0, 0, 1], 0.8);
+        assert_eq!(sim.world.block(x + 2, y + 1, z + 1), block::OAK_STAIRS);
+        assert_eq!(sim.world.meta(x + 2, y + 1, z + 1), 1 | 4);
+        // a slab, then a second one on top of it: the double slab
+        put(&mut sim, 44, 0.0, [x + 4, y, z], [0, 1, 0], 1.0);
+        assert_eq!(sim.world.block(x + 4, y + 1, z), block::STONE_SLAB);
+        assert_eq!(sim.world.meta(x + 4, y + 1, z), 0);
+        put(&mut sim, 44, 0.0, [x + 4, y + 1, z], [0, 1, 0], 0.5);
+        assert_eq!(sim.world.block(x + 4, y + 1, z), block::DOUBLE_STONE_SLAB);
+        // the upper half of a side: the top slab
+        put(&mut sim, 126, 0.0, [x + 6, y + 1, z], [0, 0, 1], 0.9);
+        assert_eq!(sim.world.block(x + 6, y + 1, z + 1), block::WOODEN_SLAB);
+        assert_eq!(sim.world.meta(x + 6, y + 1, z + 1), 8);
+    }
+
     /// EntityCreeper.interact: flint and steel lights the fuse, which then
     /// runs for `fuseTime` (30) ticks whatever the player does.
     #[test]
@@ -4872,6 +4932,7 @@ mod tests {
                     target: [cx + 2, y, cz],
                     face: [0, 1, 0],
                     sneaking: false,
+                    hit: [0.5, 1.0, 0.5],
                 },
             ],
             &mut ev,

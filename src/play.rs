@@ -790,6 +790,7 @@ impl Play {
         target: Pos,
         face: [i32; 3],
         sneaking: bool,
+        hit: [f32; 3],
     ) -> bool {
         let tid = w.block(target[0], target[1], target[2]);
         if !sneaking || self.inv.held().is_none() {
@@ -979,6 +980,54 @@ impl Play {
                 None => return false,
             },
         };
+        // ItemSlab.onItemUse: a slab on the matching half makes the double
+        // slab, on the clicked block or on the one beside it (func_150946_a)
+        if id == block::STONE_SLAB || id == block::WOODEN_SLAB {
+            let double = if id == block::STONE_SLAB {
+                block::DOUBLE_STONE_SLAB
+            } else {
+                block::DOUBLE_WOODEN_SLAB
+            };
+            let kind = held.meta & 7;
+            let tm = w.meta(target[0], target[1], target[2]);
+            let top = tm & 8 != 0;
+            let beside = [
+                target[0] + face[0],
+                target[1] + face[1],
+                target[2] + face[2],
+            ];
+            let at = if (face == [0, 1, 0] && !top || face == [0, -1, 0] && top)
+                && tid == id
+                && tm & 7 == kind
+            {
+                Some(target)
+            } else if w.block(beside[0], beside[1], beside[2]) == id
+                && w.meta(beside[0], beside[1], beside[2]) & 7 == kind
+            {
+                Some(beside)
+            } else {
+                None
+            };
+            if let Some(q) = at {
+                // checkNoEntityCollision with the full block
+                let ([px, py, pz], _) = self.player;
+                let pbb = Aabb {
+                    min: [px - 0.3, py, pz - 0.3],
+                    max: [px + 0.3, py + 1.8, pz + 0.3],
+                };
+                let bb = Aabb {
+                    min: [q[0] as f64, q[1] as f64, q[2] as f64],
+                    max: [q[0] as f64 + 1.0, q[1] as f64 + 1.0, q[2] as f64 + 1.0],
+                };
+                if !bb.intersects(&pbb) && w.set_block(q[0], q[1], q[2], double, kind, 3) {
+                    if self.mode == GameMode::Survival {
+                        self.inv.consume_held();
+                        self.inv_dirty = true;
+                    }
+                }
+                return true;
+            }
+        }
         // ItemBlock.onItemUse: replaceable targets are replaced in place.
         let tmat = block::material(tid);
         let replace_in_place = tid == block::SNOW_LAYER
@@ -1050,6 +1099,75 @@ impl Play {
                     5 if nc(w, p[0] - 1, p[1], p[2]) => 3,
                     _ => return false,
                 };
+                // BlockTrapDoor.onBlockPlaced: the upper half of the side
+                if hit[1] > 0.5 {
+                    meta |= 8;
+                }
+            }
+            // BlockStairs.onBlockPlaced (upside down under a ceiling or on
+            // the upper half of a side) and onBlockPlacedBy (facing)
+            id if block::is_stairs(id) => {
+                let k = if side != 0 && (side == 1 || hit[1] as f64 <= 0.5) {
+                    0
+                } else {
+                    4
+                };
+                meta = [2, 1, 3, 0][yaw4 as usize] | k;
+            }
+            // BlockLadder.onBlockPlaced
+            block::LADDER => {
+                let mut j = 0;
+                if (j == 0 || side == 2) && nc(w, p[0], p[1], p[2] + 1) {
+                    j = 2;
+                }
+                if (j == 0 || side == 3) && nc(w, p[0], p[1], p[2] - 1) {
+                    j = 3;
+                }
+                if (j == 0 || side == 4) && nc(w, p[0] + 1, p[1], p[2]) {
+                    j = 4;
+                }
+                if (j == 0 || side == 5) && nc(w, p[0] - 1, p[1], p[2]) {
+                    j = 5;
+                }
+                if j == 0 {
+                    // canPlaceBlockAt: needs a block behind it
+                    return false;
+                }
+                meta = j;
+            }
+            // BlockPumpkin.onBlockPlacedBy
+            block::PUMPKIN | block::LIT_PUMPKIN => {
+                meta = ((self.player.1 * 4.0 / 360.0) as f64 + 2.5).floor() as i32 & 3;
+            }
+            // BlockVine.onBlockPlaced
+            block::VINE => {
+                meta = match side {
+                    2 => 1,
+                    3 => 4,
+                    4 => 8,
+                    5 => 2,
+                    _ => meta,
+                };
+            }
+            // BlockTripWireHook.onBlockPlaced
+            block::TRIPWIRE_HOOK => {
+                meta = match side {
+                    2 if nc(w, p[0], p[1], p[2] + 1) => 2,
+                    3 if nc(w, p[0], p[1], p[2] - 1) => 0,
+                    4 if nc(w, p[0] + 1, p[1], p[2]) => 1,
+                    5 if nc(w, p[0] - 1, p[1], p[2]) => 3,
+                    _ => 0,
+                };
+            }
+            // BlockQuartz.onBlockPlaced: the pillar lies along the clicked axis
+            block::QUARTZ_BLOCK => {
+                if meta == 2 {
+                    meta = match side {
+                        2 | 3 => 4,
+                        4 | 5 => 3,
+                        _ => 2,
+                    };
+                }
             }
             block::STONE_PRESSURE_PLATE | block::WOODEN_PRESSURE_PLATE => {
                 if !w.solid_top_surface(p[0], p[1] - 1, p[2])
@@ -1108,7 +1226,7 @@ impl Play {
                 let k = (yaw4 + 1) % 4;
                 meta = [2, 3, 0, 1][k as usize] | (meta << 2) & 12;
             }
-            block::LOG | block::LOG2 => {
+            block::LOG | block::LOG2 | block::HAY_BLOCK => {
                 // BlockRotatedPillar.onBlockPlaced
                 meta = (meta & 3)
                     | if face[0] != 0 {
@@ -1119,8 +1237,11 @@ impl Play {
                         0
                     };
             }
+            // BlockSlab.onBlockPlaced: the upper half under a ceiling or
+            // on the upper half of a side
             block::STONE_SLAB | block::WOODEN_SLAB => {
-                if face == [0, -1, 0] {
+                meta &= 7;
+                if !(side != 0 && (side == 1 || hit[1] as f64 <= 0.5)) {
                     meta |= 8;
                 }
             }
