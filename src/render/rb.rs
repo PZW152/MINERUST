@@ -490,6 +490,11 @@ impl<'a, 'b> Rb<'a, 'b> {
     }
 
     /// `Tessellator.setColorOpaque_F`
+    /// `Tessellator.setColorOpaque_F`
+    pub fn set_color(&mut self, r: f32, g: f32, b: f32) {
+        self.color(r, g, b);
+    }
+
     fn color(&mut self, r: f32, g: f32, b: f32) {
         let c = |v: f32| ((v * 255.0) as i32).clamp(0, 255) as u8;
         self.tcolor = [c(r), c(g), c(b), 255];

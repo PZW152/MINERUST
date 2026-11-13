@@ -741,6 +741,8 @@ mod enchant_tests {
             .set_block(p[0], p[1], p[2], block::ENCHANTING_TABLE, 0, 3);
         sim.splayer.xp_level = 30;
         sim.play.inv.main[0] = Some(Stack::new(276, 0, 1));
+        // ContainerEnchantment.rand is new Random(): fix it for the test
+        sim.play.enchant_rand = crate::java::JavaRandom::new(1);
         sim.step(
             &[
                 Command::Use {
@@ -759,7 +761,8 @@ mod enchant_tests {
         );
         assert_eq!(sim.play.enchant_slot[0].map(|s| s.id), Some(276));
         let lv = sim.play.enchant_levels;
-        assert!(lv[0] >= 1 && lv[2] >= lv[0], "{lv:?}");
+        // the three slots are rolled apart: no order between them
+        assert!(lv.iter().all(|&l| l >= 1), "{lv:?}");
         sim.step(&[Command::EnchantItem(2)], &mut ev);
         let s = sim.play.enchant_slot[0].unwrap();
         assert!(!s.enchantments().is_empty());

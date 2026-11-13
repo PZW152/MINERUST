@@ -262,11 +262,38 @@ fn extruded(
     }
 }
 
+/// `RenderBlocks.renderItemIn3d` of the block's render type.
 fn is_3d(id: u8) -> bool {
-    matches!(
-        block::info(id).shape,
-        Shape::Cube | Shape::Cactus | Shape::Chest | Shape::Slab | Shape::SnowLayer
-    )
+    super::item_block::render_type(id).is_some()
+}
+
+/// `renderBlockAsItem` under `m` (chests excepted: `false`), each side
+/// shaded as the standard item lighting roughly leaves it.
+fn item_block(
+    out: &mut Vec<Vertex>,
+    atlas: &Atlas,
+    id: u8,
+    meta: i32,
+    m: &Mat4,
+    light: [u8; 4],
+) -> bool {
+    let Some((faces, pre)) = super::item_block::faces(atlas, id, meta) else {
+        return false;
+    };
+    let mm = mul(m, &pre);
+    for f in faces {
+        let shade = [0.5f32, 1.0, 0.8, 0.8, 0.6, 0.6][f.side];
+        for mut v in f.v {
+            let o = transform(&mm, [v.pos[0], v.pos[1], v.pos[2], 1.0]);
+            v.pos = [o[0], o[1], o[2]];
+            for c in 0..3 {
+                v.color[c] = (v.color[c] as f32 * shade) as u8;
+            }
+            v.light = light;
+            out.push(v);
+        }
+    }
+    true
 }
 
 fn sprite_rect(atlas: &Atlas, s: &Stack) -> Option<[f32; 4]> {
@@ -455,8 +482,10 @@ pub fn item_entity(
                 } else {
                     m = mul(&m, &scale(0.25, 0.25, 0.25));
                 }
-                m = mul(&m, &translate(-0.5, -0.5, -0.5));
-                block_cube(out, atlas, b, s.meta, &m, l, h);
+                if !item_block(out, atlas, b, s.meta, &m, l) {
+                    m = mul(&m, &translate(-0.5, -0.5, -0.5));
+                    block_cube(out, atlas, b, s.meta, &m, l, h);
+                }
             }
         }
         None => {
@@ -746,8 +775,10 @@ pub fn render_item(out: &mut Vec<Vertex>, atlas: &Atlas, s: Stack, m: &Mat4, l: 
             } else {
                 1.0
             };
-            let mm = mul(&m, &translate(-0.5, -0.5, -0.5));
-            block_cube(out, atlas, b, s.meta, &mm, l, h);
+            if !item_block(out, atlas, b, s.meta, m, l) {
+                let mm = mul(&m, &translate(-0.5, -0.5, -0.5));
+                block_cube(out, atlas, b, s.meta, &mm, l, h);
+            }
         }
         None => {
             let passes: Vec<([f32; 4], [f32; 3])> = if s.block().is_some() || s.id == 261 {

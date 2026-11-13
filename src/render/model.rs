@@ -1221,6 +1221,35 @@ pub fn gui_quads(raw: Vec<Vertex>, light_m: &Mat4, tint: Option<[f32; 4]>) -> Ve
     quads
 }
 
+/// Single-winding faces lit like `gui_quads` but keeping their colours
+/// (`glColor` times the lighting), sorted back to front.
+pub fn gui_lit_faces(faces: Vec<[Vertex; 4]>, light_m: &Mat4) -> Vec<Vertex> {
+    let mut raw = Vec::with_capacity(faces.len() * 8);
+    for q in &faces {
+        raw.extend_from_slice(q);
+        raw.extend_from_slice(q);
+    }
+    let lit = gui_quads(raw, light_m, Some([1.0; 4]));
+    // gui_quads drops degenerate faces; match the rest back by position
+    let mut out = Vec::with_capacity(lit.len());
+    let mut k = 0;
+    for mut q in lit {
+        while k < faces.len() && faces[k][0].pos != q[0].pos {
+            k += 1;
+        }
+        if let Some(src) = faces.get(k) {
+            for (v, s) in q.iter_mut().zip(src) {
+                for c in 0..3 {
+                    v.color[c] = (v.color[c] as u32 * s.color[c] as u32 / 255) as u8;
+                }
+            }
+        }
+        k += 1;
+        out.push(q);
+    }
+    sort_quads(out)
+}
+
 /// Back to front for the UI pass, which has no depth test.
 pub fn sort_quads(mut quads: Vec<[Vertex; 4]>) -> Vec<Vertex> {
     let depth = |q: &[Vertex; 4]| q.iter().map(|v| v.pos[2]).sum::<f32>();

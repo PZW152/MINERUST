@@ -104,6 +104,7 @@ java -cp "out;$CP" XxxHarness tools/xxx_1710.txt
 | `src/enchant.rs` | 附魔資料與 `EnchantmentHelper` |
 | `src/inventory.rs` | `InventoryPlayer` |
 | `src/repair.rs` | `ContainerRepair.updateRepairOutput`（純函式；名稱比較用共用語言表 `lang::shared()`，等同原版共用的 `StringTranslate`） |
+| `src/render/item_block.rs` | `RenderBlocks.renderBlockAsItem`：方塊物品的面與前置轉換（GUI、掉落物、手持共用） |
 | `src/gui_repair.rs` | `GuiRepair`：名稱欄、費用文字、`anvil.png` 的疊加部分 |
 | `src/item_tag.rs` | 物品的 NBT（`stackTagCompound`）：以內容去重的全域表，`Stack.tag` 只是編號，所以 `Stack` 仍是 `Copy`；比較編號就是 `areItemStackTagsEqual`（與鍵的順序無關）。附魔、自訂名稱、`RepairCost`、染色、Lore 都在這裡；存檔寫進 Anvil 的 `tag` 與自有格式的 `t<hex>` |
 | `src/entity/` | 實體：生物 AI、`EntityTrackerEntry`（`tracker.rs`）、船、礦車、箭、投擲物、經驗球、玩家物理 |
@@ -180,15 +181,15 @@ minerust --seed 12345 --no-save --size 854 480 --screenshot out.png 6
 - 鐵砧：方塊（`renderBlockAnvil` 四個方塊與 uvRotate、損壞頂面、朝向、碰撞箱、掉落、下落與落下實體的繪製、
   物品圖示的 3D 模型）、`ContainerRepair`（`updateRepairOutput` 與原版 25 組比對一致、`canTakeStack`、
   扣等級、12% 損壞與音效、關閉時掉出）、`GuiRepair`（名稱欄、費用文字與三重陰影、紅叉）、`MC|ItemName`
+- 方塊物品的 3D 模型：`render/item_block.rs` 移植 `renderBlockAsItem`（`renderItemIn3d` 接受的 render type 0/10/11/13/16/26/27/31/35/39，
+  含 `setBlockBoundsForItemRender` 的尺寸），物品欄以 `enableGUIStandardItemLighting` 打光，掉落物與手持物品共用同一份模型
 
 ## 7. 尚未完成（依優先順序）
 
 1. **附魔效果本身**：附魔台已完成，但多數附魔尚未作用在遊戲上（鋒利／不死剋星／節肢剋星、擊退、燃燒、掠奪、
    效率、絲綢之觸、耐久、幸運、保護系列、水下呼吸、親水性、荊棘、力量／衝擊／火焰／無限、海之眷顧、魚餌）。
    附魔台的書架粒子（`EntityEnchantmentTableParticleFX`）也還沒做。
-2. **GUI 裡的非方塊物品圖示**：`Ui::block_icon` 只會畫正方體，樓梯、柵欄、附魔台、門以外的特殊形狀方塊在物品欄裡
-   還是平面貼圖（鐵砧與箱子除外）。原版 `renderItemIn3d` 對 render type 0/10/11/13/16/21/22/26/27/31/32/34/35/39 畫 3D；
-   做法可比照鐵砧：`Rb::bare` 畫 `renderBlockAsItem`，再用 `model::gui_lit` 以 `enableGUIStandardItemLighting` 打光。
+2. （已完成）方塊物品的 3D 模型，見第 6 節。
 3. 其他缺方塊的 GUI：信標、漏斗、投擲器、馬的物品欄、村民交易、書與羽毛筆。
 4. 統計與成就（`StatList`、`AchievementList`、`GuiStats`、`GuiAchievements`），資源包畫面、使用統計畫面。
 5. 物品 NBT 已有（見第 4 節），還缺用到它的東西：煙火、書與羽毛筆、地圖資料，以及三個特殊配方（煙火、書本複製、地圖擴大）；附魔光澤。
@@ -222,3 +223,4 @@ minerust --seed 12345 --no-save --size 854 480 --screenshot out.png 6
 - `cc422c5` 附魔台全套（容器、介面、浮空書本）；測試 `enchanting_table_enchants_and_costs_levels`。
 - `3239bf6` 物品 NBT（`item_tag.rs`），附魔改存在 NBT 裡（Anvil 存檔以前會遺失附魔，現在不會）；自訂名稱、染色、Lore 的工具提示；皮甲染色顏色用在圖示與盔甲模型；`RecipesArmorDyes`（與原版 9 組一致）；`tools/classpath.sh`（舊的 `Sapling Data` 函式庫已刪除）。
 - 本次：鐵砧全套。方塊與繪製（世界、落下實體用 `MovingDraw::Anvil` 取世界光照、物品圖示）、`repair.rs`（與原版 25 組一致）、容器的 `canTakeStack` 檢查補進 `slotClick` 各模式、`GuiRepair`、`Command::RenameItem`；`lang::shared()`；測試 `anvil_repairs_renames_and_costs_levels`；截圖確認介面、圖示、損壞頂面。
+- 本次：方塊物品 3D 模型（樓梯、柵欄、仙人掌、活塞、壓力板、按鈕、地板門、地毯、雪片、半磚、附魔台、終界門框、龍蛋、鐵砧），取代舊的簡化正方體與平面貼圖；GUI 打光改為原版光源方向；截圖確認創造模式三個分頁與手持樓梯。

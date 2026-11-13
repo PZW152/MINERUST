@@ -1,6 +1,7 @@
 pub mod atlas;
 pub mod chest;
 pub mod entities;
+pub mod item_block;
 pub mod mesher;
 pub mod model;
 pub mod model2;
