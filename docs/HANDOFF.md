@@ -87,7 +87,7 @@ java -cp "out;$CP" XxxHarness tools/xxx_1710.txt
   聲音與各語言都可在此機測試。
 - 不帶參數啟動時 `find_jar` 依序找：`--jar`、`MC1710_JAR`、exe 旁、工作目錄、`%APPDATA%` 下的
   `.minecraft`／`Sapling`／`.hmcl`／`PCL`／`.tlauncher` 的 `versions\1.7.10\1.7.10.jar`；assets 取 jar 往上三層的 `assets`。
-  啟動失敗會跳出錯誤對話框（雙擊執行時主控台會立刻關掉）。截圖模式（`--screenshot`）刻意關閉聲音。
+  AppData 位置改由 `SHGetKnownFolderPath(FOLDERID_RoamingAppData)` 取得，不依賴環境變數；都找不到時跳出檔案選擇視窗，選好的路徑存在 exe 旁的 `minerust_jar.txt`。仍失敗時錯誤對話框會列出找過的所有位置。截圖模式（`--screenshot`）刻意關閉聲音。
 - Git Bash 會把以 `/` 開頭的參數改寫成 Windows 路徑：送聊天指令（`MINERUST_CHAT="/xp 30L"`）時加
   `MSYS_NO_PATHCONV=1`。
 
@@ -229,3 +229,4 @@ minerust --seed 12345 --no-save --size 854 480 --screenshot out.png 6
 - 本次：鐵砧全套。方塊與繪製（世界、落下實體用 `MovingDraw::Anvil` 取世界光照、物品圖示）、`repair.rs`（與原版 25 組一致）、容器的 `canTakeStack` 檢查補進 `slotClick` 各模式、`GuiRepair`、`Command::RenameItem`；`lang::shared()`；測試 `anvil_repairs_renames_and_costs_levels`；截圖確認介面、圖示、損壞頂面。
 - 本次：方塊物品 3D 模型（樓梯、柵欄、仙人掌、活塞、壓力板、按鈕、地板門、地毯、雪片、半磚、附魔台、終界門框、龍蛋、鐵砧），取代舊的簡化正方體與平面貼圖；GUI 打光改為原版光源方向；截圖確認創造模式三個分頁與手持樓梯。
 - 本次：修正雙擊 exe 打不開（舊的 jar 路徑已刪除，現在也會找 `%APPDATA%\Sapling` 等啟動器目錄與 exe 旁），啟動錯誤改以對話框顯示；聲音與語言檔因此也找得到了。
+- 本次：使用者雙擊 exe 仍找不到 jar（其環境與本機測試不同，推測 `APPDATA` 不可靠）。改用 Known Folder API、加上 `minerust_jar.txt` 與檔案選擇視窗；以清空所有環境變數、工作目錄設為 `C:\Windows` 的方式啟動 release 與 debug 驗證。

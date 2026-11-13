@@ -459,6 +459,74 @@ struct Options {
     title: bool,
 }
 
+/// The file next to the executable that remembers a jar picked by hand.
+fn jar_memo() -> Option<PathBuf> {
+    std::env::current_exe()
+        .ok()
+        .and_then(|e| e.parent().map(|p| p.join("minerust_jar.txt")))
+}
+
+/// `%APPDATA%` as Windows knows it (`FOLDERID_RoamingAppData`), which does
+/// not depend on the environment the process was started with.
+#[cfg(windows)]
+fn roaming_appdata() -> Option<PathBuf> {
+    use windows_sys::Win32::System::Com::CoTaskMemFree;
+    use windows_sys::Win32::UI::Shell::{FOLDERID_RoamingAppData, SHGetKnownFolderPath};
+    let mut p: *mut u16 = std::ptr::null_mut();
+    let hr =
+        unsafe { SHGetKnownFolderPath(&FOLDERID_RoamingAppData, 0, std::ptr::null_mut(), &mut p) };
+    if hr != 0 || p.is_null() {
+        return None;
+    }
+    let s = unsafe {
+        let mut n = 0;
+        while *p.add(n) != 0 {
+            n += 1;
+        }
+        String::from_utf16_lossy(std::slice::from_raw_parts(p, n))
+    };
+    unsafe { CoTaskMemFree(p as *const _) };
+    Some(PathBuf::from(s))
+}
+
+#[cfg(not(windows))]
+fn roaming_appdata() -> Option<PathBuf> {
+    std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".minecraft").join(".."))
+}
+
+/// A file dialog for the jar when none was found.
+#[cfg(windows)]
+fn pick_jar() -> Option<PathBuf> {
+    use windows_sys::Win32::UI::Controls::Dialogs::*;
+    let w = |s: &str| {
+        s.encode_utf16()
+            .chain(std::iter::once(0))
+            .collect::<Vec<u16>>()
+    };
+    let filter: Vec<u16> = "Minecraft 1.7.10 jar (1.7.10.jar)\0*.jar\0\0"
+        .encode_utf16()
+        .collect();
+    let title = w("找不到 1.7.10.jar：請選擇原版 Minecraft 1.7.10 的客戶端 jar");
+    let mut buf = vec![0u16; 4096];
+    let mut ofn: OPENFILENAMEW = unsafe { std::mem::zeroed() };
+    ofn.lStructSize = std::mem::size_of::<OPENFILENAMEW>() as u32;
+    ofn.lpstrFilter = filter.as_ptr();
+    ofn.lpstrFile = buf.as_mut_ptr();
+    ofn.nMaxFile = buf.len() as u32;
+    ofn.lpstrTitle = title.as_ptr();
+    ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
+    if unsafe { GetOpenFileNameW(&mut ofn) } == 0 {
+        return None;
+    }
+    let n = buf.iter().position(|&c| c == 0).unwrap_or(0);
+    Some(PathBuf::from(String::from_utf16_lossy(&buf[..n])))
+}
+
+#[cfg(not(windows))]
+fn pick_jar() -> Option<PathBuf> {
+    None
+}
+
 fn find_jar(explicit: &Option<PathBuf>) -> Result<PathBuf, String> {
     let mut candidates: Vec<PathBuf> = Vec::new();
     if let Some(p) = explicit {
@@ -466,6 +534,10 @@ fn find_jar(explicit: &Option<PathBuf>) -> Result<PathBuf, String> {
     }
     if let Ok(p) = std::env::var("MC1710_JAR") {
         candidates.push(p.into());
+    }
+    // a jar picked by hand earlier
+    if let Some(t) = jar_memo().and_then(|m| std::fs::read_to_string(m).ok()) {
+        candidates.push(PathBuf::from(t.trim()));
     }
     // next to the executable, then the working directory
     if let Some(dir) = std::env::current_exe()
@@ -478,23 +550,43 @@ fn find_jar(explicit: &Option<PathBuf>) -> Result<PathBuf, String> {
     // the launchers' game directories: <root>/versions/1.7.10/1.7.10.jar,
     // with the sounds and languages in <root>/assets
     let version = |root: PathBuf| root.join("versions").join("1.7.10").join("1.7.10.jar");
-    if let Ok(appdata) = std::env::var("APPDATA") {
-        let appdata = PathBuf::from(appdata);
+    let mut roots: Vec<PathBuf> = Vec::new();
+    roots.extend(roaming_appdata());
+    roots.extend(std::env::var_os("APPDATA").map(PathBuf::from));
+    if let Some(home) = std::env::var_os("USERPROFILE") {
+        roots.push(PathBuf::from(home).join("AppData").join("Roaming"));
+    }
+    if let Some(user) = std::env::var_os("USERNAME") {
+        roots.push(
+            PathBuf::from(r"C:\Users")
+                .join(user)
+                .join("AppData")
+                .join("Roaming"),
+        );
+    }
+    roots.dedup();
+    for r in &roots {
         for launcher in [".minecraft", "Sapling", ".hmcl", "PCL", ".tlauncher"] {
-            candidates.push(version(appdata.join(launcher)));
+            candidates.push(version(r.join(launcher)));
         }
     }
-    if let Ok(home) = std::env::var("USERPROFILE") {
-        candidates.push(version(
-            PathBuf::from(&home).join("Downloads").join("Sapling Data"),
-        ));
-        candidates.push(version(PathBuf::from(&home).join(".minecraft")));
+    if let Some(found) = candidates.iter().find(|p| p.is_file()) {
+        return Ok(found.clone());
     }
-    candidates
+    if let Some(p) = pick_jar().filter(|p| p.is_file()) {
+        if let Some(m) = jar_memo() {
+            let _ = std::fs::write(m, p.to_string_lossy().as_bytes());
+        }
+        return Ok(p);
+    }
+    let tried: Vec<String> = candidates
         .iter()
-        .find(|p| p.is_file())
-        .cloned()
-        .ok_or_else(|| "找不到 1.7.10.jar（用 --jar <路徑> 或環境變數 MC1710_JAR 指定原版客戶端 jar，材質由其中讀取）".to_string())
+        .map(|p| format!("  {}", p.display()))
+        .collect();
+    Err(format!(
+        "找不到 1.7.10.jar（用 --jar <路徑> 或環境變數 MC1710_JAR 指定原版客戶端 jar，材質由其中讀取）\n\n找過的位置：\n{}",
+        tried.join("\n")
+    ))
 }
 
 fn parse_args() -> Options {
