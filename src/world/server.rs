@@ -2369,7 +2369,7 @@ impl ServerWorld {
         }
         let m = self.meta(x, y, z);
         match id {
-            block::STONE_SLAB => m & 8 == 8,
+            block::STONE_SLAB | block::WOODEN_SLAB => m & 8 == 8,
             block::SNOW_LAYER => m & 7 == 7,
             id if block::is_stairs(id) => m & 4 == 4,
             _ => false,

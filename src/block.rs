@@ -145,6 +145,10 @@ pub const POTATOES: u8 = 142;
 pub const WOODEN_BUTTON: u8 = 143;
 pub const REDSTONE_BLOCK: u8 = 152;
 pub const QUARTZ_BLOCK: u8 = 155;
+pub const STAINED_GLASS: u8 = 95;
+pub const DOUBLE_WOODEN_SLAB: u8 = 125;
+pub const WOODEN_SLAB: u8 = 126;
+pub const QUARTZ_STAIRS: u8 = 156;
 pub const ACACIA_STAIRS: u8 = 163;
 pub const DARK_OAK_STAIRS: u8 = 164;
 pub const HAY_BLOCK: u8 = 170;
@@ -168,6 +172,7 @@ pub fn is_stairs(id: u8) -> bool {
             | JUNGLE_STAIRS
             | ACACIA_STAIRS
             | DARK_OAK_STAIRS
+            | QUARTZ_STAIRS
     )
 }
 
@@ -191,6 +196,7 @@ pub fn stair_model(id: u8) -> (u8, u8) {
         BRICK_STAIRS => (BRICK_BLOCK, 0),
         STONE_BRICK_STAIRS => (STONEBRICK, 0),
         NETHER_BRICK_STAIRS => (NETHER_BRICK, 0),
+        QUARTZ_STAIRS => (QUARTZ_BLOCK, 0),
         _ => (SANDSTONE, 0),
     }
 }
@@ -498,6 +504,10 @@ fn build() -> [BlockInfo; 256] {
     let mut glass = base(Shape::Cube, M::Glass, false);
     glass.solid = true;
     t[GLASS as usize] = glass;
+    // BlockStainedGlass: drawn in the translucent pass
+    let mut stained = glass;
+    stained.translucent = true;
+    t[STAINED_GLASS as usize] = stained;
 
     let mut spawner = base(Shape::Cube, M::Rock, false);
     spawner.solid = true;
@@ -529,6 +539,9 @@ fn build() -> [BlockInfo; 256] {
     let mut slab = base(Shape::Slab, M::Rock, false);
     slab.light_opacity = 255;
     t[STONE_SLAB as usize] = slab;
+    let mut wood_slab = base(Shape::Slab, M::Wood, false);
+    wood_slab.light_opacity = 255;
+    t[WOODEN_SLAB as usize] = wood_slab;
     t[CHEST as usize] = base(Shape::Chest, M::Wood, false);
 
     for (id, m) in [
@@ -627,6 +640,7 @@ fn build() -> [BlockInfo; 256] {
         STONE_BRICK_STAIRS,
         NETHER_BRICK_STAIRS,
         SANDSTONE_STAIRS,
+        QUARTZ_STAIRS,
     ] {
         t[id as usize] = base(Shape::Stairs, M::Rock, false);
     }
@@ -681,6 +695,9 @@ fn build() -> [BlockInfo; 256] {
     let mut dslab = cube(M::Rock);
     dslab.light_opacity = 255;
     t[DOUBLE_STONE_SLAB as usize] = dslab;
+    let mut dwood = cube(M::Wood);
+    dwood.light_opacity = 255;
+    t[DOUBLE_WOODEN_SLAB as usize] = dwood;
 
     // Block.registerBlocks: useNeighborBrightness.
     for (id, b) in t.iter_mut().enumerate() {
@@ -690,6 +707,8 @@ fn build() -> [BlockInfo; 256] {
         b.use_neighbor_brightness = is_stairs(id as u8)
             || id == STONE_SLAB as usize
             || id == DOUBLE_STONE_SLAB as usize
+            || id == WOODEN_SLAB as usize
+            || id == DOUBLE_WOODEN_SLAB as usize
             || id == FARMLAND as usize
             || b.can_block_grass
             || b.light_opacity == 0;
@@ -725,7 +744,7 @@ pub fn collision_box(id: u8, meta: u8) -> Option<[f32; 6]> {
         }),
         CHEST => Some([0.0625, 0.0, 0.0625, 0.9375, 0.875, 0.9375]),
         SOUL_SAND => Some([0.0, 0.0, 0.0, 1.0, 0.875, 1.0]),
-        STONE_SLAB => {
+        STONE_SLAB | WOODEN_SLAB => {
             if meta & 8 != 0 {
                 Some([0.0, 0.5, 0.0, 1.0, 1.0, 1.0])
             } else {
@@ -1200,10 +1219,31 @@ pub fn texture_name(id: u8, meta: u8, face: usize) -> Option<&'static str> {
         }
         OAK_STAIRS | SPRUCE_STAIRS | BIRCH_STAIRS | JUNGLE_STAIRS | ACACIA_STAIRS
         | DARK_OAK_STAIRS | STONE_STAIRS | BRICK_STAIRS | STONE_BRICK_STAIRS
-        | NETHER_BRICK_STAIRS | SANDSTONE_STAIRS => {
+        | NETHER_BRICK_STAIRS | SANDSTONE_STAIRS | QUARTZ_STAIRS => {
             let (m, mm) = stair_model(id);
             return texture_name(m, mm, face);
         }
+        // BlockWoodSlab.getIcon: the planks of its kind
+        WOODEN_SLAB | DOUBLE_WOODEN_SLAB => return texture_name(PLANKS, meta & 7, face),
+        // BlockStainedGlass.getIcon
+        STAINED_GLASS => [
+            "glass_white",
+            "glass_orange",
+            "glass_magenta",
+            "glass_light_blue",
+            "glass_yellow",
+            "glass_lime",
+            "glass_pink",
+            "glass_gray",
+            "glass_silver",
+            "glass_cyan",
+            "glass_purple",
+            "glass_blue",
+            "glass_brown",
+            "glass_green",
+            "glass_red",
+            "glass_black",
+        ][(meta & 15) as usize],
         REDSTONE_WIRE => [
             "redstone_dust_cross",
             "redstone_dust_line",

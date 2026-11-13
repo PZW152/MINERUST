@@ -1119,7 +1119,7 @@ impl Play {
                         0
                     };
             }
-            block::STONE_SLAB => {
+            block::STONE_SLAB | block::WOODEN_SLAB => {
                 if face == [0, -1, 0] {
                     meta |= 8;
                 }

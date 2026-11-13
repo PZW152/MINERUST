@@ -375,4 +375,12 @@ MINERUST_BENCH=10 minerust --seed 12345 --no-save --size 1920 1080 --distance 16
     火把是照 `renderTorchAtAngle` 寫的，其餘目視沒有明顯錯誤，但都還不是逐行移植。柵欄門、圓石牆確認是尚未移植的方塊。
   **驗證**：`cargo test --release` 85 項通過。基準這次只有 820 fps、伺服器 tick 8.7 ms，各階段一致慢約 1.7 倍，
   當時機器上有另一個遊戲在跑，**不能當作比較基準**，下次請在乾淨的環境重跑確認沒有退步。
+- `本次（2026-11-14，補方塊）`：新增染色玻璃（95，半透明階段繪製、同色相鄰面剔除）、木半磚與雙層木半磚（125／126）、石英樓梯（156）。
+  貼圖已納入 `block_textures_match_the_game`，掉落走 `drops.rs`。截圖確認外觀。
+  **新增一個方塊要改的地方**（照這次的順序）：`block.rs` 的常數、`build()` 的表、`texture_name`、需要時 `collision_box` / `is_stairs` /
+  `stair_model` / `use_neighbor_brightness`；`item.rs` 的 `hardness`；`entity/mob.rs` 的 `explosion_resistance`；
+  `play.rs` 放置時的中繼值；`world/server.rs` 的頂面是否實心。物品與創造分頁資料已由 `item_data.rs` 涵蓋。
+  **留下**：半磚的 `ItemSlab.onItemUse`（點上半部放上半磚、兩塊合成雙層）與樓梯倒放都需要點擊位置 `hitX/Y/Z`，
+  但 `Command::Use` 沒有帶，石半磚也有同樣的缺口；染色玻璃片（160）要移植 `renderBlockStainedGlassPane`（與一般玻璃片不同的立體模型）；
+  其餘未移植方塊：26, 36, 92, 104, 105, 107, 130, 137–139, 144, 146–151, 154, 157, 158, 160。
   **查到的既有錯誤，待修**：武器附魔（鋒利系列、擊退、燃燒、掠奪）、保護系列、水下呼吸、荊棘、弓的附魔、附魔光澤都還沒接。
