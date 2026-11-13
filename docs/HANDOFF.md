@@ -83,7 +83,11 @@ java -cp "out;$CP" XxxHarness tools/xxx_1710.txt
 - `MC1710_JAR` 環境變數或 `--jar` 指向原版 jar（材質、`en_US.lang`、字型）。
 - 啟動器的 assets（`assets/indexes/1.7.10.json` + `objects/`）提供其他語言檔與聲音。本機 jar：
   `C:\Users\PZW152\AppData\Roaming\Sapling\versions\1.7.10\1.7.10.jar`（SHA‑1 同上；舊路徑
-  `Downloads\Sapling Data` 已被刪除，本機目前沒有完整的 assets 目錄，所以非英文語言與聲音無法在此機測試）。
+  `Downloads\Sapling Data` 已被刪除）。assets 就在同一個啟動器根目錄 `AppData\Roaming\Saplingssets`，
+  聲音與各語言都可在此機測試。
+- 不帶參數啟動時 `find_jar` 依序找：`--jar`、`MC1710_JAR`、exe 旁、工作目錄、`%APPDATA%` 下的
+  `.minecraft`／`Sapling`／`.hmcl`／`PCL`／`.tlauncher` 的 `versions.7.10.7.10.jar`；assets 取 jar 往上三層的 `assets`。
+  啟動失敗會跳出錯誤對話框（雙擊執行時主控台會立刻關掉）。截圖模式（`--screenshot`）刻意關閉聲音。
 - Git Bash 會把以 `/` 開頭的參數改寫成 Windows 路徑：送聊天指令（`MINERUST_CHAT="/xp 30L"`）時加
   `MSYS_NO_PATHCONV=1`。
 
@@ -224,3 +228,4 @@ minerust --seed 12345 --no-save --size 854 480 --screenshot out.png 6
 - `3239bf6` 物品 NBT（`item_tag.rs`），附魔改存在 NBT 裡（Anvil 存檔以前會遺失附魔，現在不會）；自訂名稱、染色、Lore 的工具提示；皮甲染色顏色用在圖示與盔甲模型；`RecipesArmorDyes`（與原版 9 組一致）；`tools/classpath.sh`（舊的 `Sapling Data` 函式庫已刪除）。
 - 本次：鐵砧全套。方塊與繪製（世界、落下實體用 `MovingDraw::Anvil` 取世界光照、物品圖示）、`repair.rs`（與原版 25 組一致）、容器的 `canTakeStack` 檢查補進 `slotClick` 各模式、`GuiRepair`、`Command::RenameItem`；`lang::shared()`；測試 `anvil_repairs_renames_and_costs_levels`；截圖確認介面、圖示、損壞頂面。
 - 本次：方塊物品 3D 模型（樓梯、柵欄、仙人掌、活塞、壓力板、按鈕、地板門、地毯、雪片、半磚、附魔台、終界門框、龍蛋、鐵砧），取代舊的簡化正方體與平面貼圖；GUI 打光改為原版光源方向；截圖確認創造模式三個分頁與手持樓梯。
+- 本次：修正雙擊 exe 打不開（舊的 jar 路徑已刪除，現在也會找 `%APPDATA%\Sapling` 等啟動器目錄與 exe 旁），啟動錯誤改以對話框顯示；聲音與語言檔因此也找得到了。

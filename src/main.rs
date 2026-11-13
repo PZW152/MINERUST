@@ -467,25 +467,28 @@ fn find_jar(explicit: &Option<PathBuf>) -> Result<PathBuf, String> {
     if let Ok(p) = std::env::var("MC1710_JAR") {
         candidates.push(p.into());
     }
+    // next to the executable, then the working directory
+    if let Some(dir) = std::env::current_exe()
+        .ok()
+        .and_then(|e| e.parent().map(|p| p.to_path_buf()))
+    {
+        candidates.push(dir.join("1.7.10.jar"));
+    }
     candidates.push("1.7.10.jar".into());
+    // the launchers' game directories: <root>/versions/1.7.10/1.7.10.jar,
+    // with the sounds and languages in <root>/assets
+    let version = |root: PathBuf| root.join("versions").join("1.7.10").join("1.7.10.jar");
     if let Ok(appdata) = std::env::var("APPDATA") {
-        candidates.push(
-            PathBuf::from(appdata)
-                .join(".minecraft")
-                .join("versions")
-                .join("1.7.10")
-                .join("1.7.10.jar"),
-        );
+        let appdata = PathBuf::from(appdata);
+        for launcher in [".minecraft", "Sapling", ".hmcl", "PCL", ".tlauncher"] {
+            candidates.push(version(appdata.join(launcher)));
+        }
     }
     if let Ok(home) = std::env::var("USERPROFILE") {
-        candidates.push(
-            PathBuf::from(home)
-                .join("Downloads")
-                .join("Sapling Data")
-                .join("versions")
-                .join("1.7.10")
-                .join("1.7.10.jar"),
-        );
+        candidates.push(version(
+            PathBuf::from(&home).join("Downloads").join("Sapling Data"),
+        ));
+        candidates.push(version(PathBuf::from(&home).join(".minecraft")));
     }
     candidates
         .iter()
@@ -820,6 +823,8 @@ impl ApplicationHandler for App {
                 "Sound: {}",
                 if audio.is_some() {
                     "on"
+                } else if self.opts.auto_shot.is_some() {
+                    "off (screenshot run)"
                 } else {
                     "off (assets not found)"
                 }
@@ -1247,6 +1252,31 @@ fn main() {
     }
     if let Some(e) = app.error {
         eprintln!("錯誤: {e}");
+        error_dialog(&e);
         std::process::exit(1);
     }
 }
+
+/// A started-by-double-click run has its console closed before anyone can
+/// read the error: show it in a dialog too.
+#[cfg(windows)]
+fn error_dialog(e: &str) {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_OK};
+    let w = |s: &str| {
+        s.encode_utf16()
+            .chain(std::iter::once(0))
+            .collect::<Vec<u16>>()
+    };
+    let (text, title) = (w(e), w("MINERUST"));
+    unsafe {
+        MessageBoxW(
+            std::ptr::null_mut(),
+            text.as_ptr(),
+            title.as_ptr(),
+            MB_OK | MB_ICONERROR,
+        );
+    }
+}
+
+#[cfg(not(windows))]
+fn error_dialog(_e: &str) {}

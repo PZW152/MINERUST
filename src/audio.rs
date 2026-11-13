@@ -406,10 +406,13 @@ fn fill(mixer: &Mutex<Mixer>, out: &mut [f32], ch: usize) {
 mod tests {
     #[test]
     fn decodes_vanilla_sounds_when_assets_exist() {
-        let root = std::path::Path::new("C:/Users/PZW152/Downloads/Sapling Data/assets");
-        if !root.exists() {
+        let Some(root) = std::env::var_os("APPDATA")
+            .map(|a| std::path::PathBuf::from(a).join("Sapling").join("assets"))
+            .filter(|p| p.exists())
+        else {
             return;
-        }
+        };
+        let root = root.as_path();
         let mut a = super::Audio::new(root).expect("asset index");
         assert!(a.events.contains_key("mob.zombie.say"));
         let c = a.clip("mob/zombie/say1").expect("decoded");
