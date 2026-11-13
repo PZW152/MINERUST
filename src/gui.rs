@@ -111,8 +111,29 @@ impl<'a> Ui<'a> {
     }
 
     /// `GuiInventory.func_147046_a`: the player model at `(x, y)`.
-    pub fn player_model(&mut self, x: f32, y: f32, scale: f32, dx: f32, dy: f32, age: f32) {
-        let q = render::model::player_gui(self.atlas.skin_tex(), x, y, scale, dx, dy, age);
+    #[allow(clippy::too_many_arguments)]
+    pub fn player_model(
+        &mut self,
+        x: f32,
+        y: f32,
+        scale: f32,
+        dx: f32,
+        dy: f32,
+        age: f32,
+        inv: &crate::inventory::Inventory,
+    ) {
+        let q = render::model::player_gui(
+            self.atlas,
+            x,
+            y,
+            scale,
+            dx,
+            dy,
+            age,
+            &inv.armor,
+            inv.held(),
+            false,
+        );
         for c in q.chunks(4) {
             let mut c = [c[0], c[1], c[2], c[3]];
             for v in &mut c {

@@ -666,6 +666,7 @@ impl Creative {
                 px - mouse.0 as f32,
                 py - 30.0 - mouse.1 as f32,
                 age,
+                &view.inv,
             );
         }
         // drawGuiContainerForegroundLayer: the tab title

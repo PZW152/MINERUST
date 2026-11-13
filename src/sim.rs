@@ -1804,6 +1804,20 @@ impl Sim {
             self.place_boat();
             return;
         }
+        // ItemArmor.onItemRightClick: into the empty armour slot
+        if let Some(t) = crate::container::armor_type(held.id) {
+            let k = 3 - t;
+            if self.play.inv.armor[k].is_none() {
+                self.play.inv.armor[k] = Some(crate::item::Stack { count: 1, ..held });
+                // ItemInWorldManager.tryUseItem keeps a creative player's stack
+                if self.play.mode != GameMode::Creative {
+                    let sel = self.play.inv.selected;
+                    self.play.inv.main[sel] = None;
+                }
+                self.play.inv_dirty = true;
+            }
+            return;
+        }
         // ItemSnowball, ItemEgg, ItemEnderPearl, ItemPotion (splash)
         {
             use crate::entity::throwable::Kind as TK;

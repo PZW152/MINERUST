@@ -479,7 +479,7 @@ impl GuiContainer {
             // GuiInventory: the player, turned towards the mouse
             let (px, py) = (lf + 51.0, tf + 75.0);
             let (mx, my) = (f.mouse.0 as f32, f.mouse.1 as f32);
-            ui.player_model(px, py, 30.0, px - mx, py - 50.0 - my, f.age);
+            ui.player_model(px, py, 30.0, px - mx, py - 50.0 - my, f.age, &view.inv);
         }
         // the slots
         self.hovered = None;

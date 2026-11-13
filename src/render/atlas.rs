@@ -4,7 +4,7 @@ use crate::block;
 use std::collections::HashMap;
 use std::io::Read;
 
-pub const ATLAS_SIZE: u32 = 1024;
+pub const ATLAS_SIZE: u32 = 2048;
 /// Atlas width in 16px cells.
 const GRID: usize = (ATLAS_SIZE / 16) as usize;
 pub const MIP_LEVELS: u32 = 5;
@@ -511,6 +511,12 @@ impl Atlas {
             "empty_armor_slot_chestplate",
             "empty_armor_slot_leggings",
             "empty_armor_slot_boots",
+            // the second render passes of ItemArmor (leather) and ItemMonsterPlacer
+            "leather_helmet_overlay",
+            "leather_chestplate_overlay",
+            "leather_leggings_overlay",
+            "leather_boots_overlay",
+            "spawn_egg_overlay",
         ] {
             let img = read_png(jar, &format!("assets/minecraft/textures/items/{name}.png"))?;
             let t = b.add(crop(&img, 0, 0, 16), 16);
@@ -546,6 +552,8 @@ impl Atlas {
             .chain(crate::render::model3::TEXTURES)
             .chain(crate::render::vehicles::TEXTURES)
             .chain(crate::render::chest::TEXTURES)
+            .chain(crate::render::model::ARMOR_TEXTURES)
+            .chain(["../misc/pumpkinblur"])
         {
             let path = match name.strip_prefix("../") {
                 Some(rest) => format!("assets/minecraft/textures/{rest}.png"),
@@ -754,6 +762,28 @@ impl Atlas {
                     rgb(crate::potion::liquid_color(meta)),
                 ),
                 (bottle, [1.0; 3]),
+            ];
+        }
+        let base = |id: u16| {
+            self.items
+                .get(&(id, 0))
+                .map_or([0.0; 4], |&t| self.rects[t as usize])
+        };
+        if (298..=301).contains(&id) {
+            // ItemArmor.getColorFromItemStack: leather's colour, then the overlay
+            let o = ["helmet", "chestplate", "leggings", "boots"][(id - 298) as usize];
+            return vec![
+                (base(id), rgb(10511680)),
+                (self.named(&format!("leather_{o}_overlay")), [1.0; 3]),
+            ];
+        }
+        if id == 383 {
+            // ItemMonsterPlacer.getColorFromItemStack
+            let e = crate::item_data::EGGS.iter().find(|e| e.0 == meta);
+            let (a, b) = e.map_or((16777215, 16777215), |e| (e.2, e.3));
+            return vec![
+                (base(383), rgb(a)),
+                (self.named("spawn_egg_overlay"), rgb(b)),
             ];
         }
         let m = if crate::item::tool(id).is_some() {

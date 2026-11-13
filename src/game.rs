@@ -1442,17 +1442,24 @@ impl Game {
             self.world.light(false, lx, ly, lz),
         );
         let m = crate::render::model::player_matrix([0.0, -1.62, 0.0], body);
-        let mut d = crate::render::model::Draw {
-            out,
-            tex: self.atlas.skin_tex(),
-            light: [(blk << 4) as u8, (sky << 4) as u8, 0, 0],
-            tint: if self.stats.hurt_time > 0 {
-                [1.0, 0.6, 0.6, 1.0]
-            } else {
-                [1.0; 4]
-            },
+        let tint = if self.stats.hurt_time > 0 {
+            [1.0, 0.6, 0.6, 1.0]
+        } else {
+            [1.0; 4]
         };
-        crate::render::model::player_world(&mut d, &m, &pose);
+        let blocking = matches!(action, Some(crate::item_use::Action::Block));
+        for (raw, _) in crate::render::model::player_layers(
+            &self.atlas,
+            &m,
+            &pose,
+            &self.view.inv.armor,
+            st,
+            blocking,
+            [(blk << 4) as u8, (sky << 4) as u8, 0, 0],
+            tint,
+        ) {
+            out.extend(raw);
+        }
     }
 
     fn tick(&mut self) {
@@ -4024,6 +4031,12 @@ impl Game {
                         ui.atlas_rect(x0, y0, x1 - x0, y1 - y0, uv, color, 0.5);
                     }
                 }
+            }
+        }
+        // GuiIngame.renderPumpkinBlur
+        if self.third_person == 0 && self.view.inv.armor[3].is_some_and(|s| s.id == 86) {
+            if let Some(t) = self.atlas.mob_tex("../misc/pumpkinblur") {
+                ui.atlas_rect(0.0, 0.0, ui.w, ui.h, t.rect, 0xFFFFFF, 1.0);
             }
         }
         // GuiIngame.func_130015_b: the purple portal swirl

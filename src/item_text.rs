@@ -34,7 +34,7 @@ pub fn display_name(s: &Stack, lang: &Lang) -> String {
         373 => return potion_name(s, lang),
         383 => {
             let mut n = tr(lang, "item.monsterPlacer.name");
-            if let Some((_, e)) = EGGS.iter().find(|e| e.0 == s.meta) {
+            if let Some((_, e, _, _)) = EGGS.iter().find(|e| e.0 == s.meta) {
                 n = format!("{} {}", n, lang.get(&format!("entity.{e}.name")));
             }
             return n;

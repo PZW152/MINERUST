@@ -1110,22 +1110,31 @@ pub fn arrow(out: &mut Vec<Vertex>, t: Tex, rel: [f32; 3], yaw: f32, pitch: f32,
 /// pixels, `scale` 30, `(dx, dy)` the mouse offsets that turn the body and
 /// head, `age` `ticksExisted + partialTicks`. Returns GUI-space quads (four
 /// vertices each, both windings) with the GUI lighting applied.
-pub fn player_gui(tex: Tex, x: f32, y: f32, scale: f32, dx: f32, dy: f32, age: f32) -> Vec<Vertex> {
+#[allow(clippy::too_many_arguments)]
+pub fn player_gui(
+    atlas: &super::atlas::Atlas,
+    x: f32,
+    y: f32,
+    scale: f32,
+    dx: f32,
+    dy: f32,
+    age: f32,
+    armor: &[Option<crate::item::Stack>; 4],
+    held: Option<crate::item::Stack>,
+    sneak: bool,
+) -> Vec<Vertex> {
     let a = (dx / 40.0).atan();
     let b = (dy / 40.0).atan();
     let yaw_offset = a * 20.0;
     let yaw = a * 40.0;
     let pitch = -b * 20.0;
-    let anim = Anim {
-        swing: 0.0,
-        amount: 0.0,
+    let pose = Pose {
         age,
         head_yaw: yaw - yaw_offset,
         head_pitch: pitch,
-        attack: 0.0,
-        wing: 0.0,
-        sheep_head_y: 0.0,
-        sheep_head_rot: None,
+        held_right: held.is_some() as i32,
+        sneak,
+        ..Default::default()
     };
     let sc = super::entities::scale;
     let mut m = translate(x, y, 50.0);
@@ -1140,25 +1149,23 @@ pub fn player_gui(tex: Tex, x: f32, y: f32, scale: f32, dx: f32, dy: f32, age: f
     m = mul(&m, &sc(-1.0, -1.0, 1.0));
     m = mul(&m, &sc(0.9375, 0.9375, 0.9375));
     m = mul(&m, &translate(0.0, -24.0 / 16.0 - 0.0078125, 0.0));
-    let mut raw = Vec::new();
-    {
-        let mut d = Draw {
-            out: &mut raw,
-            tex,
-            light: [0; 4],
-            tint: [1.0; 4],
-        };
-        for p in biped(&anim, false, false) {
-            render(&mut d, &m, &p);
-        }
+    let mut quads = Vec::new();
+    for (raw, tint) in player_layers(atlas, &m, &pose, armor, held, false, [0; 4], [1.0; 4]) {
+        quads.extend(gui_quads(raw, &light_m, tint));
     }
-    gui_lit(raw, &light_m)
+    sort_quads(quads)
 }
 
 /// Model quads (both windings, from `Draw`) as a GUI draws them: one
 /// winding per face, lit by `RenderHelper.enableStandardItemLighting` set
 /// up under `light_m`, sorted back to front for the depth-less UI pass.
 pub fn gui_lit(raw: Vec<Vertex>, light_m: &Mat4) -> Vec<Vertex> {
+    sort_quads(gui_quads(raw, light_m, Some([1.0; 4])))
+}
+
+/// Faces of `raw` (two windings each) seen from the GUI, relit with
+/// `tint` (or keeping their colours when `None`).
+pub fn gui_quads(raw: Vec<Vertex>, light_m: &Mat4, tint: Option<[f32; 4]>) -> Vec<[Vertex; 4]> {
     let norm = |v: [f32; 4]| {
         let l = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
         [v[0] / l, v[1] / l, v[2] / l]
@@ -1197,13 +1204,25 @@ pub fn gui_lit(raw: Vec<Vertex>, light_m: &Mat4) -> Vec<Vertex> {
         let d0 = (n[0] * l0[0] + n[1] * l0[1] + n[2] * l0[2]).max(0.0);
         let d1 = (n[0] * l1[0] + n[1] * l1[1] + n[2] * l1[2]).max(0.0);
         let k = (0.4 + 0.6 * (d0 + d1)).min(1.0);
-        let c = (k * 255.0) as u8;
         let mut q = q;
-        for v in &mut q {
-            v.color = [c, c, c, 255];
+        if let Some(t) = tint {
+            let c = [
+                (t[0] * k * 255.0) as u8,
+                (t[1] * k * 255.0) as u8,
+                (t[2] * k * 255.0) as u8,
+                255,
+            ];
+            for v in &mut q {
+                v.color = c;
+            }
         }
         quads.push(q);
     }
+    quads
+}
+
+/// Back to front for the UI pass, which has no depth test.
+pub fn sort_quads(mut quads: Vec<[Vertex; 4]>) -> Vec<Vertex> {
     let depth = |q: &[Vertex; 4]| q.iter().map(|v| v.pos[2]).sum::<f32>();
     quads.sort_by(|a, b| depth(a).total_cmp(&depth(b)));
     let mut out = Vec::with_capacity(quads.len() * 4);
@@ -1337,4 +1356,224 @@ pub fn player_world(d: &mut Draw, m: &Mat4, pose: &Pose) {
     for p in biped_pose(pose, 0.0) {
         render(d, m, &p);
     }
+}
+
+/// `RenderBiped.bipedArmorFilenamePrefix` textures: both layers of each
+/// material and the leather overlays.
+pub const ARMOR_TEXTURES: [&str; 12] = [
+    "../models/armor/leather_layer_1",
+    "../models/armor/leather_layer_2",
+    "../models/armor/leather_layer_1_overlay",
+    "../models/armor/leather_layer_2_overlay",
+    "../models/armor/chainmail_layer_1",
+    "../models/armor/chainmail_layer_2",
+    "../models/armor/iron_layer_1",
+    "../models/armor/iron_layer_2",
+    "../models/armor/diamond_layer_1",
+    "../models/armor/diamond_layer_2",
+    "../models/armor/gold_layer_1",
+    "../models/armor/gold_layer_2",
+];
+
+/// `RenderPlayer.shouldRenderPass` for pass 0..4 (helmet to boots): the
+/// armour texture layers with their tint (`ItemArmor.getColor`, leather's
+/// default 10511680 then the untinted overlay).
+pub fn armor_layers(id: u16, pass: usize) -> Vec<(String, [f32; 4])> {
+    if !(298..=317).contains(&id) {
+        return Vec::new();
+    }
+    let mat = ["leather", "chainmail", "iron", "diamond", "gold"][(id as usize - 298) / 4];
+    let layer = if pass == 2 { 2 } else { 1 };
+    let base = format!("../models/armor/{mat}_layer_{layer}");
+    if mat == "leather" {
+        let c = 10511680u32;
+        let t = [
+            (c >> 16 & 255) as f32 / 255.0,
+            (c >> 8 & 255) as f32 / 255.0,
+            (c & 255) as f32 / 255.0,
+            1.0,
+        ];
+        vec![(base.clone(), t), (format!("{base}_overlay"), [1.0; 4])]
+    } else {
+        vec![(base, [1.0; 4])]
+    }
+}
+
+/// The armour model of a pass: `modelArmorChestplate` (1.0) or, for the
+/// leggings, `modelArmor` (0.5), with only that pass's parts shown.
+pub fn armor_parts(pose: &Pose, pass: usize) -> Vec<Part> {
+    let gap = if pass == 2 { 0.5 } else { 1.0 };
+    let v = biped_pose(pose, gap);
+    // head, body, right arm, left arm, right leg, left leg, headwear
+    let show = [
+        pass == 0,
+        pass == 1 || pass == 2,
+        pass == 1,
+        pass == 1,
+        pass == 2 || pass == 3,
+        pass == 2 || pass == 3,
+        pass == 0,
+    ];
+    v.into_iter()
+        .zip(show)
+        .filter(|(_, s)| *s)
+        .map(|(p, _)| p)
+        .collect()
+}
+
+/// `ModelRenderer.postRender(0.0625)` of the posed right arm.
+pub fn arm_matrix(m: &Mat4, pose: &Pose) -> Mat4 {
+    let arm = &biped_pose(pose, 0.0)[2];
+    let mut a = mul(
+        m,
+        &translate(
+            arm.pivot[0] / 16.0,
+            arm.pivot[1] / 16.0,
+            arm.pivot[2] / 16.0,
+        ),
+    );
+    let deg = 180.0 / PI;
+    if arm.rot[2] != 0.0 {
+        a = mul(&a, &rot_z(arm.rot[2] * deg));
+    }
+    if arm.rot[1] != 0.0 {
+        a = mul(&a, &rot_y(arm.rot[1] * deg));
+    }
+    if arm.rot[0] != 0.0 {
+        a = mul(&a, &rot_x(arm.rot[0] * deg));
+    }
+    a
+}
+
+/// `Item.isFull3D` and `shouldRotateAroundWhenRendering`.
+pub fn full_3d(id: u16) -> (bool, bool) {
+    if crate::item::tool(id).is_some() {
+        return (true, false);
+    }
+    match id {
+        280 | 352 | 369 => (true, false),
+        346 | 398 => (true, true),
+        _ => (false, false),
+    }
+}
+
+/// `RenderPlayer.renderEquippedItems`: the held item's place from the
+/// right arm's `postRender`.
+pub fn held_matrix(arm: &Mat4, s: &crate::item::Stack, blocking: bool) -> Mat4 {
+    let sc = super::entities::scale;
+    let mut m = mul(arm, &translate(-0.0625, 0.4375, 0.0625));
+    let block3d = s.block().is_some_and(|b| {
+        matches!(
+            crate::block::info(b).shape,
+            crate::block::Shape::Cube
+                | crate::block::Shape::Cactus
+                | crate::block::Shape::Chest
+                | crate::block::Shape::Slab
+                | crate::block::Shape::SnowLayer
+        )
+    });
+    let (full, around) = full_3d(s.id);
+    if block3d {
+        let k = 0.5 * 0.75;
+        m = mul(&m, &translate(0.0, 0.1875, -0.3125));
+        m = mul(&m, &rot_x(20.0));
+        m = mul(&m, &rot_y(45.0));
+        m = mul(&m, &sc(-k, -k, k));
+    } else if s.id == 261 {
+        let k = 0.625;
+        m = mul(&m, &translate(0.0, 0.125, 0.3125));
+        m = mul(&m, &rot_y(-20.0));
+        m = mul(&m, &sc(k, -k, k));
+        m = mul(&m, &rot_x(-100.0));
+        m = mul(&m, &rot_y(45.0));
+    } else if full {
+        let k = 0.625;
+        if around {
+            m = mul(&m, &rot_z(180.0));
+            m = mul(&m, &translate(0.0, -0.125, 0.0));
+        }
+        if blocking {
+            m = mul(&m, &translate(0.05, 0.0, -0.1));
+            m = mul(&m, &rot_y(-50.0));
+            m = mul(&m, &rot_x(-10.0));
+            m = mul(&m, &rot_z(-60.0));
+        }
+        m = mul(&m, &translate(0.0, 0.1875, 0.0));
+        m = mul(&m, &sc(k, -k, k));
+        m = mul(&m, &rot_x(-100.0));
+        m = mul(&m, &rot_y(45.0));
+    } else {
+        let k = 0.375;
+        m = mul(&m, &translate(0.25, 0.1875, -0.1875));
+        m = mul(&m, &sc(k, k, k));
+        m = mul(&m, &rot_z(60.0));
+        m = mul(&m, &rot_x(-90.0));
+        m = mul(&m, &rot_z(20.0));
+    }
+    m
+}
+
+/// A player model with its armour and held item, as layers: the skin,
+/// `shouldRenderPass` for each armour slot (tinted), then
+/// `renderEquippedItems` (its colours as drawn, no tint).
+#[allow(clippy::too_many_arguments)]
+pub fn player_layers(
+    atlas: &super::atlas::Atlas,
+    m: &Mat4,
+    pose: &Pose,
+    armor: &[Option<crate::item::Stack>; 4],
+    held: Option<crate::item::Stack>,
+    blocking: bool,
+    light: [u8; 4],
+    tint: [f32; 4],
+) -> Vec<(Vec<Vertex>, Option<[f32; 4]>)> {
+    let mut layers = Vec::new();
+    {
+        let mut raw = Vec::new();
+        let mut d = Draw {
+            out: &mut raw,
+            tex: atlas.skin_tex(),
+            light,
+            tint,
+        };
+        for p in biped_pose(pose, 0.0) {
+            render(&mut d, m, &p);
+        }
+        layers.push((raw, Some(tint)));
+    }
+    for pass in 0..4 {
+        // armorItemInSlot(3 - pass)
+        let Some(a) = armor[3 - pass] else { continue };
+        for (name, t) in armor_layers(a.id, pass) {
+            let Some(tex) = atlas.mob_tex(&name) else {
+                continue;
+            };
+            let c = [t[0] * tint[0], t[1] * tint[1], t[2] * tint[2], 1.0];
+            let mut raw = Vec::new();
+            let mut d = Draw {
+                out: &mut raw,
+                tex,
+                light,
+                tint: c,
+            };
+            for p in armor_parts(pose, pass) {
+                render(&mut d, m, &p);
+            }
+            layers.push((raw, Some(c)));
+        }
+    }
+    if let Some(s) = held {
+        let am = arm_matrix(m, pose);
+        let hm = held_matrix(&am, &s, blocking);
+        let mut items = Vec::new();
+        super::entities::render_item(&mut items, atlas, s, &hm, light);
+        // renderItemIn2D draws one winding; models draw both
+        let mut raw = Vec::new();
+        for q in items.chunks(4) {
+            raw.extend_from_slice(q);
+            raw.extend_from_slice(&[q[3], q[2], q[1], q[0]]);
+        }
+        layers.push((raw, None));
+    }
+    layers
 }

@@ -46,7 +46,7 @@ for line in open(src, encoding='utf-8'):
         breg.append('(%s, "%s")' % (f[0], f[1]))
     elif k == 'E':
         f = rest.split()
-        eggs.append('(%s, "%s")' % (f[0], f[1]))
+        eggs.append('(%s, "%s", %s, %s)' % (f[0], f[1], f[2], f[3]))
 
 w = open(out, 'w', encoding='utf-8', newline='\n')
 w.write('''//! The 1.7.10 item registry as `tools/ItemHarness.java` dumped it
@@ -72,7 +72,7 @@ for s in search:
 w.write('];\n\n/// `Enchantment.enchantmentsList`: `(id, getName, getMaxLevel)`.\npub const ENCHANTMENTS: &[(i32, &str, i32)] = &[\n')
 for e in ench:
     w.write('    %s,\n' % e)
-w.write('];\n\n/// `EntityList.entityEggs`: `(id, getStringFromID)`.\npub const EGGS: &[(i32, &str)] = &[\n')
+w.write('];\n\n/// `EntityList.entityEggs`: `(id, getStringFromID, primaryColor, secondaryColor)`.\npub const EGGS: &[(i32, &str, i32, i32)] = &[\n')
 for e in eggs:
     w.write('    %s,\n' % e)
 w.write('];\n\n/// `Item.itemRegistry` names.\npub const ITEM_NAMES: &[(u16, &str)] = &[\n')

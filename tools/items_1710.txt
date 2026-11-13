@@ -2234,27 +2234,27 @@ X 50 enchantment.arrowFire 1
 X 51 enchantment.arrowInfinite 1
 X 61 enchantment.lootBonusFishing 3
 X 62 enchantment.fishingSpeed 3
-E 50 Creeper
-E 51 Skeleton
-E 52 Spider
-E 54 Zombie
-E 55 Slime
-E 56 Ghast
-E 57 PigZombie
-E 58 Enderman
-E 59 CaveSpider
-E 60 Silverfish
-E 61 Blaze
-E 62 LavaSlime
-E 65 Bat
-E 66 Witch
-E 90 Pig
-E 91 Sheep
-E 92 Cow
-E 93 Chicken
-E 94 Squid
-E 95 Wolf
-E 96 MushroomCow
-E 98 Ozelot
-E 100 EntityHorse
-E 120 Villager
+E 50 Creeper 894731 0
+E 51 Skeleton 12698049 4802889
+E 52 Spider 3419431 11013646
+E 54 Zombie 44975 7969893
+E 55 Slime 5349438 8306542
+E 56 Ghast 16382457 12369084
+E 57 PigZombie 15373203 5009705
+E 58 Enderman 1447446 0
+E 59 CaveSpider 803406 11013646
+E 60 Silverfish 7237230 3158064
+E 61 Blaze 16167425 16775294
+E 62 LavaSlime 3407872 16579584
+E 65 Bat 4996656 986895
+E 66 Witch 3407872 5349438
+E 90 Pig 15771042 14377823
+E 91 Sheep 15198183 16758197
+E 92 Cow 4470310 10592673
+E 93 Chicken 10592673 16711680
+E 94 Squid 2243405 7375001
+E 95 Wolf 14144467 13545366
+E 96 MushroomCow 10489616 12040119
+E 98 Ozelot 15720061 5653556
+E 100 EntityHorse 12623485 15656192
+E 120 Villager 5651507 12422002

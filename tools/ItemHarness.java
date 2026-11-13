@@ -108,7 +108,10 @@ public class ItemHarness {
         }
         for (Object k : net.minecraft.entity.EntityList.entityEggs.keySet()) {
             int id = (Integer) k;
-            w.println("E " + id + " " + net.minecraft.entity.EntityList.getStringFromID(id));
+            Object egg = net.minecraft.entity.EntityList.entityEggs.get(k);
+            int pc = egg.getClass().getField("primaryColor").getInt(egg);
+            int sc = egg.getClass().getField("secondaryColor").getInt(egg);
+            w.println("E " + id + " " + net.minecraft.entity.EntityList.getStringFromID(id) + " " + pc + " " + sc);
         }
         w.close();
     }
