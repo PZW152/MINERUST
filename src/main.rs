@@ -21,6 +21,7 @@ mod inventory;
 mod item;
 mod item_data;
 mod item_table;
+mod item_tag;
 mod item_text;
 mod item_use;
 mod java;

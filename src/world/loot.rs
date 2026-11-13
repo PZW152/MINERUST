@@ -10,8 +10,8 @@ pub struct Loot {
     pub min: i32,
     pub max: i32,
     pub weight: i32,
-    /// Packed enchantments for enchanted books (`Stack::ench`).
-    pub ench: u64,
+    /// The tag of enchanted books.
+    pub tag: item::Tag,
 }
 
 pub const fn l(item: ItemId, meta: i32, min: i32, max: i32, weight: i32) -> Loot {
@@ -21,7 +21,7 @@ pub const fn l(item: ItemId, meta: i32, min: i32, max: i32, weight: i32) -> Loot
         min,
         max,
         weight,
-        ench: 0,
+        tag: item::Tag::NONE,
     }
 }
 
@@ -35,7 +35,7 @@ pub fn enchanted_book(r: &mut JavaRandom, min: i32, max: i32, weight: i32) -> Lo
         min,
         max,
         weight,
-        ench: s.ench,
+        tag: s.tag,
     }
 }
 
@@ -58,7 +58,7 @@ pub fn fill(r: &mut JavaRandom, table: &[Loot], slots: &mut [Option<Stack>], cou
         }
         let k = e.min + r.next_int_n(e.max - e.min + 1);
         let mut st = Stack::new(e.item, e.meta, 1);
-        st.ench = e.ench;
+        st.tag = e.tag;
         if item::max_stack(e.item) as i32 >= k {
             st.count = k as u32;
             let slot = r.next_int_n(slots.len() as i32) as usize;

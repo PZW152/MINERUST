@@ -725,7 +725,7 @@ pub const TEXTURES: [&str; 25] = [
 ];
 
 /// `EntitySheep.fleeceColorTable`
-const FLEECE: [[f32; 3]; 16] = [
+pub const FLEECE: [[f32; 3]; 16] = [
     [1.0, 1.0, 1.0],
     [0.85, 0.5, 0.2],
     [0.7, 0.3, 0.85],
@@ -1378,7 +1378,8 @@ pub const ARMOR_TEXTURES: [&str; 12] = [
 /// `RenderPlayer.shouldRenderPass` for pass 0..4 (helmet to boots): the
 /// armour texture layers with their tint (`ItemArmor.getColor`, leather's
 /// default 10511680 then the untinted overlay).
-pub fn armor_layers(id: u16, pass: usize) -> Vec<(String, [f32; 4])> {
+pub fn armor_layers(s: &crate::item::Stack, pass: usize) -> Vec<(String, [f32; 4])> {
+    let id = s.id;
     if !(298..=317).contains(&id) {
         return Vec::new();
     }
@@ -1386,7 +1387,7 @@ pub fn armor_layers(id: u16, pass: usize) -> Vec<(String, [f32; 4])> {
     let layer = if pass == 2 { 2 } else { 1 };
     let base = format!("../models/armor/{mat}_layer_{layer}");
     if mat == "leather" {
-        let c = 10511680u32;
+        let c = s.dye_color().map_or(10511680u32, |c| c as u32);
         let t = [
             (c >> 16 & 255) as f32 / 255.0,
             (c >> 8 & 255) as f32 / 255.0,
@@ -1544,7 +1545,7 @@ pub fn player_layers(
     for pass in 0..4 {
         // armorItemInSlot(3 - pass)
         let Some(a) = armor[3 - pass] else { continue };
-        for (name, t) in armor_layers(a.id, pass) {
+        for (name, t) in armor_layers(&a, pass) {
             let Some(tex) = atlas.mob_tex(&name) else {
                 continue;
             };

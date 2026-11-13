@@ -26,15 +26,17 @@ pub const MELON: ItemId = 360;
 pub const EMERALD: ItemId = 388;
 pub const NETHER_STAR: ItemId = 399;
 
-/// An inventory stack: item id, damage/metadata, count.
+pub use crate::item_tag::Tag;
+use crate::world::anvil::Nbt;
+
+/// An inventory stack: item id, damage/metadata, count and its NBT tag.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Stack {
     pub id: ItemId,
     pub meta: i32,
     pub count: u32,
-    /// Enchantments (`ench` / `StoredEnchantments` NBT), packed as up to
-    /// seven `(id: 6 bits, level: 3 bits)` entries, lowest bits first.
-    pub ench: u64,
+    /// `stackTagCompound` (interned; `Tag::NONE` for none).
+    pub tag: Tag,
 }
 
 impl Stack {
@@ -43,37 +45,154 @@ impl Stack {
             id,
             meta,
             count,
-            ench: 0,
+            tag: Tag::NONE,
         }
     }
 
-    pub fn with_enchantments(mut self, list: &[(i32, i32)]) -> Stack {
-        let mut v = 0u64;
-        for (i, &(id, lvl)) in list.iter().take(7).enumerate() {
-            v |= (((id as u64) & 63) | (((lvl as u64) & 7) << 6)) << (i * 9);
-        }
-        self.ench = v;
+    /// `getTagCompound`
+    pub fn nbt(&self) -> Option<std::sync::Arc<Nbt>> {
+        self.tag.get()
+    }
+
+    /// The stack with its tag changed by `f` (an empty compound when there
+    /// was none, like `setTagCompound(new NBTTagCompound())`).
+    pub fn edit_tag(mut self, f: impl FnOnce(&mut Nbt)) -> Stack {
+        let mut n = self
+            .nbt()
+            .map_or(Nbt::Compound(Vec::new()), |t| (*t).clone());
+        f(&mut n);
+        self.tag = Tag::of(&n);
         self
     }
 
-    /// `(enchantment id, level)` pairs.
-    pub fn enchantments(&self) -> Vec<(i32, i32)> {
-        let mut out = Vec::new();
-        let mut v = self.ench;
-        while v != 0 {
-            let e = v & 511;
-            out.push(((e & 63) as i32, (e >> 6) as i32));
-            v >>= 9;
+    /// `setTagCompound(null)` when the compound became empty.
+    fn drop_empty_tag(mut self) -> Stack {
+        if matches!(self.nbt().as_deref(), Some(Nbt::Compound(v)) if v.is_empty()) {
+            self.tag = Tag::NONE;
         }
-        out
+        self
     }
 
-    /// Save-file form: `id:meta:count[:enchantments]`.
-    pub fn to_code(&self) -> String {
-        if self.ench != 0 {
-            format!("{}:{}:{}:{}", self.id, self.meta, self.count, self.ench)
+    /// The list key enchantments live under: `StoredEnchantments` for the
+    /// enchanted book, `ench` otherwise.
+    fn ench_key(&self) -> &'static str {
+        if self.id == 403 {
+            "StoredEnchantments"
         } else {
-            format!("{}:{}:{}", self.id, self.meta, self.count)
+            "ench"
+        }
+    }
+
+    /// Replaces the enchantment list with `(id, level)` pairs.
+    pub fn with_enchantments(self, list: &[(i32, i32)]) -> Stack {
+        let key = self.ench_key();
+        let items: Vec<Nbt> = list
+            .iter()
+            .map(|&(id, lvl)| {
+                Nbt::Compound(vec![
+                    ("id".into(), Nbt::Short(id as i16)),
+                    ("lvl".into(), Nbt::Short(lvl as i16)),
+                ])
+            })
+            .collect();
+        if items.is_empty() {
+            return self
+                .edit_tag(|n| {
+                    if let Nbt::Compound(v) = n {
+                        v.retain(|e| e.0 != key);
+                    }
+                })
+                .drop_empty_tag();
+        }
+        self.edit_tag(|n| n.set(key, Nbt::List(10, items)))
+    }
+
+    /// `(enchantment id, level)` pairs (`getEnchantmentTagList`, or the
+    /// stored ones of an enchanted book).
+    pub fn enchantments(&self) -> Vec<(i32, i32)> {
+        let Some(t) = self.nbt() else {
+            return Vec::new();
+        };
+        t.list(self.ench_key())
+            .iter()
+            .map(|e| {
+                (
+                    e.int("id").unwrap_or(0) as i32,
+                    e.int("lvl").unwrap_or(0) as i32,
+                )
+            })
+            .collect()
+    }
+
+    /// `isItemEnchanted`: an `ench` list is present.
+    pub fn is_enchanted(&self) -> bool {
+        self.nbt()
+            .is_some_and(|t| matches!(t.get("ench"), Some(Nbt::List(..))))
+    }
+
+    /// `hasDisplayName` / `getDisplayName`'s custom part.
+    pub fn custom_name(&self) -> Option<String> {
+        let t = self.nbt()?;
+        t.get("display")?.string("Name").map(str::to_string)
+    }
+
+    /// `setStackDisplayName`, or `func_135074_t` (clearing) with `None`.
+    pub fn with_name(self, name: Option<&str>) -> Stack {
+        match name {
+            Some(s) => self.edit_tag(|n| {
+                if !matches!(n.get("display"), Some(Nbt::Compound(_))) {
+                    n.set("display", Nbt::Compound(Vec::new()));
+                }
+                if let Some(d) = n.get_mut("display") {
+                    d.set("Name", Nbt::String(s.to_string()));
+                }
+            }),
+            None => {
+                if self.custom_name().is_none() {
+                    return self;
+                }
+                self.edit_tag(|n| {
+                    let mut empty = false;
+                    if let Some(Nbt::Compound(d)) = n.get_mut("display") {
+                        d.retain(|e| e.0 != "Name");
+                        empty = d.is_empty();
+                    }
+                    if empty {
+                        if let Nbt::Compound(v) = n {
+                            v.retain(|e| e.0 != "display");
+                        }
+                    }
+                })
+                .drop_empty_tag()
+            }
+        }
+    }
+
+    /// `getRepairCost`
+    pub fn repair_cost(&self) -> i32 {
+        self.nbt().and_then(|t| t.int("RepairCost")).unwrap_or(0) as i32
+    }
+
+    /// `setRepairCost`
+    pub fn with_repair_cost(self, c: i32) -> Stack {
+        self.edit_tag(|n| n.set("RepairCost", Nbt::Int(c)))
+    }
+
+    /// `ItemArmor.getColor`'s stored `display.color`.
+    pub fn dye_color(&self) -> Option<i32> {
+        let t = self.nbt()?;
+        t.get("display")?.int("color").map(|c| c as i32)
+    }
+
+    /// Save-file form: `id:meta:count[:t<hex of the tag NBT>]`.
+    pub fn to_code(&self) -> String {
+        match self.nbt() {
+            Some(t) => {
+                let b = crate::world::anvil::write_nbt(&t);
+                let hex: String = b.iter().map(|x| format!("{x:02x}")).collect();
+                format!("{}:{}:{}:t{}", self.id, self.meta, self.count, hex)
+            }
+            None => format!("{}:{}:{}", self.id, self.meta, self.count),
         }
     }
 
@@ -84,7 +203,27 @@ impl Stack {
         }
         let mut st = Stack::new(f[0].parse().ok()?, f[1].parse().ok()?, f[2].parse().ok()?);
         if f.len() == 4 {
-            st.ench = f[3].parse().ok()?;
+            if let Some(hex) = f[3].strip_prefix('t') {
+                if hex.len() % 2 != 0 {
+                    return None;
+                }
+                let bytes: Option<Vec<u8>> = (0..hex.len())
+                    .step_by(2)
+                    .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).ok())
+                    .collect();
+                let n = crate::world::anvil::read_nbt(&bytes?).ok()?;
+                st.tag = Tag::of(&n);
+            } else {
+                // the older packed enchantment form: (id: 6 bits, level: 3) x 7
+                let mut v: u64 = f[3].parse().ok()?;
+                let mut list = Vec::new();
+                while v != 0 {
+                    let e = v & 511;
+                    list.push(((e & 63) as i32, (e >> 6) as i32));
+                    v >>= 9;
+                }
+                st = st.with_enchantments(&list);
+            }
         }
         if st.count == 0 || st.count > 64 {
             return None;
@@ -100,7 +239,7 @@ impl Stack {
     }
     /// `ItemStack.areItemStacksEqual` without the count (stackable together).
     pub fn same_item(&self, o: &Stack) -> bool {
-        self.id == o.id && (self.meta == o.meta || max_damage(self.id) > 0) && self.ench == o.ench
+        self.id == o.id && (self.meta == o.meta || max_damage(self.id) > 0) && self.tag == o.tag
     }
 }
 

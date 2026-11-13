@@ -566,6 +566,10 @@ pub fn item_nbt(slot: Option<i8>, s: &crate::item::Stack) -> Nbt {
     if let Some(sl) = slot {
         v.insert(0, ("Slot", Nbt::Byte(sl)));
     }
+    // ItemStack.writeToNBT: the tag compound when there is one
+    if let Some(t) = s.nbt() {
+        v.push(("tag", (*t).clone()));
+    }
     compound(v)
 }
 
@@ -576,11 +580,11 @@ pub fn item_from_nbt(t: &Nbt) -> Option<crate::item::Stack> {
     if count == 0 || id == 0 {
         return None;
     }
-    Some(crate::item::Stack::new(
-        id,
-        t.int("Damage").unwrap_or(0) as i32,
-        count,
-    ))
+    let mut s = crate::item::Stack::new(id, t.int("Damage").unwrap_or(0) as i32, count);
+    if let Some(tag @ Nbt::Compound(_)) = t.get("tag") {
+        s.tag = crate::item::Tag::of(tag);
+    }
+    Some(s)
 }
 
 /// Ordered map helper for slot lists.

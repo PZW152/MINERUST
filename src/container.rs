@@ -256,7 +256,7 @@ fn item_equal(a: &Stack, b: &Stack) -> bool {
 
 /// `ItemStack.areItemStackTagsEqual` (enchantments are the only tag).
 fn tags_equal(a: &Stack, b: &Stack) -> bool {
-    a.ench == b.ench
+    a.tag == b.tag
 }
 
 /// `ContainerBrewingStand$Potion.canHoldPotion`
@@ -697,7 +697,7 @@ impl<'a> Ctx<'a> {
                     if self.has(0) || !self.valid(0, &s) {
                         return None;
                     }
-                    if s.ench != 0 && s.count == 1 {
+                    if !s.tag.is_none() && s.count == 1 {
                         self.put(0, Some(s));
                         s.count = 0;
                     } else if s.count >= 1 {

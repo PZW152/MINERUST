@@ -117,7 +117,7 @@ fn can_add(view: &InvView, d: Option<&SlotDef>, s: Option<&Stack>, ignore_size: 
     let cur = d.and_then(|d| slot_stack(view, d));
     let mut ok = cur.is_none();
     if let (Some(c), Some(s)) = (cur, s) {
-        if s.id == c.id && s.meta == c.meta && s.ench == c.ench {
+        if s.id == c.id && s.meta == c.meta && s.tag == c.tag {
             let add = if ignore_size { 0 } else { s.count };
             ok |= c.count + add <= max_stack(s.id);
         }

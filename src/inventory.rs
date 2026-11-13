@@ -59,7 +59,7 @@ impl Inventory {
                     && t.count < max_stack(t.id)
                     && t.count < 64
                     && (!item::has_subtypes(t.id) || t.meta == s.meta)
-                    && t.ench == s.ench
+                    && t.tag == s.tag
             })
         })
     }

@@ -70,6 +70,14 @@
 （都在啟動器的 `libraries/` 裡）。JDK 21 可用。Windows 上 javac/java 的路徑要用 Windows 格式（`cygpath -w`）。
 在 Java 端先呼叫 `Bootstrap.register()` 初始化方塊與物品登錄。
 
+`tools/classpath.sh` 會組出這串 classpath（環境變數 `MC_LIBS` 指向啟動器的 `libraries`，`MCP_JAR` 指向重新命名的 jar）：
+
+```
+CP=$(sh tools/classpath.sh)
+javac -cp "$CP" -d out tools/XxxHarness.java
+java -cp "out;$CP" XxxHarness tools/xxx_1710.txt
+```
+
 ### 3.3 遊戲資源
 
 - `MC1710_JAR` 環境變數或 `--jar` 指向原版 jar（材質、`en_US.lang`、字型）。
@@ -95,6 +103,7 @@
 | `src/item_data.rs`、`src/item_text.rs` | 物品登錄資料（`tools/ItemHarness.java` → `tools/gen_items.py` 產生）、名稱與工具提示 |
 | `src/enchant.rs` | 附魔資料與 `EnchantmentHelper` |
 | `src/inventory.rs` | `InventoryPlayer` |
+| `src/item_tag.rs` | 物品的 NBT（`stackTagCompound`）：以內容去重的全域表，`Stack.tag` 只是編號，所以 `Stack` 仍是 `Copy`；比較編號就是 `areItemStackTagsEqual`（與鍵的順序無關）。附魔、自訂名稱、`RepairCost`、染色、Lore 都在這裡；存檔寫進 Anvil 的 `tag` 與自有格式的 `t<hex>` |
 | `src/entity/` | 實體：生物 AI、`EntityTrackerEntry`（`tracker.rs`）、船、礦車、箭、投擲物、經驗球、玩家物理 |
 | `src/world/` | 世界生成、裝飾、結構、光照、紅石、液體、火、Anvil 存檔、爆炸 |
 | `src/render/` | Vulkan（`vk.rs`）、方塊網格化（`mesher.rs`、`rb.rs` 是 `RenderBlocks` 的機械式移植）、模型（`model*.rs`）、箱子、告示牌、圖集 |
@@ -148,6 +157,7 @@ minerust --seed 12345 --no-save --size 854 480 --screenshot out.png 6
 | 配方 | `tools/RecipeHarness.java` → `tools/recipes_1710.txt` → `src/crafting/data.rs` |
 | 物品、創造分頁、登錄名稱、生怪蛋顏色 | `tools/ItemHarness.java` → `tools/items_1710.txt` → `python tools/gen_items.py` |
 | 附魔清單與附魔台等級 | `tools/EnchantHarness.java` → `tools/enchant_1710.txt`（測試 `lists_and_levels_match_the_game`） |
+| 皮甲染色配方 | `tools/DyeHarness.java` → `tools/dyes_1710.txt`（測試 `armor_dyes_match_the_game`） |
 
 新增系統時照同樣模式：寫 Harness → 存文字檔 → Rust 測試比對。
 
@@ -173,7 +183,7 @@ minerust --seed 12345 --no-save --size 854 480 --screenshot out.png 6
 2. **鐵砧**：方塊、`ContainerRepair.updateRepairOutput` 的完整費用演算法、改名欄位、損壞。
 3. 其他缺方塊的 GUI：信標、漏斗、投擲器、馬的物品欄、村民交易、書與羽毛筆。
 4. 統計與成就（`StatList`、`AchievementList`、`GuiStats`、`GuiAchievements`），資源包畫面、使用統計畫面。
-5. 物品 NBT（染色皮甲、煙火、書、地圖），以及依賴 NBT 的四個特殊配方；附魔光澤。
+5. 物品 NBT 已有（見第 4 節），還缺用到它的東西：煙火、書與羽毛筆、地圖資料，以及三個特殊配方（煙火、書本複製、地圖擴大）；附魔光澤。
 6. 缺少的方塊（見 PARITY_TODO B 節）、比較器、漏斗、投擲器、觸發鐵軌等。
 7. 告示牌上的非 ASCII 文字（原版用 unicode 字頁，目前只畫 ASCII）。
 8. 指令：summon、enchant、gamerule、playsound、spreadplayers、testfor 等與 Tab 補完。
@@ -201,4 +211,5 @@ minerust --seed 12345 --no-save --size 854 480 --screenshot out.png 6
 - `0f958b9` 聊天設定、載入畫面、發射器介面。
 - `893a6c1` 告示牌全套。
 - `5de6c71` 附魔資料與 `EnchantmentHelper`（`tools/EnchantHarness.java` 385 筆一致）、附魔台方塊、這份接手手冊。
-- 本次：附魔台全套（容器、介面、浮空書本）；測試 `enchanting_table_enchants_and_costs_levels`；截圖確認介面與世界中的書本。
+- `cc422c5` 附魔台全套（容器、介面、浮空書本）；測試 `enchanting_table_enchants_and_costs_levels`。
+- 本次：物品 NBT（`item_tag.rs`），附魔改存在 NBT 裡（Anvil 存檔以前會遺失附魔，現在不會）；自訂名稱、染色、Lore 的工具提示；皮甲染色顏色用在圖示與盔甲模型；`RecipesArmorDyes`（與原版 9 組一致）；`tools/classpath.sh`（舊的 `Sapling Data` 函式庫已刪除）。

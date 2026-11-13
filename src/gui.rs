@@ -270,7 +270,7 @@ impl<'a> Ui<'a> {
             }
         }
         // RenderItem.renderItemIntoGUI: one quad per render pass
-        for (t, c) in self.atlas.item_passes(s.id, s.meta) {
+        for (t, c) in self.atlas.stack_passes(s) {
             let col = [
                 (c[0] * 255.0) as u8,
                 (c[1] * 255.0) as u8,

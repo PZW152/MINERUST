@@ -466,7 +466,7 @@ pub fn item_entity(
                     None => return,
                 }
             } else {
-                atlas.item_passes(s.id, s.meta)
+                atlas.stack_passes(&s)
             };
             // Fancy graphics: 3D sprites that spin like blocks.
             for (t, tint) in passes {
@@ -758,7 +758,7 @@ pub fn render_item(out: &mut Vec<Vertex>, atlas: &Atlas, s: Stack, m: &Mat4, l: 
                     None => return,
                 }
             } else {
-                atlas.item_passes(s.id, s.meta)
+                atlas.stack_passes(&s)
             };
             for (t, tint) in passes {
                 let mut mm = mul(&m, &translate(0.0, -0.3, 0.0));

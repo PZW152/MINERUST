@@ -21,7 +21,8 @@
 - [x] 生物：`EntityTrackerEntry`（1/32 位置、4/32 門檻、`S19` 頭部）與客戶端三步內插、`updateDistance` 身體朝向、
       客戶端肢體擺動
 - [ ] 方塊破壞時容器內容物的散落方式
-- [ ] 特殊配方（皮甲染色、煙火、書本複製、地圖擴大）需要物品 NBT
+- [x] 物品 NBT（附魔、名稱、RepairCost、染色、Lore）與皮甲染色配方
+- [ ] 特殊配方：煙火、書本複製、地圖擴大
 - [x] 創造模式物品欄（12 個分頁、搜尋、捲動、背包分頁與垃圾桶、`C10PacketCreativeInventoryAction`）
 - [x] 聊天（`GuiNewChat` / `GuiChat`）與指令：help、give、time、gamemode、tp、weather、toggledownfall、kill、
       effect、xp、seed、difficulty、clear、setblock、spawnpoint、setworldspawn、say、me

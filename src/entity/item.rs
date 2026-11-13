@@ -208,7 +208,7 @@ fn combine(items: &mut [ItemEntity], i: usize, j: usize) -> bool {
         return false;
     }
     let (a, b) = (items[i].stack, items[j].stack);
-    if b.id != a.id || b.ench != a.ench {
+    if b.id != a.id || b.tag != a.tag {
         return false;
     }
     if crate::item::has_subtypes(b.id) && b.meta != a.meta {

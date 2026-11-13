@@ -194,7 +194,7 @@ pub fn enchantable(s: &Stack) -> bool {
     } else {
         crate::item::max_stack(s.id) == 1 && crate::item::max_damage(s.id) > 0
     };
-    tool && s.ench == 0
+    tool && !s.is_enchanted()
 }
 
 /// `EnchantmentHelper.calcItemStackEnchantability`

@@ -122,6 +122,7 @@ impl Recipe {
                 left.is_empty()
             }
             Recipe::Special("RecipesMapCloning") => map_cloning(g).is_some(),
+            Recipe::Special("RecipesArmorDyes") => armor_dyes(g).is_some(),
             // The others read item NBT (dye colours, firework and book
             // data, map scale) that stacks do not carry yet.
             Recipe::Special(_) => false,
@@ -135,9 +136,82 @@ impl Recipe {
                 Some(Stack::new(out.0, out.1, out.2))
             }
             Recipe::Special("RecipesMapCloning") => map_cloning(g),
+            Recipe::Special("RecipesArmorDyes") => armor_dyes(g),
             Recipe::Special(_) => None,
         }
     }
+}
+
+/// `RecipesArmorDyes`: one leather piece and dyes, the colours averaged
+/// and brightened to the average maximum channel.
+fn armor_dyes(g: &Grid) -> Option<Stack> {
+    let mut out: Option<Stack> = None;
+    let mut sum = [0i32; 3];
+    let (mut max_sum, mut n) = (0i32, 0i32);
+    let mut armor = false;
+    for i in 0..g.len() {
+        let Some(s) = g.slot(i) else { continue };
+        if (298..=317).contains(&s.id) {
+            armor = true;
+            // only leather (ArmorMaterial.CLOTH), and only one piece
+            if (298..=301).contains(&s.id) && out.is_none() {
+                let mut c = s;
+                c.count = 1;
+                if let Some(col) = s.dye_color() {
+                    let (r, gg, b) = (
+                        (col >> 16 & 255) as f32 / 255.0,
+                        (col >> 8 & 255) as f32 / 255.0,
+                        (col & 255) as f32 / 255.0,
+                    );
+                    max_sum = (max_sum as f32 + r.max(gg.max(b)) * 255.0) as i32;
+                    sum[0] = (sum[0] as f32 + r * 255.0) as i32;
+                    sum[1] = (sum[1] as f32 + gg * 255.0) as i32;
+                    sum[2] = (sum[2] as f32 + b * 255.0) as i32;
+                    n += 1;
+                }
+                out = Some(c);
+            } else {
+                return None;
+            }
+        } else if s.id == 351 {
+            // EntitySheep.fleeceColorTable[BlockColored.func_150032_b(damage)]
+            let f = crate::render::model::FLEECE[(!s.meta & 15) as usize];
+            let (r, gg, b) = (
+                (f[0] * 255.0) as i32,
+                (f[1] * 255.0) as i32,
+                (f[2] * 255.0) as i32,
+            );
+            max_sum += r.max(gg.max(b));
+            sum[0] += r;
+            sum[1] += gg;
+            sum[2] += b;
+            n += 1;
+        } else {
+            return None;
+        }
+    }
+    if !armor || n == 0 {
+        return None;
+    }
+    let mut out = out?;
+    let (mut r, mut gg, mut b) = (sum[0] / n, sum[1] / n, sum[2] / n);
+    let avg = max_sum as f32 / n as f32;
+    let m = r.max(gg.max(b)) as f32;
+    r = (r as f32 * avg / m) as i32;
+    gg = (gg as f32 * avg / m) as i32;
+    b = (b as f32 * avg / m) as i32;
+    let color = ((r << 8) + gg << 8) + b;
+    // ItemArmor.func_82813_b: display.color
+    out = out.edit_tag(|t| {
+        use crate::world::anvil::Nbt;
+        if !matches!(t.get("display"), Some(Nbt::Compound(_))) {
+            t.set("display", Nbt::Compound(Vec::new()));
+        }
+        if let Some(d) = t.get_mut("display") {
+            d.set("color", Nbt::Int(color));
+        }
+    });
+    Some(out)
 }
 
 const FILLED_MAP: ItemId = 358;
@@ -275,5 +349,42 @@ mod tests {
         // map cloning
         let m = find(3, &[(0, 358, 7), (1, 395, 0), (5, 395, 0)]);
         assert_eq!(m, Some(Stack::new(358, 7, 3)));
+    }
+
+    /// Against `tools/DyeHarness.java`.
+    #[test]
+    fn armor_dyes_match_the_game() {
+        for l in include_str!("../../tools/dyes_1710.txt").lines() {
+            let (grid, want) = l.split_once('|').unwrap();
+            let mut cells = vec![None; 9];
+            for (i, part) in grid.split(' ').enumerate() {
+                let f: Vec<i32> = part.split(':').map(|x| x.parse().unwrap()).collect();
+                let mut st = Stack::new(f[0] as ItemId, f[1], 1);
+                if f.len() > 2 {
+                    let c = f[2];
+                    st = st.edit_tag(|t| {
+                        t.set(
+                            "display",
+                            crate::world::anvil::Nbt::Compound(vec![(
+                                "color".into(),
+                                crate::world::anvil::Nbt::Int(c),
+                            )]),
+                        )
+                    });
+                }
+                cells[i] = Some(st);
+            }
+            let got = find_matching(&Grid {
+                cells: &cells,
+                width: 3,
+            });
+            let got = match got {
+                Some(s) => s
+                    .dye_color()
+                    .map_or_else(|| format!("item{}", s.id), |c| c.to_string()),
+                None => "none".into(),
+            };
+            assert_eq!(got, want, "{grid}");
+        }
     }
 }

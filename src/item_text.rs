@@ -30,6 +30,10 @@ fn tr(lang: &Lang, k: &str) -> String {
 
 /// `Item.getItemStackDisplayName`
 pub fn display_name(s: &Stack, lang: &Lang) -> String {
+    // ItemStack.getDisplayName: the display.Name tag first
+    if let Some(n) = s.custom_name() {
+        return n;
+    }
     match s.id {
         373 => return potion_name(s, lang),
         383 => {
@@ -71,9 +75,9 @@ pub fn rarity(s: &Stack) -> u8 {
         // ItemAppleGold and ItemRecord ignore enchantments
         322 | 2256..=2267 => base,
         // ItemEnchantedBook: stored enchantments make it uncommon
-        403 if s.ench != 0 => 1,
+        403 if !s.enchantments().is_empty() => 1,
         // Item.getRarity
-        _ if s.ench != 0 => 2,
+        _ if s.is_enchanted() => 2,
         _ => base,
     }
 }
@@ -164,7 +168,9 @@ fn modifier_line(lang: &Lang, op: i32, amount: f64, attr: &str) -> Option<String
 pub fn tooltip(s: &Stack, lang: &Lang) -> Vec<String> {
     let mut v = Vec::new();
     let mut name = display_name(s, lang);
-    if s.id == 358 {
+    if s.custom_name().is_some() {
+        name = format!("\u{a7}o{name}\u{a7}r");
+    } else if s.id == 358 {
         name = format!("{name} #{}", s.meta);
     }
     v.push(name);
@@ -220,6 +226,19 @@ pub fn tooltip(s: &Stack, lang: &Lang) -> Vec<String> {
     }
     for (id, lvl) in s.enchantments() {
         v.push(enchantment_name(id, lvl, lang));
+    }
+    // display.color and display.Lore
+    if let Some(t) = s.nbt() {
+        if let Some(d) = t.get("display") {
+            if d.int("color").is_some() {
+                v.push(format!("\u{a7}o{}", lang.get("item.dyed")));
+            }
+            for l in d.list("Lore") {
+                if let crate::world::anvil::Nbt::String(x) = l {
+                    v.push(format!("\u{a7}5\u{a7}o{x}"));
+                }
+            }
+        }
     }
     // getAttributeModifiers: the weapon damage, with Sharpness
     let atk = entry(s).map_or(0.0, |e| e.5) as f64;

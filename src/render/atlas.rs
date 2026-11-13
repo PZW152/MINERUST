@@ -736,6 +736,22 @@ impl Atlas {
     /// `Item.requiresMultipleRenderPasses` items: each pass's icon
     /// (`getIconFromDamageForRenderPass`) with its colour
     /// (`getColorFromItemStack`). Single-pass items give one entry.
+    /// `getColorFromItemStack` per pass for a whole stack: dyed leather
+    /// takes its `display.color`.
+    pub fn stack_passes(&self, s: &crate::item::Stack) -> Vec<([f32; 4], [f32; 3])> {
+        let mut v = self.item_passes(s.id, s.meta);
+        if (298..=301).contains(&s.id) {
+            if let (Some(c), Some(first)) = (s.dye_color(), v.first_mut()) {
+                first.1 = [
+                    (c >> 16 & 255) as f32 / 255.0,
+                    (c >> 8 & 255) as f32 / 255.0,
+                    (c & 255) as f32 / 255.0,
+                ];
+            }
+        }
+        v
+    }
+
     pub fn item_passes(&self, id: u16, meta: i32) -> Vec<([f32; 4], [f32; 3])> {
         let rgb = |c: i32| {
             [
