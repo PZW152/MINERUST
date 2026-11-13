@@ -134,6 +134,13 @@ java -cp "out;$CP" XxxHarness tools/xxx_1710.txt
 - 方塊實體清單（箱子、告示牌、附魔台、終界門）只重掃有變動的分段（`ClientChunk::rescan`）。
 - 影像設定的生效點：`Game::apply_video_settings`（垂直同步、平滑光照、Mipmap 層級），幀率上限在 `main.rs` 的
   `FrameSync`（LWJGL `Sync` 的移植，260 = 不限制；沒有世界時固定 30），全螢幕（F11／設定）每幀與視窗狀態同步。
+- **兩個時鐘。** 伺服器與客戶端各自以 20 Hz 走 tick，相位不同。規則：
+  - 伺服器每個 tick 的事件以 `Event::Tick(完成時間)` 收尾，客戶端收齊整個 tick 才一次套用（`Game.inbox` → `arrived`）。
+  - 由伺服器模擬、客戶端只負責畫的東西（掉落物、箭、TNT、火球、投擲物、落沙、活塞）用 `Game::server_partial()`
+    （距離該 tick 完成的時間 ÷ 50 ms）在 `prev`→`pos` 之間插值，**不能用客戶端的 `partial`**，否則會前後跳動。
+  - 客戶端自己跑 tick 的東西（玩家、生物的三步內插、經驗球、船與礦車）用客戶端的 `partial`。
+  - 收到 `Event::Tick` 時把客戶端 tick 相位緩慢拉到伺服器 tick 之後半個 tick（`pump_chunks` 內），
+    避免兩邊相位貼近時生物的三步內插拿到 2 或 4 個客戶端 tick 而一頓一頓。
 - 客戶端只有伺服器送來的快照；容器點擊在客戶端用同一份 `container.rs` 預測，伺服器的 `clicks` 計數讓客戶端丟掉過時的快照。
 - 生物在客戶端有自己的副本：伺服器端 `Mob::track()` 模擬 `EntityTrackerEntry`（1/32 座標、4/32 門檻、S19 頭部），
   客戶端以三步內插（`setPositionAndRotation2`）、`updateDistance` 與肢體擺動自行計算。
@@ -181,6 +188,7 @@ minerust --seed 12345 --no-save --size 854 480 --screenshot out.png 6
 | 物品、創造分頁、登錄名稱、生怪蛋顏色 | `tools/ItemHarness.java` → `tools/items_1710.txt` → `python tools/gen_items.py` |
 | 附魔清單與附魔台等級 | `tools/EnchantHarness.java` → `tools/enchant_1710.txt`（測試 `lists_and_levels_match_the_game`） |
 | 皮甲染色配方 | `tools/DyeHarness.java` → `tools/dyes_1710.txt`（測試 `armor_dyes_match_the_game`） |
+| 方塊貼圖（每個方塊 × 中繼值 × 面的 `Block.getIcon`） | `tools/IconHarness.java` → `tools/icons_1710.txt`（測試 `block_textures_match_the_game`；由專屬繪製函式自選貼圖的方塊列在測試的 `OWN` 裡） |
 | 鐵砧的修理／合併／命名費用 | `tools/RepairHarness.java` 讀 `tools/repair_cases.txt` → `tools/repair_1710.txt`（測試 `anvil_matches_the_game`） |
 
 新增系統時照同樣模式：寫 Harness → 存文字檔 → Rust 測試比對。
@@ -290,4 +298,21 @@ MINERUST_BENCH=10 minerust --seed 12345 --no-save --size 1920 1080 --distance 16
   載入後以 `/setblock` 放置跨分段、跨區塊邊界的方塊柱與水，確認增量重建正確；F3 顯示 121 fps（上限 120）。
   **留下**：第 7 節第 0 項的影像設定缺口；`Arc<ChunkData>` 在送出快照後的下一次寫入會整塊複製（262 KB），目前伺服器 tick 5 ms 尚可，
   之後可改成分段 `Arc`；區塊生成後的裝飾仍是單執行緒（原版的全序要求）。
+- `本次（使用者回報的手感問題，2026-11-13 晚）`：使用者列出「實體抽搐、掉落物上下跳與穿模、生物移動卡頓、放方塊有音效但過很久才出現、
+  貼圖用錯、有些東西反而更快」。逐項查證：
+  - **掉落物／箭／TNT 等抽搐**：它們的 `prev`、`pos` 來自伺服器 tick，卻用客戶端 tick 的 `partial` 插值，兩個時鐘相位不同就會鋸齒狀前後跳；
+    掉落物的浮動用 `age + partial` 也一樣。改用 `server_partial()`，並讓一個伺服器 tick 的事件整批套用（見第 4 節「兩個時鐘」）。
+  - **掉落物穿模**：繪製時多減了 0.125（`posY` 已含 `yOffset`，`RenderItem.doRender` 是 `posY + 浮動`），方塊物品因此沉進地面。已移除。
+  - **生物移動卡頓**：加上 tick 相位鎖定（同上）。
+  - **放方塊延遲**：上一輪之前網格器被整柱重建塞爆（需求約 4,300 柱／秒、產能約 2,200），玩家所在區塊排不到。
+    現在實測「右鍵 → 新網格完成」25–42 ms（`MINERUST_DEBUG_LATENCY=1` 搭配 `--open use:x,y,z` 會印出）。
+  - **貼圖用錯**：新增 `tools/IconHarness.java` 匯出原版全部方塊貼圖並逐項比對，查到並修正：木板六種全畫成橡木（連帶五種木樓梯）、
+    石英方塊的雕紋與柱狀變體、乾草捆橫放的朝向、平滑雙層半磚的砂岩款，以及一批中繼值越界時的回退貼圖（樹苗、砂岩、石磚、花、小麥、
+    胡蘿蔔／馬鈴薯、蠹魚石）。尚未移植的方塊（測試會跳過）：26, 36, 63, 68, 92, 95, 104, 105, 107, 125, 126, 130, 137–139, 144,
+    146–151, 154, 156–158, 160。
+  - **「反而更快」**：沒有找到確定的單一原因。查過挖掘延遲（`blockHitDelay`）、右鍵延遲、排程 tick，都與原版一致。推測是先前伺服器
+    執行緒被網格工作搶走 CPU，落後後連續補 tick（與原版 `MinecraftServer.run` 相同的追趕機制）造成世界忽快忽慢；上一輪修正後
+    伺服器 tick 平均 5 ms，不再落後。**這一項沒有被證實**，需要使用者指出具體是哪個東西變快。
+  **驗證**：`cargo test --release` 83 項通過；截圖確認六種木板、石英變體、乾草捆、木樓梯貼圖；基準 1,331 fps（視距 16，未退步）。
+  抽搐與卡頓的修正只有編譯與邏輯推導，**沒有錄影逐幀驗證**。
   **查到的既有錯誤，待修**：伺服器端玩家的盔甲值從未設定（`living.armor` 恆為 0，`inventory.armor_value()` 沒人呼叫），盔甲不擋傷害也不耗損；玩家爆擊用了舊版隨機加成，1.7.10 是 ×1.5；武器附魔（鋒利系列、擊退、燃燒、掠奪）、保護系列、水下呼吸、荊棘、弓的附魔、附魔光澤都還沒接。

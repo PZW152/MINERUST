@@ -98,6 +98,9 @@
 
 ## F. 渲染
 
+- [x] 伺服器模擬的實體以伺服器 tick 時間插值（掉落物、箭、TNT、落沙、活塞），掉落物高度照 `RenderItem.doRender`
+- [x] 方塊貼圖與原版 `Block.getIcon` 全表比對（`tools/icons_1710.txt`）
+- [ ] 掉落物改為客戶端自行模擬（原版客戶端也跑 `EntityItem.onUpdate`，伺服器每 20 tick 校正一次）
 - [x] 渲染區塊以 16³ 為單位（`WorldRenderer`），方塊變動只重建 `markBlockForUpdate` 範圍內的分段
 - [x] 影像設定生效：垂直同步、最大幀率（`Display.sync`）、平滑光照等級、雲開關、視角晃動、Mipmap 層級、全螢幕（F11）
 - [ ] 影像設定尚未生效：畫質「流暢」（不透明樹葉、平面雲、平面掉落物、無暈影）、粒子數量、各向異性過濾、

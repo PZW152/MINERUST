@@ -148,6 +148,10 @@ pub enum Event {
         /// The 16-high sections that changed (all of them for a new chunk).
         changed: u16,
     },
+    /// The end of one server tick's events, with the time it finished: the
+    /// client applies the tick as a whole and interpolates what the server
+    /// simulates (`prev` to `pos`) from this moment over the next 50 ms.
+    Tick(Instant),
     /// The chunk left the client's range.
     Unload((i32, i32)),
     Inventory(Box<InvView>),
@@ -3541,6 +3545,7 @@ pub fn spawn(mut sim: Sim) -> SimHandle {
                     TICK_NANOS.fetch_add(ns, Relaxed);
                     TICK_WORST.fetch_max(ns, Relaxed);
                 }
+                events.push(Event::Tick(Instant::now()));
                 for e in events.drain(..) {
                     if ev_tx.send(e).is_err() {
                         let _ = sim.save();

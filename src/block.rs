@@ -861,9 +861,10 @@ pub fn texture_name(id: u8, meta: u8, face: usize) -> Option<&'static str> {
             "stonebrick_mossy",
             "stonebrick_cracked",
             "stonebrick_carved",
-            "stone",
-            "stone",
-        ][(meta & 7) as usize],
+        ]
+        .get(meta as usize)
+        .copied()
+        .unwrap_or("stone"),
         GRASS => match face {
             1 => "grass_top",
             0 => "dirt",
@@ -881,7 +882,19 @@ pub fn texture_name(id: u8, meta: u8, face: usize) -> Option<&'static str> {
             }
         }
         COBBLESTONE => "cobblestone",
-        PLANKS | CHEST => "planks_oak",
+        CHEST => "planks_oak",
+        // BlockWood.getIcon: metadata out of range is oak
+        PLANKS => [
+            "planks_oak",
+            "planks_spruce",
+            "planks_birch",
+            "planks_jungle",
+            "planks_acacia",
+            "planks_big_oak",
+        ]
+        .get(meta as usize)
+        .copied()
+        .unwrap_or("planks_oak"),
         BEDROCK => "bedrock",
         FLOWING_WATER | WATER => "water_still",
         FLOWING_LAVA | LAVA => "lava_still",
@@ -915,13 +928,15 @@ pub fn texture_name(id: u8, meta: u8, face: usize) -> Option<&'static str> {
             } else if face == 0 {
                 "sandstone_bottom"
             } else {
-                [
-                    "sandstone_normal",
-                    "sandstone_carved",
-                    "sandstone_smooth",
-                    "sandstone_normal",
-                ][(meta & 3) as usize]
+                ["sandstone_normal", "sandstone_carved", "sandstone_smooth"]
+                    .get(meta as usize)
+                    .copied()
+                    .unwrap_or("sandstone_normal")
             }
+        }
+        STONE_SLAB | DOUBLE_STONE_SLAB if id == DOUBLE_STONE_SLAB && meta & 8 != 0 && face != 1 => {
+            // BlockStoneSlab.getIcon: `if (isDouble && (meta & 8) != 0) side = 1`
+            return texture_name(id, meta, 1);
         }
         STONE_SLAB | DOUBLE_STONE_SLAB => match meta & 7 {
             // BlockStoneSlab.getIcon
@@ -941,7 +956,7 @@ pub fn texture_name(id: u8, meta: u8, face: usize) -> Option<&'static str> {
                 _ => "quartz_block_side",
             },
             _ => {
-                if face < 2 || (id == DOUBLE_STONE_SLAB && meta & 8 != 0) {
+                if face < 2 {
                     "stone_slab_top"
                 } else {
                     "stone_slab_side"
@@ -955,7 +970,7 @@ pub fn texture_name(id: u8, meta: u8, face: usize) -> Option<&'static str> {
         },
         DEADBUSH => "deadbush",
         YELLOW_FLOWER => "flower_dandelion",
-        RED_FLOWER => FLOWERS[(meta as usize).min(8)],
+        RED_FLOWER => FLOWERS.get(meta as usize).copied().unwrap_or(FLOWERS[0]),
         BROWN_MUSHROOM => "mushroom_brown",
         RED_MUSHROOM => "mushroom_red",
         MOSSY_COBBLESTONE => "cobblestone_mossy",
@@ -1062,9 +1077,7 @@ pub fn texture_name(id: u8, meta: u8, face: usize) -> Option<&'static str> {
             "sapling_jungle",
             "sapling_acacia",
             "sapling_roofed_oak",
-            "sapling_oak",
-            "sapling_oak",
-        ][(meta & 7) as usize],
+        ][((meta & 7) as usize).min(5)],
         SPONGE => "sponge",
         LAPIS_BLOCK => "lapis_block",
         DISPENSER => {
@@ -1209,10 +1222,10 @@ pub fn texture_name(id: u8, meta: u8, face: usize) -> Option<&'static str> {
             "wheat_stage_5",
             "wheat_stage_6",
             "wheat_stage_7",
-        ][(meta & 7) as usize],
+        ][(meta as usize).min(7)],
         CARROTS | POTATOES => {
             // BlockCarrot / BlockPotato.getIcon
-            let m = (meta & 7) as usize;
+            let m = meta as usize;
             let stage = if m < 7 {
                 (if m == 6 { 5 } else { m }) >> 1
             } else {
@@ -1297,7 +1310,10 @@ pub fn texture_name(id: u8, meta: u8, face: usize) -> Option<&'static str> {
             "stonebrick_mossy",
             "stonebrick_cracked",
             "stonebrick_carved",
-        ][(meta & 3) as usize],
+        ]
+        .get(meta as usize)
+        .copied()
+        .unwrap_or("stonebrick"),
         IRON_BARS => "iron_bars",
         GLASS_PANE => {
             if face < 2 {
@@ -1342,13 +1358,42 @@ pub fn texture_name(id: u8, meta: u8, face: usize) -> Option<&'static str> {
             }
         }
         REDSTONE_BLOCK => "redstone_block",
-        QUARTZ_BLOCK => match face {
-            0 => "quartz_block_bottom",
-            1 => "quartz_block_top",
-            _ => "quartz_block_side",
+        // BlockQuartz.getIcon
+        QUARTZ_BLOCK => match meta {
+            2..=4 => {
+                let end = match meta {
+                    2 => face < 2,
+                    3 => face == 4 || face == 5,
+                    _ => face == 2 || face == 3,
+                };
+                if end {
+                    "quartz_block_lines_top"
+                } else {
+                    "quartz_block_lines"
+                }
+            }
+            1 => {
+                if face < 2 {
+                    "quartz_block_chiseled_top"
+                } else {
+                    "quartz_block_chiseled"
+                }
+            }
+            _ => match face {
+                0 => "quartz_block_bottom",
+                1 => "quartz_block_top",
+                _ => "quartz_block_side",
+            },
         },
+        // BlockRotatedPillar.getIcon
         HAY_BLOCK => {
-            if face < 2 {
+            let end = match meta & 12 {
+                0 => face < 2,
+                4 => face == 4 || face == 5,
+                8 => face == 2 || face == 3,
+                _ => false,
+            };
+            if end {
                 "hay_block_top"
             } else {
                 "hay_block_side"
@@ -1639,5 +1684,47 @@ pub fn render_type(id: u8) -> Option<i32> {
         139 => Some(32),
         107 => Some(21),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod icon_tests {
+    /// `Block.getIcon(side, meta)` of every block, from the game itself
+    /// (`tools/IconHarness.java`).
+    #[test]
+    fn block_textures_match_the_game() {
+        let mut bad = Vec::new();
+        for line in include_str!("../tools/icons_1710.txt").lines() {
+            if line.starts_with('#') {
+                continue;
+            }
+            let f: Vec<&str> = line.split(' ').collect();
+            let (id, meta) = (f[0].parse::<u8>().unwrap(), f[1].parse::<u8>().unwrap());
+            // Drawn by their own RenderBlocks methods, which pick the icons
+            // themselves (liquids, pistons, fire, wire, doors, repeaters,
+            // panes, cauldron, end portal frame, cocoa, flower pot, anvil,
+            // double plants): the table holds those icons, not getIcon's.
+            const OWN: [u8; 22] = [
+                8, 9, 10, 11, 29, 33, 34, 51, 55, 61, 62, 64, 71, 93, 94, 102, 118, 120, 127, 140,
+                145, 175,
+            ];
+            if OWN.contains(&id) {
+                continue;
+            }
+            for face in 0..6 {
+                let want = f[2 + face];
+                // blocks not ported yet are listed in docs/PARITY_TODO.md
+                let Some(got) = super::texture_name(id, meta, face) else {
+                    continue;
+                };
+                if got != want {
+                    bad.push(format!("{id}:{meta} face {face}: {got} (game: {want})"));
+                }
+            }
+        }
+        for b in &bad {
+            eprintln!("{b}");
+        }
+        assert!(bad.is_empty(), "{} block faces differ", bad.len());
     }
 }

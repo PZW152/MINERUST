@@ -242,6 +242,13 @@ pub struct Game {
     pub prof: [f64; 4],
     /// Chunk snapshots received, meshes uploaded, events received.
     pub counts: [u64; 3],
+    /// Events of the server tick still arriving, and of the ticks complete.
+    inbox: Vec<Event>,
+    arrived: std::collections::VecDeque<Event>,
+    /// When the newest complete server tick finished.
+    server_tick_at: Instant,
+    /// `MINERUST_DEBUG_LATENCY`: when a block was last used, and its chunk.
+    latency: Option<(Instant, (i32, i32))>,
     pending_mesh: HashSet<(i32, i32)>,
     /// Chunks with render chunks to build again (bit per 16-high section).
     dirty: HashMap<(i32, i32), u16>,
@@ -560,6 +567,10 @@ impl Game {
             max_in_flight: threads * 3,
             prof: [0.0; 4],
             counts: [0; 3],
+            inbox: Vec::new(),
+            arrived: std::collections::VecDeque::new(),
+            server_tick_at: Instant::now(),
+            latency: None,
             pending_mesh: HashSet::new(),
             dirty: HashMap::new(),
             offsets,
@@ -770,6 +781,15 @@ impl Game {
             && self.renderer.mesh_count() >= side * side
     }
 
+    /// The partial tick of what the server simulates and the client only
+    /// draws (dropped items, arrows, primed TNT, falling blocks, pistons):
+    /// how far the newest server tick's `prev` to `pos` step has played.
+    /// The server's ticks are not in phase with the client's, so the
+    /// client's own partial tick would make these jump back and forth.
+    fn server_partial(&self) -> f32 {
+        (self.server_tick_at.elapsed().as_secs_f32() / 0.05).clamp(0.0, 1.0)
+    }
+
     fn player_chunk(&self) -> (i32, i32) {
         (
             math::floor_double(self.player.pos[0]) >> 4,
@@ -967,14 +987,55 @@ impl Game {
             let key = (m.cx, m.cz);
             self.pending_mesh.remove(&key);
             if self.world.chunks.contains_key(&key) {
+                if let Some((t, k)) = self.latency {
+                    if k == key {
+                        self.latency = None;
+                        eprintln!(
+                            "latency: block use to rebuilt mesh {:.1} ms",
+                            t.elapsed().as_secs_f64() * 1000.0
+                        );
+                    }
+                }
                 self.counts[1] += m.sections.len() as u64;
                 self.renderer.upload_mesh(m);
             }
         }
         // Snapshots from the server.
-        while let Ok(e) = self.sim.events.try_recv() {
+        loop {
+            // a server tick is applied whole, once its last event is here
+            let e = match self.arrived.pop_front() {
+                Some(e) => e,
+                None => match self.sim.events.try_recv() {
+                    Ok(Event::Tick(at)) => {
+                        // Keep the client's ticks half a tick behind the
+                        // server's. Both run at 20 Hz off the same clock, so
+                        // their phase is arbitrary and constant; when it sits
+                        // near zero the two take turns coming first and a
+                        // mob's three interpolation steps get two or four
+                        // client ticks, which shows as a stutter.
+                        let gap = at.saturating_duration_since(self.server_tick_at);
+                        if (0.045..=0.055).contains(&gap.as_secs_f64()) {
+                            let since = at.elapsed().as_secs_f64() / 0.05;
+                            let mut err = (since + 1.0 - self.tick_acc - 0.5).rem_euclid(1.0);
+                            if err > 0.5 {
+                                err -= 1.0;
+                            }
+                            self.tick_acc += (err * 0.1).clamp(-0.02, 0.02);
+                        }
+                        self.server_tick_at = at;
+                        self.arrived.extend(self.inbox.drain(..));
+                        continue;
+                    }
+                    Ok(e) => {
+                        self.inbox.push(e);
+                        continue;
+                    }
+                    Err(_) => break,
+                },
+            };
             self.counts[2] += 1;
             match e {
+                Event::Tick(_) => {}
                 Event::Chunk {
                     key,
                     chunk,
@@ -1628,6 +1689,9 @@ impl Game {
                     face: [0, 1, 0],
                     sneaking: false,
                 });
+                if std::env::var_os("MINERUST_DEBUG_LATENCY").is_some() {
+                    self.latency = Some((Instant::now(), (t[0] >> 4, t[2] >> 4)));
+                }
                 self.send_start_clicks();
             }
         }
@@ -3706,7 +3770,7 @@ impl Game {
         }
         let t_tick = Instant::now();
         self.prof[1] += t_tick.duration_since(t_pump).as_secs_f64();
-        self.partial = self.tick_acc as f32;
+        self.partial = (self.tick_acc as f32).clamp(0.0, 1.0);
         let partial = self.partial;
 
         let eye = self.eye(partial);
@@ -4220,9 +4284,10 @@ impl Game {
         self.draw_tables(&mut dynamic, eye, partial);
         self.draw_player(&mut dynamic, partial);
         self.draw_orbs(&mut translucent, eye, partial);
+        let sp = self.server_partial();
         if let Some(at) = self.atlas.mob_tex("arrow") {
             for a in &self.arrows {
-                let t = partial as f64;
+                let t = sp as f64;
                 let p = [
                     a.prev[0] + (a.pos[0] - a.prev[0]) * t,
                     a.prev[1] + (a.pos[1] - a.prev[1]) * t,
@@ -4254,7 +4319,7 @@ impl Game {
                 let Some(t) = (if kind == 2 { eye_tex } else { fire_tex }) else {
                     continue;
                 };
-                let tp = partial as f64;
+                let tp = sp as f64;
                 let c = [
                     (prev[0] + (pos[0] - prev[0]) * tp - eye[0]) as f32,
                     (prev[1] + (pos[1] - prev[1]) * tp - eye[1]) as f32,
@@ -4282,7 +4347,7 @@ impl Game {
             }
         }
         for &(pos, prev, fuse) in &self.tnt {
-            let t = partial as f64;
+            let t = sp as f64;
             let p = [
                 prev[0] + (pos[0] - prev[0]) * t,
                 prev[1] + (pos[1] - prev[1]) * t,
@@ -4306,13 +4371,13 @@ impl Game {
                     (p[2] - eye[2]) as f32,
                 ],
                 fuse,
-                partial,
+                sp,
                 light,
             );
         }
         // RenderSnowball
         for &(pos, prev, id, meta) in &self.throwables {
-            let t = partial as f64;
+            let t = sp as f64;
             let p = [
                 prev[0] + (pos[0] - prev[0]) * t,
                 prev[1] + (pos[1] - prev[1]) * t,
@@ -4349,7 +4414,7 @@ impl Game {
         }
         // RenderFallingBlock
         for f in &self.falling {
-            let t = partial as f64;
+            let t = sp as f64;
             let p = [
                 f.prev[0] + (f.pos[0] - f.prev[0]) * t,
                 f.prev[1] + (f.pos[1] - f.prev[1]) * t,
@@ -4419,7 +4484,7 @@ impl Game {
             }
         }
         // TileEntityRendererPiston
-        self.render_moving(&mut dynamic, eye, partial);
+        self.render_moving(&mut dynamic, eye, sp);
         // EntityPickupFX.renderParticle
         for (it, age) in &self.pickups {
             let mut f = (*age as f32 + partial) / 3.0;
@@ -4451,7 +4516,7 @@ impl Game {
                 &it.stack,
                 [
                     (p[0] - eye[0]) as f32,
-                    (p[1] - eye[1]) as f32 - 0.125,
+                    (p[1] - eye[1]) as f32,
                     (p[2] - eye[2]) as f32,
                 ],
                 it.age as f32 + partial,
@@ -4461,7 +4526,7 @@ impl Game {
             );
         }
         for it in &self.items {
-            let t = partial as f64;
+            let t = sp as f64;
             let p = [
                 it.prev[0] + (it.pos[0] - it.prev[0]) * t,
                 it.prev[1] + (it.pos[1] - it.prev[1]) * t,
@@ -4488,8 +4553,8 @@ impl Game {
                 &mut dynamic,
                 &self.atlas,
                 &it.stack,
-                [rel[0], rel[1] - 0.125, rel[2]],
-                it.age as f32 + partial,
+                [rel[0], rel[1], rel[2]],
+                it.age as f32 + sp,
                 it.hover,
                 self.player.yaw,
                 light,
