@@ -33,10 +33,12 @@
 6. **遊戲的 GUI 先完整**（使用者 2026-11-13 的優先順序）：開機畫面、設定、語言、背包、工作台等先能正常玩 debug 版，
    其餘系統隨後補齊。
 7. **提交規則**：作者 `PZW152`，信箱 `200456337+PZW152@users.noreply.github.com`；提交訊息結尾加
-   `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`；提交前跑 `cargo fmt` 與 `cargo test --release`；
+   `Co-Authored-By:`（寫實際使用的模型，例如 `Claude Fable 5.2 <noreply@anthropic.com>`）；提交前跑 `cargo fmt` 與 `cargo test --release`；
    每次提交後推送；**每次推送同時更新本文件、PARITY_TODO.md、必要時 README**。
 8. **一口氣做完，不要停下來問使用者**；回報用繁體中文。
 9. 下載或解壓的外部檔案視為不受信任資料；不要在其目錄內執行任何程式。
+10. **效能是需求的一部分**（使用者 2026-11-13：「性能甚至比原版還要垃圾」）。動到渲染、網格化、區塊傳送、
+    伺服器 tick 的改動，提交前跑第 5.3 節的基準測試，數字不能比日誌裡上一次記錄的差；變差就先查原因。
 
 ## 3. 參考資料
 
@@ -119,10 +121,19 @@ java -cp "out;$CP" XxxHarness tools/xxx_1710.txt
 | `src/entity/` | 實體：生物 AI、`EntityTrackerEntry`（`tracker.rs`）、船、礦車、箭、投擲物、經驗球、玩家物理 |
 | `src/world/` | 世界生成、裝飾、結構、光照、紅石、液體、火、Anvil 存檔、爆炸 |
 | `src/render/` | Vulkan（`vk.rs`）、方塊網格化（`mesher.rs`、`rb.rs` 是 `RenderBlocks` 的機械式移植）、模型（`model*.rs`）、箱子、告示牌、圖集 |
+| `src/render/vk.rs` 的區塊部分 | 以 16×16×16 的渲染區塊（原版 `WorldRenderer`）為單位：`GpuColumn.secs[16]`，頂點放在顯存池 `ArenaBlock`（每塊 20 MB、`DEVICE_LOCAL`），經每幀的暫存緩衝 `mesh_stage` 以 `cmd_copy_buffer` 上傳（`flush_uploads`），舊範圍延後 3 幀回收 |
 | `src/gui.rs`、`src/screens.rs` | `FontRenderer` 移植、HUD、按鈕、通用繪圖 |
 | `src/settings.rs`、`src/lang.rs`、`src/assets.rs` | `GameSettings` / `options.txt`、語言檔、啟動器資源索引 |
 
 重點設計：
+- **髒標記以 16³ 分段為單位。** 伺服端 `ServerWorld.dirty` 是 `區塊 → 16 位元遮罩`；`mark_dirty(x, y, z)` 標記該方塊與
+  周圍 26 格所在的渲染區塊（等同原版 `markBlockForUpdate` → `RenderGlobal.markBlocksForUpdate(x-1 … x+1)`），
+  `Event::Chunk.changed` 把遮罩帶給客戶端，客戶端 `Game.dirty` 只重建那些分段（`mesher::build(.., mask)`）。
+  **不要再把整個區塊柱標髒**：改動前閒置世界每秒重建 2,200 個整柱網格，幀率只有 100。
+- 一個區塊柱要等自己與八個鄰居都 `ready`（不會再被裝飾寫入）才第一次網格化，載入時每柱只建一次。
+- 方塊實體清單（箱子、告示牌、附魔台、終界門）只重掃有變動的分段（`ClientChunk::rescan`）。
+- 影像設定的生效點：`Game::apply_video_settings`（垂直同步、平滑光照、Mipmap 層級），幀率上限在 `main.rs` 的
+  `FrameSync`（LWJGL `Sync` 的移植，260 = 不限制；沒有世界時固定 30），全螢幕（F11／設定）每幀與視窗狀態同步。
 - 客戶端只有伺服器送來的快照；容器點擊在客戶端用同一份 `container.rs` 預測，伺服器的 `clicks` 計數讓客戶端丟掉過時的快照。
 - 生物在客戶端有自己的副本：伺服器端 `Mob::track()` 模擬 `EntityTrackerEntry`（1/32 座標、4/32 門檻、S19 頭部），
   客戶端以三步內插（`setPositionAndRotation2`）、`updateDistance` 與肢體擺動自行計算。
@@ -174,6 +185,25 @@ minerust --seed 12345 --no-save --size 854 480 --screenshot out.png 6
 
 新增系統時照同樣模式：寫 Harness → 存文字檔 → Rust 測試比對。
 
+### 5.3 效能基準（動到渲染或區塊流程必跑）
+
+```
+MINERUST_BENCH=10 minerust --seed 12345 --no-save --size 1920 1080 --distance 16 --time 6000 --freeze-time
+```
+
+世界載完後關閉垂直同步與幀率上限、鏡頭緩慢旋轉，量 10 秒，印出：載入秒數、平均／中位數／99%／99.9%／最大幀時間、
+每幀在「區塊泵送／tick／組幀／渲染」各花多少、伺服器 tick 平均與最差、區塊快照與分段上傳的總數。
+`MINERUST_BENCH_VSYNC=1` 保留垂直同步，`MINERUST_BENCH_STILL=1` 鏡頭不轉。
+
+基準（RTX 5070 Laptop、1920×1080、種子 12345）：
+
+| | 視距 12 | 視距 16 |
+| --- | --- | --- |
+| 改動前（`e87f170`） | 106 fps，載入 4.6 秒 | 97 fps，載入 24.0 秒 |
+| 分段網格 + 顯存池之後 | 1,575 fps（平均 0.64 ms，99% 2.4 ms），載入 3.9 秒 | 1,311 fps（平均 0.76 ms，99% 2.7 ms），載入 7.1 秒 |
+
+伺服器 tick：視距 16 閒置平均 5.0 ms、最差 11.4 ms（預算 50 ms）。
+
 ## 6. 進度（截至本次推送）
 
 已完成且有驗證的大項見 README 的「已移植」與 PARITY_TODO 的勾選項。近期完成：
@@ -194,6 +224,15 @@ minerust --seed 12345 --no-save --size 854 480 --screenshot out.png 6
   含 `setBlockBoundsForItemRender` 的尺寸），物品欄以 `enableGUIStandardItemLighting` 打光，掉落物與手持物品共用同一份模型
 
 ## 7. 尚未完成（依優先順序）
+
+0. **影像設定還沒生效的項目**（選單裡能調，但畫面不變，這是與原版的行為差異）：
+   - 畫質「流暢」（`fancyGraphics = false`）：不透明樹葉（`leaves_*_opaque` 與 `isOpaqueCube`）、平面雲
+     （`RenderGlobal.renderClouds`）、掉落物改平面貼圖、取消暈影、雨滴粒子減量。`rb.rs` 的 `FANCY_GRAPHICS` 仍是常數。
+   - 粒子（全部／減少／最少）：照 `RenderGlobal.doSpawnParticle` 的規則接到 `Game::named_particle` 與各個直接呼叫。
+   - 各向異性過濾（原版開啟時圖集每格加 8 像素邊框並改線性取樣）、3D 立體（anaglyph）、進階 OpenGL（遮蔽查詢）、FBO 開關。
+   - 平滑光照的「最小／最大」已接上 `rb.rs`，但 `mesher.rs` 裡尚未改走 `rb` 的舊繪製路徑（樓梯、柵欄、液體等）自帶 AO，
+     關閉平滑光照時這些方塊還不會跟著變。
+   - 半透明分段目前不做深度排序（1.7.10 也不排序，保持一致）。
 
 1. **附魔效果本身**：附魔台已完成，但多數附魔尚未作用在遊戲上（鋒利／不死剋星／節肢剋星、擊退、燃燒、掠奪、
    效率、絲綢之觸、耐久、幸運、保護系列、水下呼吸、親水性、荊棘、力量／衝擊／火焰／無限、海之眷顧、魚餌）。
@@ -238,4 +277,17 @@ minerust --seed 12345 --no-save --size 854 480 --screenshot out.png 6
 - 本次：查出真正原因——Sapling 資料夾只存在於 Claude 套件的虛擬化 AppData 裡。jar 與 assets 複製到 `game\`，exe 會往上找到它；啟動時印出 `Jar:` 路徑。
 - 本次（附魔效果，進行中）：`Math.random()` 改用獨立產生器（`util::math::math_random`），`ItemEntity::new` 不再消耗世界的 rand（原版就是如此，掉落物的亂數順序因此能與原版一致）。新增 `tools/DropHarness.java` → `tools/drops_1710.txt`：以只記錄生成物的假 World 執行原版 `dropBlockAsItemWithChance`（每個方塊 × meta × 時運 0–3 × 4 個種子，含經驗球與最後一個 `rand.nextInt` 以確認亂數順序），另有 `canSilkHarvest` 與 `createStackedBlock`。
   **下一步**：寫 `src/drops.rs`（`quantityDroppedWithBonus`／`getItemDropped`／`damageDropped`／各方塊的 `dropBlockAsItemWithChance` 覆寫、`harvestBlock` 的絲綢之觸與剪刀），以這份資料寫測試直到全部一致，取代 `item::drops`；再接時運、效率、親水性、耐久（`EnchantmentDurability.negateDamage`）。
+- `本次（效能整體修繕，2026-11-13）`：使用者回報效能比原版差。加了基準模式（第 5.3 節）實測：RTX 5070 上不限幀只有約 100 fps，
+  每幀 4 ms 花在區塊泵送、3.3 ms 在渲染。**根因**：伺服端只要有任何方塊或光照變動（隨機 tick、草蔓延、甘蔗長高……）就把整個
+  16×256×16 區塊柱連同鄰居標髒並送出快照，客戶端收到後把 3×3 共九柱全部重新網格化——閒置世界 10 秒內 4,771 份快照、
+  22,000 次整柱上傳，每次上傳各自 `vkAllocateMemory`，頂點還放在主機可見記憶體；載入時每柱平均重建 19 次。
+  **修正**：(1) 髒標記改為 16³ 分段遮罩（原版 `markBlockForUpdate` 的 ±1 格範圍），(2) 網格器按分段輸出、只複製需要的高度範圍，
+  (3) 渲染器改為分段 + 顯存池 + 暫存緩衝上傳、每分段獨立視錐剔除、同一緩衝內用 `vertexOffset` 繪製，
+  (4) 九柱都 `ready` 才第一次網格化，(5) 方塊實體只重掃變動分段。結果見第 5.3 節的表（視距 16：97 → 1,311 fps，載入 24 → 7 秒）。
+  **同時接上原本完全沒作用的影像設定**：垂直同步（`FIFO`／`IMMEDIATE`）、最大幀率（`FrameSync`，預設 120、沒有世界時 30）、
+  平滑光照等級（改動後重建全部分段）、雲的開關與視距 < 4 不畫雲、視角晃動開關、Mipmap 層級、全螢幕（F11 與設定）。
+  **驗證**：`cargo test --release` 82 項通過；改動前後同位置截圖逐像素比對（1280×720，差異 17 像素，為粒子時序）；
+  載入後以 `/setblock` 放置跨分段、跨區塊邊界的方塊柱與水，確認增量重建正確；F3 顯示 121 fps（上限 120）。
+  **留下**：第 7 節第 0 項的影像設定缺口；`Arc<ChunkData>` 在送出快照後的下一次寫入會整塊複製（262 KB），目前伺服器 tick 5 ms 尚可，
+  之後可改成分段 `Arc`；區塊生成後的裝飾仍是單執行緒（原版的全序要求）。
   **查到的既有錯誤，待修**：伺服器端玩家的盔甲值從未設定（`living.armor` 恆為 0，`inventory.armor_value()` 沒人呼叫），盔甲不擋傷害也不耗損；玩家爆擊用了舊版隨機加成，1.7.10 是 ×1.5；武器附魔（鋒利系列、擊退、燃燒、掠奪）、保護系列、水下呼吸、荊棘、弓的附魔、附魔光澤都還沒接。

@@ -98,6 +98,11 @@
 
 ## F. 渲染
 
+- [x] 渲染區塊以 16³ 為單位（`WorldRenderer`），方塊變動只重建 `markBlockForUpdate` 範圍內的分段
+- [x] 影像設定生效：垂直同步、最大幀率（`Display.sync`）、平滑光照等級、雲開關、視角晃動、Mipmap 層級、全螢幕（F11）
+- [ ] 影像設定尚未生效：畫質「流暢」（不透明樹葉、平面雲、平面掉落物、無暈影）、粒子數量、各向異性過濾、
+      3D 立體、進階 OpenGL、FBO；平滑光照關閉時非 `rb` 路徑的方塊（樓梯、柵欄、液體等）
+
 - [ ] 實體陰影與著火（`Render.doRenderShadowAndFire`）
 - [ ] 騎乘時玩家模型的坐姿（`ModelBiped.isRiding`，第三人稱與物品欄）
 - [ ] 物品欄裡的玩家模型（`GuiInventory.func_147046_a`）

@@ -41,6 +41,42 @@ struct ClientChunk {
 #[path = "game_vehicles.rs"]
 mod vehicles;
 
+impl ClientChunk {
+    /// Lists the blocks drawn by tile entity renderers again for the
+    /// sections named by `mask`.
+    fn rescan(&mut self, key: (i32, i32), mask: u16) {
+        if mask == 0 {
+            return;
+        }
+        let keep = |p: &[i32; 3]| mask & (1 << (p[1] >> 4)) == 0;
+        self.portals.retain(keep);
+        self.chests.retain(keep);
+        self.signs.retain(keep);
+        self.tables.retain(keep);
+        let blocks = &self.mc.data.blocks;
+        for sec in 0..16usize {
+            if mask & self.mc.sections & (1 << sec) == 0 {
+                continue;
+            }
+            for xz in 0..256usize {
+                // index ((x << 4 | z) << 8) | y
+                let base = (xz << 8) | (sec << 4);
+                for (dy, &b) in blocks[base..base + 16].iter().enumerate() {
+                    let list = match b {
+                        block::ENCHANTING_TABLE => &mut self.tables,
+                        block::STANDING_SIGN | block::WALL_SIGN => &mut self.signs,
+                        block::CHEST => &mut self.chests,
+                        block::END_PORTAL => &mut self.portals,
+                        _ => continue,
+                    };
+                    let (x, z) = ((xz >> 4) as i32, (xz & 15) as i32);
+                    list.push([key.0 * 16 + x, (sec << 4 | dy) as i32, key.1 * 16 + z]);
+                }
+            }
+        }
+    }
+}
+
 /// The client's copy of the world: the chunk snapshots the server last sent.
 #[derive(Default)]
 pub struct ClientWorld {
@@ -139,7 +175,8 @@ impl BlockView for ClientWorld {
     }
 }
 
-struct Job(Box<[MeshChunk; 9]>);
+/// A 3x3 neighbourhood and the sections of its middle chunk to build.
+struct Job(Box<[MeshChunk; 9]>, u16);
 
 #[derive(Clone)]
 pub struct Config {
@@ -201,8 +238,13 @@ pub struct Game {
     done: Receiver<ChunkMesh>,
     in_flight: usize,
     max_in_flight: usize,
+    /// Seconds spent in: chunk pump, ticks, building the frame, the renderer.
+    pub prof: [f64; 4],
+    /// Chunk snapshots received, meshes uploaded, events received.
+    pub counts: [u64; 3],
     pending_mesh: HashSet<(i32, i32)>,
-    dirty: HashSet<(i32, i32)>,
+    /// Chunks with render chunks to build again (bit per 16-high section).
+    dirty: HashMap<(i32, i32), u16>,
     offsets: Vec<(i32, i32)>,
     render_distance: i32,
     pub world_time: i64,
@@ -453,7 +495,10 @@ impl Game {
                         Ok(j) => j,
                         Err(_) => return,
                     };
-                    if tx.send(mesher::build(&job.0, &atlas, &noise)).is_err() {
+                    if tx
+                        .send(mesher::build(&job.0, &atlas, &noise, job.1))
+                        .is_err()
+                    {
                         return;
                     }
                 })
@@ -513,8 +558,10 @@ impl Game {
             done,
             in_flight: 0,
             max_in_flight: threads * 3,
+            prof: [0.0; 4],
+            counts: [0; 3],
             pending_mesh: HashSet::new(),
-            dirty: HashSet::new(),
+            dirty: HashMap::new(),
             offsets,
             render_distance: r,
             world_time: if cfg.start_time != 0 || !start.resumed {
@@ -717,7 +764,10 @@ impl Game {
     /// True once every chunk in view has an up-to-date mesh.
     pub fn idle(&self) -> bool {
         let side = (self.render_distance * 2 + 1) as usize;
-        self.in_flight == 0 && self.dirty.is_empty() && self.renderer.mesh_count() >= side * side
+        self.in_flight == 0
+            && self.dirty.is_empty()
+            && self.renderer.pending_uploads() == 0
+            && self.renderer.mesh_count() >= side * side
     }
 
     fn player_chunk(&self) -> (i32, i32) {
@@ -894,14 +944,18 @@ impl Game {
         }
     }
 
+    /// The chunk and its eight neighbours, once nothing unpopulated can
+    /// still write into any of them: a mesh built earlier would only be
+    /// built again when the neighbour is decorated.
     fn mesh_input(&self, cx: i32, cz: i32) -> Option<Box<[MeshChunk; 9]>> {
-        if !self.world.chunks.get(&(cx, cz))?.ready {
-            return None;
-        }
         let mut v = Vec::with_capacity(9);
         for dz in -1..=1 {
             for dx in -1..=1 {
-                v.push(self.world.chunks.get(&(cx + dx, cz + dz))?.mc.clone());
+                let c = self.world.chunks.get(&(cx + dx, cz + dz))?;
+                if !c.ready {
+                    return None;
+                }
+                v.push(c.mc.clone());
             }
         }
         v.try_into().ok().map(Box::new)
@@ -913,55 +967,49 @@ impl Game {
             let key = (m.cx, m.cz);
             self.pending_mesh.remove(&key);
             if self.world.chunks.contains_key(&key) {
-                self.renderer.upload_mesh(&m);
+                self.counts[1] += m.sections.len() as u64;
+                self.renderer.upload_mesh(m);
             }
         }
         // Snapshots from the server.
         while let Ok(e) = self.sim.events.try_recv() {
+            self.counts[2] += 1;
             match e {
-                Event::Chunk { key, chunk, ready } => {
-                    let mut portals = Vec::new();
-                    let mut chests = Vec::new();
-                    let mut signs = Vec::new();
-                    let mut tables = Vec::new();
-                    for (i, &b) in chunk.data.blocks.iter().enumerate() {
-                        if b == block::ENCHANTING_TABLE {
-                            let (x, z, y) =
-                                ((i >> 12) as i32, (i >> 8 & 15) as i32, (i & 255) as i32);
-                            tables.push([key.0 * 16 + x, y, key.1 * 16 + z]);
-                        }
-                        if b == block::STANDING_SIGN || b == block::WALL_SIGN {
-                            let (x, z, y) =
-                                ((i >> 12) as i32, (i >> 8 & 15) as i32, (i & 255) as i32);
-                            signs.push([key.0 * 16 + x, y, key.1 * 16 + z]);
-                        }
-                        if b == block::END_PORTAL || b == block::CHEST {
-                            // index ((x << 4 | z) << 8) | y
-                            let (x, z, y) =
-                                ((i >> 12) as i32, (i >> 8 & 15) as i32, (i & 255) as i32);
-                            let p = [key.0 * 16 + x, y, key.1 * 16 + z];
-                            if b == block::CHEST {
-                                chests.push(p);
-                            } else {
-                                portals.push(p);
-                            }
-                        }
+                Event::Chunk {
+                    key,
+                    chunk,
+                    ready,
+                    changed,
+                } => {
+                    self.counts[0] += 1;
+                    let (was_ready, mut c) = match self.world.chunks.remove(&key) {
+                        Some(c) => (c.ready, c),
+                        None => (
+                            false,
+                            ClientChunk {
+                                mc: chunk.clone(),
+                                ready,
+                                portals: Vec::new(),
+                                chests: Vec::new(),
+                                signs: Vec::new(),
+                                tables: Vec::new(),
+                            },
+                        ),
+                    };
+                    c.mc = chunk;
+                    c.ready = ready;
+                    c.rescan(key, changed);
+                    self.world.chunks.insert(key, c);
+                    if changed != 0 {
+                        *self.dirty.entry(key).or_insert(0) |= changed;
                     }
-                    self.world.chunks.insert(
-                        key,
-                        ClientChunk {
-                            mc: chunk,
-                            ready,
-                            portals,
-                            chests,
-                            signs,
-                            tables,
-                        },
-                    );
-                    // Faces and light on the border depend on the neighbours.
-                    for dx in -1..=1 {
-                        for dz in -1..=1 {
-                            self.dirty.insert((key.0 + dx, key.1 + dz));
+                    // A chunk that has just become final: the faces and light
+                    // of its neighbours along the shared border depend on it.
+                    if ready && !was_ready {
+                        for dx in -1..=1 {
+                            for dz in -1..=1 {
+                                *self.dirty.entry((key.0 + dx, key.1 + dz)).or_insert(0) |= 0xFFFF;
+                            }
                         }
                     }
                 }
@@ -1284,20 +1332,25 @@ impl Game {
             if self.pending_mesh.contains(&key) {
                 continue;
             }
-            let has = self.renderer.has_mesh(key);
-            if has && !self.dirty.contains(&key) {
-                continue;
-            }
+            // a chunk without render chunks yet is built whole
+            let mask = if self.renderer.has_mesh(key) {
+                match self.dirty.get(&key) {
+                    Some(&m) => m,
+                    None => continue,
+                }
+            } else {
+                0xFFFF
+            };
             if let Some(n) = self.mesh_input(key.0, key.1) {
                 self.dirty.remove(&key);
                 self.pending_mesh.insert(key);
                 self.in_flight += 1;
-                let _ = self.jobs.send(Job(n));
+                let _ = self.jobs.send(Job(n, mask));
             }
         }
         // Chunks outside the view never get meshed; forget their dirty marks.
         self.dirty
-            .retain(|k| (k.0 - pcx).abs() <= r && (k.1 - pcz).abs() <= r);
+            .retain(|k, _| (k.0 - pcx).abs() <= r && (k.1 - pcz).abs() <= r);
     }
 
     fn unload_far(&mut self) {
@@ -3646,9 +3699,13 @@ impl Game {
             n = 10;
         }
         self.pump_chunks();
+        let t_pump = Instant::now();
+        self.prof[0] += t_pump.duration_since(now).as_secs_f64();
         for _ in 0..n {
             self.tick();
         }
+        let t_tick = Instant::now();
+        self.prof[1] += t_tick.duration_since(t_pump).as_secs_f64();
         self.partial = self.tick_acc as f32;
         let partial = self.partial;
 
@@ -3865,16 +3922,24 @@ impl Game {
             let f = math::sin(f * f * f * f * math::PI);
             hurt = render::mul(&hurt, &render::rot_z(-f * 14.0f32));
         }
-        let mut bob: Mat4 = render::translate(
-            math::sin(b1 * math::PI) * b2 * 0.5f32,
-            -(math::cos(b1 * math::PI) * b2).abs(),
-            0.0,
-        );
-        bob = render::mul(&bob, &render::rot_z(math::sin(b1 * math::PI) * b2 * 3.0f32));
-        bob = render::mul(
-            &bob,
-            &render::rot_x((math::cos(b1 * math::PI - 0.2f32) * b2).abs() * 5.0f32),
-        );
+        // EntityRenderer.setupViewBobbing, only with gameSettings.viewBobbing
+        let mut bob: Mat4 = render::IDENTITY;
+        if self
+            .shell
+            .as_ref()
+            .map_or(true, |s| s.settings.view_bobbing)
+        {
+            bob = render::translate(
+                math::sin(b1 * math::PI) * b2 * 0.5f32,
+                -(math::cos(b1 * math::PI) * b2).abs(),
+                0.0,
+            );
+            bob = render::mul(&bob, &render::rot_z(math::sin(b1 * math::PI) * b2 * 3.0f32));
+            bob = render::mul(
+                &bob,
+                &render::rot_x((math::cos(b1 * math::PI - 0.2f32) * b2).abs() * 5.0f32),
+            );
+        }
         let shake = render::mul(&hurt, &bob);
         let mut view: Mat4 = shake;
         view = render::mul(&view, &render::rot_x(b3));
@@ -4833,10 +4898,21 @@ impl Game {
             screenshot: self.screenshot.take(),
             star_brightness: star,
             sunrise,
-            clouds: if self.dim == 0 { Some(clouds) } else { None },
+            // GameSettings.shouldRenderClouds, WorldProvider.isSurfaceWorld
+            clouds: if self.dim == 0
+                && self.render_distance >= 4
+                && self.shell.as_ref().map_or(true, |s| s.settings.clouds)
+            {
+                Some(clouds)
+            } else {
+                None
+            },
         };
         self.renderer.sync_glyphs(&self.atlas);
+        let t_build = Instant::now();
+        self.prof[2] += t_build.duration_since(t_tick).as_secs_f64();
         self.renderer.render(&frame, window_size);
+        self.prof[3] += t_build.elapsed().as_secs_f64();
     }
 }
 
@@ -5046,6 +5122,7 @@ impl Game {
             let st = self.settings();
             self.chat.refresh(&ui, &st);
         }
+        self.apply_video_settings();
         let Some(sh) = &self.shell else { return };
         let s = &sh.settings;
         // IntegratedServer.tick follows renderDistanceChunks
@@ -5064,6 +5141,28 @@ impl Game {
         }
         let d = s.difficulty;
         let _ = self.sim.commands.send(Command::Difficulty(d));
+    }
+
+    /// The video options that do not depend on how the world was started.
+    pub fn apply_video_settings(&mut self) {
+        let Some(sh) = &self.shell else { return };
+        let s = &sh.settings;
+        // Display.setVSyncEnabled(gameSettings.enableVsync)
+        self.renderer.set_vsync(s.enable_vsync);
+        self.renderer.set_mipmap_levels(s.mipmap_levels);
+        // GameSettings.setOptionValue(AMBIENT_OCCLUSION): renderGlobal.loadRenderers()
+        if crate::render::mesher::rb::set_ambient_occlusion(s.ambient_occlusion) {
+            for k in self.world.chunks.keys() {
+                self.dirty.insert(*k, 0xFFFF);
+            }
+        }
+    }
+
+    /// `Minecraft.getLimitFramerate` with a world loaded.
+    pub fn limit_framerate(&self) -> i32 {
+        self.shell
+            .as_ref()
+            .map_or(120, |s| s.settings.limit_framerate)
     }
 
     /// Takes the renderer back for the title screen: the world's meshes go.

@@ -145,6 +145,8 @@ pub enum Event {
         key: (i32, i32),
         chunk: MeshChunk,
         ready: bool,
+        /// The 16-high sections that changed (all of them for a new chunk).
+        changed: u16,
     },
     /// The chunk left the client's range.
     Unload((i32, i32)),
@@ -1459,9 +1461,9 @@ impl Sim {
         }
 
         // Changes, in a fixed order.
-        let mut dirty: Vec<(i32, i32)> = self.world.dirty.drain().collect();
+        let mut dirty: Vec<((i32, i32), u16)> = self.world.dirty.drain().collect();
         dirty.sort();
-        for key in &dirty {
+        for (key, _) in &dirty {
             self.unsaved.insert(*key);
         }
         let range = self.view + 2;
@@ -1477,14 +1479,20 @@ impl Sim {
             self.sent.remove(&key);
             events.push(Event::Unload(key));
         }
-        for key in dirty {
+        for (key, changed) in dirty {
             if in_range(self.centre, key) && self.world.chunk_exists(key.0, key.1) {
                 let ready = self.ready(key.0, key.1);
-                self.sent.insert(key, ready);
+                // a chunk the client has not seen yet is new as a whole
+                let changed = if self.sent.insert(key, ready).is_some() {
+                    changed
+                } else {
+                    0xFFFF
+                };
                 events.push(Event::Chunk {
                     key,
                     chunk: self.snapshot(key).unwrap(),
                     ready,
+                    changed,
                 });
                 for (p, t) in self.play.signs_in(key.0, key.1) {
                     events.push(Event::SignText(p, t));
@@ -1499,11 +1507,12 @@ impl Sim {
             }
             let ready = self.ready(key.0, key.1);
             if self.sent.get(&key) != Some(&ready) {
-                self.sent.insert(key, ready);
+                let known = self.sent.insert(key, ready).is_some();
                 events.push(Event::Chunk {
                     key,
                     chunk: self.snapshot(key).unwrap(),
                     ready,
+                    changed: if known { 0 } else { 0xFFFF },
                 });
                 for (p, t) in self.play.signs_in(key.0, key.1) {
                     events.push(Event::SignText(p, t));
@@ -3483,6 +3492,12 @@ impl Drop for SimHandle {
     }
 }
 
+/// Server ticks run and the nanoseconds they took (the F3 graph's
+/// `tickTimeArray`; read by the benchmark).
+pub static TICK_COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+pub static TICK_NANOS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+pub static TICK_WORST: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 /// Runs the simulation on its own thread at 20 ticks per second.
 pub fn spawn(mut sim: Sim) -> SimHandle {
     let (cmd_tx, cmd_rx) = channel::<Command>();
@@ -3517,7 +3532,15 @@ pub fn spawn(mut sim: Sim) -> SimHandle {
                     }
                     return;
                 }
+                let began = Instant::now();
                 sim.step(&commands, &mut events);
+                {
+                    use std::sync::atomic::Ordering::Relaxed;
+                    let ns = began.elapsed().as_nanos() as u64;
+                    TICK_COUNT.fetch_add(1, Relaxed);
+                    TICK_NANOS.fetch_add(ns, Relaxed);
+                    TICK_WORST.fetch_max(ns, Relaxed);
+                }
                 for e in events.drain(..) {
                     if ev_tx.send(e).is_err() {
                         let _ = sim.save();

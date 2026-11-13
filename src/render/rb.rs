@@ -10,10 +10,23 @@ use crate::block::{self, Material};
 
 /// `RenderBlocks.fancyGrass`
 const FANCY_GRASS: bool = true;
+/// `GameSettings.ambientOcclusion` (default 2, "Maximum"), as the chunk
+/// builders see it; `set_ambient_occlusion` follows the options screen.
+static AMBIENT_OCCLUSION: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(2);
+
+/// `GameSettings.ambientOcclusion`: 0 off, 1 minimum, 2 maximum.
+pub fn ambient_occlusion() -> i32 {
+    AMBIENT_OCCLUSION.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Returns whether the value changed (the render chunks must be rebuilt,
+/// as `RenderGlobal.loadRenderers` does).
+pub fn set_ambient_occlusion(v: i32) -> bool {
+    AMBIENT_OCCLUSION.swap(v, std::sync::atomic::Ordering::Relaxed) != v
+}
+
 /// `GameSettings.fancyGraphics` (default on).
 pub const FANCY_GRAPHICS: bool = true;
-/// `GameSettings.ambientOcclusion` (default 2, "Maximum").
-pub const AMBIENT_OCCLUSION: i32 = 2;
 
 /// `IIcon` (a `TextureAtlasSprite`'s UV rectangle).
 #[derive(Clone, Copy, Debug)]
@@ -255,7 +268,7 @@ impl<'a, 'b> Rb<'a, 'b> {
         self.renderMaxY = y1;
         self.renderMinZ = z0;
         self.renderMaxZ = z1;
-        self.partialRenderBounds = AMBIENT_OCCLUSION >= 2
+        self.partialRenderBounds = ambient_occlusion() >= 2
             && (x0 > 0.0 || x1 < 1.0 || y0 > 0.0 || y1 < 1.0 || z0 > 0.0 || z1 < 1.0);
     }
 
@@ -568,7 +581,7 @@ impl<'a, 'b> Rb<'a, 'b> {
     /// `RenderBlocks.renderStandardBlock`
     pub fn render_standard(&mut self, x: i32, y: i32, z: i32) -> bool {
         let c = self.color_multiplier(x, y, z);
-        if AMBIENT_OCCLUSION == 0 || block::info(self.id).light_value != 0 {
+        if ambient_occlusion() == 0 || block::info(self.id).light_value != 0 {
             self.std_flat(x, y, z, c[0], c[1], c[2])
         } else if self.partialRenderBounds {
             self.std_ao_partial(x, y, z, c[0], c[1], c[2])

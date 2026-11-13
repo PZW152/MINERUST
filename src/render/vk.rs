@@ -2,7 +2,7 @@
 //! startup with naga, so the build needs no external shader compiler.
 
 use super::atlas::{Atlas, ATLAS_SIZE, MIP_LEVELS};
-use super::mesher::{ChunkMesh, Vertex};
+use super::mesher::{ChunkMesh, SectionMesh, Vertex};
 use super::Mat4;
 use ash::vk;
 use std::collections::HashMap;
@@ -401,12 +401,49 @@ pub struct CloudDraw {
     pub before_terrain: bool,
 }
 
-struct GpuMesh {
-    buffer: vk::Buffer,
-    memory: vk::DeviceMemory,
+/// The quads of one 16x16x16 render chunk inside a vertex arena block: the
+/// opaque pass first, then the translucent one.
+#[derive(Clone, Copy, Default)]
+struct GpuSection {
+    block: u32,
+    /// First vertex within the block.
+    first: u32,
     opaque_quads: u32,
     translucent_quads: u32,
-    max_y: f32,
+}
+
+impl GpuSection {
+    fn verts(&self) -> u32 {
+        (self.opaque_quads + self.translucent_quads) * 4
+    }
+}
+
+/// The render chunks of one chunk column.
+#[derive(Default)]
+struct GpuColumn {
+    secs: [GpuSection; 16],
+}
+
+/// A large device-local vertex buffer the render chunks are packed into, so
+/// that drawing the world binds a handful of buffers instead of one per chunk.
+struct ArenaBlock {
+    buffer: vk::Buffer,
+    memory: vk::DeviceMemory,
+    /// Free ranges `(first vertex, count)`, sorted by position.
+    free: Vec<(u32, u32)>,
+}
+
+/// Vertices per arena block (20 MB).
+const ARENA_VERTS: u32 = 1 << 20;
+/// Bytes of new chunk geometry copied to the GPU per frame.
+const MESH_STAGE_SIZE: u64 = 16 << 20;
+
+/// A render chunk that passed the frustum test this frame.
+#[derive(Clone, Copy)]
+struct Visible {
+    dist: f32,
+    origin: [f32; 3],
+    sec: GpuSection,
 }
 
 struct PerFrame {
@@ -435,6 +472,10 @@ struct PerFrame {
     world_buf: vk::Buffer,
     world_mem: vk::DeviceMemory,
     world_ptr: *mut u8,
+    /// Staging area for new chunk geometry on its way into the arena.
+    mesh_stage: vk::Buffer,
+    mesh_stage_mem: vk::DeviceMemory,
+    mesh_stage_ptr: *mut u8,
     set: vk::DescriptorSet,
 }
 
@@ -497,11 +538,21 @@ pub struct Renderer {
     sampler_linear: vk::Sampler,
     index_buf: (vk::Buffer, vk::DeviceMemory),
     index_quads: u32,
-    meshes: HashMap<(i32, i32), GpuMesh>,
+    meshes: HashMap<(i32, i32), GpuColumn>,
+    arena: Vec<ArenaBlock>,
+    /// Built render chunks waiting for room in the staging buffer.
+    uploads: std::collections::VecDeque<((i32, i32), SectionMesh)>,
+    /// Scratch list of the render chunks in view.
+    visible: Vec<Visible>,
     garbage: Vec<(u64, vk::Buffer, vk::DeviceMemory)>,
+    /// Arena ranges of replaced render chunks: frame, block, first, count.
+    garbage_ranges: Vec<(u64, u32, u32, u32)>,
     mem_props: vk::PhysicalDeviceMemoryProperties,
     wide_lines: bool,
     needs_recreate: bool,
+    /// `GameSettings.enableVsync` (`Display.setVSyncEnabled`).
+    vsync: bool,
+    mipmap_levels: i32,
     pub device_name: String,
     debug: Option<(ash::ext::debug_utils::Instance, vk::DebugUtilsMessengerEXT)>,
 }
@@ -1165,10 +1216,16 @@ impl Renderer {
                 index_buf: (vk::Buffer::null(), vk::DeviceMemory::null()),
                 index_quads: 0,
                 meshes: HashMap::new(),
+                arena: Vec::new(),
+                uploads: std::collections::VecDeque::new(),
+                visible: Vec::new(),
                 garbage: Vec::new(),
+                garbage_ranges: Vec::new(),
                 mem_props,
                 wide_lines,
                 needs_recreate: false,
+                vsync: true,
+                mipmap_levels: MIP_LEVELS as i32 - 1,
                 device_name,
                 debug,
             };
@@ -1231,6 +1288,17 @@ impl Renderer {
                 let world_ptr = r
                     .device
                     .map_memory(world_mem, 0, WORLD_BUF_SIZE, vk::MemoryMapFlags::empty())
+                    .unwrap() as *mut u8;
+                let (mesh_stage, mesh_stage_mem) =
+                    r.create_buffer(MESH_STAGE_SIZE, vk::BufferUsageFlags::TRANSFER_SRC, host);
+                let mesh_stage_ptr = r
+                    .device
+                    .map_memory(
+                        mesh_stage_mem,
+                        0,
+                        MESH_STAGE_SIZE,
+                        vk::MemoryMapFlags::empty(),
+                    )
                     .unwrap() as *mut u8;
                 let ui_info = [vk::DescriptorImageInfo {
                     sampler: vk::Sampler::null(),
@@ -1321,6 +1389,9 @@ impl Renderer {
                     world_buf,
                     world_mem,
                     world_ptr,
+                    mesh_stage,
+                    mesh_stage_mem,
+                    mesh_stage_ptr,
                     set: sets[i],
                 });
             }
@@ -1876,6 +1947,21 @@ impl Renderer {
                 count = count.min(caps.max_image_count);
             }
             let old = self.swapchain;
+            // Display.setVSyncEnabled: without it frames are shown as soon as
+            // they are finished (tearing allowed), as LWJGL does.
+            let modes = self
+                .surface_loader
+                .get_physical_device_surface_present_modes(self.pdev, self.surface)
+                .unwrap_or_default();
+            let present_mode = if self.vsync {
+                vk::PresentModeKHR::FIFO
+            } else if modes.contains(&vk::PresentModeKHR::IMMEDIATE) {
+                vk::PresentModeKHR::IMMEDIATE
+            } else if modes.contains(&vk::PresentModeKHR::MAILBOX) {
+                vk::PresentModeKHR::MAILBOX
+            } else {
+                vk::PresentModeKHR::FIFO
+            };
             let info = vk::SwapchainCreateInfoKHR::default()
                 .surface(self.surface)
                 .min_image_count(count)
@@ -1890,7 +1976,7 @@ impl Renderer {
                 .image_sharing_mode(vk::SharingMode::EXCLUSIVE)
                 .pre_transform(caps.current_transform)
                 .composite_alpha(vk::CompositeAlphaFlagsKHR::OPAQUE)
-                .present_mode(vk::PresentModeKHR::FIFO)
+                .present_mode(present_mode)
                 .clipped(true)
                 .old_swapchain(old);
             self.swapchain = self.swap_loader.create_swapchain(&info, None).unwrap();
@@ -1992,6 +2078,55 @@ impl Renderer {
         self.needs_recreate = true;
     }
 
+    /// `GameSettings.mipmapLevels` (0..4): `GL_TEXTURE_MAX_LEVEL` of the
+    /// block atlas; 0 samples the full-size texture only.
+    pub fn set_mipmap_levels(&mut self, levels: i32) {
+        let levels = levels.clamp(0, MIP_LEVELS as i32 - 1);
+        if levels == self.mipmap_levels {
+            return;
+        }
+        self.mipmap_levels = levels;
+        unsafe {
+            self.device.device_wait_idle().unwrap();
+            let sampler = self
+                .device
+                .create_sampler(
+                    &vk::SamplerCreateInfo::default()
+                        .mag_filter(vk::Filter::NEAREST)
+                        .min_filter(vk::Filter::NEAREST)
+                        .mipmap_mode(vk::SamplerMipmapMode::LINEAR)
+                        .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+                        .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+                        .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+                        .max_lod(levels as f32),
+                    None,
+                )
+                .unwrap();
+            let si = [vk::DescriptorImageInfo {
+                sampler,
+                image_view: vk::ImageView::null(),
+                image_layout: vk::ImageLayout::UNDEFINED,
+            }];
+            for f in &self.frames {
+                let w = [vk::WriteDescriptorSet::default()
+                    .dst_set(f.set)
+                    .dst_binding(2)
+                    .descriptor_type(vk::DescriptorType::SAMPLER)
+                    .image_info(&si)];
+                self.device.update_descriptor_sets(&w, &[]);
+            }
+            self.device.destroy_sampler(self.sampler, None);
+            self.sampler = sampler;
+        }
+    }
+
+    pub fn set_vsync(&mut self, on: bool) {
+        if self.vsync != on {
+            self.vsync = on;
+            self.needs_recreate = true;
+        }
+    }
+
     pub fn has_mesh(&self, key: (i32, i32)) -> bool {
         self.meshes.contains_key(&key)
     }
@@ -2000,58 +2135,167 @@ impl Renderer {
         self.meshes.len()
     }
 
+    /// Render chunks built but not yet copied to the GPU.
+    pub fn pending_uploads(&self) -> usize {
+        self.uploads.len()
+    }
+
     pub fn remove_mesh(&mut self, key: (i32, i32)) {
-        if let Some(m) = self.meshes.remove(&key) {
-            if m.buffer != vk::Buffer::null() {
-                self.garbage.push((self.frame_no, m.buffer, m.memory));
+        if let Some(col) = self.meshes.remove(&key) {
+            for s in col.secs {
+                if s.verts() > 0 {
+                    self.garbage_ranges
+                        .push((self.frame_no, s.block, s.first, s.verts()));
+                }
             }
+            self.uploads.retain(|u| u.0 != key);
         }
     }
 
-    pub fn upload_mesh(&mut self, mesh: &ChunkMesh) {
-        self.remove_mesh((mesh.cx, mesh.cz));
-        let oq = (mesh.opaque.len() / 4) as u32;
-        let tq = (mesh.translucent.len() / 4) as u32;
-        let mut gm = GpuMesh {
-            buffer: vk::Buffer::null(),
-            memory: vk::DeviceMemory::null(),
-            opaque_quads: oq,
-            translucent_quads: tq,
-            max_y: mesh.max_y,
-        };
-        if oq + tq > 0 {
-            self.ensure_indices(oq.max(tq));
-            let vs = std::mem::size_of::<Vertex>();
-            let total = (mesh.opaque.len() + mesh.translucent.len()) * vs;
-            let host =
-                vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT;
-            let (buf, mem) =
-                self.create_buffer(total as u64, vk::BufferUsageFlags::VERTEX_BUFFER, host);
-            unsafe {
-                let p = self
-                    .device
-                    .map_memory(mem, 0, total as u64, vk::MemoryMapFlags::empty())
-                    .unwrap() as *mut u8;
-                std::ptr::copy_nonoverlapping(
-                    mesh.opaque.as_ptr() as *const u8,
-                    p,
-                    mesh.opaque.len() * vs,
-                );
-                std::ptr::copy_nonoverlapping(
-                    mesh.translucent.as_ptr() as *const u8,
-                    p.add(mesh.opaque.len() * vs),
-                    mesh.translucent.len() * vs,
-                );
-                self.device.unmap_memory(mem);
-            }
-            gm.buffer = buf;
-            gm.memory = mem;
+    /// Takes the rebuilt render chunks of a column; they replace the old
+    /// ones as the staging buffer has room (see `flush_uploads`).
+    pub fn upload_mesh(&mut self, mesh: ChunkMesh) {
+        let key = (mesh.cx, mesh.cz);
+        self.meshes.entry(key).or_default();
+        for sec in mesh.sections {
+            // only the newest build of a render chunk matters
+            self.uploads.retain(|u| u.0 != key || u.1.sy != sec.sy);
+            self.uploads.push_back((key, sec));
         }
-        self.meshes.insert((mesh.cx, mesh.cz), gm);
+    }
+
+    fn arena_alloc(&mut self, n: u32) -> (u32, u32) {
+        for (bi, b) in self.arena.iter_mut().enumerate() {
+            if let Some(i) = b.free.iter().position(|&(_, len)| len >= n) {
+                let (start, len) = b.free[i];
+                if len == n {
+                    b.free.remove(i);
+                } else {
+                    b.free[i] = (start + n, len - n);
+                }
+                return (bi as u32, start);
+            }
+        }
+        let verts = ARENA_VERTS.max(n);
+        let (buffer, memory) = self.create_buffer(
+            verts as u64 * std::mem::size_of::<Vertex>() as u64,
+            vk::BufferUsageFlags::VERTEX_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
+            vk::MemoryPropertyFlags::DEVICE_LOCAL,
+        );
+        let mut free = Vec::new();
+        if verts > n {
+            free.push((n, verts - n));
+        }
+        self.arena.push(ArenaBlock {
+            buffer,
+            memory,
+            free,
+        });
+        (self.arena.len() as u32 - 1, 0)
+    }
+
+    fn arena_free(&mut self, block: u32, first: u32, n: u32) {
+        let free = &mut self.arena[block as usize].free;
+        let i = free.partition_point(|&(s, _)| s < first);
+        free.insert(i, (first, n));
+        if i + 1 < free.len() && free[i].0 + free[i].1 == free[i + 1].0 {
+            free[i].1 += free[i + 1].1;
+            free.remove(i + 1);
+        }
+        if i > 0 && free[i - 1].0 + free[i - 1].1 == free[i].0 {
+            free[i - 1].1 += free[i].1;
+            free.remove(i);
+        }
+    }
+
+    /// Copies queued render chunks into the arena through the staging buffer
+    /// of this frame; the copies are recorded ahead of the render pass.
+    unsafe fn flush_uploads(&mut self, cmd: vk::CommandBuffer, stage: vk::Buffer, ptr: *mut u8) {
+        let vs = std::mem::size_of::<Vertex>();
+        let mut staged = 0usize;
+        let mut copied = false;
+        let mut max_quads = 0u32;
+        while let Some((_, sec)) = self.uploads.front() {
+            let bytes = (sec.opaque.len() + sec.translucent.len()) * vs;
+            if bytes > MESH_STAGE_SIZE as usize {
+                self.uploads.pop_front();
+                continue;
+            }
+            if staged + bytes > MESH_STAGE_SIZE as usize {
+                break;
+            }
+            let (key, sec) = self.uploads.pop_front().unwrap();
+            let Some(old) = self.meshes.get(&key).map(|c| c.secs[sec.sy as usize]) else {
+                continue;
+            };
+            let mut new = GpuSection::default();
+            if bytes > 0 {
+                let (block, first) = self.arena_alloc((bytes / vs) as u32);
+                std::ptr::copy_nonoverlapping(
+                    sec.opaque.as_ptr() as *const u8,
+                    ptr.add(staged),
+                    sec.opaque.len() * vs,
+                );
+                std::ptr::copy_nonoverlapping(
+                    sec.translucent.as_ptr() as *const u8,
+                    ptr.add(staged + sec.opaque.len() * vs),
+                    sec.translucent.len() * vs,
+                );
+                self.device.cmd_copy_buffer(
+                    cmd,
+                    stage,
+                    self.arena[block as usize].buffer,
+                    &[vk::BufferCopy {
+                        src_offset: staged as u64,
+                        dst_offset: first as u64 * vs as u64,
+                        size: bytes as u64,
+                    }],
+                );
+                staged += bytes;
+                copied = true;
+                new = GpuSection {
+                    block,
+                    first,
+                    opaque_quads: (sec.opaque.len() / 4) as u32,
+                    translucent_quads: (sec.translucent.len() / 4) as u32,
+                };
+                max_quads = max_quads.max(new.opaque_quads.max(new.translucent_quads));
+            }
+            self.meshes.get_mut(&key).unwrap().secs[sec.sy as usize] = new;
+            if old.verts() > 0 {
+                self.garbage_ranges
+                    .push((self.frame_no, old.block, old.first, old.verts()));
+            }
+        }
+        if copied {
+            self.ensure_indices(max_quads);
+            let mb = [vk::MemoryBarrier::default()
+                .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
+                .dst_access_mask(vk::AccessFlags::VERTEX_ATTRIBUTE_READ)];
+            self.device.cmd_pipeline_barrier(
+                cmd,
+                vk::PipelineStageFlags::TRANSFER,
+                vk::PipelineStageFlags::VERTEX_INPUT,
+                vk::DependencyFlags::empty(),
+                &mb,
+                &[],
+                &[],
+            );
+        }
     }
 
     fn collect_garbage(&mut self) {
         let now = self.frame_no;
+        let mut i = 0;
+        while i < self.garbage_ranges.len() {
+            let (f, block, first, n) = self.garbage_ranges[i];
+            if f + 3 <= now {
+                self.garbage_ranges.swap_remove(i);
+                self.arena_free(block, first, n);
+            } else {
+                i += 1;
+            }
+        }
         let dev = &self.device;
         self.garbage.retain(|&(f, b, m)| {
             if f + 3 <= now {
@@ -2217,7 +2461,8 @@ impl Renderer {
             let cross_count = dynv.len() as u32 - cross_first;
             std::ptr::copy_nonoverlapping(dynv.as_ptr() as *const u8, dyn_ptr, dynv.len() * 12);
 
-            // Visible chunk list (frustum culled, sorted by distance).
+            // Render chunks in view (`WorldRenderer.updateInFrustum`), nearest
+            // first (`RenderSorter`).
             let m = &frame.globals.view_proj;
             let row = |r: usize| [m[r], m[4 + r], m[8 + r], m[12 + r]];
             let (r0, r1, r2, r3) = (row(0), row(1), row(2), row(3));
@@ -2237,29 +2482,49 @@ impl Renderer {
                 r2,
                 add(r3, r2, -1.0),
             ];
-            let mut visible: Vec<(f32, [f32; 3], &GpuMesh)> = Vec::new();
-            for (&(cx, cz), gm) in &self.meshes {
-                if gm.buffer == vk::Buffer::null() {
-                    continue;
-                }
+            let inside = |mn: [f32; 3], mx: [f32; 3]| {
+                planes.iter().all(|p| {
+                    let x = if p[0] >= 0.0 { mx[0] } else { mn[0] };
+                    let y = if p[1] >= 0.0 { mx[1] } else { mn[1] };
+                    let z = if p[2] >= 0.0 { mx[2] } else { mn[2] };
+                    p[0] * x + p[1] * y + p[2] * z + p[3] >= 0.0
+                })
+            };
+            let mut visible = std::mem::take(&mut self.visible);
+            visible.clear();
+            for (&(cx, cz), col) in &self.meshes {
                 let o = [
                     ((cx * 16) as f64 - frame.cam[0]) as f32,
                     (0.0 - frame.cam[1]) as f32,
                     ((cz * 16) as f64 - frame.cam[2]) as f32,
                 ];
-                let (mn, mx) = (o, [o[0] + 16.0, o[1] + gm.max_y, o[2] + 16.0]);
-                let inside = planes.iter().all(|p| {
-                    let x = if p[0] >= 0.0 { mx[0] } else { mn[0] };
-                    let y = if p[1] >= 0.0 { mx[1] } else { mn[1] };
-                    let z = if p[2] >= 0.0 { mx[2] } else { mn[2] };
-                    p[0] * x + p[1] * y + p[2] * z + p[3] >= 0.0
-                });
-                if inside {
-                    let (dx, dz) = (o[0] + 8.0, o[2] + 8.0);
-                    visible.push((dx * dx + dz * dz, o, gm));
+                // plants lean a quarter of a block out of their chunk
+                let e = 1.0f32;
+                if !inside(
+                    [o[0] - e, o[1] - e, o[2] - e],
+                    [o[0] + 16.0 + e, o[1] + 256.0 + e, o[2] + 16.0 + e],
+                ) {
+                    continue;
+                }
+                for (sy, sec) in col.secs.iter().enumerate() {
+                    if sec.verts() == 0 {
+                        continue;
+                    }
+                    let y0 = o[1] + (sy * 16) as f32;
+                    if inside(
+                        [o[0] - e, y0 - e, o[2] - e],
+                        [o[0] + 16.0 + e, y0 + 16.0 + e, o[2] + 16.0 + e],
+                    ) {
+                        let (dx, dy, dz) = (o[0] + 8.0, y0 + 8.0, o[2] + 8.0);
+                        visible.push(Visible {
+                            dist: dx * dx + dy * dy + dz * dz,
+                            origin: o,
+                            sec: *sec,
+                        });
+                    }
                 }
             }
-            visible.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+            visible.sort_unstable_by(|a, b| a.dist.total_cmp(&b.dist));
 
             // Sunrise / sunset glow: a fan from the zenith of the rotated frame
             // (glRotatef(90, X), glRotatef(0 or 180, Z), glRotatef(90, Z)).
@@ -2312,11 +2577,16 @@ impl Renderer {
                 fan_count = fan.len() as u32;
             }
 
+            self.device
+                .reset_command_buffer(cmd, vk::CommandBufferResetFlags::empty())
+                .unwrap();
+            self.device
+                .begin_command_buffer(cmd, &vk::CommandBufferBeginInfo::default())
+                .unwrap();
+            let (mesh_stage, mesh_stage_ptr) =
+                (self.frames[fi].mesh_stage, self.frames[fi].mesh_stage_ptr);
+            self.flush_uploads(cmd, mesh_stage, mesh_stage_ptr);
             let dev = &self.device;
-            dev.reset_command_buffer(cmd, vk::CommandBufferResetFlags::empty())
-                .unwrap();
-            dev.begin_command_buffer(cmd, &vk::CommandBufferBeginInfo::default())
-                .unwrap();
 
             // Animated tiles: copy the new frames into the atlas.
             if !self.tile_updates.is_empty() {
@@ -2517,11 +2787,17 @@ impl Renderer {
                 }
             }
             dev.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, self.pipe_opaque);
-            for (_, o, gm) in &visible {
-                if gm.opaque_quads > 0 {
+            let mut bound = u32::MAX;
+            for v in &visible {
+                let (o, s) = (v.origin, v.sec);
+                if s.opaque_quads > 0 {
+                    if s.block != bound {
+                        bound = s.block;
+                        let b = self.arena[bound as usize].buffer;
+                        dev.cmd_bind_vertex_buffers(cmd, 0, &[b], &[0]);
+                    }
                     push([o[0], o[1], o[2], 0.0], [0.0; 4]);
-                    dev.cmd_bind_vertex_buffers(cmd, 0, &[gm.buffer], &[0]);
-                    dev.cmd_draw_indexed(cmd, gm.opaque_quads * 6, 1, 0, 0, 0);
+                    dev.cmd_draw_indexed(cmd, s.opaque_quads * 6, 1, 0, s.first as i32, 0);
                 }
             }
             // Dropped items, then the crack overlay, all camera-relative quads.
@@ -2588,16 +2864,22 @@ impl Renderer {
                 dev.cmd_draw(cmd, outline_count, 1, 0, 0);
             }
             dev.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, self.pipe_translucent);
-            for (_, o, gm) in visible.iter().rev() {
-                if gm.translucent_quads > 0 {
+            let mut bound = u32::MAX;
+            for v in visible.iter().rev() {
+                let (o, s) = (v.origin, v.sec);
+                if s.translucent_quads > 0 {
+                    if s.block != bound {
+                        bound = s.block;
+                        let b = self.arena[bound as usize].buffer;
+                        dev.cmd_bind_vertex_buffers(cmd, 0, &[b], &[0]);
+                    }
                     push([o[0], o[1], o[2], 0.0], [0.0; 4]);
-                    dev.cmd_bind_vertex_buffers(cmd, 0, &[gm.buffer], &[0]);
                     dev.cmd_draw_indexed(
                         cmd,
-                        gm.translucent_quads * 6,
+                        s.translucent_quads * 6,
                         1,
                         0,
-                        (gm.opaque_quads * 4) as i32,
+                        (s.first + s.opaque_quads * 4) as i32,
                         0,
                     );
                 }
@@ -2797,6 +3079,7 @@ impl Renderer {
                 }
             }
 
+            self.visible = visible;
             let swapchains = [self.swapchain];
             let indices = [image_index];
             match self.swap_loader.queue_present(
@@ -2844,11 +3127,10 @@ impl Drop for Renderer {
                 self.device.destroy_buffer(b, None);
                 self.device.free_memory(m, None);
             }
-            for (_, m) in self.meshes.drain() {
-                if m.buffer != vk::Buffer::null() {
-                    self.device.destroy_buffer(m.buffer, None);
-                    self.device.free_memory(m.memory, None);
-                }
+            self.meshes.clear();
+            for b in self.arena.drain(..) {
+                self.device.destroy_buffer(b.buffer, None);
+                self.device.free_memory(b.memory, None);
             }
             for f in self.frames.drain(..) {
                 self.device.destroy_semaphore(f.image_available, None);
@@ -2866,6 +3148,8 @@ impl Drop for Renderer {
                 self.device.free_memory(f.ui_mem, None);
                 self.device.destroy_buffer(f.world_buf, None);
                 self.device.free_memory(f.world_mem, None);
+                self.device.destroy_buffer(f.mesh_stage, None);
+                self.device.free_memory(f.mesh_stage_mem, None);
             }
             self.destroy_swapchain_views();
             self.device.destroy_buffer(self.index_buf.0, None);

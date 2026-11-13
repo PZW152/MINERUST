@@ -747,7 +747,54 @@ fn parse_args() -> Options {
     o
 }
 
+/// `org.lwjgl.opengl.Sync`: holds the loop to a frame rate
+/// (`Display.sync(getLimitFramerate())` in `Minecraft.runGameLoop`).
+struct FrameSync {
+    next: Option<Instant>,
+}
+
+impl FrameSync {
+    fn sync(&mut self, fps: i32) {
+        if fps <= 0 {
+            return;
+        }
+        let step = std::time::Duration::from_nanos(1_000_000_000 / fps as u64);
+        let now = Instant::now();
+        let Some(next) = self.next else {
+            self.next = Some(now + step);
+            return;
+        };
+        // sleep while more than a scheduler slice remains, then yield
+        loop {
+            let t = Instant::now();
+            if t >= next {
+                break;
+            }
+            if next - t > std::time::Duration::from_micros(1500) {
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            } else {
+                std::thread::yield_now();
+            }
+        }
+        // nextFrame = max(nextFrame + NANOS_IN_SECOND / fps, getTime())
+        self.next = Some((next + step).max(Instant::now()));
+    }
+}
+
+/// `MINERUST_BENCH=<seconds>`: frame times once the world has loaded.
+struct Bench {
+    secs: f64,
+    began: Option<Instant>,
+    last: Instant,
+    frames: Vec<f32>,
+    prof0: [f64; 4],
+    /// Server ticks and their nanoseconds when the measurement began.
+    ticks0: (u64, u64),
+}
+
 struct App {
+    bench: Option<Bench>,
+    sync: FrameSync,
     opts: Options,
     game: Option<Game>,
     /// The title screen and its menus while no world is loaded.
@@ -974,6 +1021,7 @@ impl ApplicationHandler for App {
             game.lang = lang;
             game.audio = audio;
             game.shell = Some(shell);
+            game.apply_video_settings();
             game.apply_start_screen();
             println!(
                 "Seed: {}{}",
@@ -1105,6 +1153,23 @@ impl ApplicationHandler for App {
                     _ => {}
                 }
                 let (ctrl, shift) = (self.ctrl, self.shift);
+                // Minecraft.dispatchKeypresses: keyBindFullscreen works on
+                // every screen (toggleFullscreen, then saveOptions)
+                if pressed && !event.repeat {
+                    let lw = settings::lwjgl_code(code);
+                    let st = match (&mut self.front, &mut self.game) {
+                        (Some(f), _) => Some(&mut f.shell.settings),
+                        (None, Some(g)) => g.shell.as_mut().map(|s| &mut s.settings),
+                        _ => None,
+                    };
+                    if let Some(st) = st {
+                        if lw == st.key("key.fullscreen") {
+                            st.full_screen = !st.full_screen;
+                            st.save();
+                            return;
+                        }
+                    }
+                }
                 // GuiScreen.handleKeyboardInput: the character and the key
                 let ch = |e: &winit::event::KeyEvent| -> char {
                     if ctrl {
@@ -1215,6 +1280,17 @@ impl ApplicationHandler for App {
             }
             WindowEvent::RedrawRequested => {
                 let Some(w) = self.window.clone() else { return };
+                // gameSettings.fullScreen, from F11 or the video settings
+                let full = match (&self.front, &self.game) {
+                    (Some(f), _) => Some(f.shell.settings.full_screen),
+                    (None, Some(g)) => g.shell.as_ref().map(|s| s.settings.full_screen),
+                    _ => None,
+                };
+                if let Some(full) = full {
+                    if self.opts.auto_shot.is_none() && w.fullscreen().is_some() != full {
+                        w.set_fullscreen(full.then(|| winit::window::Fullscreen::Borderless(None)));
+                    }
+                }
                 let size = w.inner_size();
                 if let Some(f) = &mut self.front {
                     if let Some((path, wait)) = &self.opts.auto_shot {
@@ -1230,11 +1306,99 @@ impl ApplicationHandler for App {
                             }
                         }
                     }
+                    // Display.setVSyncEnabled; getLimitFramerate is 30 with
+                    // a screen open and no world
+                    f.renderer.set_vsync(f.shell.settings.enable_vsync);
                     let a = f.frame((size.width, size.height));
                     self.front_action(a, el);
+                    if self.bench.is_none() {
+                        self.sync.sync(30);
+                    }
                     return;
                 }
                 if let Some(g) = &mut self.game {
+                    if let Some(b) = &mut self.bench {
+                        let now = Instant::now();
+                        let elapsed = self.started.elapsed().as_secs_f64();
+                        match b.began {
+                            None => {
+                                if g.idle() || elapsed > 180.0 {
+                                    println!(
+                                        "Bench: world ready after {elapsed:.2} s, {} meshes",
+                                        g.loaded_meshes()
+                                    );
+                                    g.renderer.set_vsync(
+                                        std::env::var_os("MINERUST_BENCH_VSYNC").is_some(),
+                                    );
+                                    b.began = Some(now);
+                                    b.prof0 = g.prof;
+                                    {
+                                        use std::sync::atomic::Ordering::Relaxed;
+                                        b.ticks0 = (
+                                            sim::TICK_COUNT.load(Relaxed),
+                                            sim::TICK_NANOS.load(Relaxed),
+                                        );
+                                        sim::TICK_WORST.store(0, Relaxed);
+                                    }
+                                    println!(
+                                        "Bench: at start: {} chunk snapshots, {} mesh uploads, {} events",
+                                        g.counts[0], g.counts[1], g.counts[2]
+                                    );
+                                }
+                            }
+                            Some(t0) => {
+                                b.frames
+                                    .push(now.duration_since(b.last).as_secs_f32() * 1000.0);
+                                // a slow turn, so the visible set keeps changing
+                                if std::env::var_os("MINERUST_BENCH_STILL").is_none() {
+                                    g.player.turn(1.5, 0.0);
+                                }
+                                if now.duration_since(t0).as_secs_f64() >= b.secs {
+                                    let mut f = b.frames.split_off(2.min(b.frames.len()));
+                                    let n = f.len().max(1);
+                                    let avg = f.iter().sum::<f32>() / n as f32;
+                                    f.sort_by(|a, b| a.partial_cmp(b).unwrap());
+                                    let pct = |p: f64| f[((n as f64 * p) as usize).min(n - 1)];
+                                    println!(
+                                        "Bench: {n} frames, avg {avg:.3} ms ({:.0} fps), median {:.3}, 99% {:.3}, 99.9% {:.3}, max {:.3} ms",
+                                        1000.0 / avg,
+                                        pct(0.5),
+                                        pct(0.99),
+                                        pct(0.999),
+                                        f[n - 1]
+                                    );
+                                    let p = g.prof;
+                                    let k = 1000.0 / n as f64;
+                                    println!(
+                                        "Bench: per frame pump {:.3} ms, ticks {:.3}, build {:.3}, render {:.3}",
+                                        (p[0] - b.prof0[0]) * k,
+                                        (p[1] - b.prof0[1]) * k,
+                                        (p[2] - b.prof0[2]) * k,
+                                        (p[3] - b.prof0[3]) * k
+                                    );
+                                    {
+                                        use std::sync::atomic::Ordering::Relaxed;
+                                        let n = sim::TICK_COUNT.load(Relaxed) - b.ticks0.0;
+                                        let ns = sim::TICK_NANOS.load(Relaxed) - b.ticks0.1;
+                                        println!(
+                                            "Bench: server {n} ticks, avg {:.3} ms, worst {:.3} ms",
+                                            ns as f64 / n.max(1) as f64 / 1e6,
+                                            sim::TICK_WORST.load(Relaxed) as f64 / 1e6
+                                        );
+                                    }
+                                    println!(
+                                        "Bench: totals: {} chunk snapshots, {} mesh uploads, {} events",
+                                        g.counts[0], g.counts[1], g.counts[2]
+                                    );
+                                    g.shutdown();
+                                    self.game = None;
+                                    el.exit();
+                                    return;
+                                }
+                            }
+                        }
+                        b.last = now;
+                    }
                     if let Some((path, wait)) = &self.opts.auto_shot {
                         let elapsed = self.started.elapsed().as_secs_f64();
                         if self.shot_taken.is_none()
@@ -1256,6 +1420,11 @@ impl ApplicationHandler for App {
                         }
                     }
                     g.frame((size.width, size.height));
+                    // isFramerateLimitBelowMax: 260 on the slider is "Unlimited"
+                    let limit = g.limit_framerate();
+                    if self.bench.is_none() && limit < 260 {
+                        self.sync.sync(limit);
+                    }
                 }
             }
             _ => {}
@@ -1354,6 +1523,18 @@ fn main() {
         grabbed: false,
         focused: true,
         started: Instant::now(),
+        sync: FrameSync { next: None },
+        bench: std::env::var("MINERUST_BENCH")
+            .ok()
+            .and_then(|v| v.parse::<f64>().ok())
+            .map(|secs| Bench {
+                secs,
+                began: None,
+                last: Instant::now(),
+                frames: Vec::new(),
+                prof0: [0.0; 4],
+                ticks0: (0, 0),
+            }),
         shift: false,
         ctrl: false,
         shot_taken: None,

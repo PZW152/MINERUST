@@ -32,6 +32,7 @@ cargo run --release -- --seed 1
 | `--vanilla-parity` | 關閉所有 bug 修正，行為與 1.7.10 完全相同 |
 | `--validate` | 啟用 Vulkan validation layer（需已安裝） |
 | `--screenshot <檔案> <秒>` | 載入完成後截圖並結束，不存檔 |
+| 環境變數 `MINERUST_BENCH=<秒>` | 效能基準：載入完成後量測幀時間與伺服器 tick 並結束 |
 
 操作：WASD 移動、空白鍵跳、左 Shift 潛行、左 Ctrl 或連按兩下 W 疾跑、連按兩下空白鍵切換飛行、
 左鍵破壞、右鍵放置、中鍵選取方塊、F2 截圖、Esc 釋放滑鼠。
@@ -42,8 +43,10 @@ cargo run --release -- --seed 1
   是固定的全序，不依賴時鐘、雜湊表順序或執行緒排程。同種子加同一串指令會得到同一個世界。
 - **客戶端**（`src/game.rs`）：只持有伺服器送來的區塊快照，用來做玩家碰撞、選取與網格化；
   編輯以指令送回伺服器驗證後才生效。慢的一幀不會影響 tick，慢的 tick 不會卡住畫面。
-- **網格化**（`src/render/mesher.rs`）：在工作執行緒上把 3×3 區塊快照轉成頂點。
-- **渲染**（`src/render/vk.rs`）：頂點是區塊內座標，原點以相機為基準，遠離原點不會抖動。
+- **網格化**（`src/render/mesher.rs`）：在工作執行緒上把 3×3 區塊快照轉成頂點，以 16×16×16 的渲染區塊
+  （原版 `WorldRenderer`）為單位；方塊或光照變動只重建受影響的分段。
+- **渲染**（`src/render/vk.rs`）：頂點是區塊內座標，原點以相機為基準，遠離原點不會抖動。區塊頂點放在顯存池，
+  經暫存緩衝上傳，逐分段做視錐剔除。
 - **存檔**（`src/world/save.rs`）：自有格式。每個檔案先寫暫存檔、`fsync`、再改名，
   帶版本號與 CRC‑32，檢查不過就視為不存在；未知欄位原樣保留。
 - **Anvil**（`src/world/anvil.rs`）：NBT 讀寫、區域檔（`.mca`）、`level.dat`。原版存檔以這條路徑開啟，
@@ -136,6 +139,10 @@ minerust --compare-pop rust.bin java.bin <cx> <cz> <半徑>
 - Anvil：`tools/AnvilHarness.java` 以原版 `AnvilChunkLoader` 讀本專案寫出的區域檔、本專案讀原版寫出的區域檔，
   方塊、中繼值、天空光、方塊光、高度圖雙向一致。
 
-沒有驗證的部分：鍵盤滑鼠操作是否順手、長時間執行的記憶體與效能、Vulkan validation layer（本機未安裝）。
+效能（`MINERUST_BENCH=10`，RTX 5070 Laptop、1920×1080、不限幀）：視距 12 約 1,575 fps、視距 16 約 1,311 fps，
+視距 16 的世界 7 秒載完，伺服器 tick 平均 5 ms。量測方法與歷次數字見 [docs/HANDOFF.md](docs/HANDOFF.md) 第 5.3 節。
+預設與原版相同：垂直同步開、最大幀率 120，可在影像設定調整。
+
+沒有驗證的部分：鍵盤滑鼠操作是否順手、長時間執行的記憶體用量、Vulkan validation layer（本機未安裝）。
 
 原版 bug 的逐項處理見 [docs/BUG_AUDIT.md](docs/BUG_AUDIT.md)。

@@ -17,12 +17,20 @@ pub struct Vertex {
     pub light: [u8; 4],
 }
 
+/// One 16x16x16 render chunk (`WorldRenderer`): pass 0 and pass 1 quads,
+/// positions relative to the chunk column's origin.
+pub struct SectionMesh {
+    /// Section index (y / 16).
+    pub sy: u8,
+    pub opaque: Vec<Vertex>,
+    pub translucent: Vec<Vertex>,
+}
+
+/// The sections of one chunk column that were built again.
 pub struct ChunkMesh {
     pub cx: i32,
     pub cz: i32,
-    pub opaque: Vec<Vertex>,
-    pub translucent: Vec<Vertex>,
-    pub max_y: f32,
+    pub sections: Vec<SectionMesh>,
 }
 
 /// One chunk of a mesh job's 3x3 neighbourhood.
@@ -57,7 +65,9 @@ fn idx(x: i32, y: i32, z: i32) -> usize {
 }
 
 impl<'a> Region<'a> {
-    fn new(chunks: &'a [MeshChunk; 9]) -> Self {
+    /// The 3x3 chunks between heights `lo` and `hi` (the rest reads as air).
+    fn new(chunks: &'a [MeshChunk; 9], lo: usize, hi: usize) -> Self {
+        let (lo, hi) = (lo.min(256), hi.min(256));
         let n = W * W * 256;
         let mut blocks = vec![0u8; n];
         let mut meta = vec![0u8; n];
@@ -74,15 +84,15 @@ impl<'a> Region<'a> {
                 for z in 0..16 {
                     let s = (x * 16 + z) << 8;
                     let d = ((dx * 16 + x) * W + dz * 16 + z) << 8;
-                    blocks[d..d + 256].copy_from_slice(&c.blocks[s..s + 256]);
-                    meta[d..d + 256].copy_from_slice(&c.meta[s..s + 256]);
-                    blk[d..d + 256].copy_from_slice(&c.blk[s..s + 256]);
-                    sky[d..d + 256].copy_from_slice(&c.sky[s..s + 256]);
+                    blocks[d + lo..d + hi].copy_from_slice(&c.blocks[s + lo..s + hi]);
+                    meta[d + lo..d + hi].copy_from_slice(&c.meta[s + lo..s + hi]);
+                    blk[d + lo..d + hi].copy_from_slice(&c.blk[s + lo..s + hi]);
+                    sky[d + lo..d + hi].copy_from_slice(&c.sky[s + lo..s + hi]);
                     let h = mc.height[(z << 4) | x].clamp(0, 256) as usize;
-                    for sec in 0..16usize {
+                    for sec in (lo >> 4)..((hi + 15) >> 4) {
                         if mc.sections & (1 << sec) == 0 {
                             // Chunk.getSavedLightValue for a missing section.
-                            for y in (sec << 4)..((sec + 1) << 4) {
+                            for y in (sec << 4).max(lo)..((sec + 1) << 4).min(hi) {
                                 sky[d + y] = if y >= h { 15 } else { 0 };
                                 blk[d + y] = 0;
                             }
@@ -455,48 +465,68 @@ fn pos_hash(x: i32, y: i32, z: i32) -> i64 {
     l
 }
 
-pub fn build(chunks: &[MeshChunk; 9], atlas: &Atlas, noise: &BiomeNoise) -> ChunkMesh {
+/// Tessellates the sections of the middle chunk named by `mask`
+/// (`WorldRenderer.updateRenderer` for each of them).
+pub fn build(chunks: &[MeshChunk; 9], atlas: &Atlas, noise: &BiomeNoise, mask: u16) -> ChunkMesh {
+    let c = &chunks[4].data;
+    let mut sections = Vec::with_capacity(mask.count_ones() as usize);
+    if mask == 0 {
+        return ChunkMesh {
+            cx: c.cx,
+            cz: c.cz,
+            sections,
+        };
+    }
+    // The blocks a section's faces, light and shapes can reach: one section
+    // either side is far more than the single block `ChunkCache` adds.
+    let first = mask.trailing_zeros() as usize;
+    let last = 15 - mask.leading_zeros() as usize;
     let cx = Ctx {
-        r: Region::new(chunks),
+        r: Region::new(chunks, (first << 4).saturating_sub(16), (last << 4) + 32),
         atlas,
         noise,
         all_faces: false,
     };
     let r = &cx.r;
-    let c = &chunks[4].data;
-    let mut opaque: Vec<Vertex> = Vec::new();
-    let mut translucent: Vec<Vertex> = Vec::new();
-    let mut max_y = 0f32;
-
-    for lx in 0..16i32 {
-        for lz in 0..16i32 {
-            let (x, z) = (lx + 16, lz + 16);
-            for y in 0..r.top as i32 {
-                let id = r.blocks[idx(x, y, z)];
-                if id == 0 {
-                    continue;
-                }
-                let info = block::info(id);
-                let meta = r.meta[idx(x, y, z)] as i32;
-                let out = if info.translucent {
-                    &mut translucent
-                } else {
-                    &mut opaque
-                };
-                let before = out.len();
-                mesh_block(&cx, out, id, meta, x, y, z);
-                if out.len() != before {
-                    max_y = max_y.max((y + 1) as f32);
+    for sy in first..=last {
+        if mask & (1 << sy) == 0 {
+            continue;
+        }
+        let mut opaque: Vec<Vertex> = Vec::new();
+        let mut translucent: Vec<Vertex> = Vec::new();
+        // ExtendedBlockStorage that was never created holds only air
+        if chunks[4].sections & (1 << sy) != 0 {
+            let (y0, y1) = ((sy << 4) as i32, ((sy << 4) + 16).min(r.top) as i32);
+            for lx in 0..16i32 {
+                for lz in 0..16i32 {
+                    let (x, z) = (lx + 16, lz + 16);
+                    for y in y0..y1 {
+                        let id = r.blocks[idx(x, y, z)];
+                        if id == 0 {
+                            continue;
+                        }
+                        let info = block::info(id);
+                        let meta = r.meta[idx(x, y, z)] as i32;
+                        let out = if info.translucent {
+                            &mut translucent
+                        } else {
+                            &mut opaque
+                        };
+                        mesh_block(&cx, out, id, meta, x, y, z);
+                    }
                 }
             }
         }
+        sections.push(SectionMesh {
+            sy: sy as u8,
+            opaque,
+            translucent,
+        });
     }
     ChunkMesh {
         cx: c.cx,
         cz: c.cz,
-        opaque,
-        translucent,
-        max_y,
+        sections,
     }
 }
 
@@ -645,8 +675,9 @@ pub fn build_single(
     meta: i32,
     draw: MovingDraw,
 ) -> Vec<Vertex> {
+    let y = pos[1].clamp(0, 255) as usize;
     let mut cx = Ctx {
-        r: Region::new(chunks),
+        r: Region::new(chunks, y.saturating_sub(16), y + 17),
         atlas,
         noise,
         all_faces: true,

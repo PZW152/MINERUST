@@ -493,8 +493,10 @@ pub enum GenEntity {
 pub struct ServerWorld {
     pub provider: Arc<ChunkProvider>,
     pub chunks: FastMap<(i32, i32), Box<Chunk>>,
-    /// Chunks whose blocks or light changed since the renderer last looked.
-    pub dirty: FastSet<(i32, i32)>,
+    /// Chunks whose blocks or light changed since the renderer last looked,
+    /// with the 16-high sections to draw again (bit per section): what
+    /// `World.markBlockRangeForRenderUpdate` hands to `RenderGlobal`.
+    pub dirty: FastMap<(i32, i32), u16>,
     pub rand: JavaRandom,
     pub total_time: i64,
     pub scheduled_immediate: bool,
@@ -575,7 +577,7 @@ impl ServerWorld {
         ServerWorld {
             provider,
             chunks: FastMap::default(),
-            dirty: FastSet::default(),
+            dirty: FastMap::default(),
             rand: JavaRandom::new(0x1D2E3F4A5B6C),
             total_time: 0,
             scheduled_immediate: false,
@@ -928,45 +930,33 @@ impl ServerWorld {
             self.populated += 1;
             // The four chunks it can write into may have just become meshable.
             for (dx, dz) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
-                self.dirty.insert((cx + dx, cz + dz));
+                self.mark_dirty_chunk(cx + dx, cz + dz);
             }
         }
     }
 
     #[inline]
     fn mark_dirty_chunk(&mut self, cx: i32, cz: i32) {
-        self.dirty.insert((cx, cz));
+        self.dirty.insert((cx, cz), 0xFFFF);
     }
 
-    /// Marks the chunk containing a changed block (and edge neighbours).
+    /// `World.markBlockForUpdate` / `markBlockForRenderUpdate`: the render
+    /// chunks touching the block and its 26 neighbours
+    /// (`RenderGlobal.markBlocksForUpdate(x - 1, .., x + 1, ..)`).
     #[inline]
-    fn mark_dirty(&mut self, x: i32, z: i32) {
-        let (cx, cz) = (x >> 4, z >> 4);
-        self.dirty.insert((cx, cz));
-        let (lx, lz) = (x & 15, z & 15);
-        if lx == 0 || lx == 15 || lz == 0 || lz == 15 {
-            let dx = if lx == 0 {
-                -1
-            } else if lx == 15 {
-                1
-            } else {
-                0
-            };
-            let dz = if lz == 0 {
-                -1
-            } else if lz == 15 {
-                1
-            } else {
-                0
-            };
-            if dx != 0 {
-                self.dirty.insert((cx + dx, cz));
-            }
-            if dz != 0 {
-                self.dirty.insert((cx, cz + dz));
-            }
-            if dx != 0 && dz != 0 {
-                self.dirty.insert((cx + dx, cz + dz));
+    fn mark_dirty(&mut self, x: i32, y: i32, z: i32) {
+        self.mark_dirty_range(x, z, y - 1, y + 1);
+    }
+
+    /// `World.markBlocksDirtyVertical`, widened by one block as above.
+    fn mark_dirty_range(&mut self, x: i32, z: i32, y0: i32, y1: i32) {
+        let (s0, s1) = (y0.clamp(0, 255) >> 4, y1.clamp(0, 255) >> 4);
+        let bits = (((1u32 << (s1 - s0 + 1)) - 1) << s0) as u16;
+        let (c0, c1) = ((x - 1) >> 4, (x + 1) >> 4);
+        let (d0, d1) = ((z - 1) >> 4, (z + 1) >> 4);
+        for cx in c0..=c1 {
+            for cz in d0..=d1 {
+                *self.dirty.entry((cx, cz)).or_insert(0) |= bits;
             }
         }
     }
@@ -1186,7 +1176,7 @@ impl ServerWorld {
         if (0..256).contains(&y) {
             if let Some(c) = self.chunks.get_mut(&(x >> 4, z >> 4)) {
                 c.set_light(sky, x & 15, y, z & 15, v);
-                self.mark_dirty(x, z);
+                self.mark_dirty(x, y, z);
             }
         }
     }
@@ -1217,7 +1207,7 @@ impl ServerWorld {
             }
         }
         if changed {
-            self.mark_dirty(x, z);
+            self.mark_dirty(x, y, z);
             if flags & 1 != 0 {
                 self.notify_neighbours(x, y, z, old);
                 if has_comparator_input_override(id) {
@@ -1314,7 +1304,7 @@ impl ServerWorld {
         }
         Arc::make_mut(&mut c.data).meta[i] = meta as u8;
         let id = c.data.blocks[i];
-        self.mark_dirty(x, z);
+        self.mark_dirty(x, y, z);
         if flags & 1 != 0 {
             self.notify_neighbours(x, y, z, id);
             if has_comparator_input_override(id) {
@@ -1460,8 +1450,9 @@ impl ServerWorld {
                 c.height_min = new_h;
             }
         }
-        self.mark_dirty_chunk(key.0, key.1);
         let (wx, wz) = (key.0 * 16 + x, key.1 * 16 + z);
+        // the sky column was rewritten from the higher of the two tops down
+        self.mark_dirty_range(wx, wz, 0, old_h.max(new_h) + 1);
         let (mut lo, mut hi) = (old_h, new_h);
         if hi < lo {
             std::mem::swap(&mut lo, &mut hi);
