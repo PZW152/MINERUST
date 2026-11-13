@@ -2578,27 +2578,116 @@ impl Game {
         }
     }
 
-    fn use_item(&mut self) {
-        if let Some((b, n)) = self.selected {
-            if n != [0, 0, 0] {
-                if let Some(id) = self.view.inv.held().and_then(|s| s.block()) {
-                    let p = [b[0] + n[0], b[1] + n[1], b[2] + n[2]];
-                    if crate::block::material(self.world.peek_block(p[0], p[1], p[2])).replaceable()
-                    {
-                        self.block_sound(id, p, "place");
-                    }
-                }
-                let _ = self.sim.commands.send(Command::Use {
-                    target: b,
-                    face: n,
-                    sneaking: self.input.sneak,
-                });
-                self.swing_item();
-            }
+    /// `ItemBlock.onItemUse` as the client runs it, up to the point where
+    /// the block would be set: where a held block would go, or `None` when
+    /// `World.canPlaceEntityOnSide` refuses (the place is not replaceable,
+    /// or the block would stand inside the player or a mob). In that case
+    /// the original neither plays the sound nor tells the server.
+    fn placement(&self, id: u8, meta: u8, b: [i32; 3], n: [i32; 3]) -> Option<[i32; 3]> {
+        let tid = self.world.peek_block(b[0], b[1], b[2]);
+        let in_place = tid == block::SNOW_LAYER && self.world.peek_meta(b[0], b[1], b[2]) & 7 < 1
+            || matches!(tid, block::VINE | block::TALLGRASS | block::DEADBUSH);
+        let p = if in_place {
+            b
         } else {
-            let _ = self.sim.commands.send(Command::UseAir);
+            [b[0] + n[0], b[1] + n[1], b[2] + n[2]]
+        };
+        if !(0..256).contains(&p[1]) {
+            return None;
         }
+        if p[1] == 255 && block::material(id).is_solid() {
+            return None;
+        }
+        if !block::material(self.world.peek_block(p[0], p[1], p[2])).replaceable() {
+            return None;
+        }
+        // World.checkNoEntityCollision: entities that prevent spawning
+        if let Some(c) = block::collision_box(id, meta) {
+            let bb = crate::entity::player::Aabb {
+                min: [
+                    p[0] as f64 + c[0] as f64,
+                    p[1] as f64 + c[1] as f64,
+                    p[2] as f64 + c[2] as f64,
+                ],
+                max: [
+                    p[0] as f64 + c[3] as f64,
+                    p[1] as f64 + c[4] as f64,
+                    p[2] as f64 + c[5] as f64,
+                ],
+            };
+            if !self.stats.dead && self.player.bb.intersects(&bb) {
+                return None;
+            }
+            for m in &self.mobs {
+                if m.death_time > 0 {
+                    continue;
+                }
+                let mb = crate::entity::player::Aabb {
+                    min: [m.bb[0], m.bb[1], m.bb[2]],
+                    max: [m.bb[3], m.bb[4], m.bb[5]],
+                };
+                if mb.intersects(&bb) {
+                    return None;
+                }
+            }
+        }
+        Some(p)
+    }
+
+    /// `Minecraft.func_147121_ag` on a block: `onPlayerRightClick`.
+    fn use_item(&mut self) {
         self.right_delay = 4;
+        let Some((b, n)) = self.selected else {
+            let _ = self.sim.commands.send(Command::UseAir);
+            return;
+        };
+        if n == [0, 0, 0] {
+            return;
+        }
+        let held = self.view.inv.held();
+        let tid = self.world.peek_block(b[0], b[1], b[2]);
+        // Block.onBlockActivated comes first unless sneaking with an item
+        let activates = (!self.input.sneak || held.is_none())
+            && matches!(
+                tid,
+                block::CRAFTING_TABLE
+                    | block::FURNACE
+                    | block::LIT_FURNACE
+                    | block::CHEST
+                    | block::ANVIL
+                    | block::ENCHANTING_TABLE
+                    | block::DISPENSER
+                    | block::BREWING_STAND
+                    | block::LEVER
+                    | block::STONE_BUTTON
+                    | block::WOODEN_BUTTON
+                    | block::UNPOWERED_REPEATER
+                    | block::POWERED_REPEATER
+                    | block::NOTEBLOCK
+                    | block::WOODEN_DOOR
+                    | block::TRAPDOOR
+            );
+        if !activates {
+            if let Some(s) = held {
+                if let Some(id) = s.block() {
+                    // ItemBlock.func_150936_a: refused before any packet
+                    let Some(p) = self.placement(id, s.meta as u8, b, n) else {
+                        let _ = self.sim.commands.send(Command::UseAir);
+                        return;
+                    };
+                    self.block_sound(id, p, "place");
+                }
+            }
+        }
+        let _ = self.sim.commands.send(Command::Use {
+            target: b,
+            face: n,
+            sneaking: self.input.sneak,
+        });
+        if std::env::var_os("MINERUST_DEBUG_LATENCY").is_some() {
+            self.latency = Some((Instant::now(), (b[0] >> 4, b[2] >> 4)));
+        }
+        self.swing_item();
     }
 
     /// The mouse in scaled GUI pixels (`Mouse.getX() * width / displayWidth`).

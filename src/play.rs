@@ -593,6 +593,7 @@ impl Play {
                 );
                 self.spawn(it);
             }
+            GenEntity::Xp { pos, amount } => self.orbs.push((pos, amount)),
             GenEntity::ScatteredItem { pos, stack } => {
                 let id = self.next_item;
                 self.next_item += 1;
@@ -722,28 +723,33 @@ impl Play {
         if self.mode == GameMode::Survival {
             let mut rnd = std::mem::replace(&mut w.rand, JavaRandom::new(0));
             if item::can_harvest(held, id) {
-                for s in item::drops(id, meta, &mut rnd) {
-                    self.drop_at_block(s, p, &mut rnd);
-                }
-                // BlockOre / BlockRedstoneOre.dropBlockAsItemWithChance:
-                // dropXpOnBlockBreak
-                let range = |r: &mut JavaRandom, a: i32, b: i32| {
-                    if a >= b {
-                        a
-                    } else {
-                        r.next_int_n(b - a + 1) + a
+                // Block.harvestBlock
+                let ench = held.map(|s| s.enchantments()).unwrap_or_default();
+                let level = |e: i32| ench.iter().find(|x| x.0 == e).map_or(0, |x| x.1);
+                if id == block::SNOW_LAYER {
+                    // BlockSnow.harvestBlock: the layers as snowballs
+                    for s in item::drops(id, meta, &mut rnd) {
+                        self.drop_at_block(s, p, &mut rnd);
                     }
-                };
-                let xp = match id {
-                    block::COAL_ORE => range(&mut rnd, 0, 2),
-                    block::DIAMOND_ORE | block::EMERALD_ORE => range(&mut rnd, 3, 7),
-                    block::LAPIS_ORE | 153 => range(&mut rnd, 2, 5),
-                    block::REDSTONE_ORE | block::LIT_REDSTONE_ORE => 1 + rnd.next_int_n(5),
-                    _ => 0,
-                };
-                if xp > 0 {
-                    let c = [p[0] as f64 + 0.5, p[1] as f64 + 0.5, p[2] as f64 + 0.5];
-                    self.orbs.push((c, xp));
+                } else {
+                    // Silk Touch (33) takes the block itself; otherwise
+                    // dropBlockAsItem with the Fortune (35) level
+                    let silk = crate::drops::can_silk_harvest(id) && level(33) > 0;
+                    let v = if silk {
+                        match crate::drops::create_stacked_block(id, meta) {
+                            Some(s) => crate::drops::drop_stack(&mut rnd, s),
+                            None => Vec::new(),
+                        }
+                    } else {
+                        crate::drops::drop_block_as_item_with_chance(
+                            id,
+                            meta,
+                            1.0,
+                            level(35),
+                            &mut rnd,
+                        )
+                    };
+                    w.spawn_drops(v, p[0], p[1], p[2]);
                 }
             }
             w.rand = rnd;
@@ -1140,12 +1146,23 @@ impl Play {
             min: [px - 0.3, py, pz - 0.3],
             max: [px + 0.3, py + 1.8, pz + 0.3],
         };
-        let bb = Aabb {
-            min: [p[0] as f64, p[1] as f64, p[2] as f64],
-            max: [p[0] as f64 + 1.0, p[1] as f64 + 1.0, p[2] as f64 + 1.0],
-        };
-        if block::collision_box(id, meta as u8).is_some() && bb.intersects(&pbb) {
-            return false;
+        // World.canPlaceEntityOnSide: the block's own collision box
+        if let Some(c) = block::collision_box(id, meta as u8) {
+            let bb = Aabb {
+                min: [
+                    p[0] as f64 + c[0] as f64,
+                    p[1] as f64 + c[1] as f64,
+                    p[2] as f64 + c[2] as f64,
+                ],
+                max: [
+                    p[0] as f64 + c[3] as f64,
+                    p[1] as f64 + c[4] as f64,
+                    p[2] as f64 + c[5] as f64,
+                ],
+            };
+            if bb.intersects(&pbb) {
+                return false;
+            }
         }
         if id == block::DOUBLE_PLANT {
             if !w.is_air(p[0], p[1] + 1, p[2]) {

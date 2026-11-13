@@ -508,6 +508,8 @@ impl Atlas {
                 items.insert((id, meta), b.add(crop(&img, 0, 0, 16), 16));
             }
         }
+        // a white tile: what drawing with GL_TEXTURE_2D disabled samples
+        names.insert("white", b.add(vec![255u8; 16 * 16 * 4], 16));
         // the default font for text drawn in the world (signs)
         {
             let img = read_png(jar, "assets/minecraft/textures/font/ascii.png")?;

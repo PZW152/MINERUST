@@ -429,12 +429,16 @@ pub fn primed_tnt(
     let start = out.len();
     block_cube(out, atlas, block::TNT, 0, &m, l, 1.0);
     if fuse / 5 % 2 == 0 {
-        let a = (1.0 - left / 100.0) * 0.8;
+        // RenderTNTPrimed: the block again without texture or lighting,
+        // blended (SRC_ALPHA, DST_ALPHA). renderBlockAsItem sets the colour
+        // itself with alpha 1 (useInventoryTint), so the 0.8 alpha computed
+        // for it never applies and white is added to what is there: every
+        // other five ticks the block is plain white.
+        let w = atlas.named("white");
+        let uv = [(w[0] + w[2]) * 0.5, (w[1] + w[3]) * 0.5];
         for v in &mut out[start..] {
-            for c in 0..3 {
-                let x = v.color[c] as f32 / 255.0;
-                v.color[c] = ((x + (1.0 - x) * a).min(1.0) * 255.0) as u8;
-            }
+            v.color = [255; 4];
+            v.uv = uv;
             v.light = [240, 240, 0, 0];
         }
     }

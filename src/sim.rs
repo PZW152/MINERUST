@@ -4676,6 +4676,44 @@ mod tests {
         assert_eq!(sim.world.meta(x, y, z) & 4, 4, "door opened");
     }
 
+    /// EntityCreeper.interact: flint and steel lights the fuse, which then
+    /// runs for `fuseTime` (30) ticks whatever the player does.
+    #[test]
+    fn flint_and_steel_ignites_a_creeper() {
+        use crate::entity::mob::Kind;
+        let (mut sim, x, y, z) = redstone_sim();
+        let mut r = JavaRandom::new(5);
+        let id = sim.mobs.spawn(
+            Kind::Creeper,
+            [x as f64 + 3.5, y as f64, z as f64 + 3.5],
+            0.0,
+            &mut r,
+        );
+        sim.play.inv.main[sim.play.inv.selected] = Some(crate::item::Stack::new(259, 0, 1));
+        let mut ev = Vec::new();
+        sim.step(&[Command::Interact { id }], &mut ev);
+        let lit = ev.iter().any(|e| match e {
+            Event::Sounds(l) => l.iter().any(|s| s.0 == "fire.ignite"),
+            _ => false,
+        });
+        assert!(lit, "fire.ignite played");
+        assert!(sim.mobs.list.iter().any(|m| m.id == id && m.ignited));
+        for _ in 0..28 {
+            sim.step(&[], &mut ev);
+        }
+        assert!(
+            sim.mobs.list.iter().any(|m| m.id == id && !m.dead),
+            "still swelling"
+        );
+        let mut boom = false;
+        for _ in 0..4 {
+            ev.clear();
+            sim.step(&[], &mut ev);
+            boom |= ev.iter().any(|e| matches!(e, Event::Explosions(_)));
+        }
+        assert!(boom, "exploded after the fuse");
+    }
+
     #[test]
     fn big_slime_splits_and_bone_tames_wolf() {
         use crate::entity::mob::Kind;

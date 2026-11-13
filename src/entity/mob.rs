@@ -373,6 +373,8 @@ pub struct Mob {
     pub fuse: i32,
     pub prev_fuse: i32,
     fuse_dir: i32,
+    /// Creeper `hasIgnited` (flint and steel; DataWatcher 18).
+    pub ignited: bool,
     /// Chicken wing flap (`field_70886_e` etc.) and egg timer.
     pub wing: f32,
     pub prev_wing: f32,
@@ -656,6 +658,7 @@ impl Mob {
             fuse: 0,
             prev_fuse: 0,
             fuse_dir: -1,
+            ignited: false,
             wing: 0.0,
             prev_wing: 0.0,
             wing_dest: 0.0,
@@ -2393,6 +2396,25 @@ impl Mobs {
                     Some(Stack { meta: d, ..s })
                 })
             }
+            (Kind::Creeper, Some(259)) => {
+                // EntityCreeper.interact: flint and steel lights the fuse
+                let pitch = m.rand.next_float() * 0.4 + 0.8;
+                out.sounds.push((
+                    "fire.ignite",
+                    [m.pos[0] + 0.5, m.pos[1] + 0.5, m.pos[2] + 0.5],
+                    1.0,
+                    pitch,
+                ));
+                m.ignited = true;
+                // ItemStack.damageItem(1, player)
+                let s = held.unwrap();
+                let d = s.meta + 1;
+                Some(if d > crate::item::max_damage(s.id) {
+                    None
+                } else {
+                    Some(Stack { meta: d, ..s })
+                })
+            }
             (Kind::Cow | Kind::Mooshroom, Some(325)) => {
                 // EntityCow.interact: a bucket of milk
                 let s = held.unwrap();
@@ -3483,22 +3505,32 @@ fn creeper(
     explosions: &mut Vec<crate::world::explosion::Request>,
 ) {
     let d2 = m.dist2(player.feet);
-    let swelling = m.target_player && d2 < 9.0 && m.can_see(w, player.eye());
-    let stop = !m.target_player || d2 > 49.0;
-    if swelling {
-        m.fuse_dir = 1;
+    // EntityAICreeperSwell.shouldExecute: already swelling, or the target
+    // is within three blocks. It shares mutex bit 1 with the movement
+    // tasks, so the creeper stands still while it runs.
+    let executing = m.fuse_dir > 0 || (m.target_player && d2 < 9.0);
+    if executing {
         m.path.clear();
-        m.look_at = Some(player.eye());
-    } else if stop {
-        m.fuse_dir = -1;
-    }
-    if m.target_player && !swelling {
+        // updateTask
+        m.fuse_dir = if !m.target_player || d2 > 49.0 || !m.can_see(w, player.eye()) {
+            -1
+        } else {
+            1
+        };
+        if m.target_player {
+            m.look_at = Some(player.eye());
+        }
+    } else if m.target_player {
         m.look_at = Some(player.eye());
         if m.no_path() || m.ticks % 10 == 0 {
             m.path_to(w, player.feet[0], player.feet[1], player.feet[2], 1.0);
         }
-    } else if !m.target_player {
+    } else {
         wander(m, w, 0.8, 120);
+    }
+    // EntityCreeper.onUpdate
+    if m.ignited {
+        m.fuse_dir = 1;
     }
     if m.fuse_dir > 0 && m.fuse == 0 {
         out.sounds.push(("creeper.primed", m.pos, 1.0, 0.5));

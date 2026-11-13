@@ -2046,38 +2046,44 @@ fn crops(cx: &Ctx, out: &mut Vec<Vertex>, id: u8, meta: i32, x: i32, y: i32, z: 
 }
 
 /// `BlockRedstoneWire.isPowerProviderOrWire` (without the repeater facing test).
-fn wire_link(id: u8) -> bool {
+/// `Block.canProvidePower` of everything but the wire and the repeaters.
+fn provides_power(id: u8) -> bool {
+    // detector rail, lever, pressure plates, redstone torches, buttons,
+    // tripwire hook, trapped chest, weighted plates, comparators, daylight
+    // sensor, redstone block
     matches!(
         id,
-        block::REDSTONE_WIRE
-            | block::REDSTONE_TORCH
-            | block::UNLIT_REDSTONE_TORCH
-            | block::LEVER
-            | block::STONE_BUTTON
-            | block::WOODEN_BUTTON
-            | block::STONE_PRESSURE_PLATE
-            | block::WOODEN_PRESSURE_PLATE
-            | block::UNPOWERED_REPEATER
-            | block::POWERED_REPEATER
-            | block::TRIPWIRE_HOOK
-            | block::REDSTONE_BLOCK
-            | block::DETECTOR_RAIL
+        28 | 69 | 70 | 72 | 75 | 76 | 77 | 131 | 143 | 146 | 147 | 148 | 149 | 150 | 151 | 152
     )
 }
 
-/// `renderBlockRedstoneWire` (flat part).
+/// `BlockRedstoneWire.isPowerProviderOrWire(world, x, y, z, direction)`
+fn wire_link(r: &Region, x: i32, y: i32, z: i32, dir: i32) -> bool {
+    let id = r.block(x, y, z);
+    if id == block::REDSTONE_WIRE {
+        return true;
+    }
+    if id != block::UNPOWERED_REPEATER && id != block::POWERED_REPEATER {
+        return provides_power(id) && dir != -1;
+    }
+    let m = r.meta(x, y, z) & 3;
+    // Direction.rotateOpposite
+    dir == m || dir == [2, 3, 0, 1][m as usize]
+}
+
+/// `RenderBlocks.renderBlockRedstoneWire`
 fn wire(cx: &Ctx, out: &mut Vec<Vertex>, meta: i32, x: i32, y: i32, z: i32) {
     let r = &cx.r;
     let light = light_bytes(r.bright(x, y, z));
-    let link = |dx: i32, dz: i32| {
-        let n = r.block(x + dx, y, z + dz);
-        wire_link(n)
-            || (!block::info(n).normal_cube()
-                && r.block(x + dx, y - 1, z + dz) == block::REDSTONE_WIRE)
-            || (!block::info(r.block(x, y + 1, z)).normal_cube()
-                && r.block(x + dx, y + 1, z + dz) == block::REDSTONE_WIRE)
+    let normal = |x: i32, y: i32, z: i32| block::info(r.block(x, y, z)).normal_cube();
+    let (Some(cross), Some(line), Some(cross_o), Some(line_o)) = (
+        cx.rect(block::REDSTONE_WIRE, 0, 0),
+        cx.rect(block::REDSTONE_WIRE, 0, 1),
+        cx.rect(block::REDSTONE_WIRE, 0, 2),
+        cx.rect(block::REDSTONE_WIRE, 0, 3),
+    ) else {
+        return;
     };
-    let (w, e, n, s) = (link(-1, 0), link(1, 0), link(0, -1), link(0, 1));
     // BlockRedstoneWire.colorMultiplier
     let f = meta as f32 / 15.0;
     let mut red = f * 0.6 + 0.4;
@@ -2087,65 +2093,159 @@ fn wire(cx: &Ctx, out: &mut Vec<Vertex>, meta: i32, x: i32, y: i32, z: i32) {
     let green = (f * f * 0.7 - 0.5).max(0.0);
     let blue = (f * f * 0.6 - 0.7).max(0.0);
     let c = col(red, green, blue);
-    let (bx, by, bz) = ((x - 16) as f32, y as f32 + 0.015625, (z - 16) as f32);
-    let line_ew = (w || e) && !n && !s;
-    let line_ns = (n || s) && !w && !e;
-    if line_ew || line_ns {
-        let (Some(t), Some(o)) = (
-            cx.rect(block::REDSTONE_WIRE, 0, 1),
-            cx.rect(block::REDSTONE_WIRE, 0, 3),
-        ) else {
-            return;
-        };
-        for (tex, color) in [(t, c), (o, [255u8; 4])] {
-            let (u0, v0, u1, v1) = (tex[0], tex[1], tex[2], tex[3]);
-            let p = [
-                [bx + 1.0, by, bz + 1.0],
-                [bx + 1.0, by, bz],
-                [bx, by, bz],
-                [bx, by, bz + 1.0],
-            ];
-            let uv = if line_ns {
+    let white = [255u8; 4];
+
+    let side = |dx: i32, dz: i32, dir: i32| {
+        wire_link(r, x + dx, y, z + dz, dir)
+            || !normal(x + dx, y, z + dz) && wire_link(r, x + dx, y - 1, z + dz, -1)
+    };
+    let (mut w, mut e, mut n, mut so) =
+        (side(-1, 0, 1), side(1, 0, 3), side(0, -1, 2), side(0, 1, 0));
+    let open_above = !normal(x, y + 1, z);
+    if open_above {
+        let up =
+            |dx: i32, dz: i32| normal(x + dx, y, z + dz) && wire_link(r, x + dx, y + 1, z + dz, -1);
+        w |= up(-1, 0);
+        e |= up(1, 0);
+        n |= up(0, -1);
+        so |= up(0, 1);
+    }
+
+    let (bx, by, bz) = ((x - 16) as f32, y as f32, (z - 16) as f32);
+    let (mut x0, mut x1, mut z0, mut z1) = (bx, bx + 1.0, bz, bz + 1.0);
+    let yy = (by as f64 + 0.015625) as f32;
+    let mut kind = 0;
+    if (w || e) && !n && !so {
+        kind = 1;
+    }
+    if (n || so) && !e && !w {
+        kind = 2;
+    }
+    // `getInterpolatedU` / `getInterpolatedV`
+    let iu = |t: [f32; 4], d: i32| t[0] + (t[2] - t[0]) * d as f32 / 16.0;
+    let iv = |t: [f32; 4], d: i32| t[1] + (t[3] - t[1]) * d as f32 / 16.0;
+    if kind == 0 {
+        let (mut u0, mut v0, mut u1, mut v1) = (0, 0, 16, 16);
+        if !w {
+            x0 += 0.3125;
+            u0 += 5;
+        }
+        if !e {
+            x1 -= 0.3125;
+            u1 -= 5;
+        }
+        if !n {
+            z0 += 0.3125;
+            v0 += 5;
+        }
+        if !so {
+            z1 -= 0.3125;
+            v1 -= 5;
+        }
+        for (t, color) in [(cross, c), (cross_o, white)] {
+            quad(
+                out,
+                [[x1, yy, z1], [x1, yy, z0], [x0, yy, z0], [x0, yy, z1]],
+                [
+                    [iu(t, u1), iv(t, v1)],
+                    [iu(t, u1), iv(t, v0)],
+                    [iu(t, u0), iv(t, v0)],
+                    [iu(t, u0), iv(t, v1)],
+                ],
+                color,
+                light,
+                false,
+            );
+        }
+    } else {
+        for (t, color) in [(line, c), (line_o, white)] {
+            let (u0, v0, u1, v1) = (t[0], t[1], t[2], t[3]);
+            let uv = if kind == 1 {
                 [[u1, v1], [u1, v0], [u0, v0], [u0, v1]]
             } else {
-                [[u1, v0], [u0, v0], [u0, v1], [u1, v1]]
+                [[u1, v1], [u0, v1], [u0, v0], [u1, v0]]
             };
-            quad(out, p, uv, color, light, false);
+            quad(
+                out,
+                [[x1, yy, z1], [x1, yy, z0], [x0, yy, z0], [x0, yy, z1]],
+                uv,
+                color,
+                light,
+                false,
+            );
         }
-        return;
     }
-    let (Some(t), Some(o)) = (
-        cx.rect(block::REDSTONE_WIRE, 0, 0),
-        cx.rect(block::REDSTONE_WIRE, 0, 2),
-    ) else {
-        return;
-    };
-    let any = w || e || n || s;
-    let x0 = if w || !any { 0.0 } else { 0.3125 };
-    let x1 = if e || !any { 1.0 } else { 0.6875 };
-    let z0 = if n || !any { 0.0 } else { 0.3125 };
-    let z1 = if s || !any { 1.0 } else { 0.6875 };
-    for (tex, color) in [(t, c), (o, [255u8; 4])] {
-        let u = |a: f32| tex[0] + (tex[2] - tex[0]) * a;
-        let v = |a: f32| tex[1] + (tex[3] - tex[1]) * a;
-        quad(
-            out,
-            [
-                [bx + x1, by, bz + z1],
-                [bx + x1, by, bz + z0],
-                [bx + x0, by, bz + z0],
-                [bx + x0, by, bz + z1],
-            ],
-            [
-                [u(x1), v(z1)],
-                [u(x1), v(z0)],
-                [u(x0), v(z0)],
-                [u(x0), v(z1)],
-            ],
-            color,
-            light,
-            false,
-        );
+
+    // the wire climbing the faces of the blocks beside it
+    if open_above {
+        let top = by + 1.0 + 0.021875;
+        let o = 0.015625f32;
+        let climbs = |dx: i32, dz: i32| {
+            normal(x + dx, y, z + dz) && r.block(x + dx, y + 1, z + dz) == block::REDSTONE_WIRE
+        };
+        for (t, color) in [(line, c), (line_o, white)] {
+            let (u0, v0, u1, v1) = (t[0], t[1], t[2], t[3]);
+            if climbs(-1, 0) {
+                quad(
+                    out,
+                    [
+                        [bx + o, top, bz + 1.0],
+                        [bx + o, by, bz + 1.0],
+                        [bx + o, by, bz],
+                        [bx + o, top, bz],
+                    ],
+                    [[u1, v0], [u0, v0], [u0, v1], [u1, v1]],
+                    color,
+                    light,
+                    false,
+                );
+            }
+            if climbs(1, 0) {
+                quad(
+                    out,
+                    [
+                        [bx + 1.0 - o, by, bz + 1.0],
+                        [bx + 1.0 - o, top, bz + 1.0],
+                        [bx + 1.0 - o, top, bz],
+                        [bx + 1.0 - o, by, bz],
+                    ],
+                    [[u0, v1], [u1, v1], [u1, v0], [u0, v0]],
+                    color,
+                    light,
+                    false,
+                );
+            }
+            if climbs(0, -1) {
+                quad(
+                    out,
+                    [
+                        [bx + 1.0, by, bz + o],
+                        [bx + 1.0, top, bz + o],
+                        [bx, top, bz + o],
+                        [bx, by, bz + o],
+                    ],
+                    [[u0, v1], [u1, v1], [u1, v0], [u0, v0]],
+                    color,
+                    light,
+                    false,
+                );
+            }
+            if climbs(0, 1) {
+                quad(
+                    out,
+                    [
+                        [bx + 1.0, top, bz + 1.0 - o],
+                        [bx + 1.0, by, bz + 1.0 - o],
+                        [bx, by, bz + 1.0 - o],
+                        [bx, top, bz + 1.0 - o],
+                    ],
+                    [[u1, v0], [u0, v0], [u0, v1], [u1, v1]],
+                    color,
+                    light,
+                    false,
+                );
+            }
+        }
     }
 }
 

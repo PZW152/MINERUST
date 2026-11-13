@@ -1430,15 +1430,7 @@ impl ServerWorld {
 
     /// `Block.dropBlockAsItem` for blocks a piston breaks.
     pub(crate) fn drop_block_as_item(&mut self, b: u8, bm: i32, x: i32, y: i32, z: i32) {
-        let mut r = std::mem::replace(&mut self.rand, JavaRandom::new(0));
-        let drops = crate::item::drops(b, bm, &mut r);
-        self.rand = r;
-        for st in drops {
-            self.gen_entities.push(GenEntity::Item {
-                pos: [x as f64 + 0.5, y as f64 + 0.5, z as f64 + 0.5],
-                stack: st,
-            });
-        }
+        self.drop_block_with_chance(b, bm, x, y, z, 1.0, 0);
     }
 
     /// `World.setTileEntity` for a moving block.

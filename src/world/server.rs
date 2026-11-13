@@ -476,6 +476,11 @@ pub enum GenEntity {
         pos: [f64; 3],
         yaw: f32,
     },
+    /// `Block.dropXpOnBlockBreak`: one experience orb.
+    Xp {
+        pos: [f64; 3],
+        amount: i32,
+    },
     /// Wither skeletons, blazes and the like placed by structures.
     Mob {
         kind: crate::entity::mob::Kind,
@@ -932,6 +937,46 @@ impl ServerWorld {
             for (dx, dz) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
                 self.mark_dirty_chunk(cx + dx, cz + dz);
             }
+        }
+    }
+
+    /// `Block.dropBlockAsItemWithChance(this, x, y, z, meta, chance, fortune)`
+    pub fn drop_block_with_chance(
+        &mut self,
+        id: u8,
+        meta: i32,
+        x: i32,
+        y: i32,
+        z: i32,
+        chance: f32,
+        fortune: i32,
+    ) {
+        let mut r = std::mem::replace(&mut self.rand, JavaRandom::new(0));
+        let v = crate::drops::drop_block_as_item_with_chance(id, meta, chance, fortune, &mut r);
+        self.rand = r;
+        self.spawn_drops(v, x, y, z);
+    }
+
+    /// Spawns what a block at `x, y, z` dropped.
+    pub fn spawn_drops(&mut self, v: Vec<crate::drops::Spawn>, x: i32, y: i32, z: i32) {
+        use crate::drops::Spawn;
+        for s in v {
+            self.gen_entities.push(match s {
+                Spawn::Item(stack, o) => GenEntity::ScatteredItem {
+                    pos: [x as f64 + o[0], y as f64 + o[1], z as f64 + o[2]],
+                    stack,
+                },
+                Spawn::Xp(amount) => GenEntity::Xp {
+                    pos: [x as f64 + 0.5, y as f64 + 0.5, z as f64 + 0.5],
+                    amount,
+                },
+                // BlockSilverfish: setLocationAndAngles(x + 0.5, y, z + 0.5)
+                Spawn::Silverfish => GenEntity::Mob {
+                    kind: crate::entity::mob::Kind::Silverfish,
+                    pos: [x as f64 + 0.5, y as f64, z as f64 + 0.5],
+                    variant: 0,
+                },
+            });
         }
     }
 

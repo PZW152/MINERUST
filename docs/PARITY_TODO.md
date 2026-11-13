@@ -56,8 +56,11 @@
       `HashSet<ChunkPosition>` 的迭代順序、`getBlockDensity`、所有實體（玩家眼高 0.12、創造模式也會被推、掉落物、
       船、礦車、箭、投擲物、落沙）、`doExplosionB(false)` 的掉落機率與連鎖 TNT、客戶端 `doExplosionB(true)` 的粒子；
       終界水晶的爆炸改回不起火
-- [ ] 方塊掉落表：每種方塊的 `quantityDropped` / `getItemDropped` / `damageDropped` 逐一移植（目前 `item::drops`
-      先算出全部掉落物，亂數順序與原版不同）
+- [x] 方塊掉落表：`src/drops.rs`，與原版 4 萬多筆參考資料一致；時運與絲綢之觸生效
+- [ ] 掉落的其餘路徑改走 `drops.rs`：`harvestBlock` 覆寫（剪刀、冰、雪片）、水沖與失去支撐、樹葉腐爛
+- [ ] 生物 AI 改為原版 `EntityAITasks` 任務系統（目前多為手寫近似；苦力怕已改）
+- [ ] 客戶端預測放置／破壞方塊
+- [x] 紅石線照 `renderBlockRedstoneWire` 重寫（連接規則、爬牆段）；點燃的 TNT 白色閃爍；苦力怕打火石點燃
 - [ ] 苦力怕：閃電劈中變成高壓苦力怕（爆炸半徑 6）、`mobGriefing` 規則
 - [x] GUI 漸層改為真正的頂點漸層（`drawGradientRect`）
 

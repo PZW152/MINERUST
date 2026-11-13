@@ -346,25 +346,7 @@ pub fn explosion_b(
 /// `Block.dropBlockAsItemWithChance(world, x, y, z, meta, chance, 0)`: each
 /// item of the drop is kept with `chance`.
 fn drop_with_chance(w: &mut ServerWorld, id: u8, meta: i32, x: i32, y: i32, z: i32, chance: f32) {
-    let mut r = std::mem::replace(&mut w.rand, JavaRandom::new(0));
-    let drops = crate::item::drops(id, meta as i32, &mut r);
-    for st in drops {
-        for _ in 0..st.count {
-            if r.next_float() <= chance {
-                // dropBlockAsItem_do
-                let f = 0.7f32;
-                let dx = (r.next_float() * f) as f64 + (1.0 - f) as f64 * 0.5;
-                let dy = (r.next_float() * f) as f64 + (1.0 - f) as f64 * 0.5;
-                let dz = (r.next_float() * f) as f64 + (1.0 - f) as f64 * 0.5;
-                w.gen_entities
-                    .push(super::server::GenEntity::ScatteredItem {
-                        pos: [x as f64 + dx, y as f64 + dy, z as f64 + dz],
-                        stack: crate::item::Stack::new(st.id, st.meta, 1),
-                    });
-            }
-        }
-    }
-    w.rand = r;
+    w.drop_block_with_chance(id, meta, x, y, z, chance, 0);
 }
 
 #[cfg(test)]

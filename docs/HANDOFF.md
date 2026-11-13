@@ -113,6 +113,7 @@ java -cp "out;$CP" XxxHarness tools/xxx_1710.txt
 | `src/crafting/` | `CraftingManager`（`data.rs` 由 `tools/RecipeHarness.java` 產生） |
 | `src/item_data.rs`、`src/item_text.rs` | 物品登錄資料（`tools/ItemHarness.java` → `tools/gen_items.py` 產生）、名稱與工具提示 |
 | `src/enchant.rs` | 附魔資料與 `EnchantmentHelper` |
+| `src/drops.rs` | 方塊掉落：`dropBlockAsItemWithChance`、`quantityDropped(WithBonus)`、`getItemDropped`、`damageDropped`、`canSilkHarvest`、`createStackedBlock`，逐類別移植，亂數順序含每個掉落物的三個位置浮點數；`ServerWorld::drop_block_with_chance` / `spawn_drops` 把結果生成到世界（玩家挖掘、爆炸、活塞共用）。`drops_silk.rs` 是由參考資料產生的兩張表 |
 | `src/inventory.rs` | `InventoryPlayer` |
 | `src/repair.rs` | `ContainerRepair.updateRepairOutput`（純函式；名稱比較用共用語言表 `lang::shared()`，等同原版共用的 `StringTranslate`） |
 | `src/render/item_block.rs` | `RenderBlocks.renderBlockAsItem`：方塊物品的面與前置轉換（GUI、掉落物、手持共用） |
@@ -187,6 +188,7 @@ minerust --seed 12345 --no-save --size 854 480 --screenshot out.png 6
 | 配方 | `tools/RecipeHarness.java` → `tools/recipes_1710.txt` → `src/crafting/data.rs` |
 | 物品、創造分頁、登錄名稱、生怪蛋顏色 | `tools/ItemHarness.java` → `tools/items_1710.txt` → `python tools/gen_items.py` |
 | 附魔清單與附魔台等級 | `tools/EnchantHarness.java` → `tools/enchant_1710.txt`（測試 `lists_and_levels_match_the_game`） |
+| 方塊掉落（175 種方塊 × 16 中繼值 × 時運 0–3 × 4 個種子，共 4 萬多筆，含經驗球與亂數順序） | `tools/DropHarness.java` → `tools/drops_1710.txt`（測試 `drops_match_the_game`） |
 | 皮甲染色配方 | `tools/DyeHarness.java` → `tools/dyes_1710.txt`（測試 `armor_dyes_match_the_game`） |
 | 方塊貼圖（每個方塊 × 中繼值 × 面的 `Block.getIcon`） | `tools/IconHarness.java` → `tools/icons_1710.txt`（測試 `block_textures_match_the_game`；由專屬繪製函式自選貼圖的方塊列在測試的 `OWN` 裡） |
 | 鐵砧的修理／合併／命名費用 | `tools/RepairHarness.java` 讀 `tools/repair_cases.txt` → `tools/repair_1710.txt`（測試 `anvil_matches_the_game`） |
@@ -242,8 +244,18 @@ MINERUST_BENCH=10 minerust --seed 12345 --no-save --size 1920 1080 --distance 16
      關閉平滑光照時這些方塊還不會跟著變。
    - 半透明分段目前不做深度排序（1.7.10 也不排序，保持一致）。
 
-1. **附魔效果本身**：附魔台已完成，但多數附魔尚未作用在遊戲上（鋒利／不死剋星／節肢剋星、擊退、燃燒、掠奪、
-   效率、絲綢之觸、耐久、幸運、保護系列、水下呼吸、親水性、荊棘、力量／衝擊／火焰／無限、海之眷顧、魚餌）。
+1. **生物 AI 不是原版的任務系統**（使用者 2026-11-13：「生物特性有問題」）。`entity/mob.rs` 的各種生物行為多半是手寫的近似
+   （例如苦力怕原本自己判斷距離膨脹），不是 `EntityAITasks` + 各個 `EntityAIBase` 的移植。這違反準則 1。
+   應該做的是：移植 `EntityAITasks`（優先序、mutex、每 3 tick 重新評估）與常用任務（`EntityAISwimming`、`AttackOnCollide`、
+   `Wander`、`WatchClosest`、`LookIdle`、`NearestAttackableTarget`、`HurtByTarget`、`Panic`、`Tempt`、`Mate`、`FollowParent`……），
+   再逐一把生物改掛任務。苦力怕已先照 `EntityAICreeperSwell` 與 `EntityCreeper.onUpdate` / `interact` 改寫（含打火石點燃）。
+   高壓苦力怕（閃電）仍未做。
+1a. **附魔效果**：時運與絲綢之觸已經由 `drops.rs` 生效（玩家挖掘）。其餘尚未作用（鋒利／不死剋星／節肢剋星、擊退、燃燒、掠奪、
+   效率、耐久、保護系列、水下呼吸、親水性、荊棘、力量／衝擊／火焰／無限、海之眷顧、魚餌）。
+   掉落的另外幾條路徑還沒改走 `drops.rs`：`harvestBlock` 的覆寫（剪刀剪樹葉／草／藤蔓、冰、雪片仍用舊的 `item::drops`）、
+   水沖掉火把與植物失去支撐時的掉落、樹葉腐爛。`item::has_subtypes` 是近似（`max_damage == 0`），應改為原版 `getHasSubtypes` 的表。
+1b. **客戶端預測放置／破壞方塊**：原版客戶端會立刻改自己的世界，伺服器再確認。本專案仍等伺服器的快照（實測 25–100 ms）。
+   做法已想好：客戶端改自己的區塊副本並記下原值與指令序號，伺服器在 `Event::Tick` 帶回已處理的序號；序號到了還沒收到該區塊的快照就還原。
    附魔台的書架粒子（`EntityEnchantmentTableParticleFX`）也還沒做。
 2. （已完成）方塊物品的 3D 模型，見第 6 節。
 3. 其他缺方塊的 GUI：信標、漏斗、投擲器、馬的物品欄、村民交易、書與羽毛筆。
@@ -315,4 +327,21 @@ MINERUST_BENCH=10 minerust --seed 12345 --no-save --size 1920 1080 --distance 16
     伺服器 tick 平均 5 ms，不再落後。**這一項沒有被證實**，需要使用者指出具體是哪個東西變快。
   **驗證**：`cargo test --release` 83 項通過；截圖確認六種木板、石英變體、乾草捆、木樓梯貼圖；基準 1,331 fps（視距 16，未退步）。
   抽搐與卡頓的修正只有編譯與邏輯推導，**沒有錄影逐幀驗證**。
+- `本次（第二批回報 + 掉落表，2026-11-14）`：
+  - **方塊掉落表**：`src/drops.rs` 完成，與原版 4 萬多筆參考資料全部一致（測試 `drops_match_the_game`），接到玩家挖掘（含時運、絲綢之觸）、
+    爆炸、活塞。礦石經驗、蠹魚石放出蠹魚也走同一條路。
+  - **點燃的 TNT**：閃爍照 `RenderTNTPrimed` 改成純白（原版 `renderBlockAsItem` 自己把顏色設成 alpha 1，所以那個 0.8 的透明度其實沒作用，
+    每隔 5 tick 整塊變白），舊寫法是往白色內插 80% 且保留貼圖。「陷進下面的方塊」查不到位置錯誤（實體中心、0.98 的碰撞箱都對），
+    判斷是上一輪修掉的插值抖動；截圖確認現在坐在方塊上。
+  - **紅石線**：`mesher.rs` 的 `wire` 原本只有平面部分、連接規則是近似。已照 `renderBlockRedstoneWire` 與
+    `BlockRedstoneWire.isPowerProviderOrWire` 重寫：中繼器只連前後、比較器／陷阱箱／陽光感測器等會連、往上連要求旁邊是實心方塊、
+    孤立的線是中央小點而不是整個十字、爬上方塊側面的線段。
+  - **放方塊「有音效但放不下來」**：客戶端沒有做原版 `ItemBlock.onItemUse` 的檢查就播音效並送出指令；方塊與玩家（或生物）重疊、
+    或右鍵的是箱子等可互動方塊時，伺服器拒絕，按住右鍵要到下一次重複才成功。現在 `Game::placement` 先檢查
+    （`canPlaceEntityOnSide`：可取代、不與玩家和生物的碰撞箱相交），不通過就不播音效、不送出，與原版一致；伺服器端改用方塊真正的碰撞箱。
+    真正的「立即出現」還需要客戶端預測（第 7 節 1b）。
+  - **苦力怕**：打火石右鍵點燃（`fire.ignite`、耗損 1、之後固定膨脹到爆炸），膨脹邏輯照 `EntityAICreeperSwell`
+    （3 格內開始、超過 7 格或看不見才消退、膨脹時不移動）。測試 `flint_and_steel_ignites_a_creeper`。
+  **驗證**：`cargo test --release` 85 項通過；截圖確認紅石線（十字、直線、爬牆、被火把點亮）與 TNT 的白色閃爍；基準 1,355 fps。
+  放置檢查與苦力怕的實際手感沒有實機操作驗證。
   **查到的既有錯誤，待修**：伺服器端玩家的盔甲值從未設定（`living.armor` 恆為 0，`inventory.armor_value()` 沒人呼叫），盔甲不擋傷害也不耗損；玩家爆擊用了舊版隨機加成，1.7.10 是 ×1.5；武器附魔（鋒利系列、擊退、燃燒、掠奪）、保護系列、水下呼吸、荊棘、弓的附魔、附魔光澤都還沒接。
