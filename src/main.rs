@@ -802,6 +802,8 @@ struct App {
     front: Option<front::Front>,
     window: Option<Arc<Window>>,
     grabbed: bool,
+    /// Whether the game wanted the mouse on the last frame.
+    wanted_grab: bool,
     focused: bool,
     started: Instant,
     shift: bool,
@@ -822,9 +824,17 @@ impl App {
         } else {
             let _ = w.set_cursor_grab(CursorGrabMode::None);
             w.set_cursor_visible(true);
+            // MouseHelper.ungrabMouseCursor: the pointer goes to the middle
+            let size = w.inner_size();
+            let mid = (size.width as f32 / 2.0, size.height as f32 / 2.0);
+            let _ = w.set_cursor_position(winit::dpi::PhysicalPosition::new(mid.0, mid.1));
             if let Some(g) = &mut self.game {
                 g.input = Default::default();
+                g.mouse_px = mid;
             }
+        }
+        if std::env::var_os("MINERUST_DEBUG_GRAB").is_some() {
+            println!("Mouse: {}", if grab { "grabbed" } else { "released" });
         }
         self.grabbed = grab;
     }
@@ -1421,6 +1431,29 @@ impl ApplicationHandler for App {
                         }
                     }
                     g.frame((size.width, size.height));
+                    // Minecraft.displayGuiScreen: a screen the server opened
+                    // (a container window, the death screen) takes the mouse
+                    // out of the game (setIngameNotInFocus) and closing it
+                    // gives it back (setIngameFocus). Screens opened by a key
+                    // or a click ask for this themselves.
+                    let want = g.wants_grab();
+                    {
+                        // MINERUST_DEBUG_GRAB: start captured, as a real
+                        // session does, so captures can check the release
+                        static ONCE: std::sync::Once = std::sync::Once::new();
+                        let mut first = false;
+                        ONCE.call_once(|| first = true);
+                        if first && want && std::env::var_os("MINERUST_DEBUG_GRAB").is_some() {
+                            self.set_grab(true);
+                        }
+                    }
+                    if want != self.wanted_grab {
+                        self.wanted_grab = want;
+                        if self.focused && want != self.grabbed {
+                            self.set_grab(want);
+                        }
+                    }
+                    let Some(g) = &mut self.game else { return };
                     // isFramerateLimitBelowMax: 260 on the slider is "Unlimited"
                     let limit = g.limit_framerate();
                     if self.bench.is_none() && limit < 260 {
@@ -1522,6 +1555,7 @@ fn main() {
         atlas: None,
         window: None,
         grabbed: false,
+        wanted_grab: true,
         focused: true,
         started: Instant::now(),
         sync: FrameSync { next: None },

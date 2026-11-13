@@ -4137,6 +4137,206 @@ impl<'a, 'b> Rb<'a, 'b> {
     }
 
     /// `RenderBlocks.renderBlockBrewingStand`
+    /// `renderBlockLever`
+    pub fn render_block_lever(&mut self, x: i32, y: i32, z: i32) -> bool {
+        use crate::util::math::{cos, sin};
+        let var5 = self.meta;
+        let var6 = var5 & 7;
+        let var7 = (var5 & 8) > 0;
+        let var9 = self.overrideBlockTexture.is_some();
+        if !var9 {
+            self.overrideBlockTexture = Some(Icon::new(self.atlas().named("cobblestone")));
+        }
+        let var10 = 0.25f32;
+        let var11 = 0.1875f32;
+        let var12 = 0.1875f32;
+        let d = |v: f32| v as f64;
+        match var6 {
+            5 => self.set_render_bounds(
+                d(0.5 - var11),
+                0.0,
+                d(0.5 - var10),
+                d(0.5 + var11),
+                d(var12),
+                d(0.5 + var10),
+            ),
+            6 => self.set_render_bounds(
+                d(0.5 - var10),
+                0.0,
+                d(0.5 - var11),
+                d(0.5 + var10),
+                d(var12),
+                d(0.5 + var11),
+            ),
+            4 => self.set_render_bounds(
+                d(0.5 - var11),
+                d(0.5 - var10),
+                d(1.0 - var12),
+                d(0.5 + var11),
+                d(0.5 + var10),
+                1.0,
+            ),
+            3 => self.set_render_bounds(
+                d(0.5 - var11),
+                d(0.5 - var10),
+                0.0,
+                d(0.5 + var11),
+                d(0.5 + var10),
+                d(var12),
+            ),
+            2 => self.set_render_bounds(
+                d(1.0 - var12),
+                d(0.5 - var10),
+                d(0.5 - var11),
+                1.0,
+                d(0.5 + var10),
+                d(0.5 + var11),
+            ),
+            1 => self.set_render_bounds(
+                0.0,
+                d(0.5 - var10),
+                d(0.5 - var11),
+                d(var12),
+                d(0.5 + var10),
+                d(0.5 + var11),
+            ),
+            0 => self.set_render_bounds(
+                d(0.5 - var10),
+                d(1.0 - var12),
+                d(0.5 - var11),
+                d(0.5 + var10),
+                1.0,
+                d(0.5 + var11),
+            ),
+            _ => self.set_render_bounds(
+                d(0.5 - var11),
+                d(1.0 - var12),
+                d(0.5 - var10),
+                d(0.5 + var11),
+                1.0,
+                d(0.5 + var10),
+            ),
+        }
+        self.render_standard(x, y, z);
+        if !var9 {
+            self.overrideBlockTexture = None;
+        }
+        self.bright = self.mixed(x, y, z);
+        self.color(1.0, 1.0, 1.0);
+        let var13 = match self.overrideBlockTexture {
+            Some(i) => i,
+            None => Icon::new(self.atlas().named("lever")),
+        };
+        let mut var14 = var13.min_u();
+        let mut var16 = var13.min_v();
+        let mut var18 = var13.max_u();
+        let mut var20 = var13.max_v();
+        let var23 = d(0.0625f32);
+        let var24 = d(0.0625f32);
+        let var25 = d(0.625f32);
+        let mut var22: [[f64; 3]; 8] = [
+            [-var23, 0.0, -var24],
+            [var23, 0.0, -var24],
+            [var23, 0.0, var24],
+            [-var23, 0.0, var24],
+            [-var23, var25, -var24],
+            [var23, var25, -var24],
+            [var23, var25, var24],
+            [-var23, var25, var24],
+        ];
+        // Vec3.rotateAroundX / Y / Z
+        let rot_x = |v: &mut [f64; 3], a: f32| {
+            let (c, s) = (cos(a) as f64, sin(a) as f64);
+            let (y, z) = (v[1] * c + v[2] * s, v[2] * c - v[1] * s);
+            v[1] = y;
+            v[2] = z;
+        };
+        let rot_y = |v: &mut [f64; 3], a: f32| {
+            let (c, s) = (cos(a) as f64, sin(a) as f64);
+            let (x, z) = (v[0] * c + v[2] * s, v[2] * c - v[0] * s);
+            v[0] = x;
+            v[2] = z;
+        };
+        let rot_z = |v: &mut [f64; 3], a: f32| {
+            let (c, s) = (cos(a) as f64, sin(a) as f64);
+            let (x, y) = (v[0] * c + v[1] * s, v[1] * c - v[0] * s);
+            v[0] = x;
+            v[1] = y;
+        };
+        let pi = std::f32::consts::PI;
+        let (xf, yf, zf) = (x as f64, y as f64, z as f64);
+        for v in &mut var22 {
+            if var7 {
+                v[2] -= 0.0625;
+                rot_x(v, pi * 2.0 / 9.0);
+            } else {
+                v[2] += 0.0625;
+                rot_x(v, -pi * 2.0 / 9.0);
+            }
+            if var6 == 0 || var6 == 7 {
+                rot_z(v, pi);
+            }
+            if var6 == 6 || var6 == 0 {
+                rot_y(v, (std::f64::consts::PI / 2.0) as f32);
+            }
+            if var6 > 0 && var6 < 5 {
+                v[1] -= 0.375;
+                rot_x(v, (std::f64::consts::PI / 2.0) as f32);
+                if var6 == 4 {
+                    rot_y(v, 0.0);
+                }
+                if var6 == 3 {
+                    rot_y(v, pi);
+                }
+                if var6 == 2 {
+                    rot_y(v, (std::f64::consts::PI / 2.0) as f32);
+                }
+                if var6 == 1 {
+                    rot_y(v, (-std::f64::consts::PI / 2.0) as f32);
+                }
+                v[0] += xf + 0.5;
+                v[1] += d(y as f32 + 0.5);
+                v[2] += zf + 0.5;
+            } else if var6 != 0 && var6 != 7 {
+                v[0] += xf + 0.5;
+                v[1] += d(y as f32 + 0.125);
+                v[2] += zf + 0.5;
+            } else {
+                v[0] += xf + 0.5;
+                v[1] += d(y as f32 + 0.875);
+                v[2] += zf + 0.5;
+            }
+        }
+        let _ = yf;
+        for var30 in 0..6 {
+            if var30 == 0 {
+                var14 = var13.u(7.0);
+                var16 = var13.v(6.0);
+                var18 = var13.u(9.0);
+                var20 = var13.v(8.0);
+            } else if var30 == 2 {
+                var14 = var13.u(7.0);
+                var16 = var13.v(6.0);
+                var18 = var13.u(9.0);
+                var20 = var13.max_v();
+            }
+            let q: [usize; 4] = match var30 {
+                0 => [0, 1, 2, 3],
+                1 => [7, 6, 5, 4],
+                2 => [1, 0, 4, 5],
+                3 => [2, 1, 5, 6],
+                4 => [3, 2, 6, 7],
+                _ => [0, 3, 7, 4],
+            };
+            let (a, b, c, e) = (var22[q[0]], var22[q[1]], var22[q[2]], var22[q[3]]);
+            self.vertex(a[0], a[1], a[2], var14, var20);
+            self.vertex(b[0], b[1], b[2], var18, var20);
+            self.vertex(c[0], c[1], c[2], var18, var16);
+            self.vertex(e[0], e[1], e[2], var14, var16);
+        }
+        true
+    }
+
     pub fn render_brewing_stand(&mut self, x: i32, y: i32, z: i32) -> bool {
         self.set_render_bounds(0.4375, 0.0, 0.4375, 0.5625, 0.875, 0.5625);
         self.render_standard(x, y, z);

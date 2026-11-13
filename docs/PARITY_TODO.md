@@ -115,7 +115,9 @@
 - [ ] 物品名稱與說明一律由 `en_US.lang` 取得（藥水前綴與後綴、附魔書等）
 
 - [x] `RenderBlocks.renderStandardBlock`（含兩種平滑光照與六個 `renderFace*`）逐行移植；方塊、原木、石英柱、活塞底座與活塞頭已改走這條路
-- [ ] 其餘 `RenderBlocks` 渲染型態（樓梯、柵欄、門、液體、植物、紅石線……）改成逐行移植
+- [x] 紅石線、拉桿改為 `RenderBlocks` 逐行移植
+- [ ] 其餘 `RenderBlocks` 渲染型態（火把、中繼器、按鈕、壓力板、樓梯、柵欄、門、液體、植物……）改成逐行移植
+- [x] 伺服器開啟的介面（工作台、熔爐、箱子、死亡畫面）會釋放滑鼠
 - [ ] 粒子系統（`EffectRenderer` 與所有 `EntityFX`）逐類移植
 - [ ] `Entity` 基底：生物與玩家改用 `entity/base.rs`（水流推動、方塊碰撞反應、火）
 - [ ] 實體依區塊分組（`Chunk.entityLists`），影響 `getEntitiesWithinAABB` 的順序

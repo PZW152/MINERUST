@@ -1498,51 +1498,7 @@ fn shaped(cx: &Ctx, out: &mut Vec<Vertex>, id: u8, meta: i32, x: i32, y: i32, z:
             }
             block::FLOWER_POT => flower_pot(cx, out, meta, x, y, z),
             block::LEVER => {
-                // Cobblestone base and the handle (RenderBlocks.renderBlockLever).
-                let k = m & 7;
-                let on = m & 8 != 0;
-                let base: shapes::Bx = match k {
-                    1 => [0.0, 0.3125, 0.25, 0.1875, 0.6875, 0.75],
-                    2 => [0.8125, 0.3125, 0.25, 1.0, 0.6875, 0.75],
-                    3 => [0.25, 0.3125, 0.0, 0.75, 0.6875, 0.1875],
-                    4 => [0.25, 0.3125, 0.8125, 0.75, 0.6875, 1.0],
-                    5 | 6 => [0.25, 0.0, 0.3125, 0.75, 0.1875, 0.6875],
-                    _ => [0.25, 0.8125, 0.3125, 0.75, 1.0, 0.6875],
-                };
-                boxes(
-                    cx,
-                    out,
-                    x,
-                    y,
-                    z,
-                    &[base],
-                    &|_, f| cx.rect(block::COBBLESTONE, 0, f).map(|t| (t, false)),
-                    white,
-                );
-                let lean = if on { 0.15 } else { -0.15 };
-                let handle: shapes::Bx = match k {
-                    1 => [0.1875, 0.4375 + lean, 0.4375, 0.625, 0.5625 + lean, 0.5625],
-                    2 => [0.375, 0.4375 + lean, 0.4375, 0.8125, 0.5625 + lean, 0.5625],
-                    3 => [0.4375, 0.4375 + lean, 0.1875, 0.5625, 0.5625 + lean, 0.625],
-                    4 => [0.4375, 0.4375 + lean, 0.375, 0.5625, 0.5625 + lean, 0.8125],
-                    5 | 6 => [
-                        0.4375 + lean * 0.5,
-                        0.1875,
-                        0.4375,
-                        0.5625 + lean * 0.5,
-                        0.625,
-                        0.5625,
-                    ],
-                    _ => [
-                        0.4375 + lean * 0.5,
-                        0.375,
-                        0.4375,
-                        0.5625 + lean * 0.5,
-                        0.8125,
-                        0.5625,
-                    ],
-                };
-                boxes(cx, out, x, y, z, &[handle], &|_, f| plain(f), white);
+                rb::Rb::new(cx, out, id, meta).render_block_lever(x, y, z);
             }
             block::UNPOWERED_REPEATER | block::POWERED_REPEATER => {
                 let list = shapes::static_boxes(id, m);

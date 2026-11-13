@@ -235,6 +235,9 @@ MINERUST_BENCH=10 minerust --seed 12345 --no-save --size 1920 1080 --distance 16
 
 ## 7. 尚未完成（依優先順序）
 
+0a. **`mesher.rs` 的 `shaped()` 裡手寫近似的方塊外觀**改為 `RenderBlocks` 對應函式的逐行移植（已完成：標準方塊、原木、石英、活塞、
+   釀造台、鐵砧、紅石線、拉桿）。待做：火把（`renderTorchAtAngle`）、中繼器與比較器、按鈕、壓力板、絆線鉤與絆線、柵欄門、活板門、
+   門、梯子、鐵軌、柵欄、玻璃板、樓梯、液體、作物、莖、藤蔓、睡蓮、可可、火、床、煉藥鍋、終界門框、龍蛋、花盆、牆。
 0. **影像設定還沒生效的項目**（選單裡能調，但畫面不變，這是與原版的行為差異）：
    - 畫質「流暢」（`fancyGraphics = false`）：不透明樹葉（`leaves_*_opaque` 與 `isOpaqueCube`）、平面雲
      （`RenderGlobal.renderClouds`）、掉落物改平面貼圖、取消暈影、雨滴粒子減量。`rb.rs` 的 `FANCY_GRAPHICS` 仍是常數。
@@ -344,4 +347,16 @@ MINERUST_BENCH=10 minerust --seed 12345 --no-save --size 1920 1080 --distance 16
     （3 格內開始、超過 7 格或看不見才消退、膨脹時不移動）。測試 `flint_and_steel_ignites_a_creeper`。
   **驗證**：`cargo test --release` 85 項通過；截圖確認紅石線（十字、直線、爬牆、被火把點亮）與 TNT 的白色閃爍；基準 1,355 fps。
   放置檢查與苦力怕的實際手感沒有實機操作驗證。
+- `本次（2026-11-14，工作台與拉桿）`：
+  - **工作台、熔爐、箱子等伺服器開啟的介面完全不能用**：畫面有彈出，但滑鼠沒有釋放，視角還跟著滑鼠轉。原因是只有按鍵開的畫面
+    （背包、暫停）會回傳 `Request::Release`，伺服器經 `Event::Inventory` 開的視窗和死亡畫面沒有人去放開滑鼠。
+    以前只用 `--open use:` 截圖驗證過介面，從來沒用真的滑鼠操作過。修正：`main.rs` 每幀比對 `Game::wants_grab()` 的變化，
+    變了就抓取或釋放（`Minecraft.displayGuiScreen` 的 `setIngameNotInFocus` / `setIngameFocus`），釋放時游標移到視窗中央。
+    `MINERUST_DEBUG_GRAB=1` 會讓截圖模式一開始就抓取並印出 `Mouse: grabbed/released`，用它確認過開工作台會釋放。
+  - **拉桿**：原本底座尺寸不對、把手是一個隨開關平移的方塊。改為 `rb.rs` 的 `render_block_lever`（`renderBlockLever` 的逐行移植：
+    八種朝向、把手繞軸傾斜 ±40°、`lever` 貼圖的指定區域）。
+  - **教訓**：`mesher.rs` 的 `shaped()` 裡還有不少同類的手寫近似（中繼器的火把、按鈕、壓力板、絆線鉤、柵欄門、活板門、梯子、鐵軌等
+    是用碰撞箱或自訂方塊拼的），都該改成 `rb.rs` 裡對應 `RenderBlocks` 函式的逐行移植。使用者每回報一個就是一個，沒回報的多半也有問題。
+    另外凡是 GUI，都必須用真的滑鼠鍵盤流程驗證一次，不能只截圖。
+  **驗證**：`cargo test --release` 85 項通過；截圖確認拉桿四種擺法與開關狀態。
   **查到的既有錯誤，待修**：伺服器端玩家的盔甲值從未設定（`living.armor` 恆為 0，`inventory.armor_value()` 沒人呼叫），盔甲不擋傷害也不耗損；玩家爆擊用了舊版隨機加成，1.7.10 是 ×1.5；武器附魔（鋒利系列、擊退、燃燒、掠奪）、保護系列、水下呼吸、荊棘、弓的附魔、附魔光澤都還沒接。
