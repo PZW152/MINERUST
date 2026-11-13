@@ -36,24 +36,25 @@ impl ItemEntity {
         let dx = (r.next_float() * f) as f64 + (1.0 - f) as f64 * 0.5;
         let dy = (r.next_float() * f) as f64 + (1.0 - f) as f64 * 0.5;
         let dz = (r.next_float() * f) as f64 + (1.0 - f) as f64 * 0.5;
-        let mut e = Self::new(id, stack, [x as f64 + dx, y as f64 + dy, z as f64 + dz], r);
+        let mut e = Self::new(id, stack, [x as f64 + dx, y as f64 + dy, z as f64 + dz]);
         e.pickup_delay = 10;
         e
     }
 
-    /// `new EntityItem(world, x, y, z, stack)`. `Math.random()` comes from
-    /// `r` so runs are reproducible.
-    pub fn new(id: u32, stack: Stack, pos: [f64; 3], r: &mut JavaRandom) -> ItemEntity {
-        let hover = (r.next_double() * std::f64::consts::PI * 2.0) as f32;
+    /// `new EntityItem(world, x, y, z, stack)`; its `Math.random()` draws
+    /// leave every world and entity generator alone.
+    pub fn new(id: u32, stack: Stack, pos: [f64; 3]) -> ItemEntity {
+        use crate::util::math::math_random;
+        let hover = (math_random() * std::f64::consts::PI * 2.0) as f32;
         let mut e = Ent::new(0.25, 0.25, entity_seed(id));
         e.y_offset = e.height / 2.0;
         e.can_trigger_walking = false;
         e.set_position(pos[0], pos[1], pos[2]);
-        e.yaw = (r.next_double() * 360.0) as f32;
+        e.yaw = (math_random() * 360.0) as f32;
         e.motion = [
-            (r.next_double() * 0.2f32 as f64 - 0.1f32 as f64) as f32 as f64,
+            (math_random() * 0.2f32 as f64 - 0.1f32 as f64) as f32 as f64,
             0.2f32 as f64,
-            (r.next_double() * 0.2f32 as f64 - 0.1f32 as f64) as f32 as f64,
+            (math_random() * 0.2f32 as f64 - 0.1f32 as f64) as f32 as f64,
         ];
         e.prev = e.pos;
         e.last_tick = e.pos;

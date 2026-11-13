@@ -2756,7 +2756,6 @@ impl Sim {
                                 nid,
                                 crate::item::Stack::new(333, 0, 1),
                                 p,
-                                &mut r,
                             );
                             play.prand = r;
                             it.pickup_delay = 10;
@@ -4042,7 +4041,6 @@ mod tests {
             7,
             crate::item::Stack::new(crate::item::STICK, 0, 5),
             [x as f64 + 0.5, y as f64 + 1.0, z as f64 + 0.5],
-            &mut r,
         );
         let bytes = Play::drops_nbt(&[it], &[], &[], 0);
         let mut back = Play::new(GameMode::Survival);
@@ -4606,7 +4604,6 @@ mod tests {
             999,
             crate::item::Stack::new(crate::item::STICK, 0, 1),
             [x as f64 + 1.5, y as f64 + 0.125, z as f64 + 0.5],
-            &mut r,
         );
         it.e.motion = [0.0; 3];
         it.pickup_delay = 100;

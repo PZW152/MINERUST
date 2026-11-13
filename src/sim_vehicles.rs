@@ -218,7 +218,7 @@ impl Sim {
         let id = play.next_item;
         play.next_item += 1;
         let mut r = std::mem::replace(&mut play.prand, JavaRandom::new(0));
-        let mut it = crate::entity::item::ItemEntity::new(id, st, pos, &mut r);
+        let mut it = crate::entity::item::ItemEntity::new(id, st, pos);
         play.prand = r;
         it.pickup_delay = 10;
         play.items.push(it);
@@ -426,7 +426,7 @@ impl Sim {
                     let nid = play.next_item;
                     play.next_item += 1;
                     let mut r = std::mem::replace(&mut play.prand, JavaRandom::new(0));
-                    let mut it = crate::entity::item::ItemEntity::new(nid, st, p, &mut r);
+                    let mut it = crate::entity::item::ItemEntity::new(nid, st, p);
                     play.prand = r;
                     it.e.motion = m;
                     play.items.push(it);

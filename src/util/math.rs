@@ -138,3 +138,18 @@ pub fn ceiling_float_int(f: f32) -> i32 {
         i
     }
 }
+
+static MATH_RANDOM: std::sync::Mutex<Option<crate::java::JavaRandom>> = std::sync::Mutex::new(None);
+
+/// `Math.random()`: its own `new Random()`, apart from every world or
+/// entity generator.
+pub fn math_random() -> f64 {
+    let mut g = MATH_RANDOM.lock().unwrap();
+    let r = g.get_or_insert_with(|| {
+        let t = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos() as i64);
+        crate::java::JavaRandom::new(t ^ 0x5DEECE66D)
+    });
+    r.next_double()
+}

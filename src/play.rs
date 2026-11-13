@@ -597,7 +597,7 @@ impl Play {
                 let id = self.next_item;
                 self.next_item += 1;
                 let mut pr = std::mem::replace(&mut self.prand, JavaRandom::new(0));
-                let mut it = ItemEntity::new(id, stack, pos, &mut pr);
+                let mut it = ItemEntity::new(id, stack, pos);
                 self.prand = pr;
                 it.pickup_delay = 10;
                 self.spawn(it);
@@ -631,7 +631,7 @@ impl Play {
         self.next_item += 1;
         // posY is the eye position; getEyeHeight() is 0.12.
         let eye = y + 1.62f32 as f64;
-        let mut e = ItemEntity::new(id, s, [x, eye - 0.3f32 as f64 + 0.12f32 as f64, z], r);
+        let mut e = ItemEntity::new(id, s, [x, eye - 0.3f32 as f64 + 0.12f32 as f64, z]);
         e.pickup_delay = 40;
         let pr = &mut self.prand;
         if random_choice {
@@ -1308,7 +1308,7 @@ impl Play {
         at[1] -= if FY[f] != 0 { 0.125 } else { 0.15625 };
         let id = self.next_item;
         self.next_item += 1;
-        let mut e = ItemEntity::new(id, one, at, r);
+        let mut e = ItemEntity::new(id, one, at);
         let d3 = r.next_double() * 0.1 + 0.2;
         e.e.motion = [dir[0] * d3, 0.20000000298023224, dir[2] * d3];
         for v in &mut e.e.motion {
@@ -1886,7 +1886,7 @@ impl Play {
         for (p, st) in drops {
             let id = self.next_item;
             self.next_item += 1;
-            let mut e = ItemEntity::new(id, st, p, &mut rnd);
+            let mut e = ItemEntity::new(id, st, p);
             e.pickup_delay = 10;
             self.spawn(e);
         }
@@ -2278,7 +2278,7 @@ impl Play {
         };
         let id = self.next_item;
         self.next_item += 1;
-        let mut e = ItemEntity::new(id, stack, [p(0), p(1), p(2)], r);
+        let mut e = ItemEntity::new(id, stack, [p(0), p(1), p(2)]);
         let mo = t.list("Motion");
         let m = |i: usize| match mo.get(i) {
             Some(Nbt::Double(v)) => *v,
