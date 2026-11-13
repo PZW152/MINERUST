@@ -422,6 +422,45 @@ pub struct Mob {
     /// `EntityDragon.ringBuffer` (yaw, y) and `ringBufferIndex`.
     pub ring: [[f64; 2]; 64],
     pub ring_index: i32,
+    /// `EntityTrackerEntry` and what it told the client.
+    pub net: Net,
+}
+
+/// A mob's `EntityTrackerEntry` and the client's view of it: the position
+/// and angles of the last move packet (`setPositionAndRotation2`'s target)
+/// and the `S19PacketEntityHeadLook` head yaw.
+#[derive(Clone, Debug, Default)]
+pub struct Net {
+    tracker: Option<super::tracker::Tracker>,
+    sp: super::tracker::ServerPos,
+    pub at: [f64; 3],
+    pub yaw: f32,
+    pub pitch: f32,
+    /// Bumped by every move, look or teleport packet.
+    pub seq: u32,
+    head_byte: i32,
+    pub head: f32,
+}
+
+impl super::tracker::Track for Mob {
+    fn pos(&self) -> [f64; 3] {
+        self.pos
+    }
+    fn yaw(&self) -> f32 {
+        self.yaw
+    }
+    fn pitch(&self) -> f32 {
+        self.pitch
+    }
+    fn motion(&self) -> [f64; 3] {
+        self.motion
+    }
+    fn width(&self) -> f32 {
+        self.dims().0
+    }
+    fn riding(&self) -> bool {
+        self.riding.is_some()
+    }
 }
 
 /// What the player looks like to the mobs.
@@ -555,6 +594,7 @@ impl Mob {
         let (w, h) = kind.size();
         let hw = w as f64 / 2.0;
         let mut m = Mob {
+            net: Net::default(),
             id,
             kind,
             pos,
@@ -1152,6 +1192,107 @@ impl Mob {
                     self.head_yaw = self.body_yaw + 75.0;
                 }
             }
+        }
+    }
+
+    /// `EntityTracker.trackEntity` / `EntityTrackerEntry.sendLocationToAllClients`
+    /// for this mob, seen from one client.
+    pub fn track(&mut self) {
+        use super::tracker::{byte_angle, Packet, Tracker};
+        let mut t = match self.net.tracker.take() {
+            Some(t) => t,
+            None => {
+                let (range, vel) = match self.kind {
+                    Kind::Squid => (64, true),
+                    Kind::Bat => (80, false),
+                    Kind::EnderDragon => (160, true),
+                    _ => (80, true),
+                };
+                Tracker::new(self, range, 3, vel, 0, 0)
+            }
+        };
+        let mut out = Vec::new();
+        let (mut air, mut vel) = (false, false);
+        t.update(
+            self, &mut air, false, &mut vel, self.pos, false, true, &mut out,
+        );
+        self.net.tracker = Some(t);
+        for p in out {
+            match p {
+                Packet::Spawn { .. } => {
+                    // S0FPacketSpawnMob: multiplyBy32AndRound, byte angles
+                    let size = super::tracker::Size::of(self.dims().0);
+                    self.net.sp.pos = [
+                        size.mul32(self.pos[0]),
+                        crate::util::math::floor_double(self.pos[1] * 32.0),
+                        size.mul32(self.pos[2]),
+                    ];
+                    let b = |a: f32| ((a * 256.0 / 360.0) as i32 as i8) as f32 * 360.0 / 256.0;
+                    self.net.at = [
+                        self.net.sp.pos[0] as f64 / 32.0,
+                        self.net.sp.pos[1] as f64 / 32.0,
+                        self.net.sp.pos[2] as f64 / 32.0,
+                    ];
+                    self.net.yaw = b(self.yaw);
+                    self.net.pitch = b(self.pitch);
+                    self.net.head = b(self.head_yaw);
+                    self.net.head_byte =
+                        crate::util::math::floor_float(self.head_yaw * 256.0 / 360.0);
+                    self.net.seq = self.net.seq.wrapping_add(1);
+                }
+                p => {
+                    if let Some((at, y, pi)) = self.net.sp.apply(&p, self.net.yaw, self.net.pitch) {
+                        self.net.at = at;
+                        self.net.yaw = y;
+                        self.net.pitch = pi;
+                        self.net.seq = self.net.seq.wrapping_add(1);
+                    }
+                }
+            }
+        }
+        // S19PacketEntityHeadLook
+        let h = crate::util::math::floor_float(self.head_yaw * 256.0 / 360.0);
+        if (h - self.net.head_byte).abs() >= 4 {
+            self.net.head_byte = h;
+            self.net.head = byte_angle(h);
+        }
+    }
+
+    /// The end of `EntityLivingBase.onUpdate`: `renderYawOffset` turns
+    /// towards the direction moved (`updateDistance`, once `func_110146_f`).
+    pub fn update_distance(&mut self) {
+        let (dx, dz) = (
+            self.pos[0] - self.prev_pos[0],
+            self.pos[2] - self.prev_pos[2],
+        );
+        let d2 = (dx * dx + dz * dz) as f32;
+        let mut target = self.body_yaw;
+        if d2 > 0.0025000002 {
+            target = (dz.atan2(dx) as f32) * 180.0 / std::f32::consts::PI - 90.0;
+        }
+        if self.swing > 0.0 {
+            target = self.yaw;
+        }
+        let a = wrap(target - self.body_yaw);
+        self.body_yaw += a * 0.3;
+        let mut b = wrap(self.yaw - self.body_yaw);
+        b = b.clamp(-75.0, 75.0);
+        self.body_yaw = self.yaw - b;
+        if b * b > 2500.0 {
+            self.body_yaw += b * 0.2;
+        }
+        // keep the previous angles within 180 degrees for interpolation
+        while self.body_yaw - self.prev_body_yaw < -180.0 {
+            self.prev_body_yaw -= 360.0;
+        }
+        while self.body_yaw - self.prev_body_yaw >= 180.0 {
+            self.prev_body_yaw += 360.0;
+        }
+        while self.head_yaw - self.prev_head_yaw < -180.0 {
+            self.prev_head_yaw -= 360.0;
+        }
+        while self.head_yaw - self.prev_head_yaw >= 180.0 {
+            self.prev_head_yaw += 360.0;
         }
     }
 
@@ -1881,6 +2022,10 @@ impl Mobs {
                 &mut strikes,
                 &mut balls,
             );
+            if m.kind != Kind::EnderDragon {
+                m.update_distance();
+            }
+            m.track();
         }
         self.fireballs.extend(balls);
         // EntityFireball.onUpdate
@@ -3027,8 +3172,7 @@ fn tick_mob(
     if !m.kind.old_ai() {
         m.body_helper();
     } else {
-        // EntityLivingBase.func_110146_f: body follows movement direction
-        m.body_yaw = m.yaw;
+        // the old AI turns the head with the body (rotationYawHead)
         m.head_yaw = m.yaw;
     }
     // jumping (EntityJumpHelper / onLivingUpdate)

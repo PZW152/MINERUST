@@ -228,6 +228,9 @@ pub struct Game {
     gui: crate::gui_container::GuiContainer,
     /// `WindowClick`s sent (and predicted) so far.
     sent_clicks: u32,
+    /// `--open use:x,y,z`: the block to right-click once the world is up,
+    /// then the `MINERUST_CLICKS` to send.
+    start_use: Option<[i32; 3]>,
     /// The client container's drag state (`PlayerControllerMP.windowClick`
     /// runs `slotClick` locally too).
     client_drag: crate::container::Drag,
@@ -506,6 +509,7 @@ impl Game {
             },
             gui: Default::default(),
             sent_clicks: 0,
+            start_use: None,
             client_drag: Default::default(),
             items: Vec::new(),
             pickups: Vec::new(),
@@ -571,6 +575,23 @@ impl Game {
     }
 
     /// True once every chunk in view has an up-to-date mesh.
+    /// MINERUST_CLICKS=slot:button:mode,...  window clicks for captures
+    fn send_start_clicks(&mut self) {
+        if let Ok(list) = std::env::var("MINERUST_CLICKS") {
+            for part in list.split(',') {
+                let f: Vec<i32> = part.split(':').filter_map(|x| x.parse().ok()).collect();
+                if f.len() == 3 {
+                    self.sent_clicks = self.sent_clicks.wrapping_add(1);
+                    let _ = self.sim.commands.send(Command::WindowClick {
+                        slot: f[0],
+                        button: f[1],
+                        mode: f[2],
+                    });
+                }
+            }
+        }
+    }
+
     /// `--open`: start with a screen open (automated captures).
     pub fn apply_start_screen(&mut self) {
         if let Ok(s) = std::env::var("MINERUST_OPEN") {
@@ -578,6 +599,13 @@ impl Game {
                 "inventory" => {
                     let _ = self.sim.commands.send(Command::OpenInventory);
                     self.screen = Screen::Window;
+                }
+                // use:x,y,z  right-click a block (opens its window)
+                o if o.starts_with("use:") => {
+                    let v: Vec<i32> = o[4..].split(',').filter_map(|t| t.parse().ok()).collect();
+                    if v.len() == 3 {
+                        self.start_use = Some([v[0], v[1], v[2]]);
+                    }
                 }
                 "pause" => {
                     self.screen = Screen::Paused;
@@ -598,19 +626,8 @@ impl Game {
                 self.renderer.extent.height as f32 / 2.0 - 10.0,
             );
         }
-        // MINERUST_CLICKS=slot:button:mode,...  window clicks for captures
-        if let Ok(list) = std::env::var("MINERUST_CLICKS") {
-            for part in list.split(',') {
-                let f: Vec<i32> = part.split(':').filter_map(|x| x.parse().ok()).collect();
-                if f.len() == 3 {
-                    self.sent_clicks = self.sent_clicks.wrapping_add(1);
-                    let _ = self.sim.commands.send(Command::WindowClick {
-                        slot: f[0],
-                        button: f[1],
-                        mode: f[2],
-                    });
-                }
-            }
+        if self.start_use.is_none() {
+            self.send_start_clicks();
         }
     }
 
@@ -1011,7 +1028,7 @@ impl Game {
                             m.iter().map(|v| v.id).collect();
                         self.dying.retain(|i| alive.contains(i));
                     }
-                    self.mobs = m;
+                    self.merge_mobs(m);
                     self.arrows = a;
                 }
                 Event::Hits(_) => {}
@@ -1254,6 +1271,17 @@ impl Game {
     }
 
     fn tick(&mut self) {
+        self.tick_mobs();
+        if self.ticks >= 60 {
+            if let Some(t) = self.start_use.take() {
+                let _ = self.sim.commands.send(Command::Use {
+                    target: t,
+                    face: [0, 1, 0],
+                    sneaking: false,
+                });
+                self.send_start_clicks();
+            }
+        }
         self.ticks += 1;
         // EntityPlayerSP.onLivingUpdate: timeInPortal
         self.prev_portal_time = self.portal_time;
@@ -1513,26 +1541,114 @@ impl Game {
     fn debris(&self, pos: [i32; 3]) -> (Option<[f32; 4]>, [f32; 3]) {
         let id = self.world.peek_block(pos[0], pos[1], pos[2]);
         let meta = self.world.peek_meta(pos[0], pos[1], pos[2]);
-        self.debris_of(id, meta)
+        self.debris_of(id, meta, pos)
     }
 
-    fn debris_of(&self, id: u8, meta: u8) -> (Option<[f32; 4]>, [f32; 3]) {
-        let face = if id == block::GRASS {
-            0
-        } else if id == block::LOG || id == block::LOG2 {
-            2
-        } else {
-            0
-        };
+    /// `EntityDiggingFX`: `getIcon(0, meta)` and `applyColourMultiplier`
+    /// (grass keeps its untinted bottom face, dirt).
+    fn debris_of(&self, id: u8, meta: u8, pos: [i32; 3]) -> (Option<[f32; 4]>, [f32; 3]) {
         let tex = self
             .atlas
-            .tile(id, meta, face)
+            .tile(id, meta, 0)
             .or_else(|| self.atlas.tile(id, meta, 2));
-        let tint = match id {
-            block::LEAVES | block::LEAVES2 | block::VINE | block::TALLGRASS => [0.28, 0.71, 0.09],
-            _ => [1.0; 3],
+        let tint = if id == block::GRASS {
+            [1.0; 3]
+        } else {
+            crate::render::mesher::rgb(self.color_multiplier(id, pos))
         };
         (tex, tint)
+    }
+
+    /// `EntityDiggingFX.applyRenderColor` (the sprinting dust).
+    fn debris_render_color(&self, id: u8, meta: u8) -> (Option<[f32; 4]>, [f32; 3]) {
+        let tex = self
+            .atlas
+            .tile(id, meta, 0)
+            .or_else(|| self.atlas.tile(id, meta, 2));
+        let c = match id {
+            block::GRASS => 0xFFFFFF,
+            // Block.getRenderColor
+            block::LEAVES if meta & 3 == 1 => 6396257,
+            block::LEAVES if meta & 3 == 2 => 8431445,
+            block::LEAVES | block::LEAVES2 | block::VINE => 4764952,
+            block::TALLGRASS if meta != 0 => self.grass_basic(),
+            block::DOUBLE_PLANT if matches!(meta & 7, 2 | 3) => self.grass_basic(),
+            block::WATERLILY => 2129968,
+            104 | 105 => stem_color(meta as i32),
+            _ => 0xFFFFFF,
+        };
+        (tex, crate::render::mesher::rgb(c))
+    }
+
+    /// `ColorizerGrass.getGrassColor(0.5, 1.0)`
+    fn grass_basic(&self) -> u32 {
+        let (t, r) = (0.5f64, 1.0f64 * 0.5);
+        let i = ((1.0 - t) * 255.0) as usize;
+        let j = ((1.0 - r) * 255.0) as usize;
+        self.atlas
+            .grass_map
+            .get(j << 8 | i)
+            .copied()
+            .unwrap_or(0x7FB238)
+    }
+
+    /// `Block.colorMultiplier(world, x, y, z)`
+    fn color_multiplier(&self, id: u8, p: [i32; 3]) -> u32 {
+        let meta = self.world.peek_meta(p[0], p[1], p[2]) as i32;
+        let grass = |x: i32, z: i32| {
+            self.world
+                .biome(x, z)
+                .grass_color(&self.noise, &self.atlas.grass_map, x, p[1], z)
+        };
+        let foliage = |x: i32, z: i32| {
+            self.world
+                .biome(x, z)
+                .foliage_color(&self.noise, &self.atlas.foliage_map, x, p[1], z)
+        };
+        match id {
+            // BlockOldLeaf: spruce and birch have fixed colours
+            block::LEAVES if meta & 3 == 1 => 6396257,
+            block::LEAVES if meta & 3 == 2 => 8431445,
+            // BlockLeaves: the 3x3 biome average
+            block::LEAVES | block::LEAVES2 => {
+                let (mut r, mut g, mut b) = (0u32, 0u32, 0u32);
+                for dz in -1..=1 {
+                    for dx in -1..=1 {
+                        let c = foliage(p[0] + dx, p[2] + dz);
+                        r += (c & 0xFF0000) >> 16;
+                        g += (c & 0xFF00) >> 8;
+                        b += c & 0xFF;
+                    }
+                }
+                (r / 9 & 255) << 16 | (g / 9 & 255) << 8 | b / 9 & 255
+            }
+            block::VINE => foliage(p[0], p[2]),
+            block::TALLGRASS => {
+                if meta == 0 {
+                    0xFFFFFF
+                } else {
+                    grass(p[0], p[2])
+                }
+            }
+            block::DOUBLE_PLANT => {
+                // getVariant: the top half reads the half below
+                let v = if meta & 8 != 0 {
+                    self.world.peek_meta(p[0], p[1] - 1, p[2]) as i32 & 7
+                } else {
+                    meta & 7
+                };
+                if v == 2 || v == 3 {
+                    grass(p[0], p[2])
+                } else {
+                    0xFFFFFF
+                }
+            }
+            block::REEDS => grass(p[0], p[2]),
+            block::WATERLILY => 2129968,
+            104 | 105 => stem_color(meta),
+            block::REDSTONE_WIRE => 8388608,
+            _ => 0xFFFFFF,
+        }
     }
 
     /// Per-tick particle spawning around the player.
@@ -1616,7 +1732,9 @@ impl Game {
                 math::floor_double(self.player.pos[2]),
             );
             if self.world.peek_block(x, y, z) != block::AIR {
-                let (tex, tint) = self.debris([x, y, z]);
+                let id = self.world.peek_block(x, y, z);
+                let meta = self.world.peek_meta(x, y, z);
+                let (tex, tint) = self.debris_render_color(id, meta);
                 let r = &mut self.particle_rand;
                 let p = [
                     self.player.pos[0] + (r.next_float() as f64 - 0.5) * 0.6,
@@ -2137,6 +2255,7 @@ impl Game {
             h: h as i32,
             effects: !self.stats.effects.is_empty(),
             mouse: self.gui_mouse_i(),
+            age: self.ticks as f32 + self.partial,
         };
         let keys = self.container_keys();
         let mut gui = std::mem::take(&mut self.gui);
@@ -2149,6 +2268,139 @@ impl Game {
     pub fn mouse_moved(&mut self) {
         if self.screen == Screen::Window {
             self.with_container(|g, f, _, _| g.mouse_dragged(f));
+        }
+    }
+
+    /// The client's `WorldClient` copies of the mobs: a new snapshot keeps
+    /// the client-side motion state and starts a three-step interpolation
+    /// whenever the tracker sent a move (`handleEntityMovement` ->
+    /// `setPositionAndRotation2(.., 3)`).
+    fn merge_mobs(&mut self, list: Vec<crate::sim::MobView>) {
+        let mut old: std::collections::HashMap<u32, crate::sim::MobView> =
+            self.mobs.drain(..).map(|m| (m.id, m)).collect();
+        for mut v in list {
+            let old_v = old.remove(&v.id);
+            if v.kind == crate::entity::mob::Kind::EnderDragon {
+                // EntityDragon moves by its own interpolation: server frames
+                self.mobs.push(v);
+                continue;
+            }
+            match old_v {
+                Some(o) => {
+                    let shift = [
+                        o.pos[0] - v.pos[0],
+                        o.pos[1] - v.pos[1],
+                        o.pos[2] - v.pos[2],
+                    ];
+                    for i in 0..3 {
+                        v.bb[i] += shift[i];
+                        v.bb[i + 3] += shift[i];
+                    }
+                    let seq = v.net_seq;
+                    v.incs = if seq != o.net_seq { 3 } else { o.incs };
+                    v.pos = o.pos;
+                    v.prev = o.prev;
+                    v.yaw = o.yaw;
+                    v.body_yaw = o.body_yaw;
+                    v.prev_body_yaw = o.prev_body_yaw;
+                    v.head_yaw = o.head_yaw;
+                    v.prev_head_yaw = o.prev_head_yaw;
+                    v.pitch = o.pitch;
+                    v.prev_pitch = o.prev_pitch;
+                    v.limb_swing = o.limb_swing;
+                    v.limb_amount = o.limb_amount;
+                    v.prev_limb_amount = o.prev_limb_amount;
+                }
+                None => {
+                    // handleSpawnMob: setPositionAndRotation at the packet's place
+                    v.pos = v.net_at;
+                    v.prev = v.net_at;
+                    v.yaw = v.net_yaw;
+                    v.body_yaw = v.net_yaw;
+                    v.prev_body_yaw = v.net_yaw;
+                    v.head_yaw = v.net_head;
+                    v.prev_head_yaw = v.net_head;
+                    v.pitch = v.net_pitch;
+                    v.prev_pitch = v.net_pitch;
+                    v.limb_swing = 0.0;
+                    v.limb_amount = 0.0;
+                    v.prev_limb_amount = 0.0;
+                    v.incs = 0;
+                }
+            }
+            self.mobs.push(v);
+        }
+    }
+
+    /// `EntityLivingBase.onUpdate` of the client's mobs: interpolation,
+    /// `updateDistance` and the limb swing from the client's own movement.
+    fn tick_mobs(&mut self) {
+        let wrap = |a: f32| {
+            let mut a = a % 360.0;
+            if a >= 180.0 {
+                a -= 360.0;
+            }
+            if a < -180.0 {
+                a += 360.0;
+            }
+            a
+        };
+        for m in &mut self.mobs {
+            if m.kind == crate::entity::mob::Kind::EnderDragon {
+                continue;
+            }
+            m.prev = m.pos;
+            m.prev_body_yaw = m.body_yaw;
+            m.prev_head_yaw = m.head_yaw;
+            m.prev_pitch = m.pitch;
+            m.prev_limb_amount = m.limb_amount;
+            if m.incs > 0 {
+                let n = m.incs as f64;
+                let old = m.pos;
+                for i in 0..3 {
+                    m.pos[i] += (m.net_at[i] - m.pos[i]) / n;
+                }
+                m.yaw = (m.yaw as f64 + wrap(m.net_yaw - m.yaw) as f64 / n) as f32;
+                m.pitch = (m.pitch as f64 + (m.net_pitch - m.pitch) as f64 / n) as f32;
+                m.incs -= 1;
+                for i in 0..3 {
+                    m.bb[i] += m.pos[i] - old[i];
+                    m.bb[i + 3] += m.pos[i] - old[i];
+                }
+            }
+            m.head_yaw = m.net_head;
+            // EntityLivingBase.moveEntityWithHeading: limbSwingAmount
+            let (dx, dz) = (m.pos[0] - m.prev[0], m.pos[2] - m.prev[2]);
+            let f = ((dx * dx + dz * dz).sqrt() as f32 * 4.0).min(1.0);
+            m.limb_amount += (f - m.limb_amount) * 0.4;
+            m.limb_swing += m.limb_amount;
+            // updateDistance
+            let d2 = (dx * dx + dz * dz) as f32;
+            let mut target = m.body_yaw;
+            if d2 > 0.0025000002 {
+                target = (dz.atan2(dx) as f32) * 180.0 / std::f32::consts::PI - 90.0;
+            }
+            if m.swing > 0.0 {
+                target = m.yaw;
+            }
+            m.body_yaw += wrap(target - m.body_yaw) * 0.3;
+            let b = wrap(m.yaw - m.body_yaw).clamp(-75.0, 75.0);
+            m.body_yaw = m.yaw - b;
+            if b * b > 2500.0 {
+                m.body_yaw += b * 0.2;
+            }
+            while m.body_yaw - m.prev_body_yaw < -180.0 {
+                m.prev_body_yaw -= 360.0;
+            }
+            while m.body_yaw - m.prev_body_yaw >= 180.0 {
+                m.prev_body_yaw += 360.0;
+            }
+            while m.head_yaw - m.prev_head_yaw < -180.0 {
+                m.prev_head_yaw -= 360.0;
+            }
+            while m.head_yaw - m.prev_head_yaw >= 180.0 {
+                m.prev_head_yaw += 360.0;
+            }
         }
     }
 
@@ -3323,6 +3575,7 @@ impl Game {
                     h: ui.h as i32,
                     effects: !lines.is_empty(),
                     mouse: (m.0.floor() as i32, m.1.floor() as i32),
+                    age: self.ticks as f32 + partial,
                 };
                 self.gui.draw(&mut ui, &frame, &self.lang, &lines);
             }
@@ -3639,4 +3892,9 @@ impl Game {
         }
         (self.renderer, self.shell, self.lang, self.audio)
     }
+}
+
+/// `BlockStem.getRenderColor`
+fn stem_color(meta: i32) -> u32 {
+    ((meta * 32) << 16 | (255 - meta * 8) << 8 | meta * 4) as u32
 }

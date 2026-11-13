@@ -279,6 +279,17 @@ pub struct MobView {
     /// Ender dragon movement history (yaw, y), newest at `ring_index`.
     pub ring: Vec<[f64; 2]>,
     pub ring_index: i32,
+    /// The tracker's packets as the client got them: target position and
+    /// angles of `setPositionAndRotation2`, a counter that moves with every
+    /// packet, and the `S19` head yaw.
+    pub net_at: [f64; 3],
+    pub net_yaw: f32,
+    pub net_pitch: f32,
+    pub net_seq: u32,
+    pub net_head: f32,
+    /// Client side: `rotationYaw` and `newPosRotationIncrements`.
+    pub yaw: f32,
+    pub incs: i32,
 }
 
 #[derive(Clone, Debug)]
@@ -2872,6 +2883,13 @@ impl Sim {
                     Vec::new()
                 },
                 ring_index: m.ring_index,
+                net_at: m.net.at,
+                net_yaw: m.net.yaw,
+                net_pitch: m.net.pitch,
+                net_seq: m.net.seq,
+                net_head: m.net.head,
+                yaw: m.yaw,
+                incs: 0,
                 bb: [
                     m.bb.min[0],
                     m.bb.min[1],
@@ -3682,6 +3700,46 @@ mod tests {
                 .sum::<u32>(),
             4
         );
+    }
+
+    #[test]
+    #[ignore]
+    fn mob_body_follows_walking() {
+        let cfg = SimConfig {
+            seed: 12345,
+            view: 3,
+            save_dir: None,
+            start_time: 6000,
+            freeze_time: true,
+            mode: GameMode::Creative,
+        };
+        let (mut sim, start) = Sim::new(&cfg);
+        let mut ev = Vec::new();
+        for _ in 0..40 {
+            sim.step(&[], &mut ev);
+        }
+        let p = start.pos;
+        let id = 900000;
+        sim.mobs.list.push(crate::entity::mob::Mob::new(
+            id,
+            crate::entity::mob::Kind::Cow,
+            [p[0] + 3.0, p[1] + 1.0, p[2] + 3.0],
+            0.0,
+            7,
+        ));
+        for t in 0..600 {
+            sim.step(&[], &mut ev);
+            if let Some(m) = sim.mobs.list.iter().find(|m| m.id == id) {
+                let (dx, dz) = (m.pos[0] - m.prev_pos[0], m.pos[2] - m.prev_pos[2]);
+                if dx * dx + dz * dz > 1e-6 {
+                    let dir = (dz.atan2(dx) * 180.0 / std::f64::consts::PI) as f32 - 90.0;
+                    eprintln!(
+                        "{t} pos {:.3} {:.3} move {:.1} yaw {:.1} body {:.1} head {:.1}",
+                        m.pos[0], m.pos[2], dir, m.yaw, m.body_yaw, m.head_yaw
+                    );
+                }
+            }
+        }
     }
 
     fn redstone_sim() -> (Sim, i32, i32, i32) {

@@ -1,5 +1,5 @@
 //! `GuiMainMenu.renderSkybox`: `drawPanorama` into a 256x256 viewport (64
-//! jittered passes of the six `panorama_N.png` faces), seven
+//! jittered passes of the six `panorama_N.png` faces), the
 //! `rotateAndBlurSkybox` passes, as an 8-bit framebuffer holds them. The
 //! result is drawn stretched over the screen with linear filtering.
 
@@ -86,7 +86,16 @@ impl Panorama {
     /// `drawPanorama` and seven `rotateAndBlurSkybox`; `t` is
     /// `panoramaTimer + partialTicks`. Returns the 256x256 RGBA texture, row
     /// 0 being the framebuffer's bottom row.
+    ///
+    /// The final quad binds no texture of its own: it samples the
+    /// background texture as the seventh pass's `glCopyTexSubImage2D` left
+    /// it, the image after six passes (the seventh only draws into the
+    /// discarded default framebuffer).
     pub fn render(&self, t: f32) -> Vec<u8> {
+        self.render_passes(t, 6)
+    }
+
+    pub fn render_passes(&self, t: f32, passes: usize) -> Vec<u8> {
         let a = ((t / 400.0).sin() * 25.0 + 20.0) as f64;
         let b = (-t * 0.1) as f64;
         // gluPerspective(120, 1, ...)
@@ -130,7 +139,7 @@ impl Panorama {
                 });
             }
         });
-        for _ in 0..7 {
+        for _ in 0..passes {
             // glCopyTexSubImage2D, then three quads at u offsets -1, 0, +1
             // texels with alpha 1, 1/2, 1/3: the texture lands transposed
             let src = fb.clone();
@@ -177,4 +186,38 @@ pub fn screen_uv(w: f32, h: f32) -> [[f32; 2]; 4] {
         at(0.5 - a, 0.5 - b),
         at(0.5 + a, 0.5 - b),
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Writes the raw and blurred frames as PPM (`MINERUST_PANO_OUT`).
+    #[test]
+    fn dump_frames() {
+        let (Ok(jar), Ok(out)) = (
+            std::env::var("MC1710_JAR"),
+            std::env::var("MINERUST_PANO_OUT"),
+        ) else {
+            return;
+        };
+        let f = std::fs::File::open(jar).unwrap();
+        let mut j = zip::ZipArchive::new(f).unwrap();
+        let atlas = crate::render::atlas::Atlas::load(&mut j).unwrap();
+        let p = Panorama::new(&atlas.ui);
+        for (name, n) in [("raw", 0), ("blur", 7)] {
+            let px = p.render_passes(0.0, n);
+            let mut v = b"P6 256 256 255
+"
+            .to_vec();
+            // row 0 is the bottom: flip for the image
+            for y in (0..256).rev() {
+                for x in 0..256 {
+                    let i = (y * 256 + x) * 4;
+                    v.extend_from_slice(&px[i..i + 3]);
+                }
+            }
+            std::fs::write(format!("{out}/{name}.ppm"), v).unwrap();
+        }
+    }
 }

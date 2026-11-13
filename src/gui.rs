@@ -110,6 +110,19 @@ impl<'a> Ui<'a> {
             .extend_from_slice(&[q[0], q[1], q[2], q[0], q[2], q[3]]);
     }
 
+    /// `GuiInventory.func_147046_a`: the player model at `(x, y)`.
+    pub fn player_model(&mut self, x: f32, y: f32, scale: f32, dx: f32, dy: f32, age: f32) {
+        let q = render::model::player_gui(self.atlas.skin_tex(), x, y, scale, dx, dy, age);
+        for c in q.chunks(4) {
+            let mut c = [c[0], c[1], c[2], c[3]];
+            for v in &mut c {
+                v.light = [BLOCKS, 0, 0, 0];
+            }
+            self.v
+                .extend_from_slice(&[c[0], c[1], c[2], c[0], c[2], c[3]]);
+        }
+    }
+
     /// A 16x16 icon from the block/item atlas by texture name
     /// (`drawTexturedModelRectFromIcon`).
     pub fn named_icon(&mut self, name: &str, x: f32, y: f32) {

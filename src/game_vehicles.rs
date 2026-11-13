@@ -313,7 +313,7 @@ impl Game {
     pub(super) fn destroyed_fx(&mut self, list: Vec<([i32; 3], u8, i32)>) {
         for (p, id, meta) in list {
             self.block_sound(id, p, "dig");
-            let (dt, dti) = self.debris_of(id, meta as u8);
+            let (dt, dti) = self.debris_of(id, meta as u8, p);
             self.particles.destroy(p, dt, dti);
         }
     }

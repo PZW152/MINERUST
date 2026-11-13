@@ -711,6 +711,14 @@ impl Atlas {
         })
     }
 
+    /// `steve.png` in the block atlas.
+    pub fn skin_tex(&self) -> crate::render::model::Tex {
+        crate::render::model::Tex {
+            rect: self.rects[self.skin as usize],
+            size: 64.0,
+        }
+    }
+
     pub fn mob_tex(&self, name: &str) -> Option<crate::render::model::Tex> {
         let &(t, cell) = self.mobs.get(name)?;
         Some(crate::render::model::Tex {

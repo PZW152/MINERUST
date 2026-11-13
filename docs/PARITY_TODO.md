@@ -12,7 +12,17 @@
 - [x] 藥水物品（飲用）、釀造台（方塊、`TileEntityBrewingStand`、介面、存檔）、牛奶、金蘋果
 - [x] `EntityThrowable`：雪球、蛋（孵小雞）、終界珍珠、噴濺藥水（`playAuxSFX(2002)`、`EntitySpellParticleFX`），女巫照原版選藥水並投擲
 - [ ] 生物身上的持續藥水效果、玻璃瓶裝水、幼年生物的大小與模型
-- [ ] 容器點擊一律改為 `Container.slotClick` / `mergeItemStack` / `transferStackInSlot` 逐行移植；方塊破壞時內容物的散落方式
+- [x] 容器點擊：`Container.slotClick` 七種模式（拖曳分配、雙擊收集、數字鍵交換、Q 丟出、創造複製）、`mergeItemStack`、
+      各容器的 `transferStackInSlot`、`SlotCrafting` / `SlotFurnace` / 盔甲欄 / 釀造欄；客戶端以同一套程式預測
+- [x] 合成：`CraftingManager` 的 317 條配方（原版順序、鏡像、萬用中繼值）、工具修復、地圖複製
+- [x] 盔甲欄（存檔 Slot 100–103）、精確的 `addItemStackToInventory`、關閉介面時合成格與游標物品被丟出
+- [x] 物品名稱（全部語言）、稀有度顏色、`getTooltip`（攻擊傷害、附魔、藥水效果、唱片）、多行 `drawHoveringText`
+- [x] 背包畫面的玩家模型（`GuiInventory.func_147046_a`，隨滑鼠轉向）
+- [x] 生物：`EntityTrackerEntry`（1/32 位置、4/32 門檻、`S19` 頭部）與客戶端三步內插、`updateDistance` 身體朝向、
+      客戶端肢體擺動
+- [ ] 方塊破壞時容器內容物的散落方式
+- [ ] 特殊配方（皮甲染色、煙火、書本複製、地圖擴大）需要物品 NBT
+- [ ] 背包玩家模型上的盔甲與手持物品、物品附魔光澤
 - [x] 船：`EntityBoat` 兩端物理（客戶端預測、`isBoatEmpty`）、`ItemBoat`、`interactFirst` / `mountEntity` /
       `dismountEntity`、`updateRiderPosition`、撞毀成木材與木棍、摔落、`EntityTrackerEntry` 封包（`S0E` / `S14` / `S18` /
       `S12` / `S1C` / `S1B`）、`getBoundingBox` 讓所有實體與船相撞、`RenderBoat`、「按 LSHIFT 下來」提示
@@ -36,7 +46,7 @@
 - [ ] 方塊掉落表：每種方塊的 `quantityDropped` / `getItemDropped` / `damageDropped` 逐一移植（目前 `item::drops`
       先算出全部掉落物，亂數順序與原版不同）
 - [ ] 苦力怕：閃電劈中變成高壓苦力怕（爆炸半徑 6）、`mobGriefing` 規則
-- [ ] GUI 漸層用兩個矩形近似（`drawGradientRect`）
+- [x] GUI 漸層改為真正的頂點漸層（`drawGradientRect`）
 
 ## B. 缺少的方塊（28 種）
 
@@ -89,4 +99,6 @@
 - [ ] 隨機 tick 與排程 tick 統一為 `Block.updateTick`（樹苗、作物、耕地、莖、地獄疣、可可、熔岩點火……）
 
 方塊破壞粒子以外的全部粒子類型核對、`RenderGlobal` 的雲層 fancy 模式、半透明在區塊內排序、物品附魔光澤、
-生物裝備渲染、名牌、影子、`EntityRenderer` 的視角晃動與受傷傾斜、第三人稱視角、GUI 全部畫面
+生物裝備渲染、名牌、影子、`EntityRenderer` 的視角晃動與受傷傾斜、第三人稱視角、
+GUI：創造模式物品欄、聊天與指令、告示牌、附魔台、鐵砧、信標、漏斗、馬、村民交易、書、成就與統計、資源包、
+材質包以外的其餘設定子畫面、載入畫面

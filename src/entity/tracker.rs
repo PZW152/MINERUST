@@ -5,6 +5,38 @@
 use super::base::Ent;
 use crate::util::math;
 
+/// What `EntityTrackerEntry` reads of its entity.
+pub trait Track {
+    fn pos(&self) -> [f64; 3];
+    fn yaw(&self) -> f32;
+    fn pitch(&self) -> f32;
+    fn motion(&self) -> [f64; 3];
+    fn width(&self) -> f32;
+    /// `ridingEntity != null`
+    fn riding(&self) -> bool;
+}
+
+impl Track for Ent {
+    fn pos(&self) -> [f64; 3] {
+        self.pos
+    }
+    fn yaw(&self) -> f32 {
+        self.yaw
+    }
+    fn pitch(&self) -> f32 {
+        self.pitch
+    }
+    fn motion(&self) -> [f64; 3] {
+        self.motion
+    }
+    fn width(&self) -> f32 {
+        self.width
+    }
+    fn riding(&self) -> bool {
+        self.riding.is_some()
+    }
+}
+
 /// `Entity$EnumEntitySize`, from `setSize`'s width.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Size {
@@ -159,7 +191,7 @@ pub struct Tracker {
 impl Tracker {
     /// `EntityTracker.addEntityToTracker(entity, range, frequency, velocity)`
     pub fn new(
-        e: &Ent,
+        e: &impl Track,
         range: i32,
         freq: i32,
         send_velocity: bool,
@@ -170,14 +202,14 @@ impl Tracker {
             range,
             freq,
             send_velocity,
-            size: Size::of(e.width),
+            size: Size::of(e.width()),
             last: [
-                math::floor_double(e.pos[0] * 32.0),
-                math::floor_double(e.pos[1] * 32.0),
-                math::floor_double(e.pos[2] * 32.0),
+                math::floor_double(e.pos()[0] * 32.0),
+                math::floor_double(e.pos()[1] * 32.0),
+                math::floor_double(e.pos()[2] * 32.0),
             ],
-            last_yaw: angle_byte(e.yaw),
-            last_pitch: angle_byte(e.pitch),
+            last_yaw: angle_byte(e.yaw()),
+            last_pitch: angle_byte(e.pitch()),
             motion: [0.0; 3],
             ticks: 0,
             since_teleport: 0,
@@ -192,7 +224,12 @@ impl Tracker {
     /// `updatePlayerEntity` / `tryStartWachingThis`: whether the player at
     /// `player` (feet), whose view holds the entity's chunk when `in_view`,
     /// should see it. Returns the spawn or destroy packet on a change.
-    pub fn update_watcher(&mut self, e: &Ent, player: [f64; 3], in_view: bool) -> Option<Packet> {
+    pub fn update_watcher(
+        &mut self,
+        e: &impl Track,
+        player: [f64; 3],
+        in_view: bool,
+    ) -> Option<Packet> {
         let dx = player[0] - self.last[0] as f64 / 32.0;
         let dz = player[2] - self.last[2] as f64 / 32.0;
         let r = self.range as f64;
@@ -204,13 +241,13 @@ impl Tracker {
                     object: self.object,
                     data: self.data,
                     pos: [
-                        math::floor_double(e.pos[0] * 32.0),
-                        math::floor_double(e.pos[1] * 32.0),
-                        math::floor_double(e.pos[2] * 32.0),
+                        math::floor_double(e.pos()[0] * 32.0),
+                        math::floor_double(e.pos()[1] * 32.0),
+                        math::floor_double(e.pos()[2] * 32.0),
                     ],
-                    yaw: angle_byte(e.yaw),
-                    pitch: angle_byte(e.pitch),
-                    velocity: self.send_velocity.then(|| velocity_ints(e.motion)),
+                    yaw: angle_byte(e.yaw()),
+                    pitch: angle_byte(e.pitch()),
+                    velocity: self.send_velocity.then(|| velocity_ints(e.motion())),
                 });
             }
         } else if self.watching {
@@ -228,7 +265,7 @@ impl Tracker {
     #[allow(clippy::too_many_arguments)]
     pub fn update(
         &mut self,
-        e: &Ent,
+        e: &impl Track,
         airborne: &mut bool,
         changed: bool,
         velocity_changed: &mut bool,
@@ -240,12 +277,14 @@ impl Tracker {
         let far = match self.checked {
             None => true,
             Some(c) => {
-                (e.pos[0] - c[0]).powi(2) + (e.pos[1] - c[1]).powi(2) + (e.pos[2] - c[2]).powi(2)
+                (e.pos()[0] - c[0]).powi(2)
+                    + (e.pos()[1] - c[1]).powi(2)
+                    + (e.pos()[2] - c[2]).powi(2)
                     > 16.0
             }
         };
         if far {
-            self.checked = Some(e.pos);
+            self.checked = Some(e.pos());
         }
         if far || player_moved {
             if let Some(p) = self.update_watcher(e, player, in_view) {
@@ -253,13 +292,13 @@ impl Tracker {
             }
         }
         if self.ticks % self.freq == 0 || *airborne || changed {
-            if e.riding.is_none() {
+            if !e.riding() {
                 self.since_teleport += 1;
-                let x = self.size.mul32(e.pos[0]);
-                let y = math::floor_double(e.pos[1] * 32.0);
-                let z = self.size.mul32(e.pos[2]);
-                let yaw = angle_byte(e.yaw);
-                let pitch = angle_byte(e.pitch);
+                let x = self.size.mul32(e.pos()[0]);
+                let y = math::floor_double(e.pos()[1] * 32.0);
+                let z = self.size.mul32(e.pos()[2]);
+                let yaw = angle_byte(e.yaw());
+                let pitch = angle_byte(e.pitch());
                 let d = [x - self.last[0], y - self.last[1], z - self.last[2]];
                 let moved = d.iter().any(|v| v.abs() >= 4) || self.ticks % 60 == 0;
                 let rotated =
@@ -289,16 +328,16 @@ impl Tracker {
                 }
                 if self.send_velocity {
                     let dm = [
-                        e.motion[0] - self.motion[0],
-                        e.motion[1] - self.motion[1],
-                        e.motion[2] - self.motion[2],
+                        e.motion()[0] - self.motion[0],
+                        e.motion()[1] - self.motion[1],
+                        e.motion()[2] - self.motion[2],
                     ];
                     let k = 0.02;
                     let d2 = dm[0] * dm[0] + dm[1] * dm[1] + dm[2] * dm[2];
-                    if d2 > k * k || d2 > 0.0 && e.motion == [0.0; 3] {
-                        self.motion = e.motion;
+                    if d2 > k * k || d2 > 0.0 && e.motion() == [0.0; 3] {
+                        self.motion = e.motion();
                         if self.watching {
-                            out.push(Packet::Velocity(velocity_ints(e.motion)));
+                            out.push(Packet::Velocity(velocity_ints(e.motion())));
                         }
                     }
                 }
@@ -316,8 +355,8 @@ impl Tracker {
                 }
                 self.riding = false;
             } else {
-                let yaw = angle_byte(e.yaw);
-                let pitch = angle_byte(e.pitch);
+                let yaw = angle_byte(e.yaw());
+                let pitch = angle_byte(e.pitch());
                 if (yaw - self.last_yaw).abs() >= 4 || (pitch - self.last_pitch).abs() >= 4 {
                     if self.watching {
                         out.push(Packet::Look(yaw, pitch));
@@ -326,9 +365,9 @@ impl Tracker {
                     self.last_pitch = pitch;
                 }
                 self.last = [
-                    self.size.mul32(e.pos[0]),
-                    math::floor_double(e.pos[1] * 32.0),
-                    self.size.mul32(e.pos[2]),
+                    self.size.mul32(e.pos()[0]),
+                    math::floor_double(e.pos()[1] * 32.0),
+                    self.size.mul32(e.pos()[2]),
                 ];
                 self.riding = true;
             }
@@ -337,7 +376,7 @@ impl Tracker {
         self.ticks += 1;
         if *velocity_changed {
             if self.watching {
-                out.push(Packet::Velocity(velocity_ints(e.motion)));
+                out.push(Packet::Velocity(velocity_ints(e.motion())));
             }
             *velocity_changed = false;
         }

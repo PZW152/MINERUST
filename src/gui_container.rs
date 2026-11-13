@@ -145,6 +145,8 @@ pub struct Frame<'a> {
     pub h: i32,
     pub effects: bool,
     pub mouse: (i32, i32),
+    /// `ticksExisted + partialTicks` of the player.
+    pub age: f32,
 }
 
 impl GuiContainer {
@@ -424,6 +426,12 @@ impl GuiContainer {
             draw_effects(ui, lf, tf, effects);
         }
         background(ui, view, lf, tf, xs as f32, ys as f32);
+        if matches!(view.open, Open::Inventory | Open::None) {
+            // GuiInventory: the player, turned towards the mouse
+            let (px, py) = (lf + 51.0, tf + 75.0);
+            let (mx, my) = (f.mouse.0 as f32, f.mouse.1 as f32);
+            ui.player_model(px, py, 30.0, px - mx, py - 50.0 - my, f.age);
+        }
         // the slots
         self.hovered = None;
         let cursor = view.inv.cursor;

@@ -1104,3 +1104,104 @@ pub fn arrow(out: &mut Vec<Vertex>, t: Tex, rel: [f32; 3], yaw: f32, pitch: f32,
         );
     }
 }
+
+/// `GuiInventory.func_147046_a` drawing the player through
+/// `RendererLivingEntity.doRender` / `RenderPlayer`: `(x, y)` the feet in GUI
+/// pixels, `scale` 30, `(dx, dy)` the mouse offsets that turn the body and
+/// head, `age` `ticksExisted + partialTicks`. Returns GUI-space quads (four
+/// vertices each, both windings) with the GUI lighting applied.
+pub fn player_gui(tex: Tex, x: f32, y: f32, scale: f32, dx: f32, dy: f32, age: f32) -> Vec<Vertex> {
+    let a = (dx / 40.0).atan();
+    let b = (dy / 40.0).atan();
+    let yaw_offset = a * 20.0;
+    let yaw = a * 40.0;
+    let pitch = -b * 20.0;
+    let anim = Anim {
+        swing: 0.0,
+        amount: 0.0,
+        age,
+        head_yaw: yaw - yaw_offset,
+        head_pitch: pitch,
+        attack: 0.0,
+        wing: 0.0,
+        sheep_head_y: 0.0,
+        sheep_head_rot: None,
+    };
+    let sc = super::entities::scale;
+    let mut m = translate(x, y, 50.0);
+    m = mul(&m, &sc(-scale, scale, scale));
+    m = mul(&m, &rot_z(180.0));
+    // RenderHelper.enableStandardItemLighting under glRotatef(135, 0, 1, 0)
+    let light_m = mul(&mul(&sc(-1.0, 1.0, 1.0), &rot_z(180.0)), &rot_y(135.0));
+    m = mul(&m, &rot_x(-b * 20.0));
+    // glTranslatef(0, yOffset, 0) and RenderPlayer's `y - yOffset` cancel;
+    // doRender at (0, 0, 0) with rotateCorpse
+    m = mul(&m, &rot_y(180.0 - yaw_offset));
+    m = mul(&m, &sc(-1.0, -1.0, 1.0));
+    m = mul(&m, &sc(0.9375, 0.9375, 0.9375));
+    m = mul(&m, &translate(0.0, -24.0 / 16.0 - 0.0078125, 0.0));
+    let mut raw = Vec::new();
+    {
+        let mut d = Draw {
+            out: &mut raw,
+            tex,
+            light: [0; 4],
+            tint: [1.0; 4],
+        };
+        for p in biped(&anim, false, false) {
+            render(&mut d, &m, &p);
+        }
+    }
+    let norm = |v: [f32; 4]| {
+        let l = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+        [v[0] / l, v[1] / l, v[2] / l]
+    };
+    let l0 = norm(transform(&light_m, [L0[0], L0[1], L0[2], 0.0]));
+    let l1 = norm(transform(&light_m, [L1[0], L1[1], L1[2], 0.0]));
+    // one quad per face (the reversed winding is dropped: the faces are
+    // sorted back to front instead of depth tested)
+    let mut quads: Vec<[Vertex; 4]> = Vec::new();
+    for g in raw.chunks(8) {
+        let q = [g[0], g[1], g[2], g[3]];
+        let e1 = [
+            q[1].pos[0] - q[0].pos[0],
+            q[1].pos[1] - q[0].pos[1],
+            q[1].pos[2] - q[0].pos[2],
+        ];
+        let e2 = [
+            q[2].pos[0] - q[0].pos[0],
+            q[2].pos[1] - q[0].pos[1],
+            q[2].pos[2] - q[0].pos[2],
+        ];
+        let mut n = [
+            e1[1] * e2[2] - e1[2] * e2[1],
+            e1[2] * e2[0] - e1[0] * e2[2],
+            e1[0] * e2[1] - e1[1] * e2[0],
+        ];
+        let l = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
+        if l < 1e-6 {
+            continue;
+        }
+        n = [n[0] / l, n[1] / l, n[2] / l];
+        // the face towards the viewer (+z in the GUI's eye space)
+        if n[2] < 0.0 {
+            n = [-n[0], -n[1], -n[2]];
+        }
+        let d0 = (n[0] * l0[0] + n[1] * l0[1] + n[2] * l0[2]).max(0.0);
+        let d1 = (n[0] * l1[0] + n[1] * l1[1] + n[2] * l1[2]).max(0.0);
+        let k = (0.4 + 0.6 * (d0 + d1)).min(1.0);
+        let c = (k * 255.0) as u8;
+        let mut q = q;
+        for v in &mut q {
+            v.color = [c, c, c, 255];
+        }
+        quads.push(q);
+    }
+    let depth = |q: &[Vertex; 4]| q.iter().map(|v| v.pos[2]).sum::<f32>();
+    quads.sort_by(|a, b| depth(a).total_cmp(&depth(b)));
+    let mut out = Vec::with_capacity(quads.len() * 4);
+    for q in quads {
+        out.extend_from_slice(&q);
+    }
+    out
+}
