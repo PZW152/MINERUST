@@ -83,10 +83,10 @@ java -cp "out;$CP" XxxHarness tools/xxx_1710.txt
 - `MC1710_JAR` 環境變數或 `--jar` 指向原版 jar（材質、`en_US.lang`、字型）。
 - 啟動器的 assets（`assets/indexes/1.7.10.json` + `objects/`）提供其他語言檔與聲音。本機 jar：
   `C:\Users\PZW152\AppData\Roaming\Sapling\versions\1.7.10\1.7.10.jar`（SHA‑1 同上；舊路徑
-  `Downloads\Sapling Data` 已被刪除）。assets 就在同一個啟動器根目錄 `AppData\Roaming\Saplingssets`，
+  `Downloads\Sapling Data` 已被刪除）。assets 就在同一個啟動器根目錄 `AppData\Roaming\Sapling\assets`，
   聲音與各語言都可在此機測試。
 - 不帶參數啟動時 `find_jar` 依序找：`--jar`、`MC1710_JAR`、exe 旁、工作目錄、`%APPDATA%` 下的
-  `.minecraft`／`Sapling`／`.hmcl`／`PCL`／`.tlauncher` 的 `versions.7.10.7.10.jar`；assets 取 jar 往上三層的 `assets`。
+  `.minecraft`／`Sapling`／`.hmcl`／`PCL`／`.tlauncher` 的 `versions\1.7.10\1.7.10.jar`；assets 取 jar 往上三層的 `assets`。
   啟動失敗會跳出錯誤對話框（雙擊執行時主控台會立刻關掉）。截圖模式（`--screenshot`）刻意關閉聲音。
 - Git Bash 會把以 `/` 開頭的參數改寫成 Windows 路徑：送聊天指令（`MINERUST_CHAT="/xp 30L"`）時加
   `MSYS_NO_PATHCONV=1`。
