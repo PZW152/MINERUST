@@ -1152,12 +1152,19 @@ pub fn player_gui(tex: Tex, x: f32, y: f32, scale: f32, dx: f32, dy: f32, age: f
             render(&mut d, &m, &p);
         }
     }
+    gui_lit(raw, &light_m)
+}
+
+/// Model quads (both windings, from `Draw`) as a GUI draws them: one
+/// winding per face, lit by `RenderHelper.enableStandardItemLighting` set
+/// up under `light_m`, sorted back to front for the depth-less UI pass.
+pub fn gui_lit(raw: Vec<Vertex>, light_m: &Mat4) -> Vec<Vertex> {
     let norm = |v: [f32; 4]| {
         let l = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
         [v[0] / l, v[1] / l, v[2] / l]
     };
-    let l0 = norm(transform(&light_m, [L0[0], L0[1], L0[2], 0.0]));
-    let l1 = norm(transform(&light_m, [L1[0], L1[1], L1[2], 0.0]));
+    let l0 = norm(transform(light_m, [L0[0], L0[1], L0[2], 0.0]));
+    let l1 = norm(transform(light_m, [L1[0], L1[1], L1[2], 0.0]));
     // one quad per face (the reversed winding is dropped: the faces are
     // sorted back to front instead of depth tested)
     let mut quads: Vec<[Vertex; 4]> = Vec::new();

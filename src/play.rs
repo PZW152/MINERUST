@@ -210,6 +210,8 @@ pub struct Play {
     pub drag: Drag,
     /// `WindowClick`s handled so far.
     pub clicks: u32,
+    /// `field_147375_m`: the creative-mode drop throttle.
+    pub creative_drops: i32,
     /// Generated entities (villagers, witches, chest minecarts).
     pub pending: Vec<crate::world::server::GenEntity>,
 }
@@ -412,6 +414,19 @@ fn facing_meta(yaw: f32) -> i32 {
     }
 }
 
+impl InvView {
+    pub fn empty() -> InvView {
+        InvView {
+            inv: Inventory::default(),
+            open: Open::None,
+            result: None,
+            tile_slots: Vec::new(),
+            furnace: None,
+            clicks: 0,
+        }
+    }
+}
+
 impl Play {
     pub fn new(mode: GameMode) -> Play {
         Play {
@@ -433,6 +448,7 @@ impl Play {
             inv_dirty: true,
             drag: Drag::default(),
             clicks: 0,
+            creative_drops: 0,
             pending: Vec::new(),
         }
     }
@@ -1338,6 +1354,32 @@ impl Play {
                 let k = crate::entity::xp_orb::xp_split(xp);
                 xp -= k;
                 self.orbs.push(([f[0], f[1] + 0.5, f[2] + 0.5], k));
+            }
+        }
+    }
+
+    /// `NetHandlerPlayServer.processCreativeInventoryAction`
+    pub fn creative_slot(&mut self, w: &mut ServerWorld, slot: i32, stack: Option<Stack>) {
+        self.clicks = self.clicks.wrapping_add(1);
+        if self.mode != GameMode::Creative {
+            return;
+        }
+        let ok = stack.is_none_or(|s| s.meta >= 0 && s.count <= 64 && s.count > 0);
+        if (1..45).contains(&slot) && ok {
+            let mut tile: [Option<Stack>; 0] = [];
+            let mut c = Ctx::new(&mut self.inv, &mut tile, Window::Player, true);
+            c.set_slot(slot as usize, stack);
+            self.inv_dirty = true;
+        } else if slot < 0 && ok && self.creative_drops < 200 {
+            self.creative_drops += 20;
+            if let Some(s) = stack {
+                let mut rnd = std::mem::replace(&mut w.rand, JavaRandom::new(0));
+                self.throw(s, &mut rnd);
+                w.rand = rnd;
+                // setAgeToCreativeDespawnTime
+                if let Some(e) = self.items.last_mut() {
+                    e.age = 4800;
+                }
             }
         }
     }

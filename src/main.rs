@@ -8,6 +8,7 @@ mod block;
 mod compat;
 mod container;
 mod crafting;
+mod creative;
 mod dimension;
 mod entity;
 mod front;
@@ -1016,6 +1017,14 @@ impl ApplicationHandler for App {
                     return;
                 }
                 let lw = settings::lwjgl_code(code);
+                if g.text_input() {
+                    if pressed {
+                        let c = ch(&event);
+                        let req = g.text_key(c, lw, ctrl, shift);
+                        self.handle(req, el);
+                    }
+                    return;
+                }
                 if lw == self.bound("key.screenshot") && pressed && !event.repeat {
                     let Some(g) = &mut self.game else { return };
                     let _ = std::fs::create_dir_all("screenshots");

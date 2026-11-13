@@ -64,6 +64,12 @@ pub enum Command {
         mode: i32,
     },
     OpenInventory,
+    /// `C10PacketCreativeInventoryAction`: a `ContainerPlayer` slot set, or
+    /// (slot below 0) a stack thrown.
+    CreativeSlot {
+        slot: i32,
+        stack: Option<crate::item::Stack>,
+    },
     CloseWindow,
     DropHeld {
         all: bool,
@@ -918,6 +924,11 @@ impl Sim {
                     self.play.inv_dirty = true;
                 }
             }
+            Command::CreativeSlot { slot, stack } => {
+                let mut play = std::mem::replace(&mut self.play, Play::new(GameMode::Survival));
+                play.creative_slot(&mut self.world, slot, stack);
+                self.play = play;
+            }
             Command::WindowClick { slot, button, mode } => {
                 let mut play = std::mem::replace(&mut self.play, Play::new(GameMode::Survival));
                 play.window_click(&mut self.world, slot, button, mode);
@@ -1123,6 +1134,10 @@ impl Sim {
     pub fn step(&mut self, commands: &[Command], events: &mut Vec<Event>) {
         for c in commands {
             self.apply(c);
+        }
+        // NetHandlerPlayServer.onNetworkTick
+        if self.play.creative_drops > 0 {
+            self.play.creative_drops -= 1;
         }
         self.splayer.creative = self.play.mode == GameMode::Creative;
         if !self.respawn_pending {

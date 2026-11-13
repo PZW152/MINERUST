@@ -28,6 +28,8 @@ struct ClientChunk {
     mc: MeshChunk,
     /// End portal blocks (their `TileEntityEndPortal`s).
     portals: Vec<[i32; 3]>,
+    /// Chest blocks (their `TileEntityChest`s).
+    chests: Vec<[i32; 3]>,
     /// Everything that can write into it has been populated.
     ready: bool,
 }
@@ -224,8 +226,13 @@ pub struct Game {
     cloud_cell: Option<(i32, i32)>,
     /// Server view of the inventory and open window.
     pub view: InvView,
+    /// `TileEntityChest.prevLidAngle` / `lidAngle` of the chests that move.
+    chest_lids: HashMap<[i32; 3], [f32; 2]>,
     /// `GuiContainer` of the open window.
     gui: crate::gui_container::GuiContainer,
+    /// `GuiContainerCreative` while it is open, and its last tab.
+    creative: Option<crate::creative::Creative>,
+    creative_tab: usize,
     /// `WindowClick`s sent (and predicted) so far.
     sent_clicks: u32,
     /// `--open use:x,y,z`: the block to right-click once the world is up,
@@ -508,6 +515,9 @@ impl Game {
                 clicks: 0,
             },
             gui: Default::default(),
+            creative: None,
+            creative_tab: 0,
+            chest_lids: HashMap::new(),
             sent_clicks: 0,
             start_use: None,
             client_drag: Default::default(),
@@ -599,6 +609,12 @@ impl Game {
                 "inventory" => {
                     let _ = self.sim.commands.send(Command::OpenInventory);
                     self.screen = Screen::Window;
+                }
+                // creative:N  GuiContainerCreative on tab N
+                o if o.starts_with("creative") => {
+                    self.creative_tab = o[8..].trim_start_matches(':').parse().unwrap_or(0);
+                    self.screen = Screen::Window;
+                    self.open_creative();
                 }
                 // use:x,y,z  right-click a block (opens its window)
                 o if o.starts_with("use:") => {
@@ -837,12 +853,18 @@ impl Game {
             match e {
                 Event::Chunk { key, chunk, ready } => {
                     let mut portals = Vec::new();
+                    let mut chests = Vec::new();
                     for (i, &b) in chunk.data.blocks.iter().enumerate() {
-                        if b == block::END_PORTAL {
+                        if b == block::END_PORTAL || b == block::CHEST {
                             // index ((x << 4 | z) << 8) | y
                             let (x, z, y) =
                                 ((i >> 12) as i32, (i >> 8 & 15) as i32, (i & 255) as i32);
-                            portals.push([key.0 * 16 + x, y, key.1 * 16 + z]);
+                            let p = [key.0 * 16 + x, y, key.1 * 16 + z];
+                            if b == block::CHEST {
+                                chests.push(p);
+                            } else {
+                                portals.push(p);
+                            }
                         }
                     }
                     self.world.chunks.insert(
@@ -851,6 +873,7 @@ impl Game {
                             mc: chunk,
                             ready,
                             portals,
+                            chests,
                         },
                     );
                     // Faces and light on the border depend on the neighbours.
@@ -905,6 +928,13 @@ impl Game {
                         continue;
                     }
                     self.sent_clicks = v.clicks;
+                    if self.creative.is_some() {
+                        // the creative cursor lives on the client only
+                        let cursor = self.view.inv.cursor;
+                        self.view = *v;
+                        self.view.inv.cursor = cursor;
+                        continue;
+                    }
                     let was_open = self.view.open != Open::None;
                     if v.open != self.view.open {
                         self.gui = Default::default();
@@ -1271,6 +1301,15 @@ impl Game {
     }
 
     fn tick(&mut self) {
+        self.tick_chests();
+        if let Some(c) = self.creative.as_mut() {
+            c.tick();
+            // updateScreen: out of creative mode it becomes GuiInventory
+            if self.mode != GameMode::Creative {
+                self.creative = None;
+                let _ = self.sim.commands.send(Command::OpenInventory);
+            }
+        }
         self.tick_mobs();
         if self.ticks >= 60 {
             if let Some(t) = self.start_use.take() {
@@ -2250,6 +2289,7 @@ impl Game {
         let (w, h) = self.gui_size();
         let view = self.view.clone();
         let frame = crate::gui_container::Frame {
+            layout: None,
             view: &view,
             w: w as i32,
             h: h as i32,
@@ -2266,6 +2306,13 @@ impl Game {
 
     /// `GuiScreen.handleMouseInput` move events: `mouseClickMove`.
     pub fn mouse_moved(&mut self) {
+        if self.screen == Screen::Window && self.creative.is_some() {
+            let (dims, mouse, _) = self.creative_input();
+            if let Some(c) = self.creative.as_mut() {
+                c.mouse_dragged(&self.view, dims, mouse);
+            }
+            return;
+        }
         if self.screen == Screen::Window {
             self.with_container(|g, f, _, _| g.mouse_dragged(f));
         }
@@ -2404,6 +2451,195 @@ impl Game {
         }
     }
 
+    /// Window size, mouse and keys for the creative screen.
+    fn creative_input(&self) -> ((i32, i32, bool), (i32, i32), crate::gui_container::Keys) {
+        let (w, h) = self.gui_size();
+        (
+            (w as i32, h as i32, !self.stats.effects.is_empty()),
+            self.gui_mouse_i(),
+            self.container_keys(),
+        )
+    }
+
+    fn open_creative(&mut self) {
+        let (w, h) = self.gui_size();
+        let atlas = self.atlas.clone();
+        let ui = crate::gui::Ui::new(&atlas, w, h);
+        self.creative = Some(crate::creative::Creative::new(
+            self.creative_tab,
+            &ui,
+            &self.lang,
+        ));
+        self.gui = Default::default();
+    }
+
+    /// Sends the creative screen's `C10PacketCreativeInventoryAction`s.
+    fn flush_creative(&mut self) {
+        let Some(c) = self.creative.as_mut() else {
+            return;
+        };
+        for o in std::mem::take(&mut c.out) {
+            let (slot, stack) = match o {
+                crate::creative::Out::Slot(k, s) => (k, s),
+                crate::creative::Out::Drop(s) => (-1, Some(s)),
+            };
+            self.sent_clicks = self.sent_clicks.wrapping_add(1);
+            let _ = self
+                .sim
+                .commands
+                .send(Command::CreativeSlot { slot, stack });
+        }
+        self.creative_tab = c.tab;
+    }
+
+    /// Whether typed characters go to a screen (`GuiContainerCreative`'s
+    /// search field).
+    pub fn text_input(&self) -> bool {
+        self.screen == Screen::Window && self.creative.is_some()
+    }
+
+    /// `GuiScreen.keyTyped` for the screens that take text.
+    pub fn text_key(&mut self, ch: char, code: i32, ctrl: bool, shift: bool) -> Request {
+        if let Some(mut c) = self.creative.take() {
+            let (dims, mouse, keys) = self.creative_input();
+            let atlas = self.atlas.clone();
+            let ui = crate::gui::Ui::new(&atlas, dims.0 as f32, dims.1 as f32);
+            let chat = self.shell.as_ref().map_or_else(
+                || crate::settings::GameSettings::default().key("key.chat"),
+                |s| s.settings.key("key.chat"),
+            );
+            let mut clip = self
+                .shell
+                .as_ref()
+                .map_or_else(String::new, |s| s.clipboard.clone());
+            let mut view = std::mem::replace(&mut self.view, InvView::empty());
+            let close = c.key_typed(
+                &mut view, dims, mouse, ch, code, ctrl, shift, &keys, chat, &ui, &self.lang,
+                &mut clip,
+            );
+            self.view = view;
+            if let Some(s) = self.shell.as_mut() {
+                s.clipboard = clip;
+            }
+            self.creative = Some(c);
+            self.flush_creative();
+            if close {
+                return self.close_window();
+            }
+        }
+        Request::None
+    }
+
+    /// `TileEntityChest.updateEntity` on the client: the lids of the chests
+    /// in use open, the others close, with their sounds.
+    fn tick_chests(&mut self) {
+        let users: Vec<[i32; 3]> = match &self.view.open {
+            Open::Chest(ps) => ps.clone(),
+            _ => Vec::new(),
+        };
+        for p in &users {
+            self.chest_lids.entry(*p).or_insert([0.0; 2]);
+        }
+        let chest = |w: &ClientWorld, x: i32, y: i32, z: i32| w.peek_block(x, y, z) == block::CHEST;
+        let mut sounds = Vec::new();
+        let keys: Vec<[i32; 3]> = self.chest_lids.keys().copied().collect();
+        for p in keys {
+            if !chest(&self.world, p[0], p[1], p[2]) {
+                self.chest_lids.remove(&p);
+                continue;
+            }
+            let using = users.contains(&p);
+            let x_neg = chest(&self.world, p[0] - 1, p[1], p[2]);
+            let z_neg = chest(&self.world, p[0], p[1], p[2] - 1);
+            let x_pos = chest(&self.world, p[0] + 1, p[1], p[2]);
+            let z_pos = chest(&self.world, p[0], p[1], p[2] + 1);
+            let at = [
+                p[0] as f64 + 0.5 + if x_pos { 0.5 } else { 0.0 },
+                p[1] as f64 + 0.5,
+                p[2] as f64 + 0.5 + if z_pos { 0.5 } else { 0.0 },
+            ];
+            let l = self.chest_lids.get_mut(&p).unwrap();
+            l[0] = l[1];
+            if using && l[1] == 0.0 && !z_neg && !x_neg {
+                sounds.push(("random.chestopen", at));
+            }
+            if !using && l[1] > 0.0 || using && l[1] < 1.0 {
+                let before = l[1];
+                l[1] += if using { 0.1 } else { -0.1 };
+                l[1] = l[1].min(1.0);
+                if l[1] < 0.5 && before >= 0.5 && !z_neg && !x_neg {
+                    sounds.push(("random.chestclosed", at));
+                }
+                l[1] = l[1].max(0.0);
+            }
+            if !using && l[0] == 0.0 && l[1] == 0.0 {
+                self.chest_lids.remove(&p);
+            }
+        }
+        for (name, at) in sounds {
+            let pitch = self.particle_rand.next_float() * 0.1 + 0.9;
+            self.sound(name, Some(at), 0.5, pitch);
+        }
+    }
+
+    /// `TileEntityChestRenderer` for the chests in view.
+    fn draw_chests(
+        &self,
+        out: &mut Vec<crate::render::mesher::Vertex>,
+        eye: [f64; 3],
+        partial: f32,
+    ) {
+        let rd = self.render_distance as f64 * 16.0;
+        let xmas = crate::gui::christmas();
+        let w = &self.world;
+        for c in w.chunks.values() {
+            for &p in &c.chests {
+                let d = [p[0] as f64 + 0.5 - eye[0], p[2] as f64 + 0.5 - eye[2]];
+                if d[0] * d[0] + d[1] * d[1] > rd * rd {
+                    continue;
+                }
+                if w.peek_block(p[0], p[1], p[2]) != block::CHEST {
+                    continue;
+                }
+                let is = |x: i32, z: i32| w.peek_block(x, p[1], z) == block::CHEST;
+                if is(p[0] - 1, p[2]) || is(p[0], p[2] - 1) {
+                    continue;
+                }
+                let (x_pos, z_pos) = (is(p[0] + 1, p[2]), is(p[0], p[2] + 1));
+                let large = x_pos || z_pos;
+                let Some(t) = self
+                    .atlas
+                    .mob_tex(crate::render::chest::texture(false, large, xmas))
+                else {
+                    continue;
+                };
+                let lid = self
+                    .chest_lids
+                    .get(&p)
+                    .map_or(0.0, |l| l[0] + (l[1] - l[0]) * partial);
+                let (sky, blk) = (
+                    w.light(true, p[0], p[1], p[2]),
+                    w.light(false, p[0], p[1], p[2]),
+                );
+                let rel = [
+                    (p[0] as f64 - eye[0]) as f32,
+                    (p[1] as f64 - eye[1]) as f32,
+                    (p[2] as f64 - eye[2]) as f32,
+                ];
+                crate::render::chest::world(
+                    out,
+                    t,
+                    rel,
+                    w.peek_meta(p[0], p[1], p[2]) as i32,
+                    x_pos,
+                    z_pos,
+                    lid,
+                    [(blk << 4) as u8, (sky << 4) as u8, 0, 0],
+                );
+            }
+        }
+    }
+
     /// `closeScreen` from a container.
     fn close_window(&mut self) -> Request {
         let _ = self.sim.commands.send(Command::CloseWindow);
@@ -2414,6 +2650,9 @@ impl Game {
         self.view.open = Open::None;
         self.gui = Default::default();
         self.client_drag = Default::default();
+        if let Some(c) = self.creative.take() {
+            self.creative_tab = c.tab;
+        }
         self.screen = Screen::Playing;
         Request::Grab
     }
@@ -2435,6 +2674,32 @@ impl Game {
             0 => self.left_down = pressed,
             1 => self.right_down = pressed,
             _ => {}
+        }
+        if self.screen == Screen::Window && self.creative.is_some() {
+            let now = self.started.elapsed().as_millis() as u64;
+            let (dims, mouse, keys) = self.creative_input();
+            let atlas = self.atlas.clone();
+            let ui = crate::gui::Ui::new(&atlas, dims.0 as f32, dims.1 as f32);
+            let mut c = self.creative.take().unwrap();
+            let mut view = std::mem::replace(&mut self.view, InvView::empty());
+            if pressed {
+                c.mouse_clicked(&mut view, dims, mouse, button as i32, shift, now, &keys);
+            } else {
+                c.mouse_released(
+                    &mut view,
+                    dims,
+                    mouse,
+                    button as i32,
+                    shift,
+                    &keys,
+                    &ui,
+                    &self.lang,
+                );
+            }
+            self.view = view;
+            self.creative = Some(c);
+            self.flush_creative();
+            return Request::None;
         }
         if self.screen == Screen::Window {
             let now = self.started.elapsed().as_millis() as u64;
@@ -2521,11 +2786,17 @@ impl Game {
                 self.menu_key('\0', crate::settings::lwjgl_code(code))
             }
             (Screen::Playing, K::KeyE) => {
-                let _ = self.sim.commands.send(Command::OpenInventory);
                 self.screen = Screen::Window;
                 self.input = Input::default();
+                if self.mode == GameMode::Creative {
+                    // GuiInventory.initGui hands over to GuiContainerCreative
+                    self.open_creative();
+                } else {
+                    let _ = self.sim.commands.send(Command::OpenInventory);
+                }
                 Request::Release
             }
+            (Screen::Window, _) if self.creative.is_some() => Request::None,
             (Screen::Window, _) => {
                 let lw = crate::settings::lwjgl_code(code);
                 let close = self.with_container(|g, f, k, send| g.key_typed(f, lw, ctrl, k, send));
@@ -2563,6 +2834,11 @@ impl Game {
     }
 
     pub fn scroll(&mut self, up: bool) {
+        if let Some(mut c) = self.creative.take() {
+            c.wheel(up);
+            self.creative = Some(c);
+            return;
+        }
         if self.screen == Screen::Playing {
             let s = self.view.inv.selected;
             let n = if up { (s + 8) % 9 } else { (s + 1) % 9 };
@@ -3096,6 +3372,7 @@ impl Game {
             );
         }
         self.draw_boats(&mut dynamic, eye, partial);
+        self.draw_chests(&mut dynamic, eye, partial);
         self.draw_orbs(&mut translucent, eye, partial);
         if let Some(at) = self.atlas.mob_tex("arrow") {
             for a in &self.arrows {
@@ -3567,9 +3844,28 @@ impl Game {
             self.mouse_px.1 / scale as f32,
         );
         match self.screen {
+            Screen::Window if self.creative.is_some() => {
+                let lines = self.effect_lines();
+                let dims = (ui.w as i32, ui.h as i32, !lines.is_empty());
+                let mouse = (m.0.floor() as i32, m.1.floor() as i32);
+                let age = self.ticks as f32 + partial;
+                let mut c = self.creative.take().unwrap();
+                c.draw(
+                    &mut ui,
+                    &self.view,
+                    dims,
+                    mouse,
+                    self.left_down,
+                    age,
+                    &self.lang,
+                    &lines,
+                );
+                self.creative = Some(c);
+            }
             Screen::Window => {
                 let lines = self.effect_lines();
                 let frame = crate::gui_container::Frame {
+                    layout: None,
                     view: &self.view,
                     w: ui.w as i32,
                     h: ui.h as i32,

@@ -262,6 +262,31 @@ impl<'a> Ui<'a> {
     /// `FontRenderer.getStringWidth`
     /// `RenderItem.renderItemIntoGUI` for a block item in a 16x16 slot.
     pub fn block_icon(&mut self, id: u8, meta: i32, x: f32, y: f32) {
+        if id == block::CHEST {
+            // renderItemIntoGUI's 3D block place, then type 22
+            let mut m: Mat4 = render::translate(x - 2.0, y + 3.0, 0.0);
+            m = render::mul(&m, &scale(10.0, 10.0, 10.0));
+            m = render::mul(&m, &render::translate(1.0, 0.5, 1.0));
+            m = render::mul(&m, &scale(1.0, 1.0, -1.0));
+            m = render::mul(&m, &render::rot_x(210.0));
+            m = render::mul(&m, &render::rot_y(45.0));
+            m = render::mul(&m, &render::rot_y(-90.0));
+            if let Some(t) = self
+                .atlas
+                .mob_tex(render::chest::texture(false, false, christmas()))
+            {
+                let q = render::chest::gui_icon(t, &m);
+                for c in q.chunks(4) {
+                    let mut c = [c[0], c[1], c[2], c[3]];
+                    for v in &mut c {
+                        v.light = [BLOCKS, 0, 0, 0];
+                    }
+                    self.v
+                        .extend_from_slice(&[c[0], c[1], c[2], c[0], c[2], c[3]]);
+                }
+            }
+            return;
+        }
         let info = block::info(id);
         let cube = matches!(
             info.shape,
@@ -931,4 +956,21 @@ fn format_from_string(s: &str) -> String {
         }
     }
     out
+}
+
+/// `TileEntityChestRenderer`'s December 24th to 26th check.
+pub fn christmas() -> bool {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs() as i64);
+    // civil date from days since 1970-01-01 (UTC)
+    let z = secs.div_euclid(86400) + 719468;
+    let era = z.div_euclid(146097);
+    let doe = z - era * 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    m == 12 && (24..=26).contains(&d)
 }

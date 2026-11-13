@@ -593,17 +593,8 @@ fn mesh_block(cx: &Ctx, out: &mut Vec<Vertex>, id: u8, meta: i32, x: i32, y: i32
             };
             boxed(&cx, out, id, meta, x, y, z, b, 0.0)
         }
-        Shape::Chest => boxed(
-            &cx,
-            out,
-            id,
-            meta,
-            x,
-            y,
-            z,
-            [0.0625, 0.0, 0.0625, 0.9375, 0.875, 0.9375],
-            0.0,
-        ),
+        // render type 22: drawn by TileEntityChestRenderer, not the chunk
+        Shape::Chest => {}
         Shape::Torch => torch(&cx, out, id, meta, x, y, z),
         Shape::Stairs | Shape::Fence | Shape::Pane | Shape::Door | Shape::Boxes => {
             shaped(&cx, out, id, meta, x, y, z)

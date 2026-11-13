@@ -125,6 +125,14 @@ fn can_add(view: &InvView, d: Option<&SlotDef>, s: Option<&Stack>, ignore_size: 
     ok
 }
 
+/// `Container.canDragIntoSlot`
+fn can_drag_into(f: &Frame, d: &SlotDef) -> bool {
+    match f.layout {
+        Some(_) => d.inv == container::Inv::Player || d.y > 90 && d.x <= 162,
+        None => true,
+    }
+}
+
 fn over(d: &SlotDef, left: i32, top: i32, mx: i32, my: i32) -> bool {
     let (x, y) = (mx - left, my - top);
     x >= d.x - 1 && x < d.x + 16 + 1 && y >= d.y - 1 && y < d.y + 16 + 1
@@ -139,8 +147,19 @@ pub struct Keys {
     pub hotbar: [i32; 9],
 }
 
+/// A screen's own slot list and placement (`GuiContainerCreative`), with
+/// `ContainerCreative`'s `canMergeSlot` / `canDragIntoSlot` rules.
+pub struct Layout {
+    pub slots: Vec<SlotDef>,
+    pub left: i32,
+    pub top: i32,
+    pub xs: i32,
+    pub ys: i32,
+}
+
 pub struct Frame<'a> {
     pub view: &'a InvView,
+    pub layout: Option<&'a Layout>,
     pub w: i32,
     pub h: i32,
     pub effects: bool,
@@ -151,6 +170,9 @@ pub struct Frame<'a> {
 
 impl GuiContainer {
     fn geometry(f: &Frame) -> (Vec<SlotDef>, i32, i32, i32, i32) {
+        if let Some(l) = f.layout {
+            return (l.slots.clone(), l.left, l.top, l.xs, l.ys);
+        }
         let slots = container_window(&f.view.open).slots();
         let (left, top) = origin(&f.view.open, f.w, f.h, f.effects);
         let (xs, ys) = size(&f.view.open);
@@ -260,6 +282,7 @@ impl GuiContainer {
             && cur.count as usize > self.drag_slots.len()
             && can_add(f.view, Some(&slots[i]), Some(&cur), true)
             && slot_valid(&slots[i], &cur)
+            && can_drag_into(f, &slots[i])
             && !self.drag_slots.contains(&i)
         {
             self.drag_slots.push(i);
@@ -286,8 +309,14 @@ impl GuiContainer {
             n = -999;
         }
         let mut view = f.view.clone();
-        // canMergeSlot: not the crafting result
-        let mergeable = hit.is_some_and(|i| slots[i].inv != container::Inv::Result);
+        // canMergeSlot: not the crafting result; ContainerCreative: the lower rows
+        let mergeable = hit.is_some_and(|i| {
+            if f.layout.is_some() {
+                slots[i].y > 90
+            } else {
+                slots[i].inv != container::Inv::Result
+            }
+        });
         if self.double_click && hit.is_some() && button == 0 && mergeable {
             let h = hit.unwrap();
             if shift {
@@ -382,7 +411,7 @@ impl GuiContainer {
         if code == 1 || code == keys.inventory {
             return true;
         }
-        let slots = container_window(&f.view.open).slots();
+        let (slots, ..) = Self::geometry(f);
         // checkHotbarKeys
         if f.view.inv.cursor.is_none() {
             if let Some(h) = self.hovered {
@@ -418,15 +447,35 @@ impl GuiContainer {
 
     /// `GuiContainer.drawScreen`; returns the tooltip lines to draw.
     pub fn draw(&mut self, ui: &mut Ui, f: &Frame, lang: &Lang, effects: &[EffectLine]) {
+        self.draw_with(ui, f, lang, effects, &|s| {
+            crate::screens::tooltip_lines(s, lang)
+        });
+    }
+
+    /// `drawScreen` with the screen's own `renderToolTip` lines; a screen
+    /// with a `Layout` draws its background itself first.
+    pub fn draw_with(
+        &mut self,
+        ui: &mut Ui,
+        f: &Frame,
+        lang: &Lang,
+        effects: &[EffectLine],
+        tooltip: &dyn Fn(&Stack) -> Vec<String>,
+    ) {
         let view = f.view;
         let (slots, left, top, xs, ys) = Self::geometry(f);
         let (lf, tf) = (left as f32, top as f32);
-        dim_background(ui);
-        if !effects.is_empty() && matches!(view.open, Open::Inventory | Open::None) {
+        let own = f.layout.is_none();
+        if own {
+            dim_background(ui);
+        }
+        if !effects.is_empty() && (!own || matches!(view.open, Open::Inventory | Open::None)) {
             draw_effects(ui, lf, tf, effects);
         }
-        background(ui, view, lf, tf, xs as f32, ys as f32);
-        if matches!(view.open, Open::Inventory | Open::None) {
+        if own {
+            background(ui, view, lf, tf, xs as f32, ys as f32);
+        }
+        if own && matches!(view.open, Open::Inventory | Open::None) {
             // GuiInventory: the player, turned towards the mouse
             let (px, py) = (lf + 51.0, tf + 75.0);
             let (mx, my) = (f.mouse.0 as f32, f.mouse.1 as f32);
@@ -445,7 +494,7 @@ impl GuiContainer {
                 if let Some(c) = cursor {
                     if self.drag_slots.len() == 1 {
                         skip = true;
-                    } else if can_add(view, Some(d), Some(&c), true) {
+                    } else if can_add(view, Some(d), Some(&c), true) && can_drag_into(f, d) {
                         let mut s = c;
                         highlight = true;
                         let have = st.map_or(0, |s| s.count);
@@ -492,7 +541,9 @@ impl GuiContainer {
                 ui.rect(x, y, 16.0, 16.0, 0xFFFFFF, 0x80 as f32 / 255.0);
             }
         }
-        foreground(ui, view, lang, lf, tf, xs as f32, ys as f32);
+        if own {
+            foreground(ui, view, lang, lf, tf, xs as f32, ys as f32);
+        }
         if let Some(c) = cursor {
             let mut s = c;
             let mut label = None;
@@ -506,7 +557,7 @@ impl GuiContainer {
             draw_stack_with(ui, &s, mx - 8.0, my - 8.0, label.as_deref());
         } else if let Some(h) = self.hovered {
             if let Some(st) = slot_stack(view, &slots[h]) {
-                let lines = crate::screens::tooltip_lines(&st, lang);
+                let lines = tooltip(&st);
                 crate::screens::hovering_text(ui, &lines, f.mouse.0, f.mouse.1);
             }
         }

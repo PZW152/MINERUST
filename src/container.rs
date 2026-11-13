@@ -61,6 +61,9 @@ pub enum Window {
     Chest(usize),
     /// `ContainerDispenser`
     Dispenser,
+    /// `GuiContainerCreative$ContainerCreative`: the 45 item-list slots
+    /// (the tile slots) and the hotbar.
+    Creative,
 }
 
 fn slot(inv: Inv, index: usize, kind: SlotKind, x: i32, y: i32) -> SlotDef {
@@ -168,6 +171,28 @@ impl Window {
                 }
                 let off = (rows as i32 - 4) * 18;
                 player_slots(&mut v, 103 + off);
+            }
+            Window::Creative => {
+                for r in 0..5 {
+                    for c in 0..9 {
+                        v.push(slot(
+                            Inv::Tile,
+                            r * 9 + c,
+                            SlotKind::Plain,
+                            9 + c as i32 * 18,
+                            18 + r as i32 * 18,
+                        ));
+                    }
+                }
+                for c in 0..9 {
+                    v.push(slot(
+                        Inv::Player,
+                        c,
+                        SlotKind::Plain,
+                        9 + c as i32 * 18,
+                        112,
+                    ));
+                }
             }
             Window::Dispenser => {
                 for r in 0..3 {
@@ -352,6 +377,11 @@ impl<'a> Ctx<'a> {
         }
     }
 
+    /// `IInventory.setInventorySlotContents` from outside the container.
+    pub fn set_slot(&mut self, i: usize, s: Option<Stack>) {
+        self.set(i, s);
+    }
+
     /// `Slot.putStack`
     fn put(&mut self, i: usize, s: Option<Stack>) {
         self.set(i, s);
@@ -402,6 +432,12 @@ impl<'a> Ctx<'a> {
             SlotKind::Armor(_) | SlotKind::Potion => 1,
             _ => 64,
         }
+    }
+
+    /// `Container.canDragIntoSlot` (`ContainerCreative` limits it).
+    fn can_drag_into(&self, i: usize) -> bool {
+        let d = self.slots[i];
+        self.window != Window::Creative || d.inv == Inv::Player || d.y > 90 && d.x <= 162
     }
 
     fn in_player(&self, i: usize) -> bool {
@@ -632,6 +668,13 @@ impl<'a> Ctx<'a> {
                 self.slot_after_transfer(i, s);
                 return Some(before);
             }
+            Window::Creative => {
+                // the hotbar slots are emptied, nothing moves
+                if i >= n - 9 {
+                    self.put(i, None);
+                }
+                return None;
+            }
             Window::Dispenser => {
                 if i < 9 {
                     self.merge(&mut s, 9, 45, true)
@@ -737,6 +780,7 @@ pub fn slot_click(
                 let cur = c.inv.cursor.unwrap();
                 if c.can_add(Some(i), Some(&cur), true)
                     && c.valid(i, &cur)
+                    && c.can_drag_into(i)
                     && cur.count as usize > drag.slots.len()
                     && !drag.slots.contains(&i)
                 {
@@ -752,6 +796,7 @@ pub fn slot_click(
                     let cc = c.inv.cursor.unwrap();
                     if c.can_add(Some(i), Some(&cc), true)
                         && c.valid(i, &cc)
+                        && c.can_drag_into(i)
                         && cc.count as usize >= k
                     {
                         let mut put = cur;
@@ -950,7 +995,12 @@ pub fn slot_click(
                 while k >= 0 && k < n && cur.count < max {
                     let i = k as usize;
                     if let Some(s) = c.get(i) {
-                        let mergeable = !matches!(c.slots[i].inv, Inv::Result);
+                        // canMergeSlot
+                        let mergeable = if c.window == Window::Creative {
+                            c.slots[i].y > 90
+                        } else {
+                            !matches!(c.slots[i].inv, Inv::Result)
+                        };
                         if c.can_add(Some(i), Some(&cur), true)
                             && mergeable
                             && (pass != 0 || s.count != max_stack(s.id))

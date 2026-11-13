@@ -545,6 +545,7 @@ impl Atlas {
             .chain(crate::render::model2::TEXTURES2)
             .chain(crate::render::model3::TEXTURES)
             .chain(crate::render::vehicles::TEXTURES)
+            .chain(crate::render::chest::TEXTURES)
         {
             let path = match name.strip_prefix("../") {
                 Some(rest) => format!("assets/minecraft/textures/{rest}.png"),
