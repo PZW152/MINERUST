@@ -547,6 +547,18 @@ fn find_jar(explicit: &Option<PathBuf>) -> Result<PathBuf, String> {
         candidates.push(dir.join("1.7.10.jar"));
     }
     candidates.push("1.7.10.jar".into());
+    // a game directory beside the executable or one of its parents
+    // (<repo>/game when run from target/release)
+    if let Ok(exe) = std::env::current_exe() {
+        for dir in exe.ancestors().skip(1).take(4) {
+            candidates.push(
+                dir.join("game")
+                    .join("versions")
+                    .join("1.7.10")
+                    .join("1.7.10.jar"),
+            );
+        }
+    }
     // the launchers' game directories: <root>/versions/1.7.10/1.7.10.jar,
     // with the sounds and languages in <root>/assets
     let version = |root: PathBuf| root.join("versions").join("1.7.10").join("1.7.10.jar");
@@ -563,6 +575,21 @@ fn find_jar(explicit: &Option<PathBuf>) -> Result<PathBuf, String> {
                 .join("AppData")
                 .join("Roaming"),
         );
+    }
+    // MSIX-packaged apps (a launcher started from one) write AppData into
+    // their own LocalCache, which only they see as %APPDATA%
+    if let Some(local) = std::env::var_os("LOCALAPPDATA")
+        .map(PathBuf::from)
+        .or_else(|| roaming_appdata().and_then(|r| r.parent().map(|p| p.join("Local"))))
+    {
+        if let Ok(rd) = std::fs::read_dir(local.join("Packages")) {
+            for e in rd.flatten() {
+                let r = e.path().join("LocalCache").join("Roaming");
+                if r.is_dir() {
+                    roots.push(r);
+                }
+            }
+        }
     }
     roots.dedup();
     for r in &roots {
@@ -862,6 +889,7 @@ impl ApplicationHandler for App {
         };
         let result = (|| -> Result<(), String> {
             let jar_path = find_jar(&self.opts.jar)?;
+            println!("Jar: {}", jar_path.display());
             let file = std::fs::File::open(&jar_path)
                 .map_err(|e| format!("{}: {e}", jar_path.display()))?;
             let mut jar =

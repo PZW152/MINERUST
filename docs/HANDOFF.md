@@ -88,6 +88,11 @@ java -cp "out;$CP" XxxHarness tools/xxx_1710.txt
 - 不帶參數啟動時 `find_jar` 依序找：`--jar`、`MC1710_JAR`、exe 旁、工作目錄、`%APPDATA%` 下的
   `.minecraft`／`Sapling`／`.hmcl`／`PCL`／`.tlauncher` 的 `versions\1.7.10\1.7.10.jar`；assets 取 jar 往上三層的 `assets`。
   AppData 位置改由 `SHGetKnownFolderPath(FOLDERID_RoamingAppData)` 取得，不依賴環境變數；都找不到時跳出檔案選擇視窗，選好的路徑存在 exe 旁的 `minerust_jar.txt`。仍失敗時錯誤對話框會列出找過的所有位置。截圖模式（`--screenshot`）刻意關閉聲音。
+- **陷阱：Claude 桌面版是 MSIX 套件，從它啟動的程序看到的 `%APPDATA%` 是虛擬化的**。`AppData\Roaming\Sapling` 實際在
+  `AppData\Local\Packages\Claude_pzs8sxrjxfjjc\LocalCache\Roaming\Sapling`，使用者自己雙擊 exe 時看不到。
+  因此原版 jar 與 1.7.10 的 assets 複製到了 `D:\Claude\mc1710-rs\game\`（`versions.7.10.7.10.jar`、`assets\`，已加入 .gitignore，
+  不推送）；`find_jar` 會在 exe 往上四層找 `game\`，也會掃 `%LOCALAPPDATA%\Packages\*\LocalCache\Roaming`。
+  驗證「使用者能不能開」時，不能只在這裡跑：要確認啟動訊息 `Jar:` 印出的路徑不在 AppData 底下。
 - Git Bash 會把以 `/` 開頭的參數改寫成 Windows 路徑：送聊天指令（`MINERUST_CHAT="/xp 30L"`）時加
   `MSYS_NO_PATHCONV=1`。
 
@@ -230,3 +235,4 @@ minerust --seed 12345 --no-save --size 854 480 --screenshot out.png 6
 - 本次：方塊物品 3D 模型（樓梯、柵欄、仙人掌、活塞、壓力板、按鈕、地板門、地毯、雪片、半磚、附魔台、終界門框、龍蛋、鐵砧），取代舊的簡化正方體與平面貼圖；GUI 打光改為原版光源方向；截圖確認創造模式三個分頁與手持樓梯。
 - 本次：修正雙擊 exe 打不開（舊的 jar 路徑已刪除，現在也會找 `%APPDATA%\Sapling` 等啟動器目錄與 exe 旁），啟動錯誤改以對話框顯示；聲音與語言檔因此也找得到了。
 - 本次：使用者雙擊 exe 仍找不到 jar（其環境與本機測試不同，推測 `APPDATA` 不可靠）。改用 Known Folder API、加上 `minerust_jar.txt` 與檔案選擇視窗；以清空所有環境變數、工作目錄設為 `C:\Windows` 的方式啟動 release 與 debug 驗證。
+- 本次：查出真正原因——Sapling 資料夾只存在於 Claude 套件的虛擬化 AppData 裡。jar 與 assets 複製到 `game\`，exe 會往上找到它；啟動時印出 `Jar:` 路徑。
