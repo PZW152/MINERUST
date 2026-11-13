@@ -161,6 +161,44 @@ fn can_enchant(t: Type, id: ItemId) -> bool {
     }
 }
 
+fn by_id(id: i32) -> Option<&'static (i32, i32, Ench, Type)> {
+    ENCHANTMENTS.iter().find(|e| e.0 == id)
+}
+
+/// `Enchantment.getWeight`
+pub fn weight(id: i32) -> i32 {
+    by_id(id).map_or(0, |e| e.1)
+}
+
+/// `Enchantment.getMaxLevel`
+pub fn max_level_of(id: i32) -> i32 {
+    by_id(id).map_or(1, |e| max_level(e.2))
+}
+
+/// `Enchantment.canApplyTogether`
+pub fn can_apply_together(a: i32, b: i32) -> bool {
+    match (by_id(a), by_id(b)) {
+        (Some(x), Some(y)) => compatible((x.0, x.2), (y.0, y.2)),
+        _ => a != b,
+    }
+}
+
+/// `Enchantment.canApply(stack)` with its overrides (axes take the damage
+/// enchantments, shears efficiency and silk touch, anything damageable
+/// unbreaking, any armour thorns).
+pub fn can_apply(id: i32, s: &Stack) -> bool {
+    let Some(e) = by_id(id) else { return false };
+    let axe = crate::item::tool(s.id).is_some_and(|t| t.kind == crate::item::ToolKind::Axe);
+    let special = match e.2 {
+        Ench::Damage(_) => axe,
+        Ench::Digging | Ench::Untouching => s.id == 359,
+        Ench::Durability => crate::item::max_damage(s.id) > 0,
+        Ench::Thorns => crate::container::armor_type(s.id).is_some(),
+        _ => false,
+    };
+    special || can_enchant(e.3, s.id)
+}
+
 /// `Item.getItemEnchantability`
 pub fn enchantability(id: ItemId) -> i32 {
     if let Some(t) = crate::item::tool(id) {

@@ -3634,7 +3634,7 @@ pub fn explosion_resistance(id: u8) -> f32 {
         | DIAMOND_ORE | REDSTONE_ORE | LIT_REDSTONE_ORE | EMERALD_ORE | FENCE => 5.0,
         BEDROCK | END_PORTAL_FRAME => 6000000.0,
         FLOWING_WATER | WATER | FLOWING_LAVA | LAVA => 100.0,
-        OBSIDIAN => 2000.0,
+        OBSIDIAN | ANVIL => 2000.0,
         END_STONE => 15.0,
         HARDENED_CLAY | STAINED_HARDENED_CLAY => 7.0,
         COAL_BLOCK => 10.0,

@@ -266,6 +266,8 @@ pub struct Game {
     book: crate::gui_container::BookAnim,
     /// `GuiContainer` of the open window.
     gui: crate::gui_container::GuiContainer,
+    /// `GuiRepair`'s own state while an anvil is open.
+    anvil: Option<crate::gui_repair::GuiRepair>,
     /// `GuiContainerCreative` while it is open, and its last tab.
     creative: Option<crate::creative::Creative>,
     creative_tab: usize,
@@ -551,8 +553,10 @@ impl Game {
                 clicks: 0,
                 enchant: [0; 3],
                 name_seed: 0,
+                repair_cost: 0,
             },
             gui: Default::default(),
+            anvil: None,
             book: Default::default(),
             creative: None,
             creative_tab: 0,
@@ -2507,6 +2511,50 @@ impl Game {
         }
     }
 
+    /// `ContainerRepair.updateItemName` on the client's copy.
+    fn reprice_anvil(&mut self) {
+        let creative = self.mode == GameMode::Creative;
+        let name = self
+            .anvil
+            .as_ref()
+            .map_or(String::new(), |a| a.name.clone());
+        let mut tile = std::mem::take(&mut self.view.tile_slots);
+        {
+            let ctx = crate::container::Ctx::new(
+                &mut self.view.inv,
+                &mut tile,
+                crate::container::Window::Repair,
+                creative,
+            )
+            .with_repair(&name, self.stats.xp_level);
+            self.view.result = ctx.result();
+            self.view.repair_cost = ctx.repair_cost();
+        }
+        self.view.tile_slots = tile;
+    }
+
+    /// `GuiRepair` as a crafter of the anvil's container: made with the
+    /// window, told when slot 0 changes (`sendSlotContents`), which can
+    /// send `MC|ItemName`.
+    fn anvil_sync(&mut self) {
+        if !matches!(self.view.open, Open::Anvil(_)) || self.screen != Screen::Window {
+            self.anvil = None;
+            return;
+        }
+        let (w, h) = self.gui_size();
+        let (left, top) = crate::gui_container::origin(&self.view.open, w as i32, h as i32, false);
+        let atlas = self.atlas.clone();
+        let ui = crate::gui::Ui::new(&atlas, w, h);
+        let slot0 = self.view.tile_slots.first().copied().flatten();
+        let a = self
+            .anvil
+            .get_or_insert_with(|| crate::gui_repair::GuiRepair::new(left, top));
+        a.place(left, top);
+        if let Some(n) = a.sync(&ui, slot0, &self.lang) {
+            let _ = self.sim.commands.send(Command::RenameItem(n));
+        }
+    }
+
     /// `PlayerControllerMP.windowClick`: `slotClick` on the client's copy,
     /// then `C0EPacketClickWindow`.
     fn window_click(&mut self, c: crate::gui_container::Click) -> InvView {
@@ -2514,11 +2562,17 @@ impl Game {
         let window = crate::play::window_of(&self.view.open);
         let mut tile = std::mem::take(&mut self.view.tile_slots);
         {
+            let name = self
+                .anvil
+                .as_ref()
+                .map_or(String::new(), |a| a.name.clone());
             let mut ctx =
-                crate::container::Ctx::new(&mut self.view.inv, &mut tile, window, creative);
+                crate::container::Ctx::new(&mut self.view.inv, &mut tile, window, creative)
+                    .with_repair(&name, self.stats.xp_level);
             crate::container::slot_click(&mut ctx, &mut self.client_drag, c.slot, c.button, c.mode);
             let r = ctx.result();
             self.view.result = r;
+            self.view.repair_cost = ctx.repair_cost();
         }
         self.view.tile_slots = tile;
         self.sent_clicks = self.sent_clicks.wrapping_add(1);
@@ -2750,7 +2804,7 @@ impl Game {
     /// Whether typed characters go to a screen (`GuiContainerCreative`'s
     /// search field).
     pub fn text_input(&self) -> bool {
-        self.screen == Screen::Window && self.creative.is_some()
+        self.screen == Screen::Window && (self.creative.is_some() || self.anvil.is_some())
             || self.screen == Screen::Chat
             || self.screen == Screen::Sign
     }
@@ -2910,6 +2964,35 @@ impl Game {
             self.chat.reset_scroll();
             self.screen = Screen::Playing;
             return Request::Grab;
+        }
+        if self.screen == Screen::Window && self.anvil.is_some() {
+            // GuiRepair.keyTyped: the field first, then GuiContainer
+            let (w, h) = self.gui_size();
+            let atlas = self.atlas.clone();
+            let ui = crate::gui::Ui::new(&atlas, w, h);
+            let mut clip = self
+                .shell
+                .as_ref()
+                .map_or_else(String::new, |s| s.clipboard.clone());
+            let slot0 = self.view.tile_slots.first().copied().flatten();
+            let mut a = self.anvil.take().unwrap();
+            let took = a.key(&ui, ch, code, ctrl, shift, &mut clip, slot0, &self.lang);
+            self.anvil = Some(a);
+            if let Some(s) = self.shell.as_mut() {
+                s.clipboard = clip;
+            }
+            if let Some(n) = took {
+                // updateItemName on the client's container, then the packet
+                self.reprice_anvil();
+                let _ = self.sim.commands.send(Command::RenameItem(n));
+                return Request::None;
+            }
+            let close = self.with_container(|g, f, k, send| g.key_typed(f, code, ctrl, k, send));
+            return if close {
+                self.close_window()
+            } else {
+                Request::None
+            };
         }
         if let Some(mut c) = self.creative.take() {
             let (dims, mouse, keys) = self.creative_input();
@@ -3296,6 +3379,16 @@ impl Game {
                     g.mouse_released(f, button as i32, shift, k, send);
                 }
             });
+            // GuiRepair.mouseClicked: then the name field
+            if pressed {
+                let (w, h) = self.gui_size();
+                let m = self.gui_mouse();
+                let atlas = self.atlas.clone();
+                let ui = crate::gui::Ui::new(&atlas, w, h);
+                if let Some(a) = self.anvil.as_mut() {
+                    a.field.click(&ui, (m.0 as f32, m.1 as f32), button as u8);
+                }
+            }
             // GuiEnchantment.mouseClicked: the three buttons
             if pressed {
                 if let Open::Enchant(_) = self.view.open {
@@ -4206,6 +4299,46 @@ impl Game {
             if self.world.peek_block(bx, by, bz) == f.block {
                 continue;
             }
+            if f.block == block::ANVIL {
+                // renderBlockAnvilMetadata with the world as blockAccess,
+                // translated by -(block + 0.5)
+                use crate::render::mesher::{build_single, MovingDraw};
+                let (cx, cz) = (bx >> 4, bz >> 4);
+                let mut v = Vec::with_capacity(9);
+                for dz in -1..=1 {
+                    for dx in -1..=1 {
+                        if let Some(c) = self.world.chunks.get(&(cx + dx, cz + dz)) {
+                            v.push(c.mc.clone());
+                        }
+                    }
+                }
+                let Ok(nine) = <[crate::render::mesher::MeshChunk; 9]>::try_from(v) else {
+                    continue;
+                };
+                let verts = build_single(
+                    &nine,
+                    &self.atlas,
+                    &self.noise,
+                    [bx, by, bz],
+                    f.block,
+                    f.meta as i32,
+                    MovingDraw::Anvil,
+                );
+                let o = [
+                    (cx * 16 - bx) as f64 - 0.5 + p[0] - eye[0],
+                    -(by as f64) - 0.5 + p[1] - eye[1],
+                    (cz * 16 - bz) as f64 - 0.5 + p[2] - eye[2],
+                ];
+                for mut w in verts {
+                    w.pos = [
+                        (w.pos[0] as f64 + o[0]) as f32,
+                        (w.pos[1] as f64 + o[1]) as f32,
+                        (w.pos[2] as f64 + o[2]) as f32,
+                    ];
+                    dynamic.push(w);
+                }
+                continue;
+            }
             let lv = block::info(f.block).light_value as i32;
             let bright = self.world.light(true, bx, by, bz) << 20
                 | self.world.light(false, bx, by, bz).max(lv) << 4;
@@ -4352,6 +4485,7 @@ impl Game {
             );
         }
 
+        self.anvil_sync();
         let ui_atlas = self.atlas.clone();
         let mut ui = crate::gui::Ui::new(
             &ui_atlas,
@@ -4623,6 +4757,9 @@ impl Game {
                     ench: Some(self.enchant_state(partial)),
                 };
                 self.gui.draw(&mut ui, &frame, &self.lang, &lines);
+                if let Some(a) = &self.anvil {
+                    a.draw(&mut ui);
+                }
             }
             Screen::Paused => {
                 self.draw_menu(&mut ui, partial);

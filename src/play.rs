@@ -144,6 +144,8 @@ pub enum Open {
     Dispenser(Pos),
     /// `ContainerEnchantment` at the table
     Enchant(Pos),
+    /// `ContainerRepair` at an anvil
+    Anvil(Pos),
 }
 
 /// The `Container` class an open window uses.
@@ -157,6 +159,7 @@ pub fn window_of(o: &Open) -> Window {
         Open::Cart(_) => Window::Chest(3),
         Open::Dispenser(_) => Window::Dispenser,
         Open::Enchant(_) => Window::Enchant,
+        Open::Anvil(_) => Window::Repair,
     }
 }
 
@@ -176,6 +179,8 @@ pub struct InvView {
     /// `ContainerEnchantment.enchantLevels` and `nameSeed` (`S31` bars).
     pub enchant: [i32; 3],
     pub name_seed: i64,
+    /// `ContainerRepair.maximumCost` (`S31` bar 0).
+    pub repair_cost: i32,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -226,6 +231,11 @@ pub struct Play {
     pub enchant_levels: [i32; 3],
     pub name_seed: i64,
     pub enchant_rand: JavaRandom,
+    /// `ContainerRepair.inputSlots` and `repairedItemName`.
+    pub repair_slots: [Option<Stack>; 2],
+    pub repair_name: String,
+    /// `experienceLevel` of the player, kept here for the containers.
+    pub xp_level: i32,
     /// `S36PacketSignEditorOpen` to send, and sign texts that changed.
     pub sign_open: Option<Pos>,
     pub sign_updates: Vec<(Pos, [String; 4])>,
@@ -442,6 +452,7 @@ impl InvView {
             clicks: 0,
             enchant: [0; 3],
             name_seed: 0,
+            repair_cost: 0,
         }
     }
 }
@@ -470,6 +481,9 @@ impl Play {
             creative_drops: 0,
             sign_open: None,
             enchant_slot: [None],
+            repair_slots: [None; 2],
+            repair_name: String::new(),
+            xp_level: 0,
             enchant_levels: [0; 3],
             name_seed: 0,
             enchant_rand: JavaRandom::new(
@@ -504,7 +518,10 @@ impl Play {
         };
         let mut inv = self.inv.clone();
         let mut tile = self.tile_vec();
-        let result = Ctx::new(&mut inv, &mut tile, self.window(), false).result();
+        let creative = self.mode == GameMode::Creative;
+        let c = Ctx::new(&mut inv, &mut tile, self.window(), creative)
+            .with_repair(&self.repair_name, self.xp_level);
+        let (result, repair_cost) = (c.result(), c.repair_cost());
         InvView {
             inv: self.inv.clone(),
             open: self.open.clone(),
@@ -514,6 +531,7 @@ impl Play {
             clicks: self.clicks,
             enchant: self.enchant_levels,
             name_seed: self.name_seed,
+            repair_cost,
         }
     }
 
@@ -816,6 +834,13 @@ impl Play {
                     self.inv_dirty = true;
                     return true;
                 }
+                block::ANVIL => {
+                    // BlockAnvil.onBlockActivated: displayGUIAnvil
+                    self.open = Open::Anvil(target);
+                    self.repair_name.clear();
+                    self.inv_dirty = true;
+                    return true;
+                }
                 block::ENCHANTING_TABLE => {
                     // BlockEnchantmentTable.onBlockActivated
                     self.open = Open::Enchant(target);
@@ -1071,6 +1096,12 @@ impl Play {
                 }
             }
             block::FURNACE | block::CHEST => meta = facing_meta(self.player.1),
+            // ItemAnvilBlock.getMetadata (damage << 2), then
+            // BlockAnvil.onBlockPlacedBy
+            block::ANVIL => {
+                let k = (yaw4 + 1) % 4;
+                meta = [2, 3, 0, 1][k as usize] | (meta << 2) & 12;
+            }
             block::LOG | block::LOG2 => {
                 // BlockRotatedPillar.onBlockPlaced
                 meta = (meta & 3)
@@ -1378,6 +1409,7 @@ impl Play {
                 _ => Vec::new(),
             },
             Open::Enchant(_) => self.enchant_slot.to_vec(),
+            Open::Anvil(_) => self.repair_slots.to_vec(),
             Open::Chest(ps) => {
                 let mut v = Vec::new();
                 for p in ps {
@@ -1421,6 +1453,7 @@ impl Play {
                 }
             }
             Open::Enchant(_) => copy(&mut self.enchant_slot, v),
+            Open::Anvil(_) => copy(&mut self.repair_slots, v),
             Open::Chest(ps) => {
                 for (k, p) in ps.iter().enumerate() {
                     if let Some(Tile::Chest { slots }) = self.tiles.get_mut(p) {
@@ -1442,10 +1475,11 @@ impl Play {
     }
 
     /// `C0EPacketClickWindow`: `Container.slotClick` on the open window.
-    pub fn window_click(&mut self, w: &mut ServerWorld, slot: i32, button: i32, mode: i32) {
+    /// Returns the experience levels spent (the anvil).
+    pub fn window_click(&mut self, w: &mut ServerWorld, slot: i32, button: i32, mode: i32) -> i32 {
         self.clicks = self.clicks.wrapping_add(1);
         if self.open == Open::None {
-            return;
+            return 0;
         }
         self.inv_dirty = true;
         let window = self.window();
@@ -1453,7 +1487,8 @@ impl Play {
         let creative = self.mode == GameMode::Creative;
         let mut drag = std::mem::take(&mut self.drag);
         let fx = {
-            let mut c = Ctx::new(&mut self.inv, &mut tile, window, creative);
+            let mut c = Ctx::new(&mut self.inv, &mut tile, window, creative)
+                .with_repair(&self.repair_name, self.xp_level);
             container::slot_click(&mut c, &mut drag, slot, button, mode);
             c.fx
         };
@@ -1482,6 +1517,56 @@ impl Play {
                 xp -= k;
                 self.orbs.push(([f[0], f[1] + 0.5, f[2] + 0.5], k));
             }
+        }
+        let mut spent = 0;
+        if let (Some(cost), Open::Anvil(p)) = (fx.repaired, self.open.clone()) {
+            if !creative {
+                spent = cost;
+            }
+            self.anvil_used(w, p, creative);
+        }
+        spent
+    }
+
+    /// The rest of `ContainerRepair$2.onPickupFromSlot`: a 12% chance
+    /// to wear the anvil a step (and break it after the third), with
+    /// `playAuxSFX` 1020 (break) or 1021 (use).
+    fn anvil_used(&mut self, w: &mut ServerWorld, p: Pos, creative: bool) {
+        let (x, y, z) = (p[0], p[1], p[2]);
+        let mut sound = "random.anvil_use";
+        if !creative && w.block(x, y, z) == block::ANVIL && self.prand.next_float() < 0.12 {
+            let m = w.meta(x, y, z);
+            let d = (m >> 2) + 1;
+            if d > 2 {
+                w.set_air(x, y, z);
+                sound = "random.anvil_break";
+            } else {
+                w.set_meta(x, y, z, m & 3 | d << 2, 2);
+            }
+        }
+        // RenderGlobal.playAuxSFX: the client's world.rand picks the pitch
+        let pitch = w.rand.next_float() * 0.1 + 0.9;
+        self.fx.push(crate::entity::base::Fx::Sound(
+            sound,
+            [x as f64 + 0.5, y as f64 + 0.5, z as f64 + 0.5],
+            1.0,
+            pitch,
+        ));
+    }
+
+    /// `MC|ItemName`: `ContainerRepair.updateItemName` with the name
+    /// cut to the allowed characters, ignored above 30 of them.
+    pub fn rename(&mut self, name: &str) {
+        if !matches!(self.open, Open::Anvil(_)) {
+            return;
+        }
+        let s: String = name
+            .chars()
+            .filter(|&c| crate::menu::widgets::allowed_char(c))
+            .collect();
+        if s.encode_utf16().count() <= 30 {
+            self.repair_name = s;
+            self.inv_dirty = true;
         }
     }
 
@@ -1597,6 +1682,13 @@ impl Play {
         if let Some(s) = self.enchant_slot[0].take() {
             self.throw(s, &mut rnd);
         }
+        // ContainerRepair.onContainerClosed
+        for k in 0..2 {
+            if let Some(s) = self.repair_slots[k].take() {
+                self.throw(s, &mut rnd);
+            }
+        }
+        self.repair_name.clear();
         self.enchant_levels = [0; 3];
         w.rand = rnd;
         self.open = Open::None;

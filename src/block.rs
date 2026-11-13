@@ -150,6 +150,7 @@ pub const DARK_OAK_STAIRS: u8 = 164;
 pub const HAY_BLOCK: u8 = 170;
 pub const CARPET: u8 = 171;
 pub const COAL_BLOCK: u8 = 173;
+pub const ANVIL: u8 = 145;
 
 /// `BlockStairs` instances.
 #[inline]
@@ -238,6 +239,8 @@ pub enum Shape {
     Fire,
     /// `renderBlockBrewingStand` (25)
     BrewingStand,
+    /// `renderBlockAnvil` (35)
+    Anvil,
 }
 
 /// `net.minecraft.block.material.Material`
@@ -276,6 +279,8 @@ pub enum Material {
     Portal,
     /// `Material.dragonEgg`
     DragonEgg,
+    /// `Material.anvil`: needs a tool, immovable by pistons.
+    Anvil,
 }
 
 impl Material {
@@ -585,6 +590,8 @@ fn build() -> [BlockInfo; 256] {
     let mut egg = base(Shape::Boxes, M::DragonEgg, false);
     egg.light_value = 1;
     t[DRAGON_EGG as usize] = egg;
+    // BlockAnvil: setLightOpacity(0), not opaque
+    t[ANVIL as usize] = base(Shape::Anvil, M::Anvil, false);
     t[QUARTZ_ORE as usize] = cube(M::Rock);
     t[TRAPDOOR as usize] = base(Shape::Boxes, M::Wood, false);
     // TNT uses Material.tnt, which is translucent: not an opaque cube for
@@ -710,6 +717,12 @@ pub fn collision_box(id: u8, meta: u8) -> Option<[f32; 6]> {
     }
     match id {
         CACTUS => Some([0.0625, 0.0, 0.0625, 0.9375, 0.9375, 0.9375]),
+        // BlockAnvil.setBlockBoundsBasedOnState
+        ANVIL => Some(if meta & 3 == 1 || meta & 3 == 3 {
+            [0.0, 0.0, 0.125, 1.0, 1.0, 0.875]
+        } else {
+            [0.125, 0.0, 0.0, 0.875, 1.0, 1.0]
+        }),
         CHEST => Some([0.0625, 0.0, 0.0625, 0.9375, 0.875, 0.9375]),
         SOUL_SAND => Some([0.0, 0.0, 0.0, 1.0, 0.875, 1.0]),
         STONE_SLAB => {
@@ -1139,6 +1152,19 @@ pub fn texture_name(id: u8, meta: u8, face: usize) -> Option<&'static str> {
         },
         END_PORTAL => "portal",
         DRAGON_EGG => "dragon_egg",
+        // BlockAnvil.getIcon with anvilRenderSide 3 (what it is left at
+        // after any anvil was drawn): the top shows the damage
+        ANVIL => {
+            if face == 1 {
+                [
+                    "anvil_top_damaged_0",
+                    "anvil_top_damaged_1",
+                    "anvil_top_damaged_2",
+                ][(meta as usize >> 2) % 3]
+            } else {
+                "anvil_base"
+            }
+        }
         QUARTZ_ORE => "quartz_ore",
         REDSTONE_LAMP => "redstone_lamp_off",
         LIT_REDSTONE_LAMP => "redstone_lamp_on",

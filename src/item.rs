@@ -676,6 +676,7 @@ pub fn hardness(id: u8) -> f32 {
         LADDER | NETHERRACK => 0.4,
         STANDING_SIGN | WALL_SIGN => 1.0,
         ENCHANTING_TABLE => 5.0,
+        ANVIL => 5.0,
         GLOWSTONE | GLASS_PANE => 0.3,
         LIT_PUMPKIN => 1.0,
         END_PORTAL_FRAME => -1.0,
@@ -708,8 +709,10 @@ fn effective(kind: ToolKind, id: u8) -> bool {
     let m = block::material(id);
     match kind {
         ToolKind::Pickaxe => {
-            matches!(m, Material::Rock | Material::PackedIce | Material::Iron)
-                || id == ICE
+            matches!(
+                m,
+                Material::Rock | Material::PackedIce | Material::Iron | Material::Anvil
+            ) || id == ICE
                 || is_rail(id)
                 || matches!(id, STONE_BUTTON | STONE_PRESSURE_PLATE)
         }
@@ -740,7 +743,12 @@ pub fn can_harvest(held: Option<Stack>, id: u8) -> bool {
     // Material.isToolNotRequired
     let needs_tool = matches!(
         m,
-        Material::Rock | Material::Snow | Material::CraftedSnow | Material::Iron | Material::Web
+        Material::Rock
+            | Material::Snow
+            | Material::CraftedSnow
+            | Material::Iron
+            | Material::Anvil
+            | Material::Web
     );
     if m == Material::Web {
         // ItemSword / ItemShears.func_150897_b
@@ -754,7 +762,8 @@ pub fn can_harvest(held: Option<Stack>, id: u8) -> bool {
     match held.and_then(|s| tool(s.id)) {
         Some(t) => match t.kind {
             ToolKind::Pickaxe => {
-                matches!(m, Material::Rock | Material::Iron) && t.level >= pickaxe_level(id)
+                matches!(m, Material::Rock | Material::Iron | Material::Anvil)
+                    && t.level >= pickaxe_level(id)
             }
             ToolKind::Shovel => id == block::SNOW_LAYER || id == block::SNOW,
             _ => false,
@@ -825,6 +834,8 @@ pub fn drops(id: u8, meta: i32, r: &mut JavaRandom) -> Vec<Stack> {
         COAL_ORE => one(COAL, 0),
         LIT_FURNACE => one(FURNACE as ItemId, 0),
         CHEST | FURNACE | CRAFTING_TABLE | TORCH | ENCHANTING_TABLE => one(id as ItemId, 0),
+        // BlockAnvil.damageDropped
+        ANVIL => one(id as ItemId, meta >> 2),
         // BlockSign.getItemDropped
         STANDING_SIGN | WALL_SIGN => one(323, 0),
         DIAMOND_ORE => one(DIAMOND, 0),

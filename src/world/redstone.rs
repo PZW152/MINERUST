@@ -1700,7 +1700,7 @@ pub fn mobility(id: u8) -> i32 {
             | M::Circuits
             | M::Leaves
             | M::Carpet => 1,
-            M::Portal => 2,
+            M::Portal | M::Anvil => 2,
             _ => 0,
         },
     }

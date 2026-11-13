@@ -90,7 +90,7 @@ cargo run --release -- --seed 1
 ## 尚未實作
 
 完整清單與優先順序見 [docs/HANDOFF.md](docs/HANDOFF.md) 第 7 節與 [docs/PARITY_TODO.md](docs/PARITY_TODO.md)。
-主要缺口：附魔台與鐵砧介面、信標、漏斗、比較器、統計與成就、物品 NBT、村民交易、騎馬、多人連線。
+主要缺口：附魔效果、信標、漏斗、比較器、統計與成就、物品 NBT、村民交易、騎馬、多人連線。
 
 ## 接手開發
 

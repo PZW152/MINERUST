@@ -103,6 +103,8 @@ java -cp "out;$CP" XxxHarness tools/xxx_1710.txt
 | `src/item_data.rs`、`src/item_text.rs` | 物品登錄資料（`tools/ItemHarness.java` → `tools/gen_items.py` 產生）、名稱與工具提示 |
 | `src/enchant.rs` | 附魔資料與 `EnchantmentHelper` |
 | `src/inventory.rs` | `InventoryPlayer` |
+| `src/repair.rs` | `ContainerRepair.updateRepairOutput`（純函式；名稱比較用共用語言表 `lang::shared()`，等同原版共用的 `StringTranslate`） |
+| `src/gui_repair.rs` | `GuiRepair`：名稱欄、費用文字、`anvil.png` 的疊加部分 |
 | `src/item_tag.rs` | 物品的 NBT（`stackTagCompound`）：以內容去重的全域表，`Stack.tag` 只是編號，所以 `Stack` 仍是 `Copy`；比較編號就是 `areItemStackTagsEqual`（與鍵的順序無關）。附魔、自訂名稱、`RepairCost`、染色、Lore 都在這裡；存檔寫進 Anvil 的 `tag` 與自有格式的 `t<hex>` |
 | `src/entity/` | 實體：生物 AI、`EntityTrackerEntry`（`tracker.rs`）、船、礦車、箭、投擲物、經驗球、玩家物理 |
 | `src/world/` | 世界生成、裝飾、結構、光照、紅石、液體、火、Anvil 存檔、爆炸 |
@@ -158,6 +160,7 @@ minerust --seed 12345 --no-save --size 854 480 --screenshot out.png 6
 | 物品、創造分頁、登錄名稱、生怪蛋顏色 | `tools/ItemHarness.java` → `tools/items_1710.txt` → `python tools/gen_items.py` |
 | 附魔清單與附魔台等級 | `tools/EnchantHarness.java` → `tools/enchant_1710.txt`（測試 `lists_and_levels_match_the_game`） |
 | 皮甲染色配方 | `tools/DyeHarness.java` → `tools/dyes_1710.txt`（測試 `armor_dyes_match_the_game`） |
+| 鐵砧的修理／合併／命名費用 | `tools/RepairHarness.java` 讀 `tools/repair_cases.txt` → `tools/repair_1710.txt`（測試 `anvil_matches_the_game`） |
 
 新增系統時照同樣模式：寫 Harness → 存文字檔 → Rust 測試比對。
 
@@ -174,13 +177,18 @@ minerust --seed 12345 --no-save --size 854 480 --screenshot out.png 6
 - 附魔資料與 `EnchantmentHelper`（與原版 385 筆比對一致）
 - 附魔台：方塊、`ContainerEnchantment`（書架計數、三個等級、附魔與扣等級、關閉時掉出）、`GuiEnchantment`
   （書本模型在自己的透視視窗中、銀河字母字型與換行、三種按鈕狀態）、浮空書本的動畫與繪製
+- 鐵砧：方塊（`renderBlockAnvil` 四個方塊與 uvRotate、損壞頂面、朝向、碰撞箱、掉落、下落與落下實體的繪製、
+  物品圖示的 3D 模型）、`ContainerRepair`（`updateRepairOutput` 與原版 25 組比對一致、`canTakeStack`、
+  扣等級、12% 損壞與音效、關閉時掉出）、`GuiRepair`（名稱欄、費用文字與三重陰影、紅叉）、`MC|ItemName`
 
 ## 7. 尚未完成（依優先順序）
 
 1. **附魔效果本身**：附魔台已完成，但多數附魔尚未作用在遊戲上（鋒利／不死剋星／節肢剋星、擊退、燃燒、掠奪、
    效率、絲綢之觸、耐久、幸運、保護系列、水下呼吸、親水性、荊棘、力量／衝擊／火焰／無限、海之眷顧、魚餌）。
    附魔台的書架粒子（`EntityEnchantmentTableParticleFX`）也還沒做。
-2. **鐵砧**：方塊、`ContainerRepair.updateRepairOutput` 的完整費用演算法、改名欄位、損壞。
+2. **GUI 裡的非方塊物品圖示**：`Ui::block_icon` 只會畫正方體，樓梯、柵欄、附魔台、門以外的特殊形狀方塊在物品欄裡
+   還是平面貼圖（鐵砧與箱子除外）。原版 `renderItemIn3d` 對 render type 0/10/11/13/16/21/22/26/27/31/32/34/35/39 畫 3D；
+   做法可比照鐵砧：`Rb::bare` 畫 `renderBlockAsItem`，再用 `model::gui_lit` 以 `enableGUIStandardItemLighting` 打光。
 3. 其他缺方塊的 GUI：信標、漏斗、投擲器、馬的物品欄、村民交易、書與羽毛筆。
 4. 統計與成就（`StatList`、`AchievementList`、`GuiStats`、`GuiAchievements`），資源包畫面、使用統計畫面。
 5. 物品 NBT 已有（見第 4 節），還缺用到它的東西：煙火、書與羽毛筆、地圖資料，以及三個特殊配方（煙火、書本複製、地圖擴大）；附魔光澤。
@@ -212,4 +220,5 @@ minerust --seed 12345 --no-save --size 854 480 --screenshot out.png 6
 - `893a6c1` 告示牌全套。
 - `5de6c71` 附魔資料與 `EnchantmentHelper`（`tools/EnchantHarness.java` 385 筆一致）、附魔台方塊、這份接手手冊。
 - `cc422c5` 附魔台全套（容器、介面、浮空書本）；測試 `enchanting_table_enchants_and_costs_levels`。
-- 本次：物品 NBT（`item_tag.rs`），附魔改存在 NBT 裡（Anvil 存檔以前會遺失附魔，現在不會）；自訂名稱、染色、Lore 的工具提示；皮甲染色顏色用在圖示與盔甲模型；`RecipesArmorDyes`（與原版 9 組一致）；`tools/classpath.sh`（舊的 `Sapling Data` 函式庫已刪除）。
+- `3239bf6` 物品 NBT（`item_tag.rs`），附魔改存在 NBT 裡（Anvil 存檔以前會遺失附魔，現在不會）；自訂名稱、染色、Lore 的工具提示；皮甲染色顏色用在圖示與盔甲模型；`RecipesArmorDyes`（與原版 9 組一致）；`tools/classpath.sh`（舊的 `Sapling Data` 函式庫已刪除）。
+- 本次：鐵砧全套。方塊與繪製（世界、落下實體用 `MovingDraw::Anvil` 取世界光照、物品圖示）、`repair.rs`（與原版 25 組一致）、容器的 `canTakeStack` 檢查補進 `slotClick` 各模式、`GuiRepair`、`Command::RenameItem`；`lang::shared()`；測試 `anvil_repairs_renames_and_costs_levels`；截圖確認介面、圖示、損壞頂面。

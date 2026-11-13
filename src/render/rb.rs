@@ -323,6 +323,10 @@ impl<'a, 'b> Rb<'a, 'b> {
     /// `Block.shouldSideBeRendered` with the overrides of the blocks drawn
     /// through `renderStandardBlock`. `(x, y, z)` is the neighbour.
     fn should_side(&self, x: i32, y: i32, z: i32, side: i32) -> bool {
+        // BlockAnvil.shouldSideBeRendered
+        if self.id == block::ANVIL {
+            return true;
+        }
         let n = self.block_at(x, y, z);
         match self.id {
             // BlockBreakable (glass, stained glass)
@@ -4026,6 +4030,92 @@ impl<'a, 'b> Rb<'a, 'b> {
         self.color(0.6, 0.6, 0.6);
         let i = self.side_icon(5);
         self.face_x_pos(-0.5, -0.5, -0.5, i);
+    }
+
+    /// `RenderBlocks.renderBlockAnvilOrient`: the four boxes of an anvil.
+    /// `item` is the inventory form (orientation 0, faces drawn at the
+    /// origin without a world, `renderBlockAsItem` type 35).
+    pub fn render_anvil(&mut self, x: i32, y: i32, z: i32, item: bool) -> bool {
+        let o = if item { 0 } else { self.meta & 3 };
+        let mut swap = false;
+        match o {
+            0 => {
+                self.uvRotateSouth = 2;
+                self.uvRotateNorth = 1;
+                self.uvRotateTop = 3;
+                self.uvRotateBottom = 3;
+            }
+            1 => {
+                self.uvRotateEast = 1;
+                self.uvRotateWest = 2;
+                self.uvRotateTop = 2;
+                self.uvRotateBottom = 1;
+                swap = true;
+            }
+            2 => {
+                self.uvRotateSouth = 1;
+                self.uvRotateNorth = 2;
+            }
+            _ => {
+                self.uvRotateEast = 2;
+                self.uvRotateWest = 1;
+                self.uvRotateTop = 1;
+                self.uvRotateBottom = 2;
+                swap = true;
+            }
+        }
+        let base = Icon::new(self.atlas().named("anvil_base"));
+        let mut h = 0.0f32;
+        // renderBlockAnvilRotate: part, width, height, depth
+        for (part, w, ht, d) in [
+            (0, 0.75f32, 0.25f32, 0.75f32),
+            (1, 0.5, 0.0625, 0.625),
+            (2, 0.25, 0.3125, 0.5),
+            (3, 0.625, 0.375, 1.0),
+        ] {
+            let (mut a, mut b) = (w, d);
+            if swap {
+                std::mem::swap(&mut a, &mut b);
+            }
+            a /= 2.0;
+            b /= 2.0;
+            // anvilRenderSide: only the top part shows the damaged top
+            self.overrideBlockTexture = if part == 3 { None } else { Some(base) };
+            self.set_render_bounds(
+                (0.5 - a) as f64,
+                h as f64,
+                (0.5 - b) as f64,
+                (0.5 + a) as f64,
+                (h + ht) as f64,
+                (0.5 + b) as f64,
+            );
+            if item {
+                let i = self.side_icon(0);
+                self.face_y_neg(0.0, 0.0, 0.0, i);
+                let i = self.side_icon(1);
+                self.face_y_pos(0.0, 0.0, 0.0, i);
+                let i = self.side_icon(2);
+                self.face_z_neg(0.0, 0.0, 0.0, i);
+                let i = self.side_icon(3);
+                self.face_z_pos(0.0, 0.0, 0.0, i);
+                let i = self.side_icon(4);
+                self.face_x_neg(0.0, 0.0, 0.0, i);
+                let i = self.side_icon(5);
+                self.face_x_pos(0.0, 0.0, 0.0, i);
+            } else {
+                self.render_standard(x, y, z);
+            }
+            h += ht;
+        }
+        self.overrideBlockTexture = None;
+        self.set_render_bounds(0.0, 0.0, 0.0, 1.0, 1.0, 1.0);
+        self.uvRotateEast = 0;
+        self.uvRotateWest = 0;
+        self.uvRotateSouth = 0;
+        self.uvRotateNorth = 0;
+        self.uvRotateTop = 0;
+        self.uvRotateBottom = 0;
+        true
     }
 
     /// `RenderBlocks.renderBlockBrewingStand`

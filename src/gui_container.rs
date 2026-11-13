@@ -102,7 +102,7 @@ fn slot_limit(d: &SlotDef) -> u32 {
 fn slot_valid(d: &SlotDef, s: &Stack) -> bool {
     match d.kind {
         SlotKind::Plain | SlotKind::Enchant => true,
-        SlotKind::CraftResult | SlotKind::FurnaceOut => false,
+        SlotKind::CraftResult | SlotKind::FurnaceOut | SlotKind::RepairOut => false,
         SlotKind::Armor(t) => match container::armor_type(s.id) {
             Some(a) => a == t,
             None => (s.id == 86 || s.id == 397) && t == 0,
@@ -568,6 +568,9 @@ impl GuiContainer {
         }
         if own {
             foreground(ui, view, lang, lf, tf, xs as f32, ys as f32);
+            if let (Open::Anvil(_), Some(e)) = (&view.open, f.ench) {
+                crate::gui_repair::foreground(ui, view, lang, lf, tf, e.creative, e.xp_level);
+            }
         }
         if let Some(c) = cursor {
             let mut s = c;
@@ -623,6 +626,7 @@ fn background(ui: &mut Ui, view: &InvView, left: f32, top: f32, xs: f32, ys: f32
         Open::Workbench(_) => ui.sheet(left, top, WORKBENCH.0, WORKBENCH.1, xs, ys),
         Open::Dispenser(_) => ui.sheet(left, top, DISPENSER.0, DISPENSER.1, xs, ys),
         Open::Enchant(_) => ui.sheet(left, top, ENCHANT.0, ENCHANT.1, xs, ys),
+        Open::Anvil(_) => crate::gui_repair::background(ui, view, left, top),
         Open::Furnace(_) => {
             ui.sheet(left, top, FURNACE.0, FURNACE.1, xs, ys);
             if let Some((burn, cook)) = view.furnace {
@@ -720,6 +724,8 @@ fn foreground(ui: &mut Ui, view: &InvView, lang: &Lang, left: f32, top: f32, xs:
                 false,
             );
         }
+        // GuiRepair draws its own title and no inventory label
+        Open::Anvil(_) => return,
         Open::Furnace(_) => centered(ui, lang.get("container.furnace")),
         Open::Brewing(_) => centered(ui, lang.get("container.brewing")),
         Open::Dispenser(_) => centered(ui, lang.get("container.dispenser")),

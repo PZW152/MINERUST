@@ -768,4 +768,79 @@ mod enchant_tests {
         sim.step(&[Command::CloseWindow], &mut ev);
         assert!(sim.play.enchant_slot[0].is_none());
     }
+
+    #[test]
+    fn anvil_repairs_renames_and_costs_levels() {
+        let cfg = SimConfig {
+            seed: 99,
+            view: 2,
+            save_dir: None,
+            start_time: 6000,
+            freeze_time: true,
+            mode: GameMode::Survival,
+        };
+        let (mut sim, start) = Sim::new(&cfg);
+        let mut ev = Vec::new();
+        for _ in 0..40 {
+            sim.step(&[], &mut ev);
+        }
+        let p = [
+            start.pos[0].floor() as i32,
+            start.pos[1].floor() as i32 + 5,
+            start.pos[2].floor() as i32 + 3,
+        ];
+        // a support under it, or it falls
+        sim.world
+            .set_block(p[0], p[1] - 1, p[2], block::STONE, 0, 3);
+        sim.world.set_block(p[0], p[1], p[2], block::ANVIL, 0, 3);
+        sim.splayer.xp_level = 30;
+        sim.play.inv.main[0] = Some(Stack::new(276, 1000, 1));
+        sim.play.inv.main[1] = Some(Stack::new(264, 0, 5));
+        sim.step(
+            &[
+                Command::Use {
+                    target: p,
+                    face: [0, 1, 0],
+                    sneaking: false,
+                },
+                // hotbar 0 and 1 are slots 30 and 31 of ContainerRepair
+                Command::WindowClick {
+                    slot: 30,
+                    button: 0,
+                    mode: 1,
+                },
+                Command::WindowClick {
+                    slot: 31,
+                    button: 0,
+                    mode: 1,
+                },
+                Command::RenameItem("Edge".into()),
+            ],
+            &mut ev,
+        );
+        assert_eq!(sim.play.repair_slots[0].map(|s| s.id), Some(276));
+        assert_eq!(sim.play.repair_slots[1].map(|s| s.count), Some(5));
+        // 3 + 3 + 2 for three diamonds, 7 for the name
+        let v = sim.play.view();
+        assert_eq!(v.repair_cost, 15);
+        // take the output
+        sim.step(
+            &[Command::WindowClick {
+                slot: 2,
+                button: 0,
+                mode: 0,
+            }],
+            &mut ev,
+        );
+        let got = sim.play.inv.cursor.unwrap();
+        assert_eq!((got.id, got.meta), (276, 0));
+        assert_eq!(got.custom_name().as_deref(), Some("Edge"));
+        assert_eq!(got.repair_cost(), 2);
+        assert_eq!(sim.splayer.xp_level, 15);
+        assert!(sim.play.repair_slots[0].is_none());
+        assert_eq!(sim.play.repair_slots[1].map(|s| s.count), Some(2));
+        // closing throws the diamonds out
+        sim.step(&[Command::CloseWindow], &mut ev);
+        assert!(sim.play.repair_slots[1].is_none());
+    }
 }

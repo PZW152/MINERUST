@@ -4,6 +4,14 @@
 use std::collections::HashMap;
 use std::io::Read;
 
+static SHARED: std::sync::RwLock<Option<std::sync::Arc<Lang>>> = std::sync::RwLock::new(None);
+
+/// `StringTranslate.getInstance()`: the language last loaded, shared by
+/// the client and the integrated server (empty before any is loaded).
+pub fn shared() -> std::sync::Arc<Lang> {
+    SHARED.read().unwrap().clone().unwrap_or_default()
+}
+
 #[derive(Default, Clone)]
 pub struct Lang {
     map: HashMap<String, String>,
@@ -154,11 +162,15 @@ impl Lang {
             wide += v.chars().filter(|&c| c as u32 >= 256).count();
         }
         let unicode = all > 0 && (wide as f32 / all as f32) > 0.1;
-        Lang {
+        let l = Lang {
             map,
             unicode,
             code: code.to_string(),
-        }
+        };
+        // StringTranslate.replaceWith: the singleton the integrated server
+        // reads too
+        *SHARED.write().unwrap() = Some(std::sync::Arc::new(l.clone()));
+        l
     }
 
     /// `LanguageManager.isCurrentLocaleUnicode`

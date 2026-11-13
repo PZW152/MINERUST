@@ -1945,7 +1945,7 @@ impl ServerWorld {
                 }
             }
             block::WATER | block::LAVA => self.check_liquid_collisions(id, x, y, z),
-            block::SAND | block::GRAVEL => self.schedule_update(x, y, z, id, 2),
+            block::SAND | block::GRAVEL | block::ANVIL => self.schedule_update(x, y, z, id, 2),
             block::FIRE => self.fire_added(x, y, z),
             block::TORCH | block::REDSTONE_TORCH | block::UNLIT_REDSTONE_TORCH => {
                 self.torch_added(id, x, y, z);
@@ -2372,7 +2372,7 @@ impl ServerWorld {
                 }
             }
             block::FLOWING_WATER | block::FLOWING_LAVA => self.check_liquid_collisions(id, x, y, z),
-            block::SAND | block::GRAVEL => self.schedule_update(x, y, z, id, 2),
+            block::SAND | block::GRAVEL | block::ANVIL => self.schedule_update(x, y, z, id, 2),
             block::TALLGRASS
             | block::DEADBUSH
             | block::YELLOW_FLOWER
@@ -2448,7 +2448,7 @@ impl ServerWorld {
     pub fn update_tick(&mut self, id: u8, x: i32, y: i32, z: i32, rand: &mut JavaRandom) {
         match id {
             block::FLOWING_WATER | block::FLOWING_LAVA => self.liquid_tick(id, x, y, z, rand),
-            block::SAND | block::GRAVEL => self.try_fall(id, x, y, z),
+            block::SAND | block::GRAVEL | block::ANVIL => self.try_fall(id, x, y, z),
             block::TRIPWIRE_HOOK => super::tripwire::hook_tick(self, x, y, z),
             block::FIRE => self.fire_tick(x, y, z, rand),
             block::TRIPWIRE => {

@@ -37,6 +37,8 @@ pub enum SlotKind {
     Ingredient,
     /// `ContainerEnchantment$2` in a one-item inventory
     Enchant,
+    /// `ContainerRepair$2`: the anvil's output
+    RepairOut,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -65,6 +67,8 @@ pub enum Window {
     Dispenser,
     /// `ContainerEnchantment`
     Enchant,
+    /// `ContainerRepair`: the two inputs are the tile slots.
+    Repair,
     /// `GuiContainerCreative$ContainerCreative`: the 45 item-list slots
     /// (the tile slots) and the hotbar.
     Creative,
@@ -216,6 +220,12 @@ impl Window {
                 v.push(slot(Inv::Tile, 0, SlotKind::Enchant, 25, 47));
                 player_slots(&mut v, 84);
             }
+            Window::Repair => {
+                v.push(slot(Inv::Tile, 0, SlotKind::Plain, 27, 47));
+                v.push(slot(Inv::Tile, 1, SlotKind::Plain, 76, 47));
+                v.push(slot(Inv::Result, 0, SlotKind::RepairOut, 134, 47));
+                player_slots(&mut v, 84);
+            }
         }
         v
     }
@@ -273,6 +283,9 @@ pub struct Effects {
     pub smelted: Vec<(Stack, u32)>,
     /// `SlotCrafting.onCrafting`: the result taken and `amountCrafted`.
     pub crafted: Vec<(Stack, u32)>,
+    /// `ContainerRepair$2.onPickupFromSlot`: the anvil was used at this
+    /// cost (`maximumCost`).
+    pub repaired: Option<i32>,
 }
 
 /// The drag-splitting state of a `Container`.
@@ -295,6 +308,11 @@ pub struct Ctx<'a> {
     result: Option<Stack>,
     amount_crafted: u32,
     remove_count: u32,
+    /// `ContainerRepair.repairedItemName`, the player's
+    /// `experienceLevel`, and what `updateRepairOutput` made of it.
+    repair_name: String,
+    xp_level: i32,
+    repair: crate::repair::Repair,
 }
 
 impl<'a> Ctx<'a> {
@@ -314,6 +332,9 @@ impl<'a> Ctx<'a> {
             result: None,
             amount_crafted: 0,
             remove_count: 0,
+            repair_name: String::new(),
+            xp_level: 0,
+            repair: Default::default(),
         };
         c.inv.grid_size = window.grid_width().max(2);
         c.craft_changed();
@@ -324,8 +345,33 @@ impl<'a> Ctx<'a> {
         self.slots.len()
     }
 
+    /// The anvil's typed name and the player's level.
+    pub fn with_repair(mut self, name: &str, xp_level: i32) -> Self {
+        self.repair_name = name.to_string();
+        self.xp_level = xp_level;
+        self.craft_changed();
+        self
+    }
+
+    /// `ContainerRepair.maximumCost`
+    pub fn repair_cost(&self) -> i32 {
+        self.repair.cost
+    }
+
     /// `onCraftMatrixChanged`
     fn craft_changed(&mut self) {
+        if self.window == Window::Repair {
+            // ContainerRepair.updateRepairOutput; the name compared is
+            // getDisplayName in the shared language
+            let lang = crate::lang::shared();
+            let at = |k: usize| self.tile.get(k).copied().flatten();
+            self.repair =
+                crate::repair::update(at(0), at(1), &self.repair_name, self.creative, &|s| {
+                    crate::item_text::display_name(s, &lang)
+                });
+            self.result = self.repair.out;
+            return;
+        }
         let w = self.window.grid_width();
         if w > 0 {
             self.result = crafting::find_matching(&Grid {
@@ -381,6 +427,10 @@ impl<'a> Ctx<'a> {
                 if let Some(t) = self.tile.get_mut(d.index) {
                     *t = s;
                 }
+                // ContainerRepair$1.markDirty
+                if self.window == Window::Repair {
+                    self.craft_changed();
+                }
             }
         }
     }
@@ -423,7 +473,7 @@ impl<'a> Ctx<'a> {
     fn valid(&self, i: usize, s: &Stack) -> bool {
         match self.slots[i].kind {
             SlotKind::Plain | SlotKind::Enchant => true,
-            SlotKind::CraftResult | SlotKind::FurnaceOut => false,
+            SlotKind::CraftResult | SlotKind::FurnaceOut | SlotKind::RepairOut => false,
             SlotKind::Armor(t) => match armor_type(s.id) {
                 Some(a) => a == t,
                 // pumpkins and skulls go on the head
@@ -431,6 +481,18 @@ impl<'a> Ctx<'a> {
             },
             SlotKind::Potion => can_hold_potion(s),
             SlotKind::Ingredient => crate::play::is_potion_ingredient(s),
+        }
+    }
+
+    /// `Slot.canTakeStack`
+    fn can_take(&self, i: usize) -> bool {
+        match self.slots[i].kind {
+            SlotKind::RepairOut => {
+                (self.creative || self.xp_level >= self.repair.cost)
+                    && self.repair.cost > 0
+                    && self.has(i)
+            }
+            _ => true,
         }
     }
 
@@ -515,6 +577,24 @@ impl<'a> Ctx<'a> {
                 }
             }
             SlotKind::FurnaceOut => self.on_crafting(i, s),
+            SlotKind::RepairOut => {
+                // ContainerRepair$2.onPickupFromSlot; the level cost and the
+                // anvil's wear are the caller's
+                self.fx.repaired = Some(self.repair.cost);
+                let used = self.repair.use_count;
+                self.tile[0] = None;
+                self.craft_changed();
+                let rest = match self.tile[1] {
+                    Some(s) if used > 0 && s.count > used => Some(Stack {
+                        count: s.count - used,
+                        ..s
+                    }),
+                    _ => None,
+                };
+                self.tile[1] = rest;
+                self.craft_changed();
+                self.repair.cost = 0;
+            }
             _ => {}
         }
     }
@@ -688,6 +768,16 @@ impl<'a> Ctx<'a> {
                     self.merge(&mut s, 9, 45, true)
                 } else {
                     self.merge(&mut s, 0, 9, false)
+                }
+            }
+            Window::Repair => {
+                if i == 2 {
+                    // onSlotChange does nothing for this slot
+                    self.merge(&mut s, 3, 39, true)
+                } else if i != 0 && i != 1 {
+                    !(3..39).contains(&i) || self.merge(&mut s, 0, 2, false)
+                } else {
+                    self.merge(&mut s, 3, 39, false)
                 }
             }
             Window::Enchant => {
@@ -872,6 +962,9 @@ pub fn slot_click(
                 return None;
             }
             let i = slot as usize;
+            if !c.can_take(i) {
+                return None;
+            }
             if let Some(t) = c.transfer(i) {
                 ret = Some(t);
                 if c.get(i).is_some_and(|s| s.id == t.id) {
@@ -903,6 +996,7 @@ pub fn slot_click(
                     }
                 }
                 (None, None) => {}
+                (Some(_), _) if !c.can_take(i) => {}
                 (Some(h), None) => {
                     let k = if button == 0 {
                         h.count
@@ -964,6 +1058,9 @@ pub fn slot_click(
             return None;
         }
         let i = slot as usize;
+        if !c.can_take(i) {
+            return None;
+        }
         let hb = button as usize;
         let hot = c.inv.main[hb];
         let in_player = c.in_player(i);
@@ -1003,7 +1100,7 @@ pub fn slot_click(
     } else if mode == 4 && c.inv.cursor.is_none() && slot >= 0 {
         if valid_slot(slot) {
             let i = slot as usize;
-            if let Some(s) = c.get(i) {
+            if let Some(s) = c.get(i).filter(|_| c.can_take(i)) {
                 let k = if button == 0 { 1 } else { s.count };
                 if let Some(t) = c.decr(i, k) {
                     c.on_pickup(i, &t);
@@ -1013,7 +1110,8 @@ pub fn slot_click(
         }
     } else if mode == 6 && slot >= 0 {
         let here = valid_slot(slot).then(|| c.get(slot as usize)).flatten();
-        if let (Some(mut cur), true) = (c.inv.cursor, here.is_none()) {
+        let takeable = here.is_some() && c.can_take(slot as usize);
+        if let (Some(mut cur), true) = (c.inv.cursor, !takeable) {
             let (start, step) = if button == 0 { (0, 1) } else { (n - 1, -1) };
             let max = max_stack(cur.id);
             for pass in 0..2 {
@@ -1025,9 +1123,11 @@ pub fn slot_click(
                         let mergeable = if c.window == Window::Creative {
                             c.slots[i].y > 90
                         } else {
-                            !matches!(c.slots[i].inv, Inv::Result)
+                            // ContainerRepair keeps Container.canMergeSlot (true)
+                            !matches!(c.slots[i].inv, Inv::Result) || c.window == Window::Repair
                         };
                         if c.can_add(Some(i), Some(&cur), true)
+                            && c.can_take(i)
                             && mergeable
                             && (pass != 0 || s.count != max_stack(s.id))
                         {

@@ -68,6 +68,8 @@ pub enum Command {
     OpenInventory,
     /// `C11PacketEnchantItem`
     EnchantItem(usize),
+    /// `C17PacketCustomPayload` `MC|ItemName` (the anvil's text field)
+    RenameItem(String),
     /// `C12PacketUpdateSign`
     UpdateSign([i32; 3], [String; 4]),
     /// `C01PacketChatMessage`: chat text or a command.
@@ -976,8 +978,25 @@ impl Sim {
             }
             Command::WindowClick { slot, button, mode } => {
                 let mut play = std::mem::replace(&mut self.play, Play::new(GameMode::Survival));
-                play.window_click(&mut self.world, slot, button, mode);
+                play.xp_level = self.splayer.xp_level;
+                let spent = play.window_click(&mut self.world, slot, button, mode);
                 self.play = play;
+                if spent != 0 {
+                    // EntityPlayer.addExperienceLevel(-cost)
+                    let p = &mut self.splayer;
+                    p.xp_level -= spent;
+                    if p.xp_level < 0 {
+                        p.xp_level = 0;
+                        p.xp = 0.0;
+                        p.xp_total = 0;
+                    }
+                    self.play.xp_level = p.xp_level;
+                }
+            }
+            Command::RenameItem(ref n) => {
+                let n = n.clone();
+                self.play.xp_level = self.splayer.xp_level;
+                self.play.rename(&n);
             }
             Command::OpenInventory => {
                 self.play.open = Open::Inventory;

@@ -608,6 +608,9 @@ fn mesh_block(cx: &Ctx, out: &mut Vec<Vertex>, id: u8, meta: i32, x: i32, y: i32
         Shape::BrewingStand => {
             rb::Rb::new(cx, out, id, meta).render_brewing_stand(x, y, z);
         }
+        Shape::Anvil => {
+            rb::Rb::new(cx, out, id, meta).render_anvil(x, y, z, false);
+        }
         Shape::Cocoa | Shape::None => {}
     }
 }
@@ -625,6 +628,9 @@ pub enum MovingDraw {
     },
     /// `renderPistonBaseAllFaces`
     Base,
+    /// `RenderFallingBlock`: an anvil drawn where the entity is, lit by
+    /// the world there (which keeps its own block).
+    Anvil,
 }
 
 /// `TileEntityRendererPiston`: a block drawn with every face where it
@@ -651,8 +657,10 @@ pub fn build_single(
         return out;
     }
     // The world holds piston_extension with the stored metadata here.
-    cx.r.blocks[idx(x, y, z)] = block::PISTON_EXTENSION;
-    cx.r.meta[idx(x, y, z)] = meta as u8;
+    if draw != MovingDraw::Anvil {
+        cx.r.blocks[idx(x, y, z)] = block::PISTON_EXTENSION;
+        cx.r.meta[idx(x, y, z)] = meta as u8;
+    }
     match draw {
         MovingDraw::Block => mesh_block(&cx, &mut out, id, meta, x, y, z),
         MovingDraw::Head {
@@ -671,6 +679,9 @@ pub fn build_single(
         }
         MovingDraw::Base => {
             rb::Rb::new(&cx, &mut out, id, meta).render_piston_base(x, y, z, true);
+        }
+        MovingDraw::Anvil => {
+            rb::Rb::new(&cx, &mut out, id, meta).render_anvil(x, y, z, false);
         }
     }
     out

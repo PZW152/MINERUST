@@ -324,6 +324,42 @@ impl<'a> Ui<'a> {
             }
             return;
         }
+        if id == block::ANVIL {
+            // renderItemIntoGUI's block place, then renderBlockAsItem type
+            // 35 (no quarter turn, just the -0.5 translate), lit by
+            // enableGUIStandardItemLighting
+            let mut m: Mat4 = render::translate(x - 2.0, y + 3.0, 0.0);
+            m = render::mul(&m, &scale(10.0, 10.0, 10.0));
+            m = render::mul(&m, &render::translate(1.0, 0.5, 1.0));
+            m = render::mul(&m, &scale(1.0, 1.0, -1.0));
+            m = render::mul(&m, &render::rot_x(210.0));
+            m = render::mul(&m, &render::rot_y(45.0));
+            m = render::mul(&m, &render::rot_y(-90.0));
+            m = render::mul(&m, &render::translate(-0.5, -0.5, -0.5));
+            let mut raw = Vec::new();
+            render::mesher::rb::Rb::bare(self.atlas, &mut raw, id, meta << 2)
+                .render_anvil(0, 0, 0, true);
+            let mut both = Vec::with_capacity(raw.len() * 2);
+            for q in raw.chunks(4) {
+                for k in 0..8 {
+                    let mut v = q[k % 4];
+                    let o = render::transform(&m, [v.pos[0], v.pos[1], v.pos[2], 1.0]);
+                    v.pos = [o[0], o[1], o[2]];
+                    both.push(v);
+                }
+            }
+            let light_m = render::mul(&render::rot_y(-30.0), &render::rot_x(165.0));
+            let lit = render::model::gui_lit(both, &light_m);
+            for c in lit.chunks(4) {
+                let mut c = [c[0], c[1], c[2], c[3]];
+                for v in &mut c {
+                    v.light = [BLOCKS, 0, 0, 0];
+                }
+                self.v
+                    .extend_from_slice(&[c[0], c[1], c[2], c[0], c[2], c[3]]);
+            }
+            return;
+        }
         let info = block::info(id);
         let cube = matches!(
             info.shape,
@@ -595,7 +631,7 @@ pub fn color_code(i: usize) -> u32 {
 pub const FONT_HEIGHT: f32 = 9.0;
 
 impl<'a> Ui<'a> {
-    fn unicode_flag(&self) -> bool {
+    pub fn unicode_flag(&self) -> bool {
         self.atlas.glyphs.lock().map_or(false, |g| g.unicode)
     }
 
