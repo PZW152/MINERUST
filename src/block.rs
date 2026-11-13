@@ -104,6 +104,7 @@ pub const RAIL: u8 = 66;
 pub const STONE_STAIRS: u8 = 67;
 pub const LEVER: u8 = 69;
 pub const STANDING_SIGN: u8 = 63;
+pub const ENCHANTING_TABLE: u8 = 116;
 pub const WALL_SIGN: u8 = 68;
 pub const STONE_PRESSURE_PLATE: u8 = 70;
 pub const IRON_DOOR: u8 = 71;
@@ -635,6 +636,8 @@ fn build() -> [BlockInfo; 256] {
     t[IRON_DOOR as usize] = base(Shape::Door, M::Iron, false);
     t[LADDER as usize] = base(Shape::Ladder, M::Circuits, false);
     t[STANDING_SIGN as usize] = base(Shape::Sign, M::Wood, false);
+    // BlockEnchantmentTable: 0.75 high, setLightOpacity(0)
+    t[ENCHANTING_TABLE as usize] = base(Shape::Boxes, M::Rock, false);
     t[WALL_SIGN as usize] = base(Shape::Sign, M::Wood, false);
     for id in [RAIL, GOLDEN_RAIL, DETECTOR_RAIL] {
         t[id as usize] = base(Shape::Rail, M::Circuits, false);
@@ -1205,6 +1208,11 @@ pub fn texture_name(id: u8, meta: u8, face: usize) -> Option<&'static str> {
                 ][stage]
             }
         }
+        ENCHANTING_TABLE => match face {
+            0 => "enchanting_table_bottom",
+            1 => "enchanting_table_top",
+            _ => "enchanting_table_side",
+        },
         FARMLAND => {
             if face == 1 {
                 if meta > 0 {

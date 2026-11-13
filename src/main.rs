@@ -11,6 +11,7 @@ mod container;
 mod crafting;
 mod creative;
 mod dimension;
+mod enchant;
 mod entity;
 mod front;
 mod game;

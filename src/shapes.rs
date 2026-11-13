@@ -457,6 +457,7 @@ pub fn portal_bounds(axis: i32) -> Bx {
 pub fn static_boxes(id: u8, meta: u8) -> Vec<Bx> {
     match id {
         block::FARMLAND => vec![[0.0, 0.0, 0.0, 1.0, 0.9375, 1.0]],
+        block::ENCHANTING_TABLE => vec![[0.0, 0.0, 0.0, 1.0, 0.75, 1.0]],
         block::STONE_PRESSURE_PLATE | block::WOODEN_PRESSURE_PLATE => {
             let h = if meta > 0 { 0.03125 } else { 0.0625 };
             vec![[0.0625, 0.0, 0.0625, 0.9375, h, 0.9375]]

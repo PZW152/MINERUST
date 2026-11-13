@@ -536,6 +536,7 @@ pub fn hardness(id: u8) -> f32 {
         BOOKSHELF | STONEBRICK | STONE_BRICK_STAIRS => 1.5,
         LADDER | NETHERRACK => 0.4,
         STANDING_SIGN | WALL_SIGN => 1.0,
+        ENCHANTING_TABLE => 5.0,
         GLOWSTONE | GLASS_PANE => 0.3,
         LIT_PUMPKIN => 1.0,
         END_PORTAL_FRAME => -1.0,
@@ -684,7 +685,7 @@ pub fn drops(id: u8, meta: i32, r: &mut JavaRandom) -> Vec<Stack> {
         }
         COAL_ORE => one(COAL, 0),
         LIT_FURNACE => one(FURNACE as ItemId, 0),
-        CHEST | FURNACE | CRAFTING_TABLE | TORCH => one(id as ItemId, 0),
+        CHEST | FURNACE | CRAFTING_TABLE | TORCH | ENCHANTING_TABLE => one(id as ItemId, 0),
         // BlockSign.getItemDropped
         STANDING_SIGN | WALL_SIGN => one(323, 0),
         DIAMOND_ORE => one(DIAMOND, 0),
