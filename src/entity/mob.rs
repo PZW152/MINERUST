@@ -2250,8 +2250,9 @@ impl Mobs {
             return;
         }
         let mut dmg = damage;
-        if crit {
-            dmg += m.rand.next_int_n((dmg / 2.0) as i32 + 2) as f32;
+        // EntityPlayer.attackTargetEntityWithCurrentItem: a falling blow
+        if crit && dmg > 0.0 {
+            dmg *= 1.5;
         }
         if m.kind == Kind::EnderDragon {
             // attackEntityFromPart: only the head takes full damage, and the

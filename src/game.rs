@@ -175,6 +175,17 @@ impl BlockView for ClientWorld {
     }
 }
 
+/// A block changed on the client before the server's answer.
+struct Prediction {
+    /// The dig or use it belongs to (`Game.sent_actions` when sent).
+    seq: u32,
+    pos: [i32; 3],
+    /// What the server last said is there: id, metadata, sky and block light.
+    old: [u8; 4],
+    /// What the client shows meanwhile.
+    new: [u8; 4],
+}
+
 /// A 3x3 neighbourhood and the sections of its middle chunk to build.
 struct Job(Box<[MeshChunk; 9]>, u16);
 
@@ -249,6 +260,16 @@ pub struct Game {
     server_tick_at: Instant,
     /// `MINERUST_DEBUG_LATENCY`: when a block was last used, and its chunk.
     latency: Option<(Instant, (i32, i32))>,
+    /// Block digs and uses sent to the server so far (see `ACTIONS_DONE`).
+    sent_actions: u32,
+    /// How many of them the server had handled when the server tick being
+    /// applied ended.
+    batch_done: u32,
+    /// A server tick's events are being applied.
+    batch_open: bool,
+    /// Blocks the client changed ahead of the server, as the original's
+    /// client does in `onPlayerDestroyBlock` and `ItemBlock.onItemUse`.
+    predictions: Vec<Prediction>,
     pending_mesh: HashSet<(i32, i32)>,
     /// Chunks with render chunks to build again (bit per 16-high section).
     dirty: HashMap<(i32, i32), u16>,
@@ -571,6 +592,10 @@ impl Game {
             arrived: std::collections::VecDeque::new(),
             server_tick_at: Instant::now(),
             latency: None,
+            sent_actions: crate::sim::ACTIONS_DONE.load(std::sync::atomic::Ordering::Relaxed),
+            batch_done: 0,
+            batch_open: false,
+            predictions: Vec::new(),
             pending_mesh: HashSet::new(),
             dirty: HashMap::new(),
             offsets,
@@ -1005,8 +1030,17 @@ impl Game {
             // a server tick is applied whole, once its last event is here
             let e = match self.arrived.pop_front() {
                 Some(e) => e,
+                None if self.batch_open => {
+                    // the whole server tick is in: what it left untouched
+                    // is as the server has it
+                    self.batch_open = false;
+                    self.settle_predictions();
+                    continue;
+                }
                 None => match self.sim.events.try_recv() {
-                    Ok(Event::Tick(at)) => {
+                    Ok(Event::Tick(at, done)) => {
+                        self.batch_done = done;
+                        self.batch_open = true;
                         // Keep the client's ticks half a tick behind the
                         // server's. Both run at 20 Hz off the same clock, so
                         // their phase is arbitrary and constant; when it sits
@@ -1035,7 +1069,7 @@ impl Game {
             };
             self.counts[2] += 1;
             match e {
-                Event::Tick(_) => {}
+                Event::Tick(..) => {}
                 Event::Chunk {
                     key,
                     chunk,
@@ -1059,6 +1093,36 @@ impl Game {
                     };
                     c.mc = chunk;
                     c.ready = ready;
+                    // Predictions here: a snapshot from after the server
+                    // handled the action is the answer; an earlier one must
+                    // not undo what the player sees.
+                    let done = self.batch_done;
+                    let mut redo = 0u16;
+                    self.predictions.retain_mut(|p| {
+                        if (p.pos[0] >> 4, p.pos[2] >> 4) != key {
+                            return true;
+                        }
+                        if p.seq.wrapping_sub(done) as i32 <= 0 {
+                            if std::env::var_os("MINERUST_DEBUG_LATENCY").is_some() {
+                                let i = ClientWorld::index(p.pos[0], p.pos[1], p.pos[2]);
+                                eprintln!(
+                                    "predict: {:?} answered, server has {}:{}",
+                                    p.pos, c.mc.data.blocks[i], c.mc.data.meta[i]
+                                );
+                            }
+                            return false;
+                        }
+                        let i = ClientWorld::index(p.pos[0], p.pos[1], p.pos[2]);
+                        let d = Arc::make_mut(&mut c.mc.data);
+                        p.old = [d.blocks[i], d.meta[i], d.sky[i], d.blk[i]];
+                        d.blocks[i] = p.new[0];
+                        d.meta[i] = p.new[1];
+                        d.sky[i] = p.new[2];
+                        d.blk[i] = p.new[3];
+                        redo |= 1 << (p.pos[1] >> 4);
+                        true
+                    });
+                    let changed = changed | redo;
                     c.rescan(key, changed);
                     self.world.chunks.insert(key, c);
                     if changed != 0 {
@@ -1090,6 +1154,7 @@ impl Game {
                         self.renderer.remove_mesh(key);
                     }
                     self.dirty.clear();
+                    self.predictions.clear();
                     self.world.dim = dim;
                     self.mobs.clear();
                     self.items.clear();
@@ -1684,14 +1749,7 @@ impl Game {
         }
         if self.ticks >= 60 {
             if let Some(t) = self.start_use.take() {
-                let _ = self.sim.commands.send(Command::Use {
-                    target: t,
-                    face: [0, 1, 0],
-                    sneaking: false,
-                });
-                if std::env::var_os("MINERUST_DEBUG_LATENCY").is_some() {
-                    self.latency = Some((Instant::now(), (t[0] >> 4, t[2] >> 4)));
-                }
+                self.use_on(t, [0, 1, 0]);
                 self.send_start_clicks();
             }
         }
@@ -2537,7 +2595,7 @@ impl Game {
             self.block_sound(id, pos, "dig");
             let (dt, dti) = self.debris(pos);
             self.particles.destroy(pos, dt, dti);
-            let _ = self.sim.commands.send(Command::Dig(pos));
+            self.send_dig(pos);
             return;
         }
         if self.ticks % 4 == 0 {
@@ -2557,7 +2615,7 @@ impl Game {
                     self.block_sound(id, pos, "dig");
                     let (dt, dti) = self.debris(pos);
                     self.particles.destroy(pos, dt, dti);
-                    let _ = self.sim.commands.send(Command::Dig(pos));
+                    self.send_dig(pos);
                     self.dig = None;
                     self.hit_delay = 5;
                 } else {
@@ -2569,13 +2627,143 @@ impl Game {
                     self.block_sound(id, pos, "dig");
                     let (dt, dti) = self.debris(pos);
                     self.particles.destroy(pos, dt, dti);
-                    let _ = self.sim.commands.send(Command::Dig(pos));
+                    self.send_dig(pos);
                     self.dig = None;
                 } else {
                     self.dig = Some(Digging { pos, damage: 0.0 });
                 }
             }
         }
+    }
+
+    /// The render chunks around a block the client changed
+    /// (`markBlockForUpdate`).
+    fn mark_block_dirty(&mut self, p: [i32; 3]) {
+        let (s0, s1) = ((p[1] - 1).clamp(0, 255) >> 4, (p[1] + 1).clamp(0, 255) >> 4);
+        let bits = (((1u32 << (s1 - s0 + 1)) - 1) << s0) as u16;
+        for cx in ((p[0] - 1) >> 4)..=((p[0] + 1) >> 4) {
+            for cz in ((p[2] - 1) >> 4)..=((p[2] + 1) >> 4) {
+                *self.dirty.entry((cx, cz)).or_insert(0) |= bits;
+            }
+        }
+    }
+
+    /// Changes a block on the client ahead of the server. Returns false
+    /// (and does nothing) where the client has no data to change.
+    fn predict(&mut self, pos: [i32; 3], id: u8, meta: u8) -> bool {
+        if !(0..256).contains(&pos[1]) {
+            return false;
+        }
+        let i = ClientWorld::index(pos[0], pos[1], pos[2]);
+        // light for the faces a removed block uncovers: what would flow in
+        // from the six neighbours (the server's light follows in its tick)
+        let (mut sky, mut blk) = (0u8, 0u8);
+        if id == block::AIR {
+            for (k, n) in [
+                [0, 1, 0],
+                [0, -1, 0],
+                [1, 0, 0],
+                [-1, 0, 0],
+                [0, 0, 1],
+                [0, 0, -1],
+            ]
+            .iter()
+            .enumerate()
+            {
+                let (x, y, z) = (pos[0] + n[0], pos[1] + n[1], pos[2] + n[2]);
+                let s = self.world.light(true, x, y, z) as u8;
+                let b = self.world.light(false, x, y, z) as u8;
+                // full sky light falls straight down undimmed
+                sky = sky.max(if k == 0 && s == 15 {
+                    15
+                } else {
+                    s.saturating_sub(1)
+                });
+                blk = blk.max(b.saturating_sub(1));
+            }
+        }
+        let Some(c) = self.world.chunks.get_mut(&(pos[0] >> 4, pos[2] >> 4)) else {
+            return false;
+        };
+        if c.mc.sections & (1 << (pos[1] >> 4)) == 0 {
+            return false;
+        }
+        let d = Arc::make_mut(&mut c.mc.data);
+        let old = [d.blocks[i], d.meta[i], d.sky[i], d.blk[i]];
+        let new = [id, meta, sky, blk];
+        d.blocks[i] = id;
+        d.meta[i] = meta;
+        d.sky[i] = sky;
+        d.blk[i] = blk;
+        // an earlier prediction at the same place keeps the server's value
+        let old = match self.predictions.iter().position(|p| p.pos == pos) {
+            Some(k) => self.predictions.remove(k).old,
+            None => old,
+        };
+        if std::env::var_os("MINERUST_DEBUG_LATENCY").is_some() {
+            eprintln!(
+                "predict: {pos:?} = {id}:{meta} (action {})",
+                self.sent_actions
+            );
+        }
+        self.predictions.push(Prediction {
+            seq: self.sent_actions,
+            pos,
+            old,
+            new,
+        });
+        self.mark_block_dirty(pos);
+        true
+    }
+
+    /// After a whole server tick has been applied: a predicted block whose
+    /// action the server has handled without sending the chunk again was
+    /// refused, so what was there before comes back.
+    fn settle_predictions(&mut self) {
+        let done = self.batch_done;
+        let mut k = 0;
+        while k < self.predictions.len() {
+            if self.predictions[k].seq.wrapping_sub(done) as i32 > 0 {
+                k += 1;
+                continue;
+            }
+            let p = self.predictions.remove(k);
+            if std::env::var_os("MINERUST_DEBUG_LATENCY").is_some() {
+                eprintln!(
+                    "predict: {:?} refused, back to {}:{}",
+                    p.pos, p.old[0], p.old[1]
+                );
+            }
+            let i = ClientWorld::index(p.pos[0], p.pos[1], p.pos[2]);
+            if let Some(c) = self.world.chunks.get_mut(&(p.pos[0] >> 4, p.pos[2] >> 4)) {
+                let d = Arc::make_mut(&mut c.mc.data);
+                d.blocks[i] = p.old[0];
+                d.meta[i] = p.old[1];
+                d.sky[i] = p.old[2];
+                d.blk[i] = p.old[3];
+                self.mark_block_dirty(p.pos);
+            }
+        }
+    }
+
+    /// `PlayerControllerMP.onPlayerDestroyBlock`: the block goes on the
+    /// client at once and the server is told.
+    fn send_dig(&mut self, pos: [i32; 3]) {
+        self.sent_actions = self.sent_actions.wrapping_add(1);
+        let id = self.world.peek_block(pos[0], pos[1], pos[2]);
+        // what the server's `dig` refuses is left alone
+        let sword = self.mode == GameMode::Creative
+            && self.view.inv.held().is_some_and(|s| {
+                crate::item::tool(s.id).is_some_and(|t| t.kind == crate::item::ToolKind::Sword)
+            });
+        if id != block::AIR
+            && crate::item::hardness(id) >= 0.0
+            && !block::material(id).is_liquid()
+            && !sword
+        {
+            self.predict(pos, block::AIR, 0);
+        }
+        let _ = self.sim.commands.send(Command::Dig(pos));
     }
 
     /// `ItemBlock.onItemUse` as the client runs it, up to the point where
@@ -2644,6 +2832,11 @@ impl Game {
         if n == [0, 0, 0] {
             return;
         }
+        self.use_on(b, n);
+    }
+
+    /// `PlayerControllerMP.onPlayerRightClick` on block `b`, side `n`.
+    fn use_on(&mut self, b: [i32; 3], n: [i32; 3]) {
         let held = self.view.inv.held();
         let tid = self.world.peek_block(b[0], b[1], b[2]);
         // Block.onBlockActivated comes first unless sneaking with an item
@@ -2667,6 +2860,7 @@ impl Game {
                     | block::WOODEN_DOOR
                     | block::TRAPDOOR
             );
+        let mut place = None;
         if !activates {
             if let Some(s) = held {
                 if let Some(id) = s.block() {
@@ -2676,6 +2870,40 @@ impl Game {
                         return;
                     };
                     self.block_sound(id, p, "place");
+                    place = Some((p, id, s.meta as u8));
+                }
+            }
+        }
+        self.sent_actions = self.sent_actions.wrapping_add(1);
+        if let Some((p, id, meta)) = place {
+            // ItemBlock.placeBlockAt on the client. Only plain cubes whose
+            // metadata is the item's: the ones that turn to face the
+            // player or need support wait for the server.
+            let plain = block::info(id).shape == block::Shape::Cube
+                && !matches!(
+                    id,
+                    block::LOG
+                        | block::LOG2
+                        | block::HAY_BLOCK
+                        | block::QUARTZ_BLOCK
+                        | block::FURNACE
+                        | block::LIT_FURNACE
+                        | block::DISPENSER
+                        | block::PISTON
+                        | block::STICKY_PISTON
+                        | block::PUMPKIN
+                        | block::LIT_PUMPKIN
+                        | block::SAND
+                        | block::GRAVEL
+                        | block::TNT
+                );
+            if plain {
+                self.predict(p, id, meta & 15);
+                // MINERUST_PREDICT_BOGUS: also predict a block the server
+                // will not place, to check that it is taken back
+                if std::env::var_os("MINERUST_PREDICT_BOGUS").is_some() {
+                    self.predict([p[0] + 16, p[1], p[2]], id, meta & 15);
+                    self.predict([p[0], p[1] + 2, p[2]], id, meta & 15);
                 }
             }
         }

@@ -156,6 +156,28 @@ impl Inventory {
         }
     }
 
+    /// `InventoryPlayer.damageArmor`: every worn piece loses a quarter of
+    /// the damage (at least 1) and breaks past its durability.
+    pub fn damage_armor(&mut self, amount: f32) -> bool {
+        let mut n = amount / 4.0;
+        if n < 1.0 {
+            n = 1.0;
+        }
+        let mut changed = false;
+        for slot in &mut self.armor {
+            if let Some(s) = slot {
+                if armor_points(s.id).is_some() {
+                    s.meta += n as i32;
+                    changed = true;
+                    if s.meta > item::max_damage(s.id) {
+                        *slot = None;
+                    }
+                }
+            }
+        }
+        changed
+    }
+
     /// `getTotalArmorValue`: the `damageReduceAmount` of the worn pieces.
     pub fn armor_value(&self) -> i32 {
         self.armor

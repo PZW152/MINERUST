@@ -124,6 +124,9 @@ pub struct ServerPlayer {
     /// `itemInUse` / `itemInUseCount`: the hotbar slot, the stack as it was
     /// when use began, and the ticks left.
     pub using: Option<(usize, crate::item::Stack, i32)>,
+    /// `damageArmor` amounts not yet taken off the worn pieces (the
+    /// inventory lives with the container state).
+    pub armor_wear: Vec<f32>,
 }
 
 impl ServerPlayer {
@@ -163,6 +166,7 @@ impl ServerPlayer {
             last_sent: None,
             entity_age: 0,
             using: None,
+            armor_wear: Vec::new(),
         }
     }
 
@@ -494,8 +498,18 @@ impl ServerPlayer {
     }
 
     /// `EntityPlayer.damageEntity`
-    fn damage_entity(&mut self, src: &Source, a: f32) {
-        // isBlocking is not modelled yet
+    fn damage_entity(&mut self, src: &Source, mut a: f32) {
+        // isBlocking: a sword held up halves what gets through
+        let blocking = self.using.is_some_and(|(_, st, _)| {
+            crate::item::tool(st.id).is_some_and(|t| t.kind == crate::item::ToolKind::Sword)
+        });
+        if !src.unblockable && blocking && a > 0.0 {
+            a = (1.0 + a) * 0.5;
+        }
+        // applyArmorCalculations: damageArmor(damage) before the reduction
+        if !src.unblockable {
+            self.armor_wear.push(a);
+        }
         let a = self.living.armor_calc(src, a);
         let a = self.living.potion_calc(src, a, 0);
         let before = a;

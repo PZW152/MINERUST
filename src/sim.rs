@@ -151,7 +151,9 @@ pub enum Event {
     /// The end of one server tick's events, with the time it finished: the
     /// client applies the tick as a whole and interpolates what the server
     /// simulates (`prev` to `pos`) from this moment over the next 50 ms.
-    Tick(Instant),
+    /// The number is how many block digs and uses the server has handled
+    /// (`ACTIONS_DONE`), which settles the client's predictions of them.
+    Tick(Instant, u32),
     /// The chunk left the client's range.
     Unload((i32, i32)),
     Inventory(Box<InvView>),
@@ -919,6 +921,7 @@ impl Sim {
                 }
             }
             Command::Dig(p) => {
+                ACTIONS_DONE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 let mut play = std::mem::replace(&mut self.play, Play::new(GameMode::Survival));
                 let id = self.world.block(p[0], p[1], p[2]);
                 play.dig(&mut self.world, p);
@@ -936,6 +939,7 @@ impl Sim {
                 face,
                 sneaking,
             } => {
+                ACTIONS_DONE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 // ItemMinecart.onItemUse (rails have no onBlockActivated)
                 if self.place_cart(target) {
                     return;
@@ -1202,6 +1206,7 @@ impl Sim {
 
     /// Advances the world by one tick and reports what the client must know.
     pub fn step(&mut self, commands: &[Command], events: &mut Vec<Event>) {
+        self.splayer.living.armor = self.play.inv.armor_value();
         for c in commands {
             self.apply(c);
         }
@@ -3272,6 +3277,13 @@ impl Sim {
 
     /// The player's state for the client, and the consequences of dying.
     fn player_events(&mut self, events: &mut Vec<Event>) {
+        // EntityPlayer.damageArmor, and getTotalArmorValue for the next hit
+        for a in std::mem::take(&mut self.splayer.armor_wear) {
+            if self.play.inv.damage_armor(a) {
+                self.play.inv_dirty = true;
+            }
+        }
+        self.splayer.living.armor = self.play.inv.armor_value();
         let fx = std::mem::take(&mut self.splayer.fx);
         let mut sounds = Vec::new();
         let mut parts = Vec::new();
@@ -3496,6 +3508,10 @@ impl Drop for SimHandle {
     }
 }
 
+/// `Command::Dig` and `Command::Use` handled so far, by any world of this
+/// process: the client numbers the ones it sends the same way.
+pub static ACTIONS_DONE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
 /// Server ticks run and the nanoseconds they took (the F3 graph's
 /// `tickTimeArray`; read by the benchmark).
 pub static TICK_COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -3545,7 +3561,10 @@ pub fn spawn(mut sim: Sim) -> SimHandle {
                     TICK_NANOS.fetch_add(ns, Relaxed);
                     TICK_WORST.fetch_max(ns, Relaxed);
                 }
-                events.push(Event::Tick(Instant::now()));
+                events.push(Event::Tick(
+                    Instant::now(),
+                    ACTIONS_DONE.load(std::sync::atomic::Ordering::Relaxed),
+                ));
                 for e in events.drain(..) {
                     if ev_tx.send(e).is_err() {
                         let _ = sim.save();

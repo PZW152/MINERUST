@@ -59,7 +59,8 @@
 - [x] 方塊掉落表：`src/drops.rs`，與原版 4 萬多筆參考資料一致；時運與絲綢之觸生效
 - [ ] 掉落的其餘路徑改走 `drops.rs`：`harvestBlock` 覆寫（剪刀、冰、雪片）、水沖與失去支撐、樹葉腐爛
 - [ ] 生物 AI 改為原版 `EntityAITasks` 任務系統（目前多為手寫近似；苦力怕已改）
-- [ ] 客戶端預測放置／破壞方塊
+- [x] 客戶端預測破壞方塊與放置普通方塊；[ ] 有朝向或需依附的方塊的預測
+- [x] 玩家護甲值與護甲耗損、舉劍格擋減傷、爆擊 ×1.5
 - [x] 紅石線照 `renderBlockRedstoneWire` 重寫（連接規則、爬牆段）；點燃的 TNT 白色閃爍；苦力怕打火石點燃
 - [ ] 苦力怕：閃電劈中變成高壓苦力怕（爆炸半徑 6）、`mobGriefing` 規則
 - [x] GUI 漸層改為真正的頂點漸層（`drawGradientRect`）
@@ -88,7 +89,7 @@
 
 - [x] 玩家生存狀態移到伺服端（`EntityPlayerMP`）：`FoodStats`、傷害流程（難度縮放、護甲、抗性、吸收、擊退）、`CombatTracker` 死亡訊息（`en_US.lang`）
 - [x] 物品使用（`setItemInUse`：吃、喝藥水、牛奶、拉弓、劍格擋的動畫），全部 `ItemFood` 數值與效果
-- [ ] 劍格擋的減傷（`isBlocking`）
+- [x] 劍格擋的減傷（`isBlocking`）
 - [x] 經驗球 `EntityXPOrb`：兩端的 `onUpdate`（飛向最近玩家，伺服端以腳下＋0.12、客戶端以眼睛＋0.12 為目標）、
       `getXPSplit`、`xpCooldown` 撿拾、`S11` 生成與追蹤（160 格、每 20 tick）、`RenderXPOrb`、撿拾動畫與音效、存檔；
       來源：生物死亡第 20 tick（幼體不給，動物用世界亂數）、終界龍、礦石（`dropXpOnBlockBreak`）、熔爐取出
