@@ -142,6 +142,8 @@ pub enum Open {
     Cart(u32),
     /// A dispenser or dropper (`TileEntityDispenser`).
     Dispenser(Pos),
+    /// `ContainerEnchantment` at the table
+    Enchant(Pos),
 }
 
 /// The `Container` class an open window uses.
@@ -154,6 +156,7 @@ pub fn window_of(o: &Open) -> Window {
         Open::Chest(ps) => Window::Chest(ps.len() * 3),
         Open::Cart(_) => Window::Chest(3),
         Open::Dispenser(_) => Window::Dispenser,
+        Open::Enchant(_) => Window::Enchant,
     }
 }
 
@@ -170,6 +173,9 @@ pub struct InvView {
     /// How many `WindowClick`s the server had handled: the client drops
     /// views older than its own predicted clicks.
     pub clicks: u32,
+    /// `ContainerEnchantment.enchantLevels` and `nameSeed` (`S31` bars).
+    pub enchant: [i32; 3],
+    pub name_seed: i64,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -214,6 +220,12 @@ pub struct Play {
     pub clicks: u32,
     /// `field_147375_m`: the creative-mode drop throttle.
     pub creative_drops: i32,
+    /// `ContainerEnchantment`: `tableInventory`, `enchantLevels`, `nameSeed`
+    /// and its `rand` (`new Random()`).
+    pub enchant_slot: [Option<Stack>; 1],
+    pub enchant_levels: [i32; 3],
+    pub name_seed: i64,
+    pub enchant_rand: JavaRandom,
     /// `S36PacketSignEditorOpen` to send, and sign texts that changed.
     pub sign_open: Option<Pos>,
     pub sign_updates: Vec<(Pos, [String; 4])>,
@@ -428,6 +440,8 @@ impl InvView {
             tile_slots: Vec::new(),
             furnace: None,
             clicks: 0,
+            enchant: [0; 3],
+            name_seed: 0,
         }
     }
 }
@@ -455,6 +469,14 @@ impl Play {
             clicks: 0,
             creative_drops: 0,
             sign_open: None,
+            enchant_slot: [None],
+            enchant_levels: [0; 3],
+            name_seed: 0,
+            enchant_rand: JavaRandom::new(
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |d| d.as_nanos() as i64),
+            ),
             sign_updates: Vec::new(),
             pending: Vec::new(),
         }
@@ -490,6 +512,8 @@ impl Play {
             tile_slots: self.tile_vec(),
             furnace,
             clicks: self.clicks,
+            enchant: self.enchant_levels,
+            name_seed: self.name_seed,
         }
     }
 
@@ -789,6 +813,13 @@ impl Play {
                             .or_insert(Tile::Chest { slots: [None; 27] });
                     }
                     self.open = Open::Chest(halves);
+                    self.inv_dirty = true;
+                    return true;
+                }
+                block::ENCHANTING_TABLE => {
+                    // BlockEnchantmentTable.onBlockActivated
+                    self.open = Open::Enchant(target);
+                    self.enchant_levels = [0; 3];
                     self.inv_dirty = true;
                     return true;
                 }
@@ -1346,6 +1377,7 @@ impl Play {
                 Some(Tile::Dispenser { slots }) => slots.to_vec(),
                 _ => Vec::new(),
             },
+            Open::Enchant(_) => self.enchant_slot.to_vec(),
             Open::Chest(ps) => {
                 let mut v = Vec::new();
                 for p in ps {
@@ -1388,6 +1420,7 @@ impl Play {
                     copy(slots, v);
                 }
             }
+            Open::Enchant(_) => copy(&mut self.enchant_slot, v),
             Open::Chest(ps) => {
                 for (k, p) in ps.iter().enumerate() {
                     if let Some(Tile::Chest { slots }) = self.tiles.get_mut(p) {
@@ -1425,7 +1458,13 @@ impl Play {
             c.fx
         };
         self.drag = drag;
+        let enchant_before = self.enchant_slot[0];
         self.store_tile_vec(&tile);
+        if let Open::Enchant(p) = self.open {
+            if self.enchant_slot[0] != enchant_before {
+                self.enchant_changed(w, p);
+            }
+        }
         let mut rnd = std::mem::replace(&mut w.rand, JavaRandom::new(0));
         // dropPlayerItemWithRandomChoice(stack, flag) never scatters
         for (s, _) in fx.drops {
@@ -1472,6 +1511,80 @@ impl Play {
         }
     }
 
+    /// `ContainerEnchantment.onCraftMatrixChanged`: a new name seed and the
+    /// three levels from the bookshelves around the table.
+    fn enchant_changed(&mut self, w: &mut ServerWorld, p: Pos) {
+        let Some(s) = self.enchant_slot[0].filter(crate::enchant::enchantable) else {
+            self.enchant_levels = [0; 3];
+            return;
+        };
+        self.name_seed = self.enchant_rand.next_long();
+        let shelf =
+            |w: &mut ServerWorld, x: i32, y: i32, z: i32| w.block(x, y, z) == block::BOOKSHELF;
+        let (x, y, z) = (p[0], p[1], p[2]);
+        let mut n = 0;
+        for dz in -1..=1 {
+            for dx in -1..=1 {
+                if (dz != 0 || dx != 0)
+                    && w.is_air(x + dx, y, z + dz)
+                    && w.is_air(x + dx, y + 1, z + dz)
+                {
+                    n += shelf(w, x + dx * 2, y, z + dz * 2) as i32;
+                    n += shelf(w, x + dx * 2, y + 1, z + dz * 2) as i32;
+                    if dx != 0 && dz != 0 {
+                        n += shelf(w, x + dx * 2, y, z + dz) as i32;
+                        n += shelf(w, x + dx * 2, y + 1, z + dz) as i32;
+                        n += shelf(w, x + dx, y, z + dz * 2) as i32;
+                        n += shelf(w, x + dx, y + 1, z + dz * 2) as i32;
+                    }
+                }
+            }
+        }
+        for k in 0..3 {
+            self.enchant_levels[k] = crate::enchant::calc_level(&mut self.enchant_rand, k, n, &s);
+        }
+        self.inv_dirty = true;
+    }
+
+    /// `ContainerEnchantment.enchantItem`: `xp_level` is the player's
+    /// level; returns the levels spent.
+    pub fn enchant_item(&mut self, w: &mut ServerWorld, k: usize, xp_level: i32) -> Option<i32> {
+        let Open::Enchant(p) = self.open else {
+            return None;
+        };
+        let cost = *self.enchant_levels.get(k)?;
+        let s = self.enchant_slot[0]?;
+        let creative = self.mode == GameMode::Creative;
+        if cost <= 0 || !(xp_level >= cost || creative) {
+            return None;
+        }
+        let list = crate::enchant::build_list(&mut self.enchant_rand, &s, cost);
+        if list.is_empty() {
+            return Some(0);
+        }
+        let book = s.id == 340;
+        let mut out = s;
+        if book {
+            out.id = 403;
+        }
+        let skip = if book && list.len() > 1 {
+            self.enchant_rand.next_int_n(list.len() as i32) as usize
+        } else {
+            usize::MAX
+        };
+        let mut have = out.enchantments();
+        for (i, e) in list.iter().enumerate() {
+            if !book || i != skip {
+                have.push(*e);
+            }
+        }
+        out = out.with_enchantments(&have);
+        self.enchant_slot[0] = Some(out);
+        self.enchant_changed(w, p);
+        self.inv_dirty = true;
+        Some(cost)
+    }
+
     /// `closeScreen` / `C0DPacketCloseWindow`: `onContainerClosed` throws
     /// out the cursor stack and the crafting grid.
     pub fn close(&mut self, w: &mut ServerWorld) {
@@ -1480,6 +1593,11 @@ impl Play {
         for (s, _) in container::close(&mut self.inv, window) {
             self.throw(s, &mut rnd);
         }
+        // ContainerEnchantment.onContainerClosed
+        if let Some(s) = self.enchant_slot[0].take() {
+            self.throw(s, &mut rnd);
+        }
+        self.enchant_levels = [0; 3];
         w.rand = rnd;
         self.open = Open::None;
         self.drag = Drag::default();

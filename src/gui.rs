@@ -110,6 +110,22 @@ impl<'a> Ui<'a> {
             .extend_from_slice(&[q[0], q[1], q[2], q[0], q[2], q[3]]);
     }
 
+    pub fn atlas(&self) -> &'a Atlas {
+        self.atlas
+    }
+
+    /// Quads (four vertices each, sampling the block atlas) as UI triangles.
+    pub fn push_model(&mut self, q: &[Vertex]) {
+        for c in q.chunks(4) {
+            let mut c = [c[0], c[1], c[2], c[3]];
+            for v in &mut c {
+                v.light = [BLOCKS, 0, 0, 0];
+            }
+            self.v
+                .extend_from_slice(&[c[0], c[1], c[2], c[0], c[2], c[3]]);
+        }
+    }
+
     /// `GuiInventory.func_147046_a`: the player model at `(x, y)`.
     #[allow(clippy::too_many_arguments)]
     pub fn player_model(
@@ -654,6 +670,90 @@ impl<'a> Ui<'a> {
             SHEET,
         );
         self.atlas.char_width[i] as f32
+    }
+
+    /// `standardGalacticFontRenderer.getStringWidth`
+    pub fn sga_width(&self, s: &str) -> f32 {
+        s.chars()
+            .map(|c| {
+                if c == ' ' {
+                    4.0
+                } else {
+                    ascii_index(c).map_or(0.0, |i| self.atlas.sga_width[i] as f32)
+                }
+            })
+            .sum()
+    }
+
+    /// `standardGalacticFontRenderer.drawString`, no shadow.
+    pub fn sga_text(&mut self, s: &str, x: f32, y: f32, color: u32) {
+        let sz = UI_SIZE as f32;
+        let (ox, oy) = (512.0, 1536.0);
+        let c = rgba(color, 1.0);
+        let mut px = x;
+        for ch in s.chars() {
+            if ch == ' ' {
+                px += 4.0;
+                continue;
+            }
+            let Some(i) = ascii_index(ch) else { continue };
+            let (cu, cv) = (ox + (i % 16 * 8) as f32, oy + (i / 16 * 8) as f32);
+            let w = self.atlas.sga_width[i] as f32 - 0.01;
+            let (u0, v0, u1, v1) = (cu / sz, cv / sz, (cu + w - 1.0) / sz, (cv + 7.99) / sz);
+            self.quad(
+                [
+                    [px, y],
+                    [px, y + 7.99],
+                    [px + w - 1.0, y + 7.99],
+                    [px + w - 1.0, y],
+                ],
+                [[u0, v0], [u0, v1], [u1, v1], [u1, v0]],
+                c,
+                SHEET,
+            );
+            px += self.atlas.sga_width[i] as f32;
+        }
+    }
+
+    /// `drawSplitString` with the galactic font: `wrapFormattedStringToWidth`
+    /// at `width`, one line every 9 pixels.
+    pub fn sga_split(&mut self, s: &str, x: f32, y: f32, width: f32, color: u32) {
+        let mut rest: Vec<char> = s.chars().collect();
+        let mut ty = y;
+        loop {
+            // sizeStringToWidth
+            let (mut w, mut i, mut space) = (0.0f32, 0usize, None);
+            while i < rest.len() {
+                let c = rest[i];
+                if c == ' ' {
+                    space = Some(i);
+                    w += 4.0;
+                } else if let Some(k) = ascii_index(c) {
+                    w += self.atlas.sga_width[k] as f32;
+                }
+                if w > width {
+                    break;
+                }
+                i += 1;
+            }
+            let cut = match space {
+                Some(sp) if i != rest.len() && sp < i => sp,
+                _ => i,
+            };
+            if rest.len() <= cut {
+                let line: String = rest.iter().collect();
+                self.sga_text(&line, x, ty, color);
+                break;
+            }
+            let line: String = rest[..cut].iter().collect();
+            self.sga_text(&line, x, ty, color);
+            let skip = if rest[cut] == ' ' { 1 } else { 0 };
+            rest = rest[cut + skip..].to_vec();
+            ty += 9.0;
+            if cut == 0 && skip == 0 {
+                break;
+            }
+        }
     }
 
     /// `renderUnicodeChar`: half of a 16-pixel glyph cell.

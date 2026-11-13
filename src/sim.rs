@@ -66,6 +66,8 @@ pub enum Command {
         mode: i32,
     },
     OpenInventory,
+    /// `C11PacketEnchantItem`
+    EnchantItem(usize),
     /// `C12PacketUpdateSign`
     UpdateSign([i32; 3], [String; 4]),
     /// `C01PacketChatMessage`: chat text or a command.
@@ -947,6 +949,21 @@ impl Sim {
             Command::Chat(ref t) => {
                 let t = t.clone();
                 self.chat_message(&t);
+            }
+            Command::EnchantItem(k) => {
+                let mut play = std::mem::replace(&mut self.play, Play::new(GameMode::Survival));
+                let lvl = self.splayer.xp_level;
+                if let Some(cost) = play.enchant_item(&mut self.world, k, lvl) {
+                    // EntityPlayer.addExperienceLevel(-cost)
+                    let p = &mut self.splayer;
+                    p.xp_level -= cost;
+                    if p.xp_level < 0 {
+                        p.xp_level = 0;
+                        p.xp = 0.0;
+                        p.xp_total = 0;
+                    }
+                }
+                self.play = play;
             }
             Command::UpdateSign(p, ref lines) => {
                 let l = lines.clone();

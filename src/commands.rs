@@ -712,3 +712,60 @@ mod tests {
         assert_eq!(sim.splayer.xp_level, 3);
     }
 }
+
+#[cfg(test)]
+mod enchant_tests {
+    use super::*;
+
+    #[test]
+    fn enchanting_table_enchants_and_costs_levels() {
+        let cfg = SimConfig {
+            seed: 99,
+            view: 2,
+            save_dir: None,
+            start_time: 6000,
+            freeze_time: true,
+            mode: GameMode::Survival,
+        };
+        let (mut sim, start) = Sim::new(&cfg);
+        let mut ev = Vec::new();
+        for _ in 0..40 {
+            sim.step(&[], &mut ev);
+        }
+        let p = [
+            start.pos[0].floor() as i32,
+            start.pos[1].floor() as i32 + 5,
+            start.pos[2].floor() as i32 + 3,
+        ];
+        sim.world
+            .set_block(p[0], p[1], p[2], block::ENCHANTING_TABLE, 0, 3);
+        sim.splayer.xp_level = 30;
+        sim.play.inv.main[0] = Some(Stack::new(276, 0, 1));
+        sim.step(
+            &[
+                Command::Use {
+                    target: p,
+                    face: [0, 1, 0],
+                    sneaking: false,
+                },
+                // hotbar 0 is slot 28 of ContainerEnchantment
+                Command::WindowClick {
+                    slot: 28,
+                    button: 0,
+                    mode: 1,
+                },
+            ],
+            &mut ev,
+        );
+        assert_eq!(sim.play.enchant_slot[0].map(|s| s.id), Some(276));
+        let lv = sim.play.enchant_levels;
+        assert!(lv[0] >= 1 && lv[2] >= lv[0], "{lv:?}");
+        sim.step(&[Command::EnchantItem(2)], &mut ev);
+        let s = sim.play.enchant_slot[0].unwrap();
+        assert!(!s.enchantments().is_empty());
+        assert_eq!(sim.splayer.xp_level, 30 - lv[2]);
+        // closing throws the sword out
+        sim.step(&[Command::CloseWindow], &mut ev);
+        assert!(sim.play.enchant_slot[0].is_none());
+    }
+}

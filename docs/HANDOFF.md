@@ -73,8 +73,11 @@
 ### 3.3 遊戲資源
 
 - `MC1710_JAR` 環境變數或 `--jar` 指向原版 jar（材質、`en_US.lang`、字型）。
-- 啟動器的 assets（`assets/indexes/1.7.10.json` + `objects/`）提供其他語言檔與聲音。本機路徑：
-  `C:\Users\PZW152\Downloads\Sapling Data\`（`versions/1.7.10/1.7.10.jar` 與 `assets/`）。
+- 啟動器的 assets（`assets/indexes/1.7.10.json` + `objects/`）提供其他語言檔與聲音。本機 jar：
+  `C:\Users\PZW152\AppData\Roaming\Sapling\versions\1.7.10\1.7.10.jar`（SHA‑1 同上；舊路徑
+  `Downloads\Sapling Data` 已被刪除，本機目前沒有完整的 assets 目錄，所以非英文語言與聲音無法在此機測試）。
+- Git Bash 會把以 `/` 開頭的參數改寫成 Windows 路徑：送聊天指令（`MINERUST_CHAT="/xp 30L"`）時加
+  `MSYS_NO_PATHCONV=1`。
 
 ## 4. 架構
 
@@ -159,12 +162,14 @@ minerust --seed 12345 --no-save --size 854 480 --screenshot out.png 6
 - 盔甲（穿戴、模型、圖示）、手持物品、玩家模型
 - 箱子模型與開蓋、告示牌（放置、編輯、文字、存檔）
 - 附魔資料與 `EnchantmentHelper`（與原版 385 筆比對一致）
+- 附魔台：方塊、`ContainerEnchantment`（書架計數、三個等級、附魔與扣等級、關閉時掉出）、`GuiEnchantment`
+  （書本模型在自己的透視視窗中、銀河字母字型與換行、三種按鈕狀態）、浮空書本的動畫與繪製
 
 ## 7. 尚未完成（依優先順序）
 
-1. **附魔台**：方塊已加入（116），還缺 `ContainerEnchantment`、`GuiEnchantment`（書本模型、銀河字母字型
-   `font/ascii_sga.png`、三個按鈕）、`TileEntityEnchantmentTableRenderer` 浮空書本與書架粒子，以及附魔效果本身
-   （鋒利、效率、保護、耐久、掉落加成……多數尚未作用在戰鬥與挖掘上）。
+1. **附魔效果本身**：附魔台已完成，但多數附魔尚未作用在遊戲上（鋒利／不死剋星／節肢剋星、擊退、燃燒、掠奪、
+   效率、絲綢之觸、耐久、幸運、保護系列、水下呼吸、親水性、荊棘、力量／衝擊／火焰／無限、海之眷顧、魚餌）。
+   附魔台的書架粒子（`EntityEnchantmentTableParticleFX`）也還沒做。
 2. **鐵砧**：方塊、`ContainerRepair.updateRepairOutput` 的完整費用演算法、改名欄位、損壞。
 3. 其他缺方塊的 GUI：信標、漏斗、投擲器、馬的物品欄、村民交易、書與羽毛筆。
 4. 統計與成就（`StatList`、`AchievementList`、`GuiStats`、`GuiAchievements`），資源包畫面、使用統計畫面。
@@ -195,4 +200,5 @@ minerust --seed 12345 --no-save --size 854 480 --screenshot out.png 6
 - `d89b492` 盔甲與手持物品繪製、穿戴盔甲、南瓜視野。
 - `0f958b9` 聊天設定、載入畫面、發射器介面。
 - `893a6c1` 告示牌全套。
-- 本次：附魔資料與 `EnchantmentHelper`（`tools/EnchantHarness.java` 385 筆一致）、附魔台方塊，以及這份接手手冊。
+- `5de6c71` 附魔資料與 `EnchantmentHelper`（`tools/EnchantHarness.java` 385 筆一致）、附魔台方塊、這份接手手冊。
+- 本次：附魔台全套（容器、介面、浮空書本）；測試 `enchanting_table_enchants_and_costs_levels`；截圖確認介面與世界中的書本。

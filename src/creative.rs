@@ -436,6 +436,7 @@ impl Creative {
             effects: false,
             mouse,
             age,
+            ench: None,
         }
     }
 
@@ -681,6 +682,7 @@ impl Creative {
         }
         let shown = self.shown(view);
         let f = Frame {
+            ench: None,
             view: &shown,
             layout: Some(&layout),
             w: dims.0,

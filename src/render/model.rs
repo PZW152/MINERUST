@@ -1577,3 +1577,110 @@ pub fn player_layers(
     }
     layers
 }
+
+pub const BOOK_TEXTURE: &str = "enchanting_table_book";
+
+/// `ModelBook` posed by `setRotationAngles(time, flipA, flipB, spread)`:
+/// the covers, spine, page blocks and the two flipping pages.
+pub fn book_parts(time: f32, flip_a: f32, flip_b: f32, spread: f32) -> Vec<Part> {
+    let k = (sin(time * 0.02) * 0.1 + 1.25) * spread;
+    let s = sin(k);
+    vec![
+        Part::new([0.0, 0.0, -1.0])
+            .bx(0.0, 0.0, [-6.0, -5.0, 0.0], [6.0, 10.0, 0.0], 0.0)
+            .r(0.0, PI + k, 0.0),
+        Part::new([0.0, 0.0, 1.0])
+            .bx(16.0, 0.0, [0.0, -5.0, 0.0], [6.0, 10.0, 0.0], 0.0)
+            .r(0.0, -k, 0.0),
+        Part::new([0.0, 0.0, 0.0])
+            .bx(12.0, 0.0, [-1.0, -5.0, 0.0], [2.0, 10.0, 0.0], 0.0)
+            .r(0.0, PI / 2.0, 0.0),
+        Part::new([s, 0.0, 0.0])
+            .bx(0.0, 10.0, [0.0, -4.0, -0.99], [5.0, 8.0, 1.0], 0.0)
+            .r(0.0, k, 0.0),
+        Part::new([s, 0.0, 0.0])
+            .bx(12.0, 10.0, [0.0, -4.0, -0.01], [5.0, 8.0, 1.0], 0.0)
+            .r(0.0, -k, 0.0),
+        Part::new([s, 0.0, 0.0])
+            .bx(24.0, 10.0, [0.0, -4.0, 0.0], [5.0, 8.0, 0.0], 0.0)
+            .r(0.0, k - k * 2.0 * flip_a, 0.0),
+        Part::new([s, 0.0, 0.0])
+            .bx(24.0, 10.0, [0.0, -4.0, 0.0], [5.0, 8.0, 0.0], 0.0)
+            .r(0.0, k - k * 2.0 * flip_b, 0.0),
+    ]
+}
+
+/// The page angles `TileEntityEnchantmentTableRenderer` and `GuiEnchantment`
+/// derive from the flip value.
+pub fn book_flips(flip: f32) -> (f32, f32) {
+    let f = |v: f32| ((v - v.trunc()) * 1.6 - 0.3).clamp(0.0, 1.0);
+    (f(flip + 0.25), f(flip + 0.75))
+}
+
+/// `GuiEnchantment.drawGuiContainerBackgroundLayer`'s book: drawn through
+/// its own 320x240 viewport with `gluPerspective(90, 4/3, 9, 80)` shifted by
+/// (-0.34, 0.23), then mapped back to GUI pixels (`sw` x `sh`).
+pub fn enchant_book_gui(
+    atlas: &super::atlas::Atlas,
+    sw: f32,
+    sh: f32,
+    open: f32,
+    flip: f32,
+) -> Vec<Vertex> {
+    let Some(tex) = atlas.mob_tex(BOOK_TEXTURE) else {
+        return Vec::new();
+    };
+    let sc = super::entities::scale;
+    let mut m = translate(0.0, 3.3, -16.0);
+    m = mul(&m, &sc(5.0, 5.0, 5.0));
+    m = mul(&m, &rot_z(180.0));
+    m = mul(&m, &rot_x(20.0));
+    let o = 1.0 - open;
+    m = mul(&m, &translate(o * 0.2, o * 0.1, o * 0.25));
+    m = mul(&m, &rot_y(-o * 90.0 - 90.0));
+    m = mul(&m, &rot_x(180.0));
+    let (fa, fb) = book_flips(flip);
+    let mut raw = Vec::new();
+    {
+        let mut d = Draw {
+            out: &mut raw,
+            tex,
+            light: [0; 4],
+            tint: [1.0; 4],
+        };
+        for p in book_parts(0.0, fa, fb, open) {
+            render(&mut d, &m, &p);
+        }
+    }
+    // enableStandardItemLighting under the identity model view
+    let quads = gui_quads(raw, &super::IDENTITY, Some([1.0; 4]));
+    let sorted = sort_quads(quads);
+    // the projection and the viewport
+    let f = 1.0 / (45.0f32).to_radians().tan();
+    let a = 320.0 / 240.0;
+    let vx = ((sw as i32 - 320) / 2) as f32;
+    let vy = ((sh as i32 - 240) / 2) as f32;
+    sorted
+        .into_iter()
+        .map(|mut v| {
+            let (x, y, z) = (v.pos[0], v.pos[1], v.pos[2]);
+            let w = -z;
+            let cx = f / a * x + -0.34 * w;
+            let cy = f * y + 0.23 * w;
+            let (nx, ny) = (cx / w, cy / w);
+            v.pos = [
+                vx + (nx + 1.0) / 2.0 * 320.0,
+                sh - (vy + (ny + 1.0) / 2.0 * 240.0),
+                0.0,
+            ];
+            v
+        })
+        .collect()
+}
+
+/// `ModelBook.render` under `m`.
+pub fn book_world(d: &mut Draw, m: &Mat4, time: f32, flip_a: f32, flip_b: f32, spread: f32) {
+    for p in book_parts(time, flip_a, flip_b, spread) {
+        render(d, m, &p);
+    }
+}

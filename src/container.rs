@@ -35,6 +35,8 @@ pub enum SlotKind {
     Potion,
     /// `ContainerBrewingStand$Ingredient`
     Ingredient,
+    /// `ContainerEnchantment$2` in a one-item inventory
+    Enchant,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -61,6 +63,8 @@ pub enum Window {
     Chest(usize),
     /// `ContainerDispenser`
     Dispenser,
+    /// `ContainerEnchantment`
+    Enchant,
     /// `GuiContainerCreative$ContainerCreative`: the 45 item-list slots
     /// (the tile slots) and the hotbar.
     Creative,
@@ -206,6 +210,10 @@ impl Window {
                         ));
                     }
                 }
+                player_slots(&mut v, 84);
+            }
+            Window::Enchant => {
+                v.push(slot(Inv::Tile, 0, SlotKind::Enchant, 25, 47));
                 player_slots(&mut v, 84);
             }
         }
@@ -414,7 +422,7 @@ impl<'a> Ctx<'a> {
     /// `Slot.isItemValid`
     fn valid(&self, i: usize, s: &Stack) -> bool {
         match self.slots[i].kind {
-            SlotKind::Plain => true,
+            SlotKind::Plain | SlotKind::Enchant => true,
             SlotKind::CraftResult | SlotKind::FurnaceOut => false,
             SlotKind::Armor(t) => match armor_type(s.id) {
                 Some(a) => a == t,
@@ -429,7 +437,7 @@ impl<'a> Ctx<'a> {
     /// `Slot.getSlotStackLimit`
     fn limit(&self, i: usize) -> u32 {
         match self.slots[i].kind {
-            SlotKind::Armor(_) | SlotKind::Potion => 1,
+            SlotKind::Armor(_) | SlotKind::Potion | SlotKind::Enchant => 1,
             _ => 64,
         }
     }
@@ -680,6 +688,24 @@ impl<'a> Ctx<'a> {
                     self.merge(&mut s, 9, 45, true)
                 } else {
                     self.merge(&mut s, 0, 9, false)
+                }
+            }
+            Window::Enchant => {
+                if i == 0 {
+                    self.merge(&mut s, 1, 37, true)
+                } else {
+                    if self.has(0) || !self.valid(0, &s) {
+                        return None;
+                    }
+                    if s.ench != 0 && s.count == 1 {
+                        self.put(0, Some(s));
+                        s.count = 0;
+                    } else if s.count >= 1 {
+                        // new ItemStack(item, 1, damage): without the tag
+                        self.put(0, Some(Stack::new(s.id, s.meta, 1)));
+                        s.count -= 1;
+                    }
+                    true
                 }
             }
         };

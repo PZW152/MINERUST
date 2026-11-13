@@ -29,6 +29,9 @@
 - [x] 玩家模型（第三人稱與背包）上的盔甲層、手持物品，`ModelBiped.setRotationAngles` 完整移植；右鍵穿上盔甲；南瓜頭的視野遮罩
 - [x] 箱子：`TileEntityChestRenderer`（單／大箱子、開蓋動畫與音效、聖誕節材質），箱子物品圖示
 - [x] 聊天設定畫面、載入畫面（`LoadingScreenRenderer` / `GuiDownloadTerrain`）、發射器介面
+- [x] 附魔台：`ContainerEnchantment`、`GuiEnchantment`（書本、銀河字母）、`TileEntityEnchantmentTableRenderer`；
+      `EnchantmentHelper.buildEnchantmentList` 與附魔台等級和原版逐筆一致
+- [ ] 附魔效果作用在戰鬥、挖掘、盔甲、弓、釣竿；附魔台書架粒子
 - [ ] 物品附魔光澤、手持箱子與掉落箱子的模型
 - [ ] 指令：summon、enchant、gamerule、playsound、spreadplayers、testfor 等，Tab 自動補完
 - [ ] 統計與成就（`StatList` / `AchievementList`）與其畫面；資源包、使用統計（Snooper）、直播畫面

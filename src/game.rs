@@ -32,6 +32,8 @@ struct ClientChunk {
     chests: Vec<[i32; 3]>,
     /// Sign blocks (their `TileEntitySign`s).
     signs: Vec<[i32; 3]>,
+    /// Enchanting tables (their `TileEntityEnchantmentTable`s).
+    tables: Vec<[i32; 3]>,
     /// Everything that can write into it has been populated.
     ready: bool,
 }
@@ -232,6 +234,12 @@ pub struct Game {
     cloud_cell: Option<(i32, i32)>,
     /// Server view of the inventory and open window.
     pub view: InvView,
+    /// `TileEntityEnchantmentTable` state of the tables in the world:
+    /// tick count, page flip (prev, now), `flipT`, `flipA`, book spread
+    /// (prev, now), book rotation (prev, now), `tRot`.
+    tables: HashMap<[i32; 3], [f32; 10]>,
+    /// `TileEntityEnchantmentTable.field_145923_r` (static `new Random()`).
+    table_rand: JavaRandom,
     /// `TileEntitySign.signText` as the client knows it.
     sign_texts: HashMap<[i32; 3], [String; 4]>,
     /// `GuiEditSign`: the sign, its lines, the line edited, `updateCounter`.
@@ -254,6 +262,8 @@ pub struct Game {
     /// `gameSettings.thirdPersonView` and `hideGUI`.
     pub third_person: i32,
     pub hide_gui: bool,
+    /// `GuiEnchantment`'s book animation.
+    book: crate::gui_container::BookAnim,
     /// `GuiContainer` of the open window.
     gui: crate::gui_container::GuiContainer,
     /// `GuiContainerCreative` while it is open, and its last tab.
@@ -539,12 +549,21 @@ impl Game {
                 tile_slots: Vec::new(),
                 furnace: None,
                 clicks: 0,
+                enchant: [0; 3],
+                name_seed: 0,
             },
             gui: Default::default(),
+            book: Default::default(),
             creative: None,
             creative_tab: 0,
             chest_lids: HashMap::new(),
             sign_texts: HashMap::new(),
+            tables: HashMap::new(),
+            table_rand: JavaRandom::new(
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |d| d.as_nanos() as i64),
+            ),
             sign_edit: None,
             third_person: 0,
             loading: 0,
@@ -900,7 +919,13 @@ impl Game {
                     let mut portals = Vec::new();
                     let mut chests = Vec::new();
                     let mut signs = Vec::new();
+                    let mut tables = Vec::new();
                     for (i, &b) in chunk.data.blocks.iter().enumerate() {
+                        if b == block::ENCHANTING_TABLE {
+                            let (x, z, y) =
+                                ((i >> 12) as i32, (i >> 8 & 15) as i32, (i & 255) as i32);
+                            tables.push([key.0 * 16 + x, y, key.1 * 16 + z]);
+                        }
                         if b == block::STANDING_SIGN || b == block::WALL_SIGN {
                             let (x, z, y) =
                                 ((i >> 12) as i32, (i >> 8 & 15) as i32, (i & 255) as i32);
@@ -926,6 +951,7 @@ impl Game {
                             portals,
                             chests,
                             signs,
+                            tables,
                         },
                     );
                     // Faces and light on the border depend on the neighbours.
@@ -1506,6 +1532,14 @@ impl Game {
     }
 
     fn tick(&mut self) {
+        self.tick_tables();
+        if let Open::Enchant(_) = self.view.open {
+            // GuiEnchantment.updateScreen
+            let item = self.view.tile_slots.first().copied().flatten();
+            self.book.tick(item, self.view.enchant);
+        } else {
+            self.book = Default::default();
+        }
         if let Some(e) = self.sign_edit.as_mut() {
             e.3 += 1;
         }
@@ -2516,6 +2550,7 @@ impl Game {
             effects: !self.stats.effects.is_empty(),
             mouse: self.gui_mouse_i(),
             age: self.ticks as f32 + self.partial,
+            ench: Some(self.enchant_state(self.partial)),
         };
         let keys = self.container_keys();
         let mut gui = std::mem::take(&mut self.gui);
@@ -2958,6 +2993,121 @@ impl Game {
         }
     }
 
+    /// `TileEntityEnchantmentTable.updateEntity` for every loaded table.
+    fn tick_tables(&mut self) {
+        use std::f32::consts::PI;
+        let list: Vec<[i32; 3]> = self
+            .world
+            .chunks
+            .values()
+            .flat_map(|c| c.tables.clone())
+            .collect();
+        self.tables.retain(|p, _| list.contains(p));
+        let eye = self.player.pos;
+        for p in list {
+            if self.world.peek_block(p[0], p[1], p[2]) != block::ENCHANTING_TABLE {
+                continue;
+            }
+            let t = self.tables.entry(p).or_insert([0.0; 10]);
+            // [0] ticks, [1] flip prev, [2] flip, [3] flipT, [4] flipA,
+            // [5] spread prev, [6] spread, [7] rot prev, [8] rot, [9] tRot
+            t[5] = t[6];
+            t[7] = t[8];
+            // getClosestPlayer(x + 0.5, y + 0.5, z + 0.5, 3.0) on posY (the eyes)
+            let c = [p[0] as f64 + 0.5, p[1] as f64 + 0.5, p[2] as f64 + 0.5];
+            let d2 = (eye[0] - c[0]).powi(2) + (eye[1] - c[1]).powi(2) + (eye[2] - c[2]).powi(2);
+            if d2 < 9.0 {
+                t[9] = ((eye[2] - c[2]) as f32).atan2((eye[0] - c[0]) as f32);
+                t[6] += 0.1;
+                if t[6] < 0.5 || self.table_rand.next_int_n(40) == 0 {
+                    let old = t[3];
+                    loop {
+                        t[3] +=
+                            (self.table_rand.next_int_n(4) - self.table_rand.next_int_n(4)) as f32;
+                        if old != t[3] {
+                            break;
+                        }
+                    }
+                }
+            } else {
+                t[9] += 0.02;
+                t[6] -= 0.1;
+            }
+            let wrap = |mut a: f32| {
+                while a >= PI {
+                    a -= PI * 2.0;
+                }
+                while a < -PI {
+                    a += PI * 2.0;
+                }
+                a
+            };
+            t[8] = wrap(t[8]);
+            t[9] = wrap(t[9]);
+            let d = wrap(t[9] - t[8]);
+            t[8] += d * 0.4;
+            t[6] = t[6].clamp(0.0, 1.0);
+            t[0] += 1.0;
+            t[1] = t[2];
+            let f = ((t[3] - t[2]) * 0.4).clamp(-0.2, 0.2);
+            t[4] += (f - t[4]) * 0.9;
+            t[2] += t[4];
+        }
+    }
+
+    /// `TileEntityEnchantmentTableRenderer`: the floating book.
+    fn draw_tables(
+        &self,
+        out: &mut Vec<crate::render::mesher::Vertex>,
+        eye: [f64; 3],
+        partial: f32,
+    ) {
+        use std::f32::consts::PI;
+        let Some(tex) = self.atlas.mob_tex(crate::render::model::BOOK_TEXTURE) else {
+            return;
+        };
+        for (p, t) in &self.tables {
+            let rel = [
+                (p[0] as f64 - eye[0]) as f32,
+                (p[1] as f64 - eye[1]) as f32,
+                (p[2] as f64 - eye[2]) as f32,
+            ];
+            if rel[0] * rel[0] + rel[1] * rel[1] + rel[2] * rel[2] > 64.0 * 64.0 {
+                continue;
+            }
+            let time = t[0] + partial;
+            let mut m = render::translate(rel[0] + 0.5, rel[1] + 0.75, rel[2] + 0.5);
+            m = render::mul(
+                &m,
+                &render::translate(0.0, 0.1 + (time * 0.1).sin() * 0.01, 0.0),
+            );
+            let mut d = t[8] - t[7];
+            while d >= PI {
+                d -= PI * 2.0;
+            }
+            while d < -PI {
+                d += PI * 2.0;
+            }
+            let rot = t[7] + d * partial;
+            m = render::mul(&m, &render::rot_y(-rot * 180.0 / PI));
+            m = render::mul(&m, &render::rot_z(80.0));
+            let flip = t[1] + (t[2] - t[1]) * partial;
+            let (fa, fb) = render::model::book_flips(flip);
+            let spread = t[5] + (t[6] - t[5]) * partial;
+            let (sky, blk) = (
+                self.world.light(true, p[0], p[1], p[2]),
+                self.world.light(false, p[0], p[1], p[2]),
+            );
+            let mut dr = render::model::Draw {
+                out: &mut *out,
+                tex,
+                light: [(blk << 4) as u8, (sky << 4) as u8, 0, 0],
+                tint: [1.0; 4],
+            };
+            render::model::book_world(&mut dr, &m, time, fa, fb, spread);
+        }
+    }
+
     /// `TileEntitySignRenderer` for the signs within 64 blocks.
     fn draw_signs(&self, out: &mut Vec<crate::render::mesher::Vertex>, eye: [f64; 3]) {
         let w = &self.world;
@@ -3066,6 +3216,16 @@ impl Game {
         }
     }
 
+    fn enchant_state(&self, partial: f32) -> crate::gui_container::EnchantState {
+        let b = &self.book;
+        crate::gui_container::EnchantState {
+            xp_level: self.stats.xp_level,
+            creative: self.mode == GameMode::Creative,
+            open: b.o_open + (b.open - b.o_open) * partial,
+            flip: b.o_flip + (b.flip - b.o_flip) * partial,
+        }
+    }
+
     /// `closeScreen` from a container.
     fn close_window(&mut self) -> Request {
         let _ = self.sim.commands.send(Command::CloseWindow);
@@ -3136,6 +3296,27 @@ impl Game {
                     g.mouse_released(f, button as i32, shift, k, send);
                 }
             });
+            // GuiEnchantment.mouseClicked: the three buttons
+            if pressed {
+                if let Open::Enchant(_) = self.view.open {
+                    let (w, h) = self.gui_size();
+                    let m = self.gui_mouse_i();
+                    if let Some(i) = crate::gui_container::enchant_button_at(
+                        &self.view.open,
+                        w as i32,
+                        h as i32,
+                        m,
+                    ) {
+                        let lvl = self.view.enchant[i];
+                        // ContainerEnchantment.enchantItem on the client
+                        if lvl > 0
+                            && (self.stats.xp_level >= lvl || self.mode == GameMode::Creative)
+                        {
+                            let _ = self.sim.commands.send(Command::EnchantItem(i));
+                        }
+                    }
+                }
+            }
             return Request::None;
         }
         if !pressed {
@@ -3878,6 +4059,7 @@ impl Game {
         self.draw_boats(&mut dynamic, eye, partial);
         self.draw_chests(&mut dynamic, eye, partial);
         self.draw_signs(&mut dynamic, eye);
+        self.draw_tables(&mut dynamic, eye, partial);
         self.draw_player(&mut dynamic, partial);
         self.draw_orbs(&mut translucent, eye, partial);
         if let Some(at) = self.atlas.mob_tex("arrow") {
@@ -4438,6 +4620,7 @@ impl Game {
                     effects: !lines.is_empty(),
                     mouse: (m.0.floor() as i32, m.1.floor() as i32),
                     age: self.ticks as f32 + partial,
+                    ench: Some(self.enchant_state(partial)),
                 };
                 self.gui.draw(&mut ui, &frame, &self.lang, &lines);
             }

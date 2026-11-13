@@ -17,7 +17,7 @@ pub const GLYPH_Y: u32 = 1024;
 
 /// GUI textures beyond the original sheet: path under `textures/` and the
 /// pixel position in the sheet.
-pub const GUI_TEXTURES: [(&str, u32, u32); 26] = [
+pub const GUI_TEXTURES: [(&str, u32, u32); 27] = [
     ("gui/title/minecraft.png", 1024, 0),
     ("gui/title/background/panorama_0.png", 1280, 0),
     ("gui/title/background/panorama_1.png", 1536, 0),
@@ -52,6 +52,7 @@ pub const GUI_TEXTURES: [(&str, u32, u32); 26] = [
     ("gui/stream_indicator.png", 768, 1280),
     ("gui/container/generic_54.png", 0, 1536),
     ("gui/presets/isles.png", 256, 1536),
+    ("font/ascii_sga.png", 512, 1536),
 ];
 
 /// The sheet position of a GUI texture by its path under `textures/`.
@@ -163,6 +164,8 @@ pub struct Atlas {
     pub ui: Vec<u8>,
     /// `FontRenderer.charWidth` for the ASCII sheet.
     pub char_width: [u8; 256],
+    /// `standardGalacticFontRenderer`'s widths (`font/ascii_sga.png`).
+    pub sga_width: [u8; 256],
     /// The Unicode font (`glyphWidth` and the glyph cells).
     pub glyphs: std::sync::Mutex<GlyphCache>,
     /// Animated tiles (`.png.mcmeta`).
@@ -559,6 +562,7 @@ impl Atlas {
             .chain(crate::render::vehicles::TEXTURES)
             .chain(crate::render::chest::TEXTURES)
             .chain(crate::render::sign::TEXTURES)
+            .chain([crate::render::model::BOOK_TEXTURE])
             .chain(crate::render::model::ARMOR_TEXTURES)
             .chain(["../misc/pumpkinblur"])
         {
@@ -678,24 +682,9 @@ impl Atlas {
             jar: None,
             unicode: false,
         });
-        let mut char_width = [0u8; 256];
-        let cell = font.w / 16;
-        for (k, w) in char_width.iter_mut().enumerate() {
-            let (cx, cy) = (k as u32 % 16, k as u32 / 16);
-            let mut used = cell as i32 - 1;
-            while used >= 0 {
-                let x = cx * cell + used as u32;
-                let empty = (0..cell)
-                    .all(|y| font.rgba[(((cy * cell + y) * font.w + x) * 4 + 3) as usize] == 0);
-                if !empty {
-                    break;
-                }
-                used -= 1;
-            }
-            used += 1;
-            // readFontTexture: (int)(0.5 + ++var12 * (8.0F / cell)) + 1
-            *w = ((0.5 + (used as f32 * (8.0f32 / cell as f32)) as f64) as i32 + 1) as u8;
-        }
+        let char_width = font_widths(&font);
+        let sga_width = read_png(jar, "assets/minecraft/textures/font/ascii_sga.png")
+            .map_or([0u8; 256], |i| font_widths(&i));
         Ok(Atlas {
             skin,
             destroy,
@@ -703,6 +692,7 @@ impl Atlas {
             mobs,
             ui,
             char_width,
+            sga_width,
             glyphs,
             anims,
             clouds,
@@ -824,4 +814,28 @@ impl Atlas {
             Some(self.rects[t as usize])
         }
     }
+}
+
+/// `FontRenderer.readFontTexture`: each glyph's width from its last
+/// non-transparent column.
+fn font_widths(font: &Image) -> [u8; 256] {
+    let mut out = [0u8; 256];
+    let cell = font.w / 16;
+    for (k, w) in out.iter_mut().enumerate() {
+        let (cx, cy) = (k as u32 % 16, k as u32 / 16);
+        let mut used = cell as i32 - 1;
+        while used >= 0 {
+            let x = cx * cell + used as u32;
+            let empty = (0..cell)
+                .all(|y| font.rgba[(((cy * cell + y) * font.w + x) * 4 + 3) as usize] == 0);
+            if !empty {
+                break;
+            }
+            used -= 1;
+        }
+        used += 1;
+        // readFontTexture: (int)(0.5 + ++var12 * (8.0F / cell)) + 1
+        *w = ((0.5 + (used as f32 * (8.0f32 / cell as f32)) as f64) as i32 + 1) as u8;
+    }
+    out
 }

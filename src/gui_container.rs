@@ -94,14 +94,14 @@ pub fn slot_stack(view: &InvView, d: &SlotDef) -> Option<Stack> {
 
 fn slot_limit(d: &SlotDef) -> u32 {
     match d.kind {
-        SlotKind::Armor(_) | SlotKind::Potion => 1,
+        SlotKind::Armor(_) | SlotKind::Potion | SlotKind::Enchant => 1,
         _ => 64,
     }
 }
 
 fn slot_valid(d: &SlotDef, s: &Stack) -> bool {
     match d.kind {
-        SlotKind::Plain => true,
+        SlotKind::Plain | SlotKind::Enchant => true,
         SlotKind::CraftResult | SlotKind::FurnaceOut => false,
         SlotKind::Armor(t) => match container::armor_type(s.id) {
             Some(a) => a == t,
@@ -166,6 +166,28 @@ pub struct Frame<'a> {
     pub mouse: (i32, i32),
     /// `ticksExisted + partialTicks` of the player.
     pub age: f32,
+    /// `GuiEnchantment`: the player's level, creative mode, and the book's
+    /// interpolated `open` and `flip`.
+    pub ench: Option<EnchantState>,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct EnchantState {
+    pub xp_level: i32,
+    pub creative: bool,
+    pub open: f32,
+    pub flip: f32,
+}
+
+const ENCHANT: (f32, f32) = (1024.0, 768.0);
+
+/// The enchanting button `i` under the mouse (`GuiEnchantment.mouseClicked`).
+pub fn enchant_button_at(open: &Open, w: i32, h: i32, mouse: (i32, i32)) -> Option<usize> {
+    let (left, top) = origin(open, w, h, false);
+    (0..3).find(|&i| {
+        let (x, y) = (mouse.0 - (left + 60), mouse.1 - (top + 14 + 19 * i as i32));
+        x >= 0 && y >= 0 && x < 108 && y < 19
+    })
 }
 
 impl GuiContainer {
@@ -474,6 +496,9 @@ impl GuiContainer {
         }
         if own {
             background(ui, view, lf, tf, xs as f32, ys as f32);
+            if let (Open::Enchant(_), Some(e)) = (&view.open, f.ench) {
+                enchant_background(ui, view, &e, lf, tf, f.mouse);
+            }
         }
         if own && matches!(view.open, Open::Inventory | Open::None) {
             // GuiInventory: the player, turned towards the mouse
@@ -597,6 +622,7 @@ fn background(ui: &mut Ui, view: &InvView, left: f32, top: f32, xs: f32, ys: f32
         Open::Inventory | Open::None => ui.sheet(left, top, INVENTORY.0, INVENTORY.1, xs, ys),
         Open::Workbench(_) => ui.sheet(left, top, WORKBENCH.0, WORKBENCH.1, xs, ys),
         Open::Dispenser(_) => ui.sheet(left, top, DISPENSER.0, DISPENSER.1, xs, ys),
+        Open::Enchant(_) => ui.sheet(left, top, ENCHANT.0, ENCHANT.1, xs, ys),
         Open::Furnace(_) => {
             ui.sheet(left, top, FURNACE.0, FURNACE.1, xs, ys);
             if let Some((burn, cook)) = view.furnace {
@@ -697,6 +723,15 @@ fn foreground(ui: &mut Ui, view: &InvView, lang: &Lang, left: f32, top: f32, xs:
         Open::Furnace(_) => centered(ui, lang.get("container.furnace")),
         Open::Brewing(_) => centered(ui, lang.get("container.brewing")),
         Open::Dispenser(_) => centered(ui, lang.get("container.dispenser")),
+        Open::Enchant(_) => {
+            ui.text(
+                lang.get("container.enchant"),
+                left + 12.0,
+                top + 5.0,
+                fg,
+                false,
+            );
+        }
         Open::Cart(_) => {
             ui.text(
                 lang.get("container.minecart"),
@@ -716,4 +751,114 @@ fn foreground(ui: &mut Ui, view: &InvView, lang: &Lang, left: f32, top: f32, xs:
         }
     }
     ui.text(inv, left + 8.0, top + ys - 96.0 + 2.0, fg, false);
+}
+
+/// `GuiEnchantment.drawGuiContainerBackgroundLayer` after the panel: the
+/// book and the three buttons with their galactic names and levels.
+fn enchant_background(
+    ui: &mut Ui,
+    view: &InvView,
+    e: &EnchantState,
+    left: f32,
+    top: f32,
+    mouse: (i32, i32),
+) {
+    // the book model in its own perspective viewport
+    let (w, h) = (ui.w, ui.h);
+    let atlas = ui.atlas();
+    let book = crate::render::model::enchant_book_gui(atlas, w, h, e.open, e.flip);
+    ui.push_model(&book);
+    // EnchantmentNameParts.reseedRandomGenerator(nameSeed)
+    let mut r = crate::java::JavaRandom::new(view.name_seed);
+    for i in 0..3 {
+        let name = crate::enchant::random_name(&mut r);
+        let lvl = view.enchant[i];
+        let (x, y) = (left + 60.0, top + 14.0 + 19.0 * i as f32);
+        if lvl == 0 {
+            ui.sheet(x, y, ENCHANT.0, ENCHANT.1 + 185.0, 108.0, 19.0);
+            continue;
+        }
+        let num = lvl.to_string();
+        let nw = ui.text_width(&num);
+        if e.xp_level < lvl && !e.creative {
+            ui.sheet(x, y, ENCHANT.0, ENCHANT.1 + 185.0, 108.0, 19.0);
+            ui.sga_split(
+                &name,
+                left + 62.0,
+                y + 2.0,
+                104.0,
+                (6839882 & 16711422) >> 1,
+            );
+            ui.text(&num, left + 62.0 + 104.0 - nw, y + 2.0 + 7.0, 4226832, true);
+        } else {
+            let (mx, my) = (mouse.0 as f32 - x, mouse.1 as f32 - y);
+            let mut color = 6839882;
+            if mx >= 0.0 && my >= 0.0 && mx < 108.0 && my < 19.0 {
+                ui.sheet(x, y, ENCHANT.0, ENCHANT.1 + 204.0, 108.0, 19.0);
+                color = 16777088;
+            } else {
+                ui.sheet(x, y, ENCHANT.0, ENCHANT.1 + 166.0, 108.0, 19.0);
+            }
+            ui.sga_split(&name, left + 62.0, y + 2.0, 104.0, color);
+            ui.text(&num, left + 62.0 + 104.0 - nw, y + 2.0 + 7.0, 8453920, true);
+        }
+    }
+}
+
+/// `GuiEnchantment`'s book: `flip`, `flipT`, `flipA`, `open` and their
+/// previous values, its own `random` and the last stack (`tickBook`).
+#[derive(Clone, Debug)]
+pub struct BookAnim {
+    pub flip: f32,
+    pub o_flip: f32,
+    flip_t: f32,
+    flip_a: f32,
+    pub open: f32,
+    pub o_open: f32,
+    rand: crate::java::JavaRandom,
+    last: Option<Stack>,
+}
+
+impl Default for BookAnim {
+    fn default() -> Self {
+        let seed = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos() as i64);
+        BookAnim {
+            flip: 0.0,
+            o_flip: 0.0,
+            flip_t: 0.0,
+            flip_a: 0.0,
+            open: 0.0,
+            o_open: 0.0,
+            rand: crate::java::JavaRandom::new(seed),
+            last: None,
+        }
+    }
+}
+
+impl BookAnim {
+    /// `GuiEnchantment.tickBook`
+    pub fn tick(&mut self, item: Option<Stack>, levels: [i32; 3]) {
+        if item != self.last {
+            self.last = item;
+            loop {
+                self.flip_t += (self.rand.next_int_n(4) - self.rand.next_int_n(4)) as f32;
+                if !(self.flip <= self.flip_t + 1.0 && self.flip >= self.flip_t - 1.0) {
+                    break;
+                }
+            }
+        }
+        self.o_flip = self.flip;
+        self.o_open = self.open;
+        if levels.iter().any(|&l| l != 0) {
+            self.open += 0.2;
+        } else {
+            self.open -= 0.2;
+        }
+        self.open = self.open.clamp(0.0, 1.0);
+        let d = ((self.flip_t - self.flip) * 0.4).clamp(-0.2, 0.2);
+        self.flip_a += (d - self.flip_a) * 0.9;
+        self.flip += self.flip_a;
+    }
 }
