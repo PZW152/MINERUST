@@ -505,6 +505,12 @@ impl Atlas {
                 items.insert((id, meta), b.add(crop(&img, 0, 0, 16), 16));
             }
         }
+        // the default font for text drawn in the world (signs)
+        {
+            let img = read_png(jar, "assets/minecraft/textures/font/ascii.png")?;
+            let t = b.add(crop(&img, 0, 0, 128), 128);
+            names.insert("font_ascii", t);
+        }
         // ItemArmor.getBackgroundIcon: the empty armour slot outlines
         for name in [
             "empty_armor_slot_helmet",
@@ -552,6 +558,7 @@ impl Atlas {
             .chain(crate::render::model3::TEXTURES)
             .chain(crate::render::vehicles::TEXTURES)
             .chain(crate::render::chest::TEXTURES)
+            .chain(crate::render::sign::TEXTURES)
             .chain(crate::render::model::ARMOR_TEXTURES)
             .chain(["../misc/pumpkinblur"])
         {

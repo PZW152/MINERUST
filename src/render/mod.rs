@@ -5,6 +5,7 @@ pub mod mesher;
 pub mod model;
 pub mod model2;
 pub mod model3;
+pub mod sign;
 pub mod vehicles;
 pub mod vk;
 

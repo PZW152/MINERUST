@@ -29,6 +29,8 @@ pub enum Tile {
     Dispenser { slots: [Option<Stack>; 9] },
     /// `TileEntityMobSpawner` (`MobSpawnerBaseLogic.mobID`)
     Spawner { mob: String },
+    /// `TileEntitySign.signText`; `editable` until the placer's update.
+    Sign { text: [String; 4], editable: bool },
     /// `TileEntityBrewingStand`: three bottles and the ingredient.
     Brewing {
         slots: [Option<Stack>; 4],
@@ -212,6 +214,9 @@ pub struct Play {
     pub clicks: u32,
     /// `field_147375_m`: the creative-mode drop throttle.
     pub creative_drops: i32,
+    /// `S36PacketSignEditorOpen` to send, and sign texts that changed.
+    pub sign_open: Option<Pos>,
+    pub sign_updates: Vec<(Pos, [String; 4])>,
     /// Generated entities (villagers, witches, chest minecarts).
     pub pending: Vec<crate::world::server::GenEntity>,
 }
@@ -449,6 +454,8 @@ impl Play {
             drag: Drag::default(),
             clicks: 0,
             creative_drops: 0,
+            sign_open: None,
+            sign_updates: Vec::new(),
             pending: Vec::new(),
         }
     }
@@ -642,7 +649,7 @@ impl Play {
                 Tile::Chest { slots } => slots.to_vec(),
                 Tile::Dispenser { slots } => slots.to_vec(),
                 Tile::Brewing { slots, .. } => slots.to_vec(),
-                Tile::Spawner { .. } => Vec::new(),
+                Tile::Spawner { .. } | Tile::Sign { .. } => Vec::new(),
             };
             for s in slots.into_iter().flatten() {
                 let mut rnd = std::mem::replace(&mut w.rand, JavaRandom::new(0));
@@ -874,6 +881,9 @@ impl Play {
         if held.id == 324 || held.id == 330 {
             self.place_door(w, target, face, held.id);
             return true;
+        }
+        if held.id == 323 {
+            return self.place_sign(w, target, face);
         }
         if held.id == 259 {
             // ItemFlintAndSteel.onItemUse: fire on the clicked side.
@@ -1245,6 +1255,75 @@ impl Play {
         self.spawn(e);
         sounds.push(("random.click", c, 1.0, 1.0));
         None
+    }
+
+    /// `ItemSign.onItemUse`: a standing sign on top, a wall sign on a side,
+    /// then the sign editor (`func_146100_a`).
+    fn place_sign(&mut self, w: &mut ServerWorld, t: Pos, face: [i32; 3]) -> bool {
+        let side = match face {
+            [0, -1, 0] => 0,
+            [0, 1, 0] => 1,
+            [0, 0, -1] => 2,
+            [0, 0, 1] => 3,
+            [-1, 0, 0] => 4,
+            _ => 5,
+        };
+        if side == 0 || !w.material(t[0], t[1], t[2]).is_solid() {
+            return false;
+        }
+        let p = [t[0] + face[0], t[1] + face[1], t[2] + face[2]];
+        if !(0..256).contains(&p[1]) || !w.material(p[0], p[1], p[2]).replaceable() {
+            return false;
+        }
+        if side == 1 {
+            let m = (((self.player.1 + 180.0) * 16.0 / 360.0) as f64 + 0.5).floor() as i32 & 15;
+            w.set_block(p[0], p[1], p[2], block::STANDING_SIGN, m, 3);
+        } else {
+            w.set_block(p[0], p[1], p[2], block::WALL_SIGN, side, 3);
+        }
+        self.tiles.insert(
+            p,
+            Tile::Sign {
+                text: Default::default(),
+                editable: true,
+            },
+        );
+        if self.mode != GameMode::Creative {
+            self.inv.consume_held();
+        }
+        self.inv_dirty = true;
+        self.sign_open = Some(p);
+        true
+    }
+
+    /// `NetHandlerPlayServer.processUpdateSign`
+    pub fn update_sign(&mut self, p: Pos, lines: [String; 4]) {
+        if let Some(Tile::Sign { text, editable }) = self.tiles.get_mut(&p) {
+            if !*editable {
+                return;
+            }
+            *editable = false;
+            for (i, l) in lines.into_iter().enumerate() {
+                // ChatAllowedCharacters, fifteen at most
+                let ok = l.chars().count() <= 15
+                    && l.chars()
+                        .all(|c| c != '\u{a7}' && c >= ' ' && c != '\u{7f}');
+                text[i] = if ok { l } else { "!?".to_string() };
+            }
+            self.sign_updates.push((p, text.clone()));
+        }
+    }
+
+    /// The text of the signs in a chunk (`S33PacketUpdateSign` on load).
+    pub fn signs_in(&self, cx: i32, cz: i32) -> Vec<(Pos, [String; 4])> {
+        self.tiles
+            .iter()
+            .filter(|(p, _)| p[0] >> 4 == cx && p[2] >> 4 == cz)
+            .filter_map(|(p, t)| match t {
+                Tile::Sign { text, .. } => Some((*p, text.clone())),
+                _ => None,
+            })
+            .collect()
     }
 
     /// The `Container` of the open window.
@@ -1726,6 +1805,15 @@ impl Play {
                             ("Delay", Nbt::Short(20)),
                         ],
                     ),
+                    Tile::Sign { text, .. } => (
+                        "Sign",
+                        vec![
+                            ("Text1", Nbt::String(text[0].clone())),
+                            ("Text2", Nbt::String(text[1].clone())),
+                            ("Text3", Nbt::String(text[2].clone())),
+                            ("Text4", Nbt::String(text[3].clone())),
+                        ],
+                    ),
                 };
                 let mut v = vec![
                     ("id", Nbt::String(id.into())),
@@ -1792,6 +1880,18 @@ impl Play {
             "MobSpawner" => Tile::Spawner {
                 mob: t.string("EntityId").unwrap_or("Pig").to_string(),
             },
+            // TileEntitySign.readFromNBT: at most 15 characters a line
+            "Sign" => {
+                let mut text: [String; 4] = Default::default();
+                for (i, l) in text.iter_mut().enumerate() {
+                    let s = t.string(&format!("Text{}", i + 1)).unwrap_or("");
+                    *l = s.chars().take(15).collect();
+                }
+                Tile::Sign {
+                    text,
+                    editable: false,
+                }
+            }
             _ => return,
         };
         self.tiles.insert(pos, tile);
@@ -2011,6 +2111,9 @@ impl Play {
                 Tile::Chest { slots } => format!("C,{},{},{},{}", p[0], p[1], p[2], enc(slots)),
                 Tile::Dispenser { slots } => format!("D,{},{},{},{}", p[0], p[1], p[2], enc(slots)),
                 Tile::Spawner { mob } => format!("S,{},{},{},{}", p[0], p[1], p[2], mob),
+                Tile::Sign { text, .. } => {
+                    format!("G,{},{},{},{}", p[0], p[1], p[2], text.join("\u{1f}"))
+                }
                 Tile::Brewing {
                     slots,
                     brew_time,
@@ -2054,6 +2157,20 @@ impl Play {
             Some([a.parse().ok()?, b.parse().ok()?, c.parse().ok()?])
         };
         match *f.first()? {
+            "G" => {
+                let f: Vec<&str> = line.splitn(5, ',').collect();
+                let mut text: [String; 4] = Default::default();
+                for (i, l) in f.get(4)?.split('\u{1f}').take(4).enumerate() {
+                    text[i] = l.to_string();
+                }
+                self.tiles.insert(
+                    pos(f[1], f[2], f[3])?,
+                    Tile::Sign {
+                        text,
+                        editable: false,
+                    },
+                );
+            }
             "F" if f.len() == 8 => {
                 let s = dec(f[7], 3)?;
                 self.tiles.insert(

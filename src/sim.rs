@@ -66,6 +66,8 @@ pub enum Command {
         mode: i32,
     },
     OpenInventory,
+    /// `C12PacketUpdateSign`
+    UpdateSign([i32; 3], [String; 4]),
     /// `C01PacketChatMessage`: chat text or a command.
     Chat(String),
     /// `C10PacketCreativeInventoryAction`: a `ContainerPlayer` slot set, or
@@ -125,6 +127,10 @@ pub enum Command {
 }
 
 pub enum Event {
+    /// `S36PacketSignEditorOpen`
+    OpenSign([i32; 3]),
+    /// `S33PacketUpdateSign`
+    SignText([i32; 3], [String; 4]),
     /// `S02PacketChat`
     Chat(Vec<crate::chat::ChatMsg>),
     /// `S2BPacketChangeGameState` (reason 3): the game mode changed.
@@ -942,6 +948,10 @@ impl Sim {
                 let t = t.clone();
                 self.chat_message(&t);
             }
+            Command::UpdateSign(p, ref lines) => {
+                let l = lines.clone();
+                self.play.update_sign(p, l);
+            }
             Command::CreativeSlot { slot, stack } => {
                 let mut play = std::mem::replace(&mut self.play, Play::new(GameMode::Survival));
                 play.creative_slot(&mut self.world, slot, stack);
@@ -1440,6 +1450,9 @@ impl Sim {
                     chunk: self.snapshot(key).unwrap(),
                     ready,
                 });
+                for (p, t) in self.play.signs_in(key.0, key.1) {
+                    events.push(Event::SignText(p, t));
+                }
             }
         }
         // Chunks that entered the range or became ready without changing.
@@ -1456,6 +1469,9 @@ impl Sim {
                     chunk: self.snapshot(key).unwrap(),
                     ready,
                 });
+                for (p, t) in self.play.signs_in(key.0, key.1) {
+                    events.push(Event::SignText(p, t));
+                }
             }
         }
         if self.world.save_dir.is_some() && self.world.total_time % AUTOSAVE_TICKS == 0 {
@@ -3238,6 +3254,12 @@ impl Sim {
         if let Some(p) = self.teleport_to.take() {
             self.play.player.0 = p;
             events.push(Event::Teleport(p));
+        }
+        if let Some(p) = self.play.sign_open.take() {
+            events.push(Event::OpenSign(p));
+        }
+        for (p, t) in std::mem::take(&mut self.play.sign_updates) {
+            events.push(Event::SignText(p, t));
         }
         if std::mem::take(&mut self.mode_changed) {
             events.push(Event::GameMode(self.play.mode));

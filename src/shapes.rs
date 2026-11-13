@@ -574,6 +574,21 @@ pub fn selection(get: Get, id: u8, meta: u8, x: i32, y: i32, z: i32) -> Bx {
         block::Shape::Pane => union(&pane(get, id, x, y, z)),
         block::Shape::Door => door(door_full_meta(get, x, y, z, meta)),
         block::Shape::Ladder => ladder(meta),
+        // BlockSign.setBlockBoundsBasedOnState
+        block::Shape::Sign => {
+            if id == block::STANDING_SIGN {
+                [0.25, 0.0, 0.25, 0.75, 1.0, 0.75]
+            } else {
+                let (a, b, t) = (0.28125, 0.78125, 0.125);
+                match meta {
+                    2 => [0.0, a, 1.0 - t, 1.0, b, 1.0],
+                    3 => [0.0, a, 0.0, 1.0, b, t],
+                    4 => [1.0 - t, a, 0.0, 1.0, b, 1.0],
+                    5 => [0.0, a, 0.0, t, b, 1.0],
+                    _ => FULL,
+                }
+            }
+        }
         block::Shape::Rail => {
             let shape = if id == block::RAIL { meta } else { meta & 7 };
             if (2..=5).contains(&shape) {

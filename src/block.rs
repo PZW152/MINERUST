@@ -103,6 +103,8 @@ pub const LADDER: u8 = 65;
 pub const RAIL: u8 = 66;
 pub const STONE_STAIRS: u8 = 67;
 pub const LEVER: u8 = 69;
+pub const STANDING_SIGN: u8 = 63;
+pub const WALL_SIGN: u8 = 68;
 pub const STONE_PRESSURE_PLATE: u8 = 70;
 pub const IRON_DOOR: u8 = 71;
 pub const WOODEN_PRESSURE_PLATE: u8 = 72;
@@ -207,6 +209,8 @@ pub enum Shape {
     SnowLayer,
     Slab,
     Chest,
+    /// `BlockSign` (render type -1: `TileEntitySignRenderer`)
+    Sign,
     Cocoa,
     Torch,
     /// `renderBlockStairs` (render type 10)
@@ -630,6 +634,8 @@ fn build() -> [BlockInfo; 256] {
     t[WOODEN_DOOR as usize] = base(Shape::Door, M::Wood, false);
     t[IRON_DOOR as usize] = base(Shape::Door, M::Iron, false);
     t[LADDER as usize] = base(Shape::Ladder, M::Circuits, false);
+    t[STANDING_SIGN as usize] = base(Shape::Sign, M::Wood, false);
+    t[WALL_SIGN as usize] = base(Shape::Sign, M::Wood, false);
     for id in [RAIL, GOLDEN_RAIL, DETECTOR_RAIL] {
         t[id as usize] = base(Shape::Rail, M::Circuits, false);
     }

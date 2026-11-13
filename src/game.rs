@@ -30,6 +30,8 @@ struct ClientChunk {
     portals: Vec<[i32; 3]>,
     /// Chest blocks (their `TileEntityChest`s).
     chests: Vec<[i32; 3]>,
+    /// Sign blocks (their `TileEntitySign`s).
+    signs: Vec<[i32; 3]>,
     /// Everything that can write into it has been populated.
     ready: bool,
 }
@@ -159,6 +161,8 @@ pub enum Screen {
     Dead,
     /// `GuiChat`
     Chat,
+    /// `GuiEditSign`
+    Sign,
 }
 
 /// What the window wants after an input event.
@@ -228,6 +232,10 @@ pub struct Game {
     cloud_cell: Option<(i32, i32)>,
     /// Server view of the inventory and open window.
     pub view: InvView,
+    /// `TileEntitySign.signText` as the client knows it.
+    sign_texts: HashMap<[i32; 3], [String; 4]>,
+    /// `GuiEditSign`: the sign, its lines, the line edited, `updateCounter`.
+    sign_edit: Option<([i32; 3], [String; 4], usize, i32)>,
     /// `TileEntityChest.prevLidAngle` / `lidAngle` of the chests that move.
     chest_lids: HashMap<[i32; 3], [f32; 2]>,
     /// `GuiNewChat` and the open `GuiChat`.
@@ -536,6 +544,8 @@ impl Game {
             creative: None,
             creative_tab: 0,
             chest_lids: HashMap::new(),
+            sign_texts: HashMap::new(),
+            sign_edit: None,
             third_person: 0,
             loading: 0,
             p_body: [0.0; 2],
@@ -889,7 +899,13 @@ impl Game {
                 Event::Chunk { key, chunk, ready } => {
                     let mut portals = Vec::new();
                     let mut chests = Vec::new();
+                    let mut signs = Vec::new();
                     for (i, &b) in chunk.data.blocks.iter().enumerate() {
+                        if b == block::STANDING_SIGN || b == block::WALL_SIGN {
+                            let (x, z, y) =
+                                ((i >> 12) as i32, (i >> 8 & 15) as i32, (i & 255) as i32);
+                            signs.push([key.0 * 16 + x, y, key.1 * 16 + z]);
+                        }
                         if b == block::END_PORTAL || b == block::CHEST {
                             // index ((x << 4 | z) << 8) | y
                             let (x, z, y) =
@@ -909,6 +925,7 @@ impl Game {
                             ready,
                             portals,
                             chests,
+                            signs,
                         },
                     );
                     // Faces and light on the border depend on the neighbours.
@@ -1099,6 +1116,26 @@ impl Game {
                     self.arrows = a;
                 }
                 Event::Hits(_) => {}
+                Event::SignText(p, t) => {
+                    self.sign_texts.insert(p, t);
+                }
+                Event::OpenSign(p) => {
+                    // NetHandlerPlayClient.handleSignEditorOpen: GuiEditSign
+                    let mut lines: [String; 4] = Default::default();
+                    // MINERUST_SIGN=a|b|c|d prefills the editor (captures)
+                    if let Ok(t) = std::env::var("MINERUST_SIGN") {
+                        for (i, l) in t.split('|').take(4).enumerate() {
+                            lines[i] = l.chars().take(15).collect();
+                        }
+                    }
+                    self.sign_edit = Some((p, lines, 0, 0));
+                    if std::env::var_os("MINERUST_SIGN_DONE").is_some() {
+                        let _ = self.close_sign();
+                        continue;
+                    }
+                    self.screen = Screen::Sign;
+                    self.input = Input::default();
+                }
                 Event::Chat(list) => {
                     for m in list {
                         let t = m.text(&self.lang);
@@ -1469,6 +1506,9 @@ impl Game {
     }
 
     fn tick(&mut self) {
+        if let Some(e) = self.sign_edit.as_mut() {
+            e.3 += 1;
+        }
         if let Some(c) = self.chat_screen.as_mut() {
             c.field.cursor_counter += 1;
         }
@@ -2675,7 +2715,84 @@ impl Game {
     /// Whether typed characters go to a screen (`GuiContainerCreative`'s
     /// search field).
     pub fn text_input(&self) -> bool {
-        self.screen == Screen::Window && self.creative.is_some() || self.screen == Screen::Chat
+        self.screen == Screen::Window && self.creative.is_some()
+            || self.screen == Screen::Chat
+            || self.screen == Screen::Sign
+    }
+
+    /// `GuiEditSign.onGuiClosed`: `C12PacketUpdateSign`.
+    fn close_sign(&mut self) -> Request {
+        if let Some((p, lines, _, _)) = self.sign_edit.take() {
+            self.sign_texts.insert(p, lines.clone());
+            let _ = self.sim.commands.send(Command::UpdateSign(p, lines));
+        }
+        self.screen = Screen::Playing;
+        Request::Grab
+    }
+
+    /// `GuiEditSign.drawScreen`
+    fn draw_sign_editor(&mut self, ui: &mut crate::gui::Ui, m: (f32, f32)) {
+        let Some((p, lines, line, counter)) = self.sign_edit.clone() else {
+            return;
+        };
+        screens::dim_background(ui);
+        let (w, h) = (ui.w, ui.h);
+        ui.centered(
+            self.lang.get("sign.edit"),
+            (w / 2.0).floor(),
+            40.0,
+            0xFFFFFF,
+        );
+        let id = self.world.peek_block(p[0], p[1], p[2]);
+        let meta = self.world.peek_meta(p[0], p[1], p[2]) as i32;
+        let standing = id != block::WALL_SIGN;
+        let sc = render::entities::scale;
+        let mut mm = render::translate((w / 2.0).floor(), 0.0, 50.0);
+        mm = render::mul(&mm, &sc(-93.75, -93.75, -93.75));
+        mm = render::mul(&mm, &render::rot_y(180.0));
+        if standing {
+            mm = render::mul(&mm, &render::rot_y(meta as f32 * 360.0 / 16.0));
+        } else {
+            let a = match meta {
+                2 => 180.0,
+                4 => 90.0,
+                5 => -90.0,
+                _ => 0.0,
+            };
+            mm = render::mul(&mm, &render::rot_y(a));
+        }
+        mm = render::mul(&mm, &render::translate(0.0, -1.0625, 0.0));
+        mm = render::mul(&mm, &render::translate(-0.5, -0.75, -0.5));
+        let edit = (counter / 6 % 2 == 0).then_some(line);
+        let (board, words) =
+            render::sign::sign(&self.atlas, &mm, standing, meta, &lines, edit, [0; 4]);
+        // no lighting in the GUI: full colour, then back to front
+        let mut quads = render::model::gui_quads(board, &render::IDENTITY, None);
+        for q in quads.iter_mut() {
+            for v in q.iter_mut() {
+                v.color = [255; 4];
+            }
+        }
+        for q in words.chunks(4) {
+            quads.push([q[0], q[1], q[2], q[3]]);
+        }
+        for q in render::model::sort_quads(quads).chunks(4) {
+            let mut c = [q[0], q[1], q[2], q[3]];
+            for v in &mut c {
+                v.light = [0, 0, 0, 0];
+            }
+            ui.v.extend_from_slice(&[c[0], c[1], c[2], c[0], c[2], c[3]]);
+        }
+        // the Done button
+        screens::button(
+            ui,
+            (w / 2.0).floor() - 100.0,
+            (h / 4.0).floor() + 120.0,
+            200.0,
+            self.lang.get("gui.done"),
+            true,
+            m,
+        );
     }
 
     fn settings(&self) -> crate::settings::GameSettings {
@@ -2709,6 +2826,28 @@ impl Game {
 
     /// `GuiScreen.keyTyped` for the screens that take text.
     pub fn text_key(&mut self, ch: char, code: i32, ctrl: bool, shift: bool) -> Request {
+        if let Some((_, lines, line, _)) = self.sign_edit.as_mut() {
+            // GuiEditSign.keyTyped
+            let _ = (ctrl, shift);
+            if code == 200 {
+                *line = line.wrapping_sub(1) & 3;
+            }
+            if code == 208 || code == 28 || code == 156 {
+                *line = (*line + 1) & 3;
+            }
+            if code == 14 {
+                lines[*line].pop();
+            }
+            // ChatAllowedCharacters.isAllowedCharacter
+            let allowed = ch != '\u{a7}' && ch >= ' ' && ch != '\u{7f}';
+            if allowed && lines[*line].chars().count() < 15 {
+                lines[*line].push(ch);
+            }
+            if code == 1 {
+                return self.close_sign();
+            }
+            return Request::None;
+        }
         if let Some(mut c) = self.chat_screen.take() {
             let (w, h) = self.gui_size();
             let atlas = self.atlas.clone();
@@ -2816,6 +2955,56 @@ impl Game {
         for (name, at) in sounds {
             let pitch = self.particle_rand.next_float() * 0.1 + 0.9;
             self.sound(name, Some(at), 0.5, pitch);
+        }
+    }
+
+    /// `TileEntitySignRenderer` for the signs within 64 blocks.
+    fn draw_signs(&self, out: &mut Vec<crate::render::mesher::Vertex>, eye: [f64; 3]) {
+        let w = &self.world;
+        for c in w.chunks.values() {
+            for &p in &c.signs {
+                let d = [
+                    p[0] as f64 + 0.5 - eye[0],
+                    p[1] as f64 + 0.5 - eye[1],
+                    p[2] as f64 + 0.5 - eye[2],
+                ];
+                if d[0] * d[0] + d[1] * d[1] + d[2] * d[2] > 64.0 * 64.0 {
+                    continue;
+                }
+                let id = w.peek_block(p[0], p[1], p[2]);
+                if id != block::STANDING_SIGN && id != block::WALL_SIGN {
+                    continue;
+                }
+                let editing = self.sign_edit.as_ref().filter(|e| e.0 == p);
+                let empty: [String; 4] = Default::default();
+                let lines = match editing {
+                    Some(e) => &e.1,
+                    None => self.sign_texts.get(&p).unwrap_or(&empty),
+                };
+                let (sky, blk) = (
+                    w.light(true, p[0], p[1], p[2]),
+                    w.light(false, p[0], p[1], p[2]),
+                );
+                let base = render::translate(
+                    (p[0] as f64 - eye[0]) as f32,
+                    (p[1] as f64 - eye[1]) as f32,
+                    (p[2] as f64 - eye[2]) as f32,
+                );
+                let (board, words) = render::sign::sign(
+                    &self.atlas,
+                    &base,
+                    id == block::STANDING_SIGN,
+                    w.peek_meta(p[0], p[1], p[2]) as i32,
+                    lines,
+                    None,
+                    [(blk << 4) as u8, (sky << 4) as u8, 0, 0],
+                );
+                out.extend(board);
+                for q in words.chunks(4) {
+                    out.extend_from_slice(q);
+                    out.extend_from_slice(&[q[3], q[2], q[1], q[0]]);
+                }
+            }
         }
     }
 
@@ -2989,6 +3178,16 @@ impl Game {
             Screen::Window => Request::None,
             Screen::Paused => self.menu_mouse(button, true),
             Screen::Chat => Request::None,
+            Screen::Sign => {
+                // the Done button
+                let (w, h) = self.gui_size();
+                let (mx, my) = self.gui_mouse();
+                let (bx, by) = ((w / 2.0).floor() - 100.0, (h / 4.0).floor() + 120.0);
+                if button == 0 && mx >= bx && my >= by && mx < bx + 200.0 && my < by + 20.0 {
+                    return self.close_sign();
+                }
+                Request::None
+            }
             Screen::Dead => match self.menu_hit() {
                 Some(MenuAction::BackToGame) => {
                     self.screen = Screen::Playing;
@@ -3678,6 +3877,7 @@ impl Game {
         }
         self.draw_boats(&mut dynamic, eye, partial);
         self.draw_chests(&mut dynamic, eye, partial);
+        self.draw_signs(&mut dynamic, eye);
         self.draw_player(&mut dynamic, partial);
         self.draw_orbs(&mut translucent, eye, partial);
         if let Some(at) = self.atlas.mob_tex("arrow") {
@@ -4252,6 +4452,7 @@ impl Game {
                     c.draw(&mut ui);
                 }
             }
+            Screen::Sign => self.draw_sign_editor(&mut ui, m),
             Screen::Playing => {}
         }
         let ui_verts = ui.v;

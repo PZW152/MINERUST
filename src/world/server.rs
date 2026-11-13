@@ -2001,6 +2001,29 @@ impl ServerWorld {
     }
 
     /// `BlockTorch.onBlockAdded` + `dropTorchIfCantStay`
+    /// `BlockSign.onNeighborBlockChange`: off when its support is not solid.
+    fn sign_neighbour(&mut self, id: u8, x: i32, y: i32, z: i32) {
+        let solid = |w: &mut ServerWorld, x: i32, y: i32, z: i32| w.material(x, y, z).is_solid();
+        let drop = if id == block::STANDING_SIGN {
+            !solid(self, x, y - 1, z)
+        } else {
+            match self.meta(x, y, z) {
+                2 => !solid(self, x, y, z + 1),
+                3 => !solid(self, x, y, z - 1),
+                4 => !solid(self, x + 1, y, z),
+                5 => !solid(self, x - 1, y, z),
+                _ => true,
+            }
+        };
+        if drop {
+            self.gen_entities.push(GenEntity::Item {
+                pos: [x as f64 + 0.5, y as f64 + 0.5, z as f64 + 0.5],
+                stack: crate::item::Stack::new(323, 0, 1),
+            });
+            self.set_block(x, y, z, block::AIR, 0, 3);
+        }
+    }
+
     fn torch_added(&mut self, id: u8, x: i32, y: i32, z: i32) {
         let nc = |w: &mut ServerWorld, x: i32, y: i32, z: i32| {
             block::info(w.block(x, y, z)).normal_cube()
@@ -2336,6 +2359,7 @@ impl ServerWorld {
             block::TRIPWIRE => super::tripwire::wire_neighbour(self, x, y, z),
             block::FIRE => self.fire_neighbour(x, y, z),
             block::PORTAL => self.portal_neighbour(x, y, z),
+            block::STANDING_SIGN | block::WALL_SIGN => self.sign_neighbour(id, x, y, z),
             block::WOODEN_DOOR | block::IRON_DOOR => self.door_neighbour(id, x, y, z, src),
             block::TRIPWIRE_HOOK => super::tripwire::hook_neighbour(self, x, y, z, src),
             block::WATER | block::LAVA => {
