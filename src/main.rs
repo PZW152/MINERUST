@@ -1110,7 +1110,9 @@ impl ApplicationHandler for App {
                         let elapsed = self.started.elapsed().as_secs_f64();
                         if self.shot_taken.is_none()
                             && elapsed >= *wait
-                            && (g.idle() || elapsed >= *wait + 60.0)
+                            && (g.idle()
+                                || elapsed >= *wait + 60.0
+                                || std::env::var_os("MINERUST_NOWAIT").is_some())
                         {
                             println!("Meshes: {}", g.loaded_meshes());
                             g.screenshot = Some(path.clone());

@@ -170,6 +170,8 @@ pub enum Screen {
     /// A screen not ported yet with its title (Achievements, Statistics,
     /// Resource Packs, Snooper, Chat Settings, Twitch).
     Todo(Basic, String),
+    /// `ScreenChatOptions` and the y of its "Multiplayer Settings" title.
+    ChatOptions(Basic, f32),
 }
 
 /// A screen of plain and option buttons.
@@ -236,6 +238,7 @@ impl Menu {
             "sounds" => Screen::Sounds(b()),
             "controls" => Screen::Controls(Controls::new()),
             "language" => Screen::Language(LanguageScreen::new()),
+            "chat" => Screen::ChatOptions(b(), 0.0),
             _ => return,
         };
         self.stack.push(s);
@@ -306,6 +309,7 @@ impl Menu {
             Screen::Multiplayer(s) => &mut s.buttons,
             Screen::Options(s) | Screen::Sounds(s) | Screen::Ingame(s) => &mut s.buttons,
             Screen::Todo(s, _) => &mut s.buttons,
+            Screen::ChatOptions(s, _) => &mut s.buttons,
             Screen::Video(s) => &mut s.buttons,
             Screen::Controls(s) => &mut s.buttons,
             Screen::Language(s) => &mut s.buttons,
@@ -415,6 +419,16 @@ impl Menu {
             Screen::Todo(_, title) => {
                 default_background(ui, ctx.in_world);
                 ui.centered(title, w / 2.0, 15.0, 0xFFFFFF);
+            }
+            Screen::ChatOptions(_, sep) => {
+                default_background(ui, ctx.in_world);
+                ui.centered(ctx.lang.get("options.chat.title"), w / 2.0, 20.0, 0xFFFFFF);
+                ui.centered(
+                    ctx.lang.get("options.multiplayer.title"),
+                    w / 2.0,
+                    *sep + 7.0,
+                    0xFFFFFF,
+                );
             }
             Screen::Video(s) => {
                 default_background(ui, ctx.in_world);
@@ -822,11 +836,11 @@ impl Menu {
                         ctx,
                     ),
                     103 => self.open(
-                        Screen::Todo(
+                        Screen::ChatOptions(
                             Basic {
                                 buttons: Vec::new(),
                             },
-                            lang.get("options.chat.title").to_string(),
+                            0.0,
                         ),
                         ui,
                         ctx,
@@ -863,6 +877,22 @@ impl Menu {
                     ),
                     200 => return self.back(ui, ctx),
                     _ => {}
+                }
+            }
+            Screen::ChatOptions(c, _) => {
+                if b.id < 100 {
+                    if let Kind::Option(o) = b.kind {
+                        ctx.settings.set_option(o, 1);
+                        let label = ctx.settings.label(o, lang);
+                        if let Some(x) = c.buttons.iter_mut().find(|x| x.id == b.id) {
+                            x.label = label;
+                        }
+                        return Action::Settings;
+                    }
+                }
+                if b.id == 200 {
+                    ctx.settings.save();
+                    return self.back(ui, ctx);
                 }
             }
             Screen::Sounds(_) | Screen::Todo(..) => {
@@ -1263,6 +1293,42 @@ fn init(s: &mut Screen, ui: &Ui, ctx: &mut Ctx, w: f32, h: f32) {
         }
         Screen::Todo(b, _) => {
             b.buttons = vec![Button::wide(200, cx - 100.0, h - 27.0, t("gui.done"))];
+        }
+        Screen::ChatOptions(b, sep) => {
+            // ScreenChatOptions.initGui
+            let h6 = (h as i32 / 6) as f32;
+            let mut v = Vec::new();
+            let mut i = 0usize;
+            let place = |i: usize| {
+                (
+                    cx - 155.0 + (i % 2) as f32 * 160.0,
+                    h6 + 24.0 * (i >> 1) as f32,
+                )
+            };
+            for o in [
+                Opt::ChatVisibility,
+                Opt::ChatColor,
+                Opt::ChatLinks,
+                Opt::ChatOpacity,
+                Opt::ChatLinksPrompt,
+                Opt::ChatScale,
+                Opt::ChatHeightFocused,
+                Opt::ChatHeightUnfocused,
+                Opt::ChatWidth,
+            ] {
+                let (x, y) = place(i);
+                v.push(Button::option(x, y, o, ctx.settings, lang));
+                i += 1;
+            }
+            if i % 2 == 1 {
+                i += 1;
+            }
+            *sep = h6 + 24.0 * (i >> 1) as f32;
+            i += 2;
+            let (x, y) = place(i);
+            v.push(Button::option(x, y, Opt::ShowCape, ctx.settings, lang));
+            v.push(Button::wide(200, cx - 100.0, h6 + 168.0, t("gui.done")));
+            b.buttons = v;
         }
     }
 }

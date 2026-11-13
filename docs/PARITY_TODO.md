@@ -22,7 +22,16 @@
       客戶端肢體擺動
 - [ ] 方塊破壞時容器內容物的散落方式
 - [ ] 特殊配方（皮甲染色、煙火、書本複製、地圖擴大）需要物品 NBT
-- [ ] 背包玩家模型上的盔甲與手持物品、物品附魔光澤
+- [x] 創造模式物品欄（12 個分頁、搜尋、捲動、背包分頁與垃圾桶、`C10PacketCreativeInventoryAction`）
+- [x] 聊天（`GuiNewChat` / `GuiChat`）與指令：help、give、time、gamemode、tp、weather、toggledownfall、kill、
+      effect、xp、seed、difficulty、clear、setblock、spawnpoint、setworldspawn、say、me
+- [x] F5 第三人稱（前後兩種）、F1 隱藏介面、遊戲中的按鍵全部改讀按鍵設定
+- [x] 玩家模型（第三人稱與背包）上的盔甲層、手持物品，`ModelBiped.setRotationAngles` 完整移植；右鍵穿上盔甲；南瓜頭的視野遮罩
+- [x] 箱子：`TileEntityChestRenderer`（單／大箱子、開蓋動畫與音效、聖誕節材質），箱子物品圖示
+- [x] 聊天設定畫面、載入畫面（`LoadingScreenRenderer` / `GuiDownloadTerrain`）、發射器介面
+- [ ] 物品附魔光澤、手持箱子與掉落箱子的模型
+- [ ] 指令：summon、enchant、gamerule、playsound、spreadplayers、testfor 等，Tab 自動補完
+- [ ] 統計與成就（`StatList` / `AchievementList`）與其畫面；資源包、使用統計（Snooper）、直播畫面
 - [x] 船：`EntityBoat` 兩端物理（客戶端預測、`isBoatEmpty`）、`ItemBoat`、`interactFirst` / `mountEntity` /
       `dismountEntity`、`updateRiderPosition`、撞毀成木材與木棍、摔落、`EntityTrackerEntry` 封包（`S0E` / `S14` / `S18` /
       `S12` / `S1C` / `S1B`）、`getBoundingBox` 讓所有實體與船相撞、`RenderBoat`、「按 LSHIFT 下來」提示
@@ -100,5 +109,4 @@
 
 方塊破壞粒子以外的全部粒子類型核對、`RenderGlobal` 的雲層 fancy 模式、半透明在區塊內排序、物品附魔光澤、
 生物裝備渲染、名牌、影子、`EntityRenderer` 的視角晃動與受傷傾斜、第三人稱視角、
-GUI：創造模式物品欄、聊天與指令、告示牌、附魔台、鐵砧、信標、漏斗、馬、村民交易、書、成就與統計、資源包、
-材質包以外的其餘設定子畫面、載入畫面
+GUI：告示牌、附魔台、鐵砧、信標、漏斗、投擲器（等方塊）、馬、村民交易、書、成就與統計、資源包、使用統計

@@ -785,6 +785,15 @@ impl Play {
                     self.inv_dirty = true;
                     return true;
                 }
+                block::DISPENSER => {
+                    // BlockDispenser.onBlockActivated: displayGUIDispenser
+                    self.tiles
+                        .entry(target)
+                        .or_insert(Tile::Dispenser { slots: [None; 9] });
+                    self.open = Open::Dispenser(target);
+                    self.inv_dirty = true;
+                    return true;
+                }
                 block::BREWING_STAND => {
                     self.tiles.entry(target).or_insert(Tile::Brewing {
                         slots: [None; 4],

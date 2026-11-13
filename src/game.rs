@@ -240,6 +240,9 @@ pub struct Game {
     p_yaw: [f32; 2],
     p_pitch: [f32; 2],
     p_limb: [f32; 3],
+    /// 0 while the world is generated (`LoadingScreenRenderer`), 1 while
+    /// `GuiDownloadTerrain` waits for the player's chunk, 2 in the game.
+    pub loading: u8,
     /// `gameSettings.thirdPersonView` and `hideGUI`.
     pub third_person: i32,
     pub hide_gui: bool,
@@ -534,6 +537,7 @@ impl Game {
             creative_tab: 0,
             chest_lids: HashMap::new(),
             third_person: 0,
+            loading: 0,
             p_body: [0.0; 2],
             p_yaw: [0.0; 2],
             p_pitch: [0.0; 2],
@@ -607,7 +611,6 @@ impl Game {
         self.renderer.mesh_count()
     }
 
-    /// True once every chunk in view has an up-to-date mesh.
     /// MINERUST_CLICKS=slot:button:mode,...  window clicks for captures
     fn send_start_clicks(&mut self) {
         if let Ok(list) = std::env::var("MINERUST_CLICKS") {
@@ -678,6 +681,7 @@ impl Game {
         }
     }
 
+    /// True once every chunk in view has an up-to-date mesh.
     pub fn idle(&self) -> bool {
         let side = (self.render_distance * 2 + 1) as usize;
         self.in_flight == 0 && self.dirty.is_empty() && self.renderer.mesh_count() >= side * side
@@ -920,8 +924,10 @@ impl Game {
                     self.dirty.remove(&key);
                 }
                 Event::Dimension { dim, pos, yaw } => {
-                    // NetHandlerPlayClient.handleRespawn: a new world
+                    // NetHandlerPlayClient.handleRespawn: a new world, and
+                    // GuiDownloadTerrain until the player's chunk is there
                     self.dim = dim;
+                    self.loading = 1;
                     let keys: Vec<(i32, i32)> = self.world.chunks.keys().copied().collect();
                     for key in keys {
                         self.world.chunks.remove(&key);
@@ -3934,7 +3940,7 @@ impl Game {
         }
         let mut hand: Vec<crate::render::mesher::Vertex> = Vec::new();
         // EntityRenderer.renderHand: first person, GUI shown
-        if !self.stats.dead && self.third_person == 0 && !self.hide_gui {
+        if !self.stats.dead && self.third_person == 0 && !self.hide_gui && self.loading == 2 {
             let (lx, ly, lz) = (
                 math::floor_double(eye[0]),
                 math::floor_double(eye[1]),
@@ -3972,6 +3978,18 @@ impl Game {
         );
         // updateCameraAndRender: no GuiIngame with hideGUI and no screen
         let hud_hidden = self.hide_gui && self.screen == Screen::Playing;
+        if self.loading < 2 {
+            // the integrated server's spawn area first, then the chunks
+            // around the player drawn
+            let (cx, cz) = self.player_chunk();
+            let near = || (-2..=2).flat_map(move |dx| (-2..=2).map(move |dz| (cx + dx, cz + dz)));
+            if self.loading == 0 && near().all(|k| self.world.chunks.contains_key(&k)) {
+                self.loading = 1;
+            }
+            if self.loading == 1 && near().all(|k| self.renderer.has_mesh(k)) {
+                self.loading = 2;
+            }
+        }
         // ItemRenderer.renderWarpedTextureOverlay: the water texture, repeated four
         // times across the screen and scrolled by the view direction.
         if eye_mat == Material::Water {
@@ -4084,6 +4102,36 @@ impl Game {
         }
         if hud_hidden {
             ui.v.clear();
+        }
+        if self.loading < 2 {
+            ui.v.clear();
+            screens::dirt_background(&mut ui);
+            let (w, h) = (ui.w, ui.h);
+            if self.loading == 0 {
+                // LoadingScreenRenderer: menu.loadingLevel, menu.generatingTerrain
+                let title = self.lang.get("menu.loadingLevel").to_string();
+                let msg = self.lang.get("menu.generatingTerrain").to_string();
+                let tw = ui.text_width(&title);
+                ui.text(
+                    &title,
+                    ((w - tw) / 2.0).floor(),
+                    (h / 2.0).floor() - 4.0 - 16.0,
+                    0xFFFFFF,
+                    true,
+                );
+                let mw = ui.text_width(&msg);
+                ui.text(
+                    &msg,
+                    ((w - mw) / 2.0).floor(),
+                    (h / 2.0).floor() - 4.0 + 8.0,
+                    0xFFFFFF,
+                    true,
+                );
+            } else {
+                // GuiDownloadTerrain
+                let t = self.lang.get("multiplayer.downloadingTerrain").to_string();
+                ui.centered(&t, (w / 2.0).floor(), (h / 2.0).floor() - 50.0, 0xFFFFFF);
+            }
         }
         if self.show_debug {
             let p = &self.player;
@@ -4251,7 +4299,7 @@ impl Game {
         }
         let frame = Frame {
             end_portals: &end_portals,
-            crosshair: self.screen == Screen::Playing && !self.hide_gui,
+            crosshair: self.screen == Screen::Playing && !self.hide_gui && self.loading == 2,
             dynamic: &dynamic,
             crack: &crack,
             hand: &hand,
@@ -4469,6 +4517,14 @@ impl Game {
 
     /// The game side of a changed `options.txt`.
     pub fn apply_settings(&mut self) {
+        // GameSettings.setOptionFloatValue: the chat options refresh the chat
+        {
+            let (w, h) = self.gui_size();
+            let atlas = self.atlas.clone();
+            let ui = crate::gui::Ui::new(&atlas, w, h);
+            let st = self.settings();
+            self.chat.refresh(&ui, &st);
+        }
         let Some(sh) = &self.shell else { return };
         let s = &sh.settings;
         // IntegratedServer.tick follows renderDistanceChunks
