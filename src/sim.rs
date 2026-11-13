@@ -25,6 +25,8 @@ const LOADS_PER_TICK: usize = 8;
 /// `MinecraftServer` autosave interval.
 const AUTOSAVE_TICKS: i64 = 900;
 
+#[path = "commands.rs"]
+mod commands;
 #[path = "sim_vehicles.rs"]
 mod vehicles;
 
@@ -64,6 +66,8 @@ pub enum Command {
         mode: i32,
     },
     OpenInventory,
+    /// `C01PacketChatMessage`: chat text or a command.
+    Chat(String),
     /// `C10PacketCreativeInventoryAction`: a `ContainerPlayer` slot set, or
     /// (slot below 0) a stack thrown.
     CreativeSlot {
@@ -121,6 +125,10 @@ pub enum Command {
 }
 
 pub enum Event {
+    /// `S02PacketChat`
+    Chat(Vec<crate::chat::ChatMsg>),
+    /// `S2BPacketChangeGameState` (reason 3): the game mode changed.
+    GameMode(GameMode),
     /// A chunk appeared or changed. `ready` means nothing unpopulated can
     /// still write into it, so it may be meshed.
     Chunk {
@@ -336,6 +344,10 @@ pub struct Sim {
     sent_moving: bool,
     /// An ender pearl landed: the player is moved there.
     teleport_to: Option<[f64; 3]>,
+    /// Chat lines for the client (`S02PacketChat`).
+    chat_out: Vec<crate::chat::ChatMsg>,
+    /// `/gamemode` ran: the client is told the new mode.
+    mode_changed: bool,
     /// Events from commands, sent with the tick's.
     vehicle_events: Vec<Event>,
     /// Sounds from vehicles outside their tick.
@@ -544,6 +556,8 @@ impl Sim {
             push_add: [0.0; 3],
             using_changed: false,
             teleport_to: None,
+            chat_out: Vec::new(),
+            mode_changed: false,
             vehicle_events: Vec::new(),
             vehicle_sounds: Vec::new(),
             riding: None,
@@ -923,6 +937,10 @@ impl Sim {
                     self.play.inv.selected = i;
                     self.play.inv_dirty = true;
                 }
+            }
+            Command::Chat(ref t) => {
+                let t = t.clone();
+                self.chat_message(&t);
             }
             Command::CreativeSlot { slot, stack } => {
                 let mut play = std::mem::replace(&mut self.play, Play::new(GameMode::Survival));
@@ -3206,6 +3224,12 @@ impl Sim {
         if let Some(p) = self.teleport_to.take() {
             self.play.player.0 = p;
             events.push(Event::Teleport(p));
+        }
+        if std::mem::take(&mut self.mode_changed) {
+            events.push(Event::GameMode(self.play.mode));
+        }
+        if !self.chat_out.is_empty() {
+            events.push(Event::Chat(std::mem::take(&mut self.chat_out)));
         }
         let splashes = std::mem::take(&mut self.mobs.splashes);
         if !splashes.is_empty() {

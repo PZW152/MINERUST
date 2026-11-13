@@ -5,6 +5,7 @@
 mod assets;
 mod audio;
 mod block;
+mod chat;
 mod compat;
 mod container;
 mod crafting;

@@ -5,7 +5,7 @@ src = sys.argv[1] if len(sys.argv) > 1 else 'tools/items_1710.txt'
 out = sys.argv[2] if len(sys.argv) > 2 else 'src/item_data.rs'
 
 RAR = {'common': 0, 'uncommon': 1, 'rare': 2, 'epic': 3}
-names, tabs, creative, search, ench, eggs, english = [], [], [], [], [], [], []
+names, tabs, creative, search, ench, eggs, english, reg, breg = [], [], [], [], [], [], [], [], []
 
 
 def stack(f):
@@ -38,6 +38,12 @@ for line in open(src, encoding='utf-8'):
     elif k == 'X':
         f = rest.split()
         ench.append('(%s, "%s", %s)' % (f[0], f[1], f[2]))
+    elif k == 'R':
+        f = rest.split()
+        reg.append('(%s, "%s")' % (f[0], f[1]))
+    elif k == 'B':
+        f = rest.split()
+        breg.append('(%s, "%s")' % (f[0], f[1]))
     elif k == 'E':
         f = rest.split()
         eggs.append('(%s, "%s")' % (f[0], f[1]))
@@ -68,6 +74,12 @@ for e in ench:
     w.write('    %s,\n' % e)
 w.write('];\n\n/// `EntityList.entityEggs`: `(id, getStringFromID)`.\npub const EGGS: &[(i32, &str)] = &[\n')
 for e in eggs:
+    w.write('    %s,\n' % e)
+w.write('];\n\n/// `Item.itemRegistry` names.\npub const ITEM_NAMES: &[(u16, &str)] = &[\n')
+for e in reg:
+    w.write('    %s,\n' % e)
+w.write('];\n\n/// `Block.blockRegistry` names.\npub const BLOCK_NAMES: &[(u16, &str)] = &[\n')
+for e in breg:
     w.write('    %s,\n' % e)
 w.write('];\n')
 w.close()

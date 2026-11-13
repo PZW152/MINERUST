@@ -173,8 +173,14 @@ impl Lang {
 
     /// `ChatComponentTranslation`: arguments that are keys are translated.
     pub fn format(&self, key: &str, args: &[String]) -> String {
+        let args: Vec<String> = args.iter().map(|a| self.get(a).to_string()).collect();
+        self.format_raw(key, &args)
+    }
+
+    /// `ChatComponentTranslation` with its arguments as given.
+    pub fn format_raw(&self, key: &str, args: &[String]) -> String {
         let pattern = self.get(key);
-        let args: Vec<&str> = args.iter().map(|a| self.get(a)).collect();
+        let args: Vec<&str> = args.iter().map(|a| a.as_str()).collect();
         let mut out = String::new();
         let mut next = 0usize;
         let b = pattern.as_bytes();

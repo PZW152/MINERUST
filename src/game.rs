@@ -157,6 +157,8 @@ pub enum Screen {
     Window,
     Paused,
     Dead,
+    /// `GuiChat`
+    Chat,
 }
 
 /// What the window wants after an input event.
@@ -228,6 +230,19 @@ pub struct Game {
     pub view: InvView,
     /// `TileEntityChest.prevLidAngle` / `lidAngle` of the chests that move.
     chest_lids: HashMap<[i32; 3], [f32; 2]>,
+    /// `GuiNewChat` and the open `GuiChat`.
+    pub chat: crate::chat::ChatGui,
+    chat_screen: Option<crate::chat::ChatScreen>,
+    /// The local player as `RenderPlayer` sees it: `renderYawOffset`,
+    /// `rotationYaw`, `rotationPitch` (previous, current) and the limb swing
+    /// (`limbSwing`, `limbSwingAmount`, `prevLimbSwingAmount`).
+    p_body: [f32; 2],
+    p_yaw: [f32; 2],
+    p_pitch: [f32; 2],
+    p_limb: [f32; 3],
+    /// `gameSettings.thirdPersonView` and `hideGUI`.
+    pub third_person: i32,
+    pub hide_gui: bool,
     /// `GuiContainer` of the open window.
     gui: crate::gui_container::GuiContainer,
     /// `GuiContainerCreative` while it is open, and its last tab.
@@ -518,6 +533,14 @@ impl Game {
             creative: None,
             creative_tab: 0,
             chest_lids: HashMap::new(),
+            third_person: 0,
+            p_body: [0.0; 2],
+            p_yaw: [0.0; 2],
+            p_pitch: [0.0; 2],
+            p_limb: [0.0; 3],
+            chat: Default::default(),
+            chat_screen: None,
+            hide_gui: false,
             sent_clicks: 0,
             start_use: None,
             client_drag: Default::default(),
@@ -609,6 +632,14 @@ impl Game {
                 "inventory" => {
                     let _ = self.sim.commands.send(Command::OpenInventory);
                     self.screen = Screen::Window;
+                }
+                // chat  GuiChat open
+                "chat" => {
+                    let _ = self.open_chat("/give ");
+                }
+                // view:N  thirdPersonView
+                o if o.starts_with("view:") => {
+                    self.third_person = o[5..].parse().unwrap_or(0);
                 }
                 // creative:N  GuiContainerCreative on tab N
                 o if o.starts_with("creative") => {
@@ -1062,6 +1093,19 @@ impl Game {
                     self.arrows = a;
                 }
                 Event::Hits(_) => {}
+                Event::Chat(list) => {
+                    for m in list {
+                        let t = m.text(&self.lang);
+                        self.print_chat(&t);
+                    }
+                }
+                Event::GameMode(m) => {
+                    self.mode = m;
+                    self.player.allow_flying = m == GameMode::Creative;
+                    if m != GameMode::Creative {
+                        self.player.flying = false;
+                    }
+                }
                 Event::PlayerStats(v) => {
                     self.stats.apply_view(&v);
                     self.player.speed_attr = v.speed;
@@ -1300,7 +1344,121 @@ impl Game {
         v
     }
 
+    /// `EntityLivingBase.onUpdate` / `moveEntityWithHeading` for the local
+    /// player's model: the body turns towards the movement, the limbs swing.
+    fn tick_player_model(&mut self) {
+        let wrap = |a: f32| {
+            let mut a = a % 360.0;
+            if a >= 180.0 {
+                a -= 360.0;
+            }
+            if a < -180.0 {
+                a += 360.0;
+            }
+            a
+        };
+        let p = &self.player;
+        self.p_body[0] = self.p_body[1];
+        self.p_yaw = [self.p_yaw[1], p.yaw];
+        self.p_pitch = [self.p_pitch[1], p.pitch];
+        while self.p_yaw[1] - self.p_yaw[0] < -180.0 {
+            self.p_yaw[0] -= 360.0;
+        }
+        while self.p_yaw[1] - self.p_yaw[0] >= 180.0 {
+            self.p_yaw[0] += 360.0;
+        }
+        let (dx, dz) = (p.pos[0] - p.prev_pos[0], p.pos[2] - p.prev_pos[2]);
+        let d2 = (dx * dx + dz * dz) as f32;
+        let mut target = self.p_body[1];
+        if d2 > 0.0025000002 {
+            target = (dz.atan2(dx) as f32) * 180.0 / std::f32::consts::PI - 90.0;
+        }
+        if self.swing_f > 0.0 {
+            target = p.yaw;
+        }
+        let mut b = self.p_body[1];
+        b += wrap(target - b) * 0.3;
+        let k = wrap(p.yaw - b).clamp(-75.0, 75.0);
+        b = p.yaw - k;
+        if k * k > 2500.0 {
+            b += k * 0.2;
+        }
+        self.p_body[1] = b;
+        while self.p_body[1] - self.p_body[0] < -180.0 {
+            self.p_body[0] -= 360.0;
+        }
+        while self.p_body[1] - self.p_body[0] >= 180.0 {
+            self.p_body[0] += 360.0;
+        }
+        // limbSwingAmount
+        self.p_limb[2] = self.p_limb[1];
+        let mut f = (d2.sqrt() * 4.0).min(1.0);
+        if p.flying {
+            f = (((dx * dx + (p.pos[1] - p.prev_pos[1]).powi(2) + dz * dz) as f32).sqrt() * 4.0)
+                .min(1.0);
+            f = f.min(1.0);
+        }
+        self.p_limb[1] += (f - self.p_limb[1]) * 0.4;
+        self.p_limb[0] += self.p_limb[1];
+    }
+
+    /// `RenderPlayer` for the local player in third person.
+    fn draw_player(&self, out: &mut Vec<crate::render::mesher::Vertex>, partial: f32) {
+        if self.third_person == 0 || self.stats.dead {
+            return;
+        }
+        let lerp = |a: [f32; 2]| a[0] + (a[1] - a[0]) * partial;
+        let body = lerp(self.p_body);
+        let yaw = lerp(self.p_yaw);
+        let pitch = lerp(self.p_pitch);
+        let st = self.equipped;
+        let action = self
+            .using
+            .map(|(u, _)| crate::item_use::action(u.id, u.meta));
+        let pose = crate::render::model::Pose {
+            limb_swing: self.p_limb[0] - self.p_limb[1] * (1.0 - partial),
+            limb_amount: (self.p_limb[2] + (self.p_limb[1] - self.p_limb[2]) * partial).min(1.0),
+            age: self.ticks as f32 + partial,
+            head_yaw: yaw - body,
+            head_pitch: pitch,
+            swing: self.prev_swing_f + (self.swing_f - self.prev_swing_f) * partial,
+            held_right: match (st, action) {
+                (Some(_), Some(crate::item_use::Action::Block)) => 3,
+                (Some(_), _) => 1,
+                _ => 0,
+            },
+            sneak: self.player.sneaking,
+            riding: self.player.riding,
+            aimed_bow: matches!(action, Some(crate::item_use::Action::Bow)),
+        };
+        let p = self.player.pos;
+        let (lx, ly, lz) = (
+            math::floor_double(p[0]),
+            math::floor_double(p[1] - 1.62 + 1.8 * 0.66),
+            math::floor_double(p[2]),
+        );
+        let (sky, blk) = (
+            self.world.light(true, lx, ly, lz),
+            self.world.light(false, lx, ly, lz),
+        );
+        let m = crate::render::model::player_matrix([0.0, -1.62, 0.0], body);
+        let mut d = crate::render::model::Draw {
+            out,
+            tex: self.atlas.skin_tex(),
+            light: [(blk << 4) as u8, (sky << 4) as u8, 0, 0],
+            tint: if self.stats.hurt_time > 0 {
+                [1.0, 0.6, 0.6, 1.0]
+            } else {
+                [1.0; 4]
+            },
+        };
+        crate::render::model::player_world(&mut d, &m, &pose);
+    }
+
     fn tick(&mut self) {
+        if let Some(c) = self.chat_screen.as_mut() {
+            c.field.cursor_counter += 1;
+        }
         self.tick_chests();
         if let Some(c) = self.creative.as_mut() {
             c.tick();
@@ -1311,6 +1469,14 @@ impl Game {
             }
         }
         self.tick_mobs();
+        if self.ticks == 40 {
+            // MINERUST_CHAT=line;line  chat lines sent once the world is up
+            if let Ok(list) = std::env::var("MINERUST_CHAT") {
+                for l in list.split(';') {
+                    let _ = self.sim.commands.send(Command::Chat(l.to_string()));
+                }
+            }
+        }
         if self.ticks >= 60 {
             if let Some(t) = self.start_use.take() {
                 let _ = self.sim.commands.send(Command::Use {
@@ -1401,6 +1567,7 @@ impl Game {
             }
             self.player.tick(&self.world, &input);
             self.update_rider();
+            self.tick_player_model();
             // Entity.moveEntity: a step sound per block walked.
             if self.riding.is_none()
                 && self.player.on_ground
@@ -2495,11 +2662,68 @@ impl Game {
     /// Whether typed characters go to a screen (`GuiContainerCreative`'s
     /// search field).
     pub fn text_input(&self) -> bool {
-        self.screen == Screen::Window && self.creative.is_some()
+        self.screen == Screen::Window && self.creative.is_some() || self.screen == Screen::Chat
+    }
+
+    fn settings(&self) -> crate::settings::GameSettings {
+        self.shell
+            .as_ref()
+            .map_or_else(crate::settings::GameSettings::default, |s| {
+                s.settings.clone()
+            })
+    }
+
+    /// `displayGuiScreen(new GuiChat(text))`
+    fn open_chat(&mut self, text: &str) -> Request {
+        let (w, h) = self.gui_size();
+        let atlas = self.atlas.clone();
+        let ui = crate::gui::Ui::new(&atlas, w, h);
+        self.chat_screen = Some(crate::chat::ChatScreen::new(&ui, &self.chat, text));
+        self.screen = Screen::Chat;
+        self.input = Input::default();
+        Request::Release
+    }
+
+    /// `GuiNewChat.printChatMessage`
+    pub fn print_chat(&mut self, text: &str) {
+        let (w, h) = self.gui_size();
+        let atlas = self.atlas.clone();
+        let ui = crate::gui::Ui::new(&atlas, w, h);
+        let st = self.settings();
+        let open = self.screen == Screen::Chat;
+        self.chat.print(&ui, &st, text, self.ticks as i32, open);
     }
 
     /// `GuiScreen.keyTyped` for the screens that take text.
     pub fn text_key(&mut self, ch: char, code: i32, ctrl: bool, shift: bool) -> Request {
+        if let Some(mut c) = self.chat_screen.take() {
+            let (w, h) = self.gui_size();
+            let atlas = self.atlas.clone();
+            let ui = crate::gui::Ui::new(&atlas, w, h);
+            let st = self.settings();
+            let mut clip = self
+                .shell
+                .as_ref()
+                .map_or_else(String::new, |s| s.clipboard.clone());
+            let r = c.key(&ui, &mut self.chat, &st, ch, code, ctrl, shift, &mut clip);
+            if let Some(s) = self.shell.as_mut() {
+                s.clipboard = clip;
+            }
+            match r {
+                crate::chat::ChatKey::None => {
+                    self.chat_screen = Some(c);
+                    return Request::None;
+                }
+                crate::chat::ChatKey::Send(t) => {
+                    let _ = self.sim.commands.send(Command::Chat(t));
+                }
+                crate::chat::ChatKey::Close => {}
+            }
+            // onGuiClosed
+            self.chat.reset_scroll();
+            self.screen = Screen::Playing;
+            return Request::Grab;
+        }
         if let Some(mut c) = self.creative.take() {
             let (dims, mouse, keys) = self.creative_input();
             let atlas = self.atlas.clone();
@@ -2751,6 +2975,7 @@ impl Game {
             }
             Screen::Window => Request::None,
             Screen::Paused => self.menu_mouse(button, true),
+            Screen::Chat => Request::None,
             Screen::Dead => match self.menu_hit() {
                 Some(MenuAction::BackToGame) => {
                     self.screen = Screen::Playing;
@@ -2785,17 +3010,6 @@ impl Game {
                 let _ = c;
                 self.menu_key('\0', crate::settings::lwjgl_code(code))
             }
-            (Screen::Playing, K::KeyE) => {
-                self.screen = Screen::Window;
-                self.input = Input::default();
-                if self.mode == GameMode::Creative {
-                    // GuiInventory.initGui hands over to GuiContainerCreative
-                    self.open_creative();
-                } else {
-                    let _ = self.sim.commands.send(Command::OpenInventory);
-                }
-                Request::Release
-            }
             (Screen::Window, _) if self.creative.is_some() => Request::None,
             (Screen::Window, _) => {
                 let lw = crate::settings::lwjgl_code(code);
@@ -2806,34 +3020,69 @@ impl Game {
                     Request::None
                 }
             }
-            (Screen::Playing, K::KeyQ) => {
-                let _ = self.sim.commands.send(Command::DropHeld { all: ctrl });
-                self.swing_item();
-                Request::None
-            }
-            (Screen::Playing, _) => {
-                let digits = [
-                    K::Digit1,
-                    K::Digit2,
-                    K::Digit3,
-                    K::Digit4,
-                    K::Digit5,
-                    K::Digit6,
-                    K::Digit7,
-                    K::Digit8,
-                    K::Digit9,
-                ];
-                if let Some(i) = digits.iter().position(|d| *d == code) {
-                    let _ = self.sim.commands.send(Command::Select(i));
-                    self.view.inv.selected = i;
-                }
-                Request::None
-            }
+            (Screen::Playing, _) => self.game_key(crate::settings::lwjgl_code(code), ctrl),
             _ => Request::None,
         }
     }
 
+    /// The key binding's code (`GameSettings.keyBind*`).
+    fn bind(&self, d: &str) -> i32 {
+        self.shell.as_ref().map_or_else(
+            || crate::settings::GameSettings::default().key(d),
+            |s| s.settings.key(d),
+        )
+    }
+
+    /// `Minecraft.runTick`'s key handling while no screen is open.
+    fn game_key(&mut self, lw: i32, ctrl: bool) -> Request {
+        if lw == 59 {
+            // F1: hideGUI
+            self.hide_gui = !self.hide_gui;
+            return Request::None;
+        }
+        if lw == self.bind("key.togglePerspective") {
+            self.third_person = (self.third_person + 1) % 3;
+            return Request::None;
+        }
+        if lw == self.bind("key.inventory") {
+            self.screen = Screen::Window;
+            self.input = Input::default();
+            if self.mode == GameMode::Creative {
+                // GuiInventory.initGui hands over to GuiContainerCreative
+                self.open_creative();
+            } else {
+                let _ = self.sim.commands.send(Command::OpenInventory);
+            }
+            return Request::Release;
+        }
+        if lw == self.bind("key.drop") {
+            let _ = self.sim.commands.send(Command::DropHeld { all: ctrl });
+            self.swing_item();
+            return Request::None;
+        }
+        if lw == self.bind("key.chat") {
+            return self.open_chat("");
+        }
+        if lw == self.bind("key.command") {
+            return self.open_chat("/");
+        }
+        for i in 0..9 {
+            if lw == self.bind(&format!("key.hotbar.{}", i + 1)) {
+                let _ = self.sim.commands.send(Command::Select(i));
+                self.view.inv.selected = i;
+            }
+        }
+        Request::None
+    }
+
     pub fn scroll(&mut self, up: bool) {
+        if let Some(mut c) = self.chat_screen.take() {
+            let st = self.settings();
+            let shift = self.shell.as_ref().is_some_and(|s| s.shift);
+            c.wheel(&mut self.chat, &st, up, shift);
+            self.chat_screen = Some(c);
+            return;
+        }
         if let Some(mut c) = self.creative.take() {
             c.wheel(up);
             self.creative = Some(c);
@@ -3143,7 +3392,50 @@ impl Game {
         let shake = render::mul(&hurt, &bob);
         let mut view: Mat4 = shake;
         view = render::mul(&view, &render::rot_x(b3));
-        view = render::mul(&view, &render::translate(0.0, 0.0, -0.1));
+        if self.third_person > 0 {
+            // EntityRenderer.orientCamera: back off, short of the blocks
+            let mut d = 4.0f64;
+            let yaw = p.yaw;
+            let mut pitch = p.pitch;
+            if self.third_person == 2 {
+                pitch += 180.0;
+            }
+            let r = |a: f32| a / 180.0 * math::PI;
+            let dx = (-math::sin(r(yaw)) * math::cos(r(pitch))) as f64 * d;
+            let dz = (math::cos(r(yaw)) * math::cos(r(pitch))) as f64 * d;
+            let dy = (-math::sin(r(pitch))) as f64 * d;
+            let e = self.eye(partial);
+            for k in 0..8 {
+                let a = ((k & 1) * 2 - 1) as f32 * 0.1;
+                let b = ((k >> 1 & 1) * 2 - 1) as f32 * 0.1;
+                let c = ((k >> 2 & 1) * 2 - 1) as f32 * 0.1;
+                let (a, b, c) = (a as f64, b as f64, c as f64);
+                let hit = crate::entity::raytrace::ray_trace_blocks(
+                    &self.world,
+                    [e[0] + a, e[1] + b, e[2] + c],
+                    [e[0] - dx + a + c, e[1] - dy + b, e[2] - dz + c],
+                    false,
+                    false,
+                    false,
+                );
+                if let Some(h) = hit {
+                    let q = h.vec;
+                    let l = ((q[0] - e[0]).powi(2) + (q[1] - e[1]).powi(2) + (q[2] - e[2]).powi(2))
+                        .sqrt();
+                    if l < d {
+                        d = l;
+                    }
+                }
+            }
+            if self.third_person == 2 {
+                view = render::mul(&view, &render::rot_y(180.0));
+            }
+            view = render::mul(&view, &render::rot_x(p.pitch - pitch));
+            view = render::mul(&view, &render::translate(0.0, 0.0, -d as f32));
+            view = render::mul(&view, &render::rot_x(pitch - p.pitch));
+        } else {
+            view = render::mul(&view, &render::translate(0.0, 0.0, -0.1));
+        }
         view = render::mul(&view, &render::rot_x(p.pitch));
         view = render::mul(&view, &render::rot_y(p.yaw + 180.0));
         let view_proj = render::mul(&proj, &view);
@@ -3373,6 +3665,7 @@ impl Game {
         }
         self.draw_boats(&mut dynamic, eye, partial);
         self.draw_chests(&mut dynamic, eye, partial);
+        self.draw_player(&mut dynamic, partial);
         self.draw_orbs(&mut translucent, eye, partial);
         if let Some(at) = self.atlas.mob_tex("arrow") {
             for a in &self.arrows {
@@ -3633,7 +3926,8 @@ impl Game {
             }
         }
         let mut hand: Vec<crate::render::mesher::Vertex> = Vec::new();
-        if !self.stats.dead {
+        // EntityRenderer.renderHand: first person, GUI shown
+        if !self.stats.dead && self.third_person == 0 && !self.hide_gui {
             let (lx, ly, lz) = (
                 math::floor_double(eye[0]),
                 math::floor_double(eye[1]),
@@ -3669,6 +3963,8 @@ impl Game {
             (window_size.0 as f64 / scale as f64).ceil() as f32,
             (window_size.1 as f64 / scale as f64).ceil() as f32,
         );
+        // updateCameraAndRender: no GuiIngame with hideGUI and no screen
+        let hud_hidden = self.hide_gui && self.screen == Screen::Playing;
         // ItemRenderer.renderWarpedTextureOverlay: the water texture, repeated four
         // times across the screen and scrolled by the view direction.
         if eye_mat == Material::Water {
@@ -3766,6 +4062,15 @@ impl Game {
             jitter.set_seed(self.ticks as i64 * 312871);
             screens::survival_bars(&mut ui, &self.stats, self.ticks as u32, &mut jitter, under);
             self.jitter = jitter;
+        }
+        // GuiIngame: persistantChatGUI.drawChat(updateCounter)
+        {
+            let st = self.settings();
+            self.chat
+                .draw(&mut ui, &st, self.ticks as i32, self.screen == Screen::Chat);
+        }
+        if hud_hidden {
+            ui.v.clear();
         }
         if self.show_debug {
             let p = &self.player;
@@ -3881,6 +4186,11 @@ impl Game {
             Screen::Dead => {
                 screens::death_screen(&mut ui, &self.stats, m);
             }
+            Screen::Chat => {
+                if let Some(c) = self.chat_screen.as_mut() {
+                    c.draw(&mut ui);
+                }
+            }
             Screen::Playing => {}
         }
         let ui_verts = ui.v;
@@ -3928,7 +4238,7 @@ impl Game {
         }
         let frame = Frame {
             end_portals: &end_portals,
-            crosshair: self.screen == Screen::Playing,
+            crosshair: self.screen == Screen::Playing && !self.hide_gui,
             dynamic: &dynamic,
             crack: &crack,
             hand: &hand,

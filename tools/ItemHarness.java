@@ -18,6 +18,7 @@ import net.minecraft.nbt.NBTTagList;
  *   S id meta count ench...                           (the search tab list)
  *   X id name maxLevel                                (enchantments)
  *   E id name                                         (spawn egg entities)
+ *   R id name / B id name                             (item / block registry names)
  * ench is id:lvl pairs from ench / StoredEnchantments.
  *
  * Usage: ItemHarness <out>
@@ -94,6 +95,14 @@ public class ItemHarness {
             if (e != null && e.type != null) net.minecraft.init.Items.enchanted_book.getAll(e, search);
         }
         for (Object so : search) w.println("S " + st((ItemStack) so));
+        for (Object o : Item.itemRegistry) {
+            Item it = (Item) o;
+            w.println("R " + Item.getIdFromItem(it) + " " + Item.itemRegistry.getNameForObject(it));
+        }
+        for (Object o : net.minecraft.block.Block.blockRegistry) {
+            net.minecraft.block.Block b = (net.minecraft.block.Block) o;
+            w.println("B " + net.minecraft.block.Block.getIdFromBlock(b) + " " + net.minecraft.block.Block.blockRegistry.getNameForObject(b));
+        }
         for (net.minecraft.enchantment.Enchantment e : net.minecraft.enchantment.Enchantment.enchantmentsList) {
             if (e != null) w.println("X " + e.effectId + " " + e.getName() + " " + e.getMaxLevel());
         }

@@ -1212,3 +1212,129 @@ pub fn gui_lit(raw: Vec<Vertex>, light_m: &Mat4) -> Vec<Vertex> {
     }
     out
 }
+
+/// The inputs of `ModelBiped.setRotationAngles` beyond `Anim`.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Pose {
+    pub limb_swing: f32,
+    pub limb_amount: f32,
+    pub age: f32,
+    /// head yaw relative to the body, head pitch (degrees)
+    pub head_yaw: f32,
+    pub head_pitch: f32,
+    /// `onGround`: the swing progress
+    pub swing: f32,
+    /// `heldItemRight`: 0 empty, 1 holding, 3 blocking
+    pub held_right: i32,
+    pub sneak: bool,
+    pub riding: bool,
+    pub aimed_bow: bool,
+}
+
+/// `ModelBiped(gap)` posed by `setRotationAngles`: head, body, right arm,
+/// left arm, right leg, left leg, headwear.
+pub fn biped_pose(p: &Pose, gap: f32) -> Vec<Part> {
+    let head = Part::new([0.0, 0.0, 0.0]).bx(0.0, 0.0, [-4.0, -8.0, -4.0], [8.0, 8.0, 8.0], gap);
+    let hat =
+        Part::new([0.0, 0.0, 0.0]).bx(32.0, 0.0, [-4.0, -8.0, -4.0], [8.0, 8.0, 8.0], gap + 0.5);
+    let body = Part::new([0.0, 0.0, 0.0]).bx(16.0, 16.0, [-4.0, 0.0, -2.0], [8.0, 12.0, 4.0], gap);
+    let rarm =
+        Part::new([-5.0, 2.0, 0.0]).bx(40.0, 16.0, [-3.0, -2.0, -2.0], [4.0, 12.0, 4.0], gap);
+    let larm =
+        Part::new([5.0, 2.0, 0.0]).mbx(40.0, 16.0, [-1.0, -2.0, -2.0], [4.0, 12.0, 4.0], gap);
+    let rleg = Part::new([-1.9, 12.0, 0.0]).bx(0.0, 16.0, [-2.0, 0.0, -2.0], [4.0, 12.0, 4.0], gap);
+    let lleg = Part::new([1.9, 12.0, 0.0]).mbx(0.0, 16.0, [-2.0, 0.0, -2.0], [4.0, 12.0, 4.0], gap);
+    let mut v = vec![head, body, rarm, larm, rleg, lleg, hat];
+    let d = 180.0 / PI;
+    let (s1, s2, s3) = (p.limb_swing, p.limb_amount, p.age);
+    v[0].rot = [p.head_pitch / d, p.head_yaw / d, 0.0];
+    v[6].rot = v[0].rot;
+    v[2].rot = [cos(s1 * 0.6662 + PI) * 2.0 * s2 * 0.5, 0.0, 0.0];
+    v[3].rot = [cos(s1 * 0.6662) * 2.0 * s2 * 0.5, 0.0, 0.0];
+    v[4].rot = [cos(s1 * 0.6662) * 1.4 * s2, 0.0, 0.0];
+    v[5].rot = [cos(s1 * 0.6662 + PI) * 1.4 * s2, 0.0, 0.0];
+    if p.riding {
+        v[2].rot[0] += -PI / 5.0;
+        v[3].rot[0] += -PI / 5.0;
+        v[4].rot[0] = -PI * 2.0 / 5.0;
+        v[5].rot[0] = -PI * 2.0 / 5.0;
+        v[4].rot[1] = PI / 10.0;
+        v[5].rot[1] = -PI / 10.0;
+    }
+    if p.held_right != 0 {
+        v[2].rot[0] = v[2].rot[0] * 0.5 - PI / 10.0 * p.held_right as f32;
+    }
+    // onGround > -9990: the swing
+    let g = p.swing;
+    let by = sin(g.sqrt() * PI * 2.0) * 0.2;
+    v[1].rot[1] = by;
+    v[2].pivot[2] = sin(by) * 5.0;
+    v[2].pivot[0] = -cos(by) * 5.0;
+    v[3].pivot[2] = -sin(by) * 5.0;
+    v[3].pivot[0] = cos(by) * 5.0;
+    v[2].rot[1] += by;
+    v[3].rot[1] += by;
+    v[3].rot[0] += by;
+    let mut f = 1.0 - g;
+    f *= f;
+    f *= f;
+    f = 1.0 - f;
+    let f9 = sin(f * PI);
+    let f10 = sin(g * PI) * -(v[0].rot[0] - 0.7) * 0.75;
+    v[2].rot[0] = (v[2].rot[0] as f64 - (f9 as f64 * 1.2 + f10 as f64)) as f32;
+    v[2].rot[1] += by * 2.0;
+    v[2].rot[2] = sin(g * PI) * -0.4;
+    if p.sneak {
+        v[1].rot[0] = 0.5;
+        v[2].rot[0] += 0.4;
+        v[3].rot[0] += 0.4;
+        v[4].pivot[2] = 4.0;
+        v[5].pivot[2] = 4.0;
+        v[4].pivot[1] = 9.0;
+        v[5].pivot[1] = 9.0;
+        v[0].pivot[1] = 1.0;
+        v[6].pivot[1] = 1.0;
+    } else {
+        v[1].rot[0] = 0.0;
+        v[4].pivot[2] = 0.1;
+        v[5].pivot[2] = 0.1;
+        v[4].pivot[1] = 12.0;
+        v[5].pivot[1] = 12.0;
+        v[0].pivot[1] = 0.0;
+        v[6].pivot[1] = 0.0;
+    }
+    v[2].rot[2] += cos(s3 * 0.09) * 0.05 + 0.05;
+    v[3].rot[2] -= cos(s3 * 0.09) * 0.05 + 0.05;
+    v[2].rot[0] += sin(s3 * 0.067) * 0.05;
+    v[3].rot[0] -= sin(s3 * 0.067) * 0.05;
+    if p.aimed_bow {
+        v[2].rot[2] = 0.0;
+        v[3].rot[2] = 0.0;
+        v[2].rot[1] = -0.1 + v[0].rot[1];
+        v[3].rot[1] = 0.1 + v[0].rot[1] + 0.4;
+        v[2].rot[0] = -PI / 2.0 + v[0].rot[0];
+        v[3].rot[0] = -PI / 2.0 + v[0].rot[0];
+        v[2].rot[2] += cos(s3 * 0.09) * 0.05 + 0.05;
+        v[3].rot[2] -= cos(s3 * 0.09) * 0.05 + 0.05;
+        v[2].rot[0] += sin(s3 * 0.067) * 0.05;
+        v[3].rot[0] -= sin(s3 * 0.067) * 0.05;
+    }
+    v
+}
+
+/// `RendererLivingEntity.doRender` for a player model at `rel` (feet,
+/// camera relative) turned by `body_yaw`, with `RenderPlayer`'s scale.
+pub fn player_matrix(rel: [f32; 3], body_yaw: f32) -> Mat4 {
+    let mut m = translate(rel[0], rel[1], rel[2]);
+    m = mul(&m, &rot_y(180.0 - body_yaw));
+    m = mul(&m, &super::entities::scale(-1.0, -1.0, 1.0));
+    m = mul(&m, &super::entities::scale(0.9375, 0.9375, 0.9375));
+    mul(&m, &translate(0.0, -24.0 / 16.0 - 0.0078125, 0.0))
+}
+
+/// The player in the world (third person).
+pub fn player_world(d: &mut Draw, m: &Mat4, pose: &Pose) {
+    for p in biped_pose(pose, 0.0) {
+        render(d, m, &p);
+    }
+}
