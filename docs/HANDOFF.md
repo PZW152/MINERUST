@@ -394,6 +394,6 @@ MINERUST_BENCH=10 minerust --seed 12345 --no-save --size 1920 1080 --distance 16
     觸及距離照 `getBlockReachDistance`（創造 5、生存 4.5），選取框畫 `shapes::selection` 的範圍（`Frame.outline` 改為最小／最大角）。
     與生物比較遠近改用實際命中點的距離。
   - 截圖模式的 `--open use:` 可用 `MINERUST_HIT=x,y,z`、`MINERUST_FACE=0..5` 指定命中點與面。
-  **驗證**：`cargo test --release` 87 項通過；截圖確認火把的選取框貼合其範圍。梯子、南瓜、藤蔓、絆線鉤的放置方向只照原始碼移植，
+  **驗證**：`cargo test --release` 86 項通過；截圖確認火把的選取框貼合其範圍。梯子、南瓜、藤蔓、絆線鉤的放置方向只照原始碼移植，
   沒有個別測試。**還沒補放置規則的**：柵欄門、床、頭顱、可可、終界門框的朝向、鐵軌之外需要 `canPlaceBlockOnSide` 的檢查（火把、按鈕已有）。
   **查到的既有錯誤，待修**：武器附魔（鋒利系列、擊退、燃燒、掠奪）、保護系列、水下呼吸、荊棘、弓的附魔、附魔光澤都還沒接。
