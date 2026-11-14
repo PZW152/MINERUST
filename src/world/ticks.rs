@@ -27,6 +27,24 @@ pub fn ticks_randomly(id: u8) -> bool {
             | block::RED_MUSHROOM
             | block::VINE
             | block::FIRE
+            | block::SAPLING
+            | block::YELLOW_FLOWER
+            | block::RED_FLOWER
+            | block::TALLGRASS
+            | block::DEADBUSH
+            | block::WATERLILY
+            | block::WHEAT
+            | block::CARROTS
+            | block::POTATOES
+            | block::PUMPKIN_STEM
+            | block::MELON_STEM
+            | block::NETHER_WART
+            | block::COCOA
+            | block::FARMLAND
+            | block::LIT_REDSTONE_ORE
+            | block::SNOW
+            | block::LAVA
+            | block::PORTAL
     )
 }
 
@@ -171,7 +189,9 @@ impl ServerWorld {
                 }
             }
             block::VINE => self.vine_tick(x, y, z, r),
-            _ => {}
+            _ => {
+                self.growth_tick(id, x, y, z, r);
+            }
         }
     }
 

@@ -25,6 +25,8 @@ const LOADS_PER_TICK: usize = 8;
 /// `MinecraftServer` autosave interval.
 const AUTOSAVE_TICKS: i64 = 900;
 
+#[path = "sim_bed.rs"]
+mod bed;
 #[path = "commands.rs"]
 mod commands;
 #[path = "sim_vehicles.rs"]
@@ -95,6 +97,11 @@ pub enum Command {
     Respawn,
     /// `/give`: adds the stack to the inventory.
     Give(crate::item::Stack),
+    /// "Leave Bed" (`GuiSleepMP`).
+    LeaveBed,
+    /// Survival digging started on a block (`C07PacketPlayerDigging` 0:
+    /// `ItemInWorldManager.onBlockClicked`), with the side hit.
+    ClickBlock([i32; 3], i32),
     /// Left click on a mob or vehicle (`C02PacketUseEntity` ATTACK; the
     /// server runs `attackTargetEntityWithCurrentItem`). `crit` is the
     /// client's falling state (`fallDistance > 0`, airborne, not on a
@@ -180,6 +187,8 @@ pub enum Event {
     Tnt(Vec<([f64; 3], [f64; 3], i32)>),
     /// Note blocks played this tick: position, instrument, pitch 0..24.
     Notes(Vec<([i32; 3], &'static str, i32)>),
+    /// `playAuxSFX(2005)` (`ItemDye.func_150918_a` on the client).
+    BoneMeal([i32; 3]),
     /// Particles from mobs: kind, position, motion.
     Particles(Vec<crate::entity::mob::Puff>),
     /// The player moved to another dimension: drop every chunk and stand here.
@@ -203,6 +212,9 @@ pub enum Event {
     },
     /// `S19PacketEntityStatus` 2: the hurt animation and sound.
     Hurt,
+    /// `S0APacketUseBed` (the head of the bed and where the player lies) or,
+    /// with `None`, `S0BPacketAnimation` 2 (waking up).
+    Sleep(Option<([i32; 3], [f64; 3])>),
     /// `S0BPacketAnimation` 4 / 5: an `EntityCrit2FX` of "crit" (false) or
     /// "magicCrit" (true) on the mob.
     CritFx(u32, bool),
@@ -381,6 +393,14 @@ pub struct Sim {
     vehicle_sounds: Vec<(&'static str, [f64; 3], f32, f32)>,
     /// `ridingEntity` of the player: a boat's id.
     riding: Option<u32>,
+    /// `EntityPlayer.playerLocation` while sleeping, `sleepTimer`, and the
+    /// bed that is the spawn point (`spawnChunk`).
+    sleeping: Option<[i32; 3]>,
+    sleep_timer: i32,
+    bed_spawn: Option<[i32; 3]>,
+    /// `S0APacketUseBed` (bed, position) / the wake animation, for the client.
+    sleep_event: Option<Option<([i32; 3], [f64; 3])>>,
+    wake_exit: Option<[f64; 3]>,
     /// The last `C0CPacketInput`.
     ride: RideInput,
     /// Where the player's tracker entry last re-checked the watchers.
@@ -389,6 +409,7 @@ pub struct Sim {
     using_changed: bool,
     /// `setSprinting(false)` after a knockback hit, for the client.
     stop_sprinting: bool,
+    bone_meal_fx: Vec<[i32; 3]>,
     /// `S0BPacketAnimation` 4 (critical) / 5 (magic critical) on a mob.
     crit_fx: Vec<(u32, bool)>,
     /// `S27PacketExplosion` pushes for the client this tick.
@@ -591,6 +612,7 @@ impl Sim {
             push_add: [0.0; 3],
             using_changed: false,
             stop_sprinting: false,
+            bone_meal_fx: Vec::new(),
             crit_fx: Vec::new(),
             teleport_to: None,
             chat_out: Vec::new(),
@@ -598,6 +620,11 @@ impl Sim {
             vehicle_events: Vec::new(),
             vehicle_sounds: Vec::new(),
             riding: None,
+            sleeping: None,
+            sleep_timer: 0,
+            bed_spawn: None,
+            sleep_event: None,
+            wake_exit: None,
             ride: RideInput::default(),
             track_check: None,
             sent: Default::default(),
@@ -878,6 +905,10 @@ impl Sim {
                 if self.await_ack {
                     return;
                 }
+                // NetHandlerPlayServer.processPlayer: a sleeping player stays put
+                if self.sleeping.is_some() {
+                    return;
+                }
                 if self.riding.is_some() {
                     // NetHandlerPlayServer.processPlayer, riding: only the look
                     // and onGround; the boat places the player.
@@ -941,6 +972,17 @@ impl Sim {
                     w.set_block(p[0], p[1], p[2], id, meta, 3);
                 }
             }
+            Command::ClickBlock(p, side) => {
+                let mut play = std::mem::replace(&mut self.play, Play::new(GameMode::Survival));
+                if play.mode == GameMode::Survival {
+                    play.can_eat = self.splayer.can_eat(false);
+                    play.click_block(&mut self.world, p, side);
+                    for (n, sat) in play.ate.drain(..) {
+                        self.splayer.food.add_stats(n, sat);
+                    }
+                }
+                self.play = play;
+            }
             Command::Dig(p) => {
                 ACTIONS_DONE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 let mut play = std::mem::replace(&mut self.play, Play::new(GameMode::Survival));
@@ -971,10 +1013,21 @@ impl Sim {
                 if self.place_cart(target) {
                     return;
                 }
+                // BlockBed.onBlockActivated needs the player and the mobs
+                if self.world.block(target[0], target[1], target[2]) == crate::block::BED
+                    && (!sneaking || self.play.inv.held().is_none())
+                {
+                    self.use_bed(target);
+                    return;
+                }
                 let mut play = std::mem::replace(&mut self.play, Play::new(GameMode::Survival));
                 std::mem::swap(&mut play.wear_rand, &mut self.splayer.e.rand);
+                play.can_eat = self.splayer.can_eat(false);
                 let used = play.use_block(&mut self.world, target, face, sneaking, hit);
                 std::mem::swap(&mut play.wear_rand, &mut self.splayer.e.rand);
+                for (n, sat) in play.ate.drain(..) {
+                    self.splayer.food.add_stats(n, sat);
+                }
                 for s in play.broke.drain(..) {
                     self.splayer.fx.push(crate::entity::base::Fx::BrokenItem(s));
                 }
@@ -1062,7 +1115,12 @@ impl Sim {
             }
             Command::Stats(_) => {}
             Command::Died => {}
+            Command::LeaveBed => {
+                // C0BPacketEntityAction 3: wakeUpPlayer(false, true, true)
+                self.wake_up(false, true);
+            }
             Command::Respawn => {
+                self.wake_up(true, false);
                 self.splayer.respawn();
                 self.respawn_pending = true;
                 if self.dim != 0 {
@@ -1247,9 +1305,12 @@ impl Sim {
             self.play.creative_drops -= 1;
         }
         self.splayer.creative = self.play.mode == GameMode::Creative;
+        self.world.dim = self.dim;
+        self.world.difficulty = self.difficulty as i32;
         if !self.respawn_pending {
             let d = self.difficulty;
             self.splayer.tick(&self.world, d, true);
+            self.tick_sleep();
         }
         let mut use_events = Vec::new();
         self.tick_item_use(&mut use_events);
@@ -1494,11 +1555,10 @@ impl Sim {
         ));
         if self.respawn_pending {
             self.respawn_pending = false;
-            self.centre = (
-                (self.spawn[0].floor() as i32) >> 4,
-                (self.spawn[2].floor() as i32) >> 4,
-            );
-            events.push(Event::Respawn(self.spawn));
+            let at = self.respawn_point();
+            self.play.player.0 = at;
+            self.centre = ((at[0].floor() as i32) >> 4, (at[2].floor() as i32) >> 4);
+            events.push(Event::Respawn(at));
         }
 
         // Changes, in a fixed order.
@@ -1617,6 +1677,10 @@ impl Sim {
                 rot = [*a, *b];
             }
             *dim = p.int("Dimension").unwrap_or(0) as i32;
+            if let (Some(x), Some(y), Some(z)) = (p.int("SpawnX"), p.int("SpawnY"), p.int("SpawnZ"))
+            {
+                self.bed_spawn = Some([x as i32, y as i32, z as i32]);
+            }
             for (k, st) in crate::world::anvil::slots(p.list("Inventory")) {
                 if (0..36).contains(&k) {
                     self.play.inv.main[k as usize] = Some(st);
@@ -1804,6 +1868,22 @@ impl Sim {
             list(vec![Nbt::Float(rot[0]), Nbt::Float(rot[1])]),
         );
         player.set("Dimension", Nbt::Int(self.dim));
+        // EntityPlayer.writeEntityToNBT: the bed spawn
+        match self.bed_spawn {
+            Some(b) => {
+                player.set("SpawnX", Nbt::Int(b[0]));
+                player.set("SpawnY", Nbt::Int(b[1]));
+                player.set("SpawnZ", Nbt::Int(b[2]));
+                player.set("SpawnForced", Nbt::Byte(0));
+            }
+            None => {
+                if let Nbt::Compound(v) = &mut player {
+                    v.retain(|(k, _)| {
+                        !matches!(k.as_str(), "SpawnX" | "SpawnY" | "SpawnZ" | "SpawnForced")
+                    });
+                }
+            }
+        }
         player.set("Inventory", Nbt::List(10, inv));
         player.set("SelectedItemSlot", Nbt::Int(self.play.inv.selected as i32));
         let mut ab = player
@@ -2957,6 +3037,7 @@ impl Sim {
                     Effect::Sound(n, p, v, pi) => sounds.push((n, p, v, pi)),
                     Effect::Note(p, inst, pitch) => notes.push((p, inst, pitch)),
                     Effect::Tnt(p, fuse) => self.mobs.prime_tnt(p, fuse),
+                    Effect::BoneMeal(p) => self.bone_meal_fx.push(p),
                     Effect::Dispense(p, facing) => {
                         if let Some((s, at, dir)) = play.dispense(p, facing, &mut rnd, &mut sounds)
                         {
@@ -3644,6 +3725,15 @@ impl Sim {
         }
         for (id, magic) in std::mem::take(&mut self.crit_fx) {
             events.push(Event::CritFx(id, magic));
+        }
+        for p in std::mem::take(&mut self.bone_meal_fx) {
+            events.push(Event::BoneMeal(p));
+        }
+        if let Some(s) = self.sleep_event.take() {
+            if let Some(e) = self.wake_exit.take() {
+                events.push(Event::Teleport(e));
+            }
+            events.push(Event::Sleep(s));
         }
         if std::mem::take(&mut self.stop_sprinting) {
             events.push(Event::StopSprinting);
@@ -5113,6 +5203,217 @@ mod tests {
         assert!(sim.splayer.living.health < before, "and hit");
     }
 
+    /// A hoe tills grass, seeds go on farmland, bone meal grows the crop,
+    /// random ticks grow it further (`BlockCrops.updateTick`), farmland
+    /// without water dries, and the crop drops when its soil goes.
+    #[test]
+    fn farming_from_hoe_to_harvest() {
+        let (mut sim, x, y, z) = redstone_sim();
+        sim.play.mode = GameMode::Survival;
+        let sel = sim.play.inv.selected;
+        let feet = [x as f64 + 0.5, y as f64, z as f64 - 1.5];
+        let mut ev = Vec::new();
+        sim.step(&[Command::Player(feet, [0.0, 30.0], false)], &mut ev);
+        let use_on = |sim: &mut Sim, p: [i32; 3]| {
+            sim.step(
+                &[Command::Use {
+                    target: p,
+                    face: [0, 1, 0],
+                    sneaking: false,
+                    hit: [0.5, 1.0, 0.5],
+                }],
+                &mut Vec::new(),
+            );
+        };
+        let soil = [x, y - 1, z];
+        sim.world
+            .set_block(soil[0], soil[1], soil[2], block::GRASS, 0, 3);
+        sim.play.inv.main[sel] = Some(crate::item::Stack::new(291, 0, 1));
+        use_on(&mut sim, soil);
+        assert_eq!(sim.world.block(soil[0], soil[1], soil[2]), block::FARMLAND);
+        assert_eq!(sim.play.inv.main[sel].unwrap().meta, 1, "the hoe wears");
+        sim.play.inv.main[sel] = Some(crate::item::Stack::new(295, 0, 3));
+        use_on(&mut sim, soil);
+        assert_eq!(sim.world.block(x, y, z), block::WHEAT);
+        assert_eq!(sim.play.inv.main[sel].unwrap().count, 2);
+        // bone meal: 2..5 stages at a time
+        sim.play.inv.main[sel] = Some(crate::item::Stack::new(351, 15, 1));
+        use_on(&mut sim, [x, y, z]);
+        let m = sim.world.meta(x, y, z);
+        assert!((2..=5).contains(&m), "{m}");
+        assert!(sim.play.inv.main[sel].is_none());
+        // random ticks in full light finish it
+        let mut r = JavaRandom::new(3);
+        for _ in 0..2000 {
+            sim.world.growth_tick(block::WHEAT, x, y, z, &mut r);
+        }
+        assert_eq!(sim.world.meta(x, y, z), 7);
+        // dry farmland: the crop keeps it from turning to dirt
+        sim.world.set_meta(soil[0], soil[1], soil[2], 0, 2);
+        sim.world
+            .growth_tick(block::FARMLAND, soil[0], soil[1], soil[2], &mut r);
+        assert_eq!(sim.world.block(soil[0], soil[1], soil[2]), block::FARMLAND);
+        // water nearby wets it
+        sim.world.set_block(x + 3, y - 1, z, block::WATER, 0, 3);
+        sim.world
+            .growth_tick(block::FARMLAND, soil[0], soil[1], soil[2], &mut r);
+        assert_eq!(sim.world.meta(soil[0], soil[1], soil[2]), 7);
+        // the soil turned to stone: the wheat drops
+        sim.world.gen_entities.clear();
+        sim.world
+            .set_block(soil[0], soil[1], soil[2], block::STONE, 0, 3);
+        assert_eq!(sim.world.block(x, y, z), block::AIR);
+        assert!(sim.world.gen_entities.iter().any(|e| matches!(
+            e,
+            crate::world::server::GenEntity::ScatteredItem { stack, .. } if stack.id == 296
+        )));
+    }
+
+    /// A pumpkin stem grows to full and puts a pumpkin beside itself; an
+    /// oak sapling grows into a tree.
+    #[test]
+    fn stems_bear_fruit_and_saplings_grow() {
+        let (mut sim, x, y, z) = redstone_sim();
+        let mut r = JavaRandom::new(9);
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                sim.world
+                    .set_block(x + 4 + dx, y - 1, z + 4 + dz, block::DIRT, 0, 3);
+            }
+        }
+        sim.world
+            .set_block(x + 4, y - 1, z + 4, block::FARMLAND, 7, 3);
+        sim.world
+            .set_block(x + 4, y, z + 4, block::PUMPKIN_STEM, 0, 3);
+        for _ in 0..5000 {
+            sim.world
+                .growth_tick(block::PUMPKIN_STEM, x + 4, y, z + 4, &mut r);
+        }
+        assert_eq!(sim.world.meta(x + 4, y, z + 4), 7);
+        let fruit = [(-1, 0), (1, 0), (0, -1), (0, 1)]
+            .iter()
+            .filter(|(dx, dz)| sim.world.block(x + 4 + dx, y, z + 4 + dz) == block::PUMPKIN)
+            .count();
+        assert_eq!(fruit, 1);
+        // a sapling on dirt: marked, then grown
+        sim.world.set_block(x + 8, y - 1, z + 8, block::DIRT, 0, 3);
+        sim.world.set_block(x + 8, y, z + 8, block::SAPLING, 0, 3);
+        let mut grew = false;
+        for _ in 0..40 {
+            sim.world.mark_or_grow_sapling(x + 8, y, z + 8, &mut r);
+            if sim.world.block(x + 8, y, z + 8) == block::LOG {
+                grew = true;
+                break;
+            }
+        }
+        assert!(grew, "the sapling became a trunk");
+    }
+
+    /// Cake slices feed a hungry player; a fence gate swings open and shut.
+    #[test]
+    fn cake_and_fence_gate() {
+        let (mut sim, x, y, z) = redstone_sim();
+        sim.play.mode = GameMode::Survival;
+        let feet = [x as f64 + 0.5, y as f64, z as f64 - 1.5];
+        sim.step(
+            &[Command::Player(feet, [0.0, 30.0], false)],
+            &mut Vec::new(),
+        );
+        sim.world.set_block(x, y, z, block::CAKE, 0, 3);
+        sim.splayer.food.level = 10;
+        let sel = sim.play.inv.selected;
+        sim.play.inv.main[sel] = None;
+        let use_on = |sim: &mut Sim, p: [i32; 3]| {
+            sim.step(
+                &[Command::Use {
+                    target: p,
+                    face: [0, 0, -1],
+                    sneaking: false,
+                    hit: [0.5, 0.5, 0.0],
+                }],
+                &mut Vec::new(),
+            );
+        };
+        use_on(&mut sim, [x, y, z]);
+        assert_eq!(sim.world.meta(x, y, z), 1);
+        assert_eq!(sim.splayer.food.level, 12);
+        // a left click eats too (onBlockClicked)
+        sim.step(&[Command::ClickBlock([x, y, z], 2)], &mut Vec::new());
+        assert_eq!(sim.world.meta(x, y, z), 2);
+        sim.world.set_block(x + 2, y, z, block::FENCE_GATE, 0, 3);
+        use_on(&mut sim, [x + 2, y, z]);
+        assert_eq!(sim.world.meta(x + 2, y, z) & 4, 4, "open");
+        let m = sim.world.meta(x + 2, y, z) as u8;
+        let mut out = Vec::new();
+        {
+            let w = &sim.world;
+            let get = |a: i32, b: i32, c: i32| (w.peek_block(a, b, c), w.peek_meta(a, b, c));
+            crate::shapes::collision(&get, block::FENCE_GATE, m, x + 2, y, z, &mut out);
+        }
+        assert!(out.is_empty(), "an open gate lets you through");
+        use_on(&mut sim, [x + 2, y, z]);
+        assert_eq!(sim.world.meta(x + 2, y, z) & 4, 0, "shut");
+    }
+
+    /// A bed at night: the player lies down, the night is skipped once
+    /// fully asleep, and the bed becomes the spawn point.
+    #[test]
+    fn sleeping_skips_the_night() {
+        let (mut sim, x, y, z) = redstone_sim();
+        sim.play.mode = GameMode::Survival;
+        sim.world_time = 18000;
+        let feet = [x as f64 + 0.5, y as f64, z as f64 - 1.0];
+        sim.step(
+            &[Command::Player(feet, [0.0, 30.0], false)],
+            &mut Vec::new(),
+        );
+        sim.mobs.list.clear();
+        let sel = sim.play.inv.selected;
+        sim.play.inv.main[sel] = Some(crate::item::Stack::new(355, 0, 1));
+        sim.step(
+            &[Command::Use {
+                target: [x, y - 1, z],
+                face: [0, 1, 0],
+                sneaking: false,
+                hit: [0.5, 1.0, 0.5],
+            }],
+            &mut Vec::new(),
+        );
+        // yaw 0 looks to +z: the foot here, the head beyond
+        assert_eq!(sim.world.block(x, y, z), block::BED);
+        assert_eq!(sim.world.meta(x, y, z + 1), 8);
+        sim.mobs.list.clear();
+        let mut ev = Vec::new();
+        sim.step(
+            &[Command::Use {
+                target: [x, y, z],
+                face: [0, 1, 0],
+                sneaking: false,
+                hit: [0.5, 0.5, 0.5],
+            }],
+            &mut ev,
+        );
+        assert_eq!(sim.sleeping, Some([x, y, z + 1]));
+        assert!(ev.iter().any(|e| matches!(e, Event::Sleep(Some(_)))));
+        assert_eq!(sim.world.meta(x, y, z + 1) & 4, 4, "occupied");
+        steps(&mut sim, 101);
+        assert!(sim.sleeping.is_none(), "awake");
+        assert_eq!(sim.world_time, 24000);
+        assert_eq!(sim.bed_spawn, Some([x, y, z + 1]));
+        assert_eq!(sim.world.meta(x, y, z + 1) & 4, 0);
+        // in daylight the bed says no
+        sim.step(
+            &[Command::Use {
+                target: [x, y, z],
+                face: [0, 1, 0],
+                sneaking: false,
+                hit: [0.5, 0.5, 0.5],
+            }],
+            &mut Vec::new(),
+        );
+        assert!(sim.sleeping.is_none());
+    }
+
     /// `attackTargetEntityWithCurrentItem` with an enchanted sword
     /// (Sharpness, Smite, Fire Aspect, Knockback, the zombie's 2 armour),
     /// Feather Falling on the player's boots and an enchanted bow.
@@ -5275,7 +5576,9 @@ mod tests {
             .unwrap()
             .tamed = true;
         let zombie = sim.mobs.spawn(Kind::Zombie, at(8.5, 2.5), 0.0, &mut r);
-        steps(&mut sim, 5);
+        for _ in 0..5 {
+            sim.step(&[Command::Player(feet, [0.0, 0.0], false)], &mut Vec::new());
+        }
         sim.step(
             &[
                 Command::Player(feet, [0.0, 0.0], false),
@@ -5437,6 +5740,9 @@ mod tests {
     fn flint_and_steel_ignites_a_creeper() {
         use crate::entity::mob::Kind;
         let (mut sim, x, y, z) = redstone_sim();
+        // the player on the platform (mobs over 128 blocks away despawn)
+        let feet = [x as f64 + 0.5, y as f64, z as f64 + 0.5];
+        sim.step(&[Command::Player(feet, [0.0, 0.0], false)], &mut Vec::new());
         let mut r = JavaRandom::new(5);
         let id = sim.mobs.spawn(
             Kind::Creeper,
@@ -5454,7 +5760,7 @@ mod tests {
         assert!(lit, "fire.ignite played");
         assert!(sim.mobs.list.iter().any(|m| m.id == id && m.ignited));
         for _ in 0..28 {
-            sim.step(&[], &mut ev);
+            sim.step(&[Command::Player(feet, [0.0, 0.0], false)], &mut ev);
         }
         assert!(
             sim.mobs.list.iter().any(|m| m.id == id && !m.dead),

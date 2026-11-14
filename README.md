@@ -94,6 +94,7 @@ cargo run --release -- --seed 1
 
 完整清單與優先順序見 [docs/HANDOFF.md](docs/HANDOFF.md) 第 7 節與 [docs/PARITY_TODO.md](docs/PARITY_TODO.md)。
 主要缺口：生物裝備與生物藥水效果、信標、漏斗、比較器、統計與成就、村民交易、騎馬、釣魚、多人連線。
+（2026-11-14 補上：農業整套（耕地、種植、作物成長、骨粉、樹苗長成樹）、床與睡覺、蛋糕、柵欄門、圓石牆、南瓜／西瓜梗。）
 
 ## 接手開發
 

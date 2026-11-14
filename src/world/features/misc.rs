@@ -504,7 +504,8 @@ pub fn canopy(w: &mut ServerWorld, r: &mut JavaRandom, x: i32, y: i32, z: i32) -
         return false;
     }
     for (dx, dz) in [(0, 0), (1, 0), (1, 1), (0, 1)] {
-        w.set_block(x + dx, y - 1, z + dz, block::DIRT, 0, 2);
+        let f = w.gen_flag();
+        w.set_block(x + dx, y - 1, z + dz, block::DIRT, 0, f);
     }
     let dir = r.next_int_n(4) as usize;
     let bend = h - r.next_int_n(4);
@@ -522,7 +523,8 @@ pub fn canopy(w: &mut ServerWorld, r: &mut JavaRandom, x: i32, y: i32, z: i32) -
             for (dx, dz) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
                 // MC-10176: only the first of the four trunk logs is checked.
                 if crate::compat::vanilla_parity() || can_grow_into(w.block(tx + dx, yy, tz + dz)) {
-                    w.set_block(tx + dx, yy, tz + dz, block::LOG2, 1, 2);
+                    let f = w.gen_flag();
+                    w.set_block(tx + dx, yy, tz + dz, block::LOG2, 1, f);
                 }
             }
             top = yy;
@@ -570,7 +572,8 @@ pub fn canopy(w: &mut ServerWorld, r: &mut JavaRandom, x: i32, y: i32, z: i32) -
                     if crate::compat::vanilla_parity()
                         || can_grow_into(w.block(x + i, top - k - 1, z + j))
                     {
-                        w.set_block(x + i, top - k - 1, z + j, block::LOG2, 1, 2);
+                        let f = w.gen_flag();
+                        w.set_block(x + i, top - k - 1, z + j, block::LOG2, 1, f);
                     }
                 }
                 for a in -1..=1 {
@@ -695,14 +698,16 @@ pub fn big_mushroom(
                     m = 0;
                 }
                 if m != 0 && !block::info(w.block(xx, yy, zz)).full_block {
-                    w.set_block(xx, yy, zz, id, m, 2);
+                    let f = w.gen_flag();
+                    w.set_block(xx, yy, zz, id, m, f);
                 }
             }
         }
     }
     for i in 0..h {
         if !block::info(w.block(x, y + i, z)).full_block {
-            w.set_block(x, y + i, z, id, 10, 2);
+            let f = w.gen_flag();
+            w.set_block(x, y + i, z, id, 10, f);
         }
     }
     true

@@ -398,6 +398,10 @@ impl<'a, 'b> Rb<'a, 'b> {
             }
             block::SNOW_LAYER | block::CARPET if side == 1 => true,
             block::DRAGON_EGG => true,
+            // BlockFenceGate.shouldSideBeRendered
+            block::FENCE_GATE => true,
+            // BlockWall.shouldSideBeRendered: only the bottom is culled
+            block::COBBLESTONE_WALL if side != 0 => true,
             _ => self.default_side(x, y, z, side),
         }
     }
@@ -4377,6 +4381,319 @@ impl<'a, 'b> Rb<'a, 'b> {
             self.vertex(x0, yf + 1.0, z0, u0, v0);
         }
         self.set_render_bounds(0.0, 0.0, 0.0, 1.0, 0.125, 1.0);
+        true
+    }
+
+    /// `renderStandardBlock` over a list of `setRenderBounds` boxes.
+    fn std_boxes(&mut self, x: i32, y: i32, z: i32, boxes: &[[f32; 6]]) {
+        for b in boxes {
+            self.set_render_bounds(
+                b[0] as f64,
+                b[1] as f64,
+                b[2] as f64,
+                b[3] as f64,
+                b[4] as f64,
+                b[5] as f64,
+            );
+            self.render_standard(x, y, z);
+        }
+    }
+
+    /// `renderBlockFenceGate` (render type 21)
+    pub fn render_block_fence_gate(&mut self, x: i32, y: i32, z: i32) -> bool {
+        let meta = self.meta;
+        let open = meta & 4 != 0;
+        let dir = meta & 3;
+        let (mut v9, mut v10, mut v11, mut v12, mut v13, mut v14) =
+            (0.375f32, 0.5625f32, 0.75f32, 0.9375f32, 0.3125f32, 1.0f32);
+        let wall = |dx: i32, dz: i32| self.block_at(x + dx, y, z + dz) == block::COBBLESTONE_WALL;
+        if (dir == 2 || dir == 0) && wall(-1, 0) && wall(1, 0)
+            || (dir == 3 || dir == 1) && wall(0, -1) && wall(0, 1)
+        {
+            v9 -= 0.1875;
+            v10 -= 0.1875;
+            v11 -= 0.1875;
+            v12 -= 0.1875;
+            v13 -= 0.1875;
+            v14 -= 0.1875;
+        }
+        let all = self.renderAllFaces;
+        self.renderAllFaces = true;
+        if dir != 3 && dir != 1 {
+            self.std_boxes(
+                x,
+                y,
+                z,
+                &[
+                    [0.0, v13, 0.4375, 0.125, v14, 0.5625],
+                    [0.875, v13, 0.4375, 1.0, v14, 0.5625],
+                ],
+            );
+        } else {
+            self.uvRotateTop = 1;
+            self.std_boxes(
+                x,
+                y,
+                z,
+                &[
+                    [0.4375, v13, 0.0, 0.5625, v14, 0.125],
+                    [0.4375, v13, 0.875, 0.5625, v14, 1.0],
+                ],
+            );
+            self.uvRotateTop = 0;
+        }
+        if open {
+            if dir == 2 || dir == 0 {
+                self.uvRotateTop = 1;
+            }
+            match dir {
+                3 => self.std_boxes(
+                    x,
+                    y,
+                    z,
+                    &[
+                        [0.8125, v9, 0.0, 0.9375, v12, 0.125],
+                        [0.8125, v9, 0.875, 0.9375, v12, 1.0],
+                        [0.5625, v9, 0.0, 0.8125, v10, 0.125],
+                        [0.5625, v9, 0.875, 0.8125, v10, 1.0],
+                        [0.5625, v11, 0.0, 0.8125, v12, 0.125],
+                        [0.5625, v11, 0.875, 0.8125, v12, 1.0],
+                    ],
+                ),
+                1 => self.std_boxes(
+                    x,
+                    y,
+                    z,
+                    &[
+                        [0.0625, v9, 0.0, 0.1875, v12, 0.125],
+                        [0.0625, v9, 0.875, 0.1875, v12, 1.0],
+                        [0.1875, v9, 0.0, 0.4375, v10, 0.125],
+                        [0.1875, v9, 0.875, 0.4375, v10, 1.0],
+                        [0.1875, v11, 0.0, 0.4375, v12, 0.125],
+                        [0.1875, v11, 0.875, 0.4375, v12, 1.0],
+                    ],
+                ),
+                0 => self.std_boxes(
+                    x,
+                    y,
+                    z,
+                    &[
+                        [0.0, v9, 0.8125, 0.125, v12, 0.9375],
+                        [0.875, v9, 0.8125, 1.0, v12, 0.9375],
+                        [0.0, v9, 0.5625, 0.125, v10, 0.8125],
+                        [0.875, v9, 0.5625, 1.0, v10, 0.8125],
+                        [0.0, v11, 0.5625, 0.125, v12, 0.8125],
+                        [0.875, v11, 0.5625, 1.0, v12, 0.8125],
+                    ],
+                ),
+                _ => self.std_boxes(
+                    x,
+                    y,
+                    z,
+                    &[
+                        [0.0, v9, 0.0625, 0.125, v12, 0.1875],
+                        [0.875, v9, 0.0625, 1.0, v12, 0.1875],
+                        [0.0, v9, 0.1875, 0.125, v10, 0.4375],
+                        [0.875, v9, 0.1875, 1.0, v10, 0.4375],
+                        [0.0, v11, 0.1875, 0.125, v12, 0.4375],
+                        [0.875, v11, 0.1875, 1.0, v12, 0.4375],
+                    ],
+                ),
+            }
+        } else if dir != 3 && dir != 1 {
+            self.std_boxes(
+                x,
+                y,
+                z,
+                &[
+                    [0.375, v9, 0.4375, 0.5, v12, 0.5625],
+                    [0.5, v9, 0.4375, 0.625, v12, 0.5625],
+                    [0.625, v9, 0.4375, 0.875, v10, 0.5625],
+                    [0.625, v11, 0.4375, 0.875, v12, 0.5625],
+                    [0.125, v9, 0.4375, 0.375, v10, 0.5625],
+                    [0.125, v11, 0.4375, 0.375, v12, 0.5625],
+                ],
+            );
+        } else {
+            self.uvRotateTop = 1;
+            self.std_boxes(
+                x,
+                y,
+                z,
+                &[
+                    [0.4375, v9, 0.375, 0.5625, v12, 0.5],
+                    [0.4375, v9, 0.5, 0.5625, v12, 0.625],
+                    [0.4375, v9, 0.625, 0.5625, v10, 0.875],
+                    [0.4375, v11, 0.625, 0.5625, v12, 0.875],
+                    [0.4375, v9, 0.125, 0.5625, v10, 0.375],
+                    [0.4375, v11, 0.125, 0.5625, v12, 0.375],
+                ],
+            );
+        }
+        self.renderAllFaces = all;
+        self.uvRotateTop = 0;
+        self.set_render_bounds(0.0, 0.0, 0.0, 1.0, 1.0, 1.0);
+        true
+    }
+
+    /// `BlockWall.canConnectWallTo`
+    fn wall_connects(&self, x: i32, y: i32, z: i32) -> bool {
+        let id = self.block_at(x, y, z);
+        crate::shapes::wall_connects(id)
+    }
+
+    /// `renderBlockWall` (render type 32)
+    pub fn render_block_wall(&mut self, x: i32, y: i32, z: i32) -> bool {
+        let w = self.wall_connects(x - 1, y, z);
+        let e = self.wall_connects(x + 1, y, z);
+        let n = self.wall_connects(x, y, z - 1);
+        let s = self.wall_connects(x, y, z + 1);
+        let ns = n && s && !w && !e;
+        let ew = !n && !s && w && e;
+        let air_above = block::material(self.block_at(x, y + 1, z)) == block::Material::Air;
+        if (ns || ew) && air_above {
+            if ns {
+                self.std_boxes(x, y, z, &[[0.3125, 0.0, 0.0, 0.6875, 0.8125, 1.0]]);
+            } else {
+                self.std_boxes(x, y, z, &[[0.0, 0.0, 0.3125, 1.0, 0.8125, 0.6875]]);
+            }
+        } else {
+            self.std_boxes(x, y, z, &[[0.25, 0.0, 0.25, 0.75, 1.0, 0.75]]);
+            if w {
+                self.std_boxes(x, y, z, &[[0.0, 0.0, 0.3125, 0.25, 0.8125, 0.6875]]);
+            }
+            if e {
+                self.std_boxes(x, y, z, &[[0.75, 0.0, 0.3125, 1.0, 0.8125, 0.6875]]);
+            }
+            if n {
+                self.std_boxes(x, y, z, &[[0.3125, 0.0, 0.0, 0.6875, 0.8125, 0.25]]);
+            }
+            if s {
+                self.std_boxes(x, y, z, &[[0.3125, 0.0, 0.75, 0.6875, 0.8125, 1.0]]);
+            }
+        }
+        true
+    }
+
+    /// `renderBlockBed` (render type 14); the render bounds are the bed's
+    /// (`setRenderBoundsFromBlock`: 0.5625 high).
+    pub fn render_block_bed(&mut self, x: i32, y: i32, z: i32) -> bool {
+        self.set_render_bounds(0.0, 0.0, 0.0, 1.0, 0.5625, 1.0);
+        let meta = self.meta;
+        let dir = meta & 3;
+        let head = meta & 8 != 0;
+        let (bottom_c, top_c, ns_c, ew_c) = (0.5f32, 1.0f32, 0.8f32, 0.6f32);
+        let own = self.mixed(x, y, z);
+        let (xf, yf, zf) = (x as f64, y as f64, z as f64);
+        // the underside, 3/16 up
+        self.bright = own;
+        self.color(bottom_c, bottom_c, bottom_c);
+        let i = self.icon(x, y, z, 0);
+        let (u0, u1, v0, v1) = (i.min_u(), i.max_u(), i.min_v(), i.max_v());
+        let (x0, x1) = (xf + self.renderMinX, xf + self.renderMaxX);
+        let yb = yf + self.renderMinY + 0.1875;
+        let (z0, z1) = (zf + self.renderMinZ, zf + self.renderMaxZ);
+        self.vertex(x0, yb, z1, u0, v1);
+        self.vertex(x0, yb, z0, u0, v0);
+        self.vertex(x1, yb, z0, u1, v0);
+        self.vertex(x1, yb, z1, u1, v1);
+        // the top, turned to the bed's direction
+        self.bright = self.mixed(x, y + 1, z);
+        self.color(top_c, top_c, top_c);
+        let i = self.icon(x, y, z, 1);
+        let (iu0, iu1, iv0, iv1) = (i.min_u(), i.max_u(), i.min_v(), i.max_v());
+        let (mut a, mut b, mut c, mut d) = (iu0, iu1, iv0, iv0);
+        let (mut e, mut f, mut g, mut h) = (iu0, iu1, iv1, iv1);
+        match dir {
+            0 => {
+                b = iu0;
+                c = iv1;
+                e = iu1;
+                h = iv0;
+            }
+            2 => {
+                a = iu1;
+                d = iv1;
+                f = iu0;
+                g = iv0;
+            }
+            3 => {
+                a = iu1;
+                d = iv1;
+                f = iu0;
+                g = iv0;
+                b = iu0;
+                c = iv1;
+                e = iu1;
+                h = iv0;
+            }
+            _ => {}
+        }
+        let yt = yf + self.renderMaxY;
+        self.vertex(x1, yt, z1, e, g);
+        self.vertex(x1, yt, z0, a, c);
+        self.vertex(x0, yt, z0, b, d);
+        self.vertex(x0, yt, z1, f, h);
+        // Direction.directionToFacing, rotateOpposite
+        const TO_FACING: [i32; 4] = [3, 4, 2, 5];
+        const ROT_OPP: [usize; 4] = [2, 3, 0, 1];
+        let skip = if head {
+            TO_FACING[ROT_OPP[dir as usize]]
+        } else {
+            TO_FACING[dir as usize]
+        };
+        let flip_side = match dir {
+            0 => 5,
+            1 => 3,
+            3 => 2,
+            _ => 4,
+        };
+        if skip != 2 && (self.renderAllFaces || self.should_side(x, y, z - 1, 2)) {
+            self.bright = if self.renderMinZ > 0.0 {
+                own
+            } else {
+                self.mixed(x, y, z - 1)
+            };
+            self.color(ns_c, ns_c, ns_c);
+            self.flipTexture = flip_side == 2;
+            let i = self.icon(x, y, z, 2);
+            self.face_z_neg(xf, yf, zf, i);
+        }
+        if skip != 3 && (self.renderAllFaces || self.should_side(x, y, z + 1, 3)) {
+            self.bright = if self.renderMaxZ < 1.0 {
+                own
+            } else {
+                self.mixed(x, y, z + 1)
+            };
+            self.color(ns_c, ns_c, ns_c);
+            self.flipTexture = flip_side == 3;
+            let i = self.icon(x, y, z, 3);
+            self.face_z_pos(xf, yf, zf, i);
+        }
+        if skip != 4 && (self.renderAllFaces || self.should_side(x - 1, y, z, 4)) {
+            // the game tests renderMinZ here, not renderMinX
+            self.bright = if self.renderMinZ > 0.0 {
+                own
+            } else {
+                self.mixed(x - 1, y, z)
+            };
+            self.color(ew_c, ew_c, ew_c);
+            self.flipTexture = flip_side == 4;
+            let i = self.icon(x, y, z, 4);
+            self.face_x_neg(xf, yf, zf, i);
+        }
+        if skip != 5 && (self.renderAllFaces || self.should_side(x + 1, y, z, 5)) {
+            self.bright = if self.renderMaxZ < 1.0 {
+                own
+            } else {
+                self.mixed(x + 1, y, z)
+            };
+            self.color(ew_c, ew_c, ew_c);
+            self.flipTexture = flip_side == 5;
+            let i = self.icon(x, y, z, 5);
+            self.face_x_pos(xf, yf, zf, i);
+        }
+        self.flipTexture = false;
         true
     }
 }

@@ -554,6 +554,22 @@ fn mesh_block(cx: &Ctx, out: &mut Vec<Vertex>, id: u8, meta: i32, x: i32, y: i32
             rb.set_bounds(crate::shapes::portal_bounds(axis));
             rb.render_standard(x, y, z);
         }
+        Shape::Boxes if id == block::CAKE => {
+            // render type 0 with BlockCake.setBlockBoundsBasedOnState
+            let mut rb = rb::Rb::new(cx, out, id, meta);
+            rb.set_bounds(crate::shapes::cake(meta as u8));
+            rb.render_standard(x, y, z);
+        }
+        Shape::FenceGate => {
+            rb::Rb::new(cx, out, id, meta).render_block_fence_gate(x, y, z);
+        }
+        Shape::Wall => {
+            rb::Rb::new(cx, out, id, meta).render_block_wall(x, y, z);
+        }
+        Shape::Bed => {
+            rb::Rb::new(cx, out, id, meta).render_block_bed(x, y, z);
+        }
+        Shape::Stem => stem(cx, out, id, meta, x, y, z),
         Shape::Boxes if id == block::PISTON_HEAD => {
             // renderPistonExtension (17)
             rb::Rb::new(cx, out, id, meta).render_piston_extension(x, y, z, true);
@@ -1998,6 +2014,128 @@ fn crops(cx: &Ctx, out: &mut Vec<Vertex>, id: u8, meta: i32, x: i32, y: i32, z: 
             light,
             true,
         );
+    }
+}
+
+/// `renderBlockStem` (render type 19): `renderBlockStemSmall` up to the
+/// stem's height, and with a fruit beside a grown stem the bent
+/// `renderBlockStemBig` towards it; tinted by `BlockStem.getRenderColor`.
+fn stem(cx: &Ctx, out: &mut Vec<Vertex>, id: u8, meta: i32, x: i32, y: i32, z: i32) {
+    let r = &cx.r;
+    let light = light_bytes(r.bright(x, y, z));
+    let col = [
+        (meta * 32) as u8,
+        (255 - meta * 8) as u8,
+        (meta * 4) as u8,
+        255,
+    ];
+    let height = crate::shapes::stem(meta as u8)[4] as f64;
+    let fruit = if id == block::PUMPKIN_STEM {
+        block::PUMPKIN
+    } else {
+        block::MELON_BLOCK
+    };
+    // BlockStem.getState
+    let state = if meta < 7 {
+        -1
+    } else if r.block(x - 1, y, z) == fruit {
+        0
+    } else if r.block(x + 1, y, z) == fruit {
+        1
+    } else if r.block(x, y, z - 1) == fruit {
+        2
+    } else if r.block(x, y, z + 1) == fruit {
+        3
+    } else {
+        -1
+    };
+    let (bx, by, bz) = (
+        (x - 16) as f64,
+        y as f64 - 0.0625f32 as f64,
+        (z - 16) as f64,
+    );
+    let mut v = |p: [f64; 3], uv: [f32; 2]| {
+        out.push(Vertex {
+            pos: [p[0] as f32, p[1] as f32, p[2] as f32],
+            uv,
+            color: col,
+            light,
+        });
+    };
+    // renderBlockStemSmall
+    let small = if state < 0 { height } else { 0.5 };
+    if let Some(t) = cx.rect(id, meta, 0) {
+        let (u0, v0, u1) = (t[0], t[1], t[2]);
+        let v1 = (t[1] as f64 + (t[3] - t[1]) as f64 * (small * 16.0) / 16.0) as f32;
+        let x0 = bx + 0.5 - 0.45f32 as f64;
+        let x1 = bx + 0.5 + 0.45f32 as f64;
+        let z0 = bz + 0.5 - 0.45f32 as f64;
+        let z1 = bz + 0.5 + 0.45f32 as f64;
+        let quads = [
+            [
+                (x0, z0, u0, v0, true),
+                (x0, z0, u0, v1, false),
+                (x1, z1, u1, v1, false),
+                (x1, z1, u1, v0, true),
+            ],
+            [
+                (x1, z1, u1, v0, true),
+                (x1, z1, u1, v1, false),
+                (x0, z0, u0, v1, false),
+                (x0, z0, u0, v0, true),
+            ],
+            [
+                (x0, z1, u0, v0, true),
+                (x0, z1, u0, v1, false),
+                (x1, z0, u1, v1, false),
+                (x1, z0, u1, v0, true),
+            ],
+            [
+                (x1, z0, u1, v0, true),
+                (x1, z0, u1, v1, false),
+                (x0, z1, u0, v1, false),
+                (x0, z1, u0, v0, true),
+            ],
+        ];
+        for q in quads {
+            for (px, pz, u, vv, top) in q {
+                v([px, by + if top { small } else { 0.0 }, pz], [u, vv]);
+            }
+        }
+    }
+    // renderBlockStemBig
+    if state >= 0 {
+        let t = cx.atlas.named(if id == block::PUMPKIN_STEM {
+            "pumpkin_stem_connected"
+        } else {
+            "melon_stem_connected"
+        });
+        let (mut u0, v0, mut u1, v1) = (t[0], t[1], t[2], t[3]);
+        if (state + 1) / 2 % 2 == 1 {
+            std::mem::swap(&mut u0, &mut u1);
+        }
+        let (x0, x1, z0, z1) = (bx, bx + 1.0, bz, bz + 1.0);
+        let (xm, zm) = (bx + 0.5, bz + 0.5);
+        let top = by + height;
+        if state < 2 {
+            v([x0, top, zm], [u0, v0]);
+            v([x0, by, zm], [u0, v1]);
+            v([x1, by, zm], [u1, v1]);
+            v([x1, top, zm], [u1, v0]);
+            v([x1, top, zm], [u1, v0]);
+            v([x1, by, zm], [u1, v1]);
+            v([x0, by, zm], [u0, v1]);
+            v([x0, top, zm], [u0, v0]);
+        } else {
+            v([xm, top, z1], [u0, v0]);
+            v([xm, by, z1], [u0, v1]);
+            v([xm, by, z0], [u1, v1]);
+            v([xm, top, z0], [u1, v0]);
+            v([xm, top, z0], [u1, v0]);
+            v([xm, by, z0], [u1, v1]);
+            v([xm, by, z1], [u0, v1]);
+            v([xm, top, z1], [u0, v0]);
+        }
     }
 }
 

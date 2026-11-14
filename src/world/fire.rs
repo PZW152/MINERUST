@@ -8,7 +8,8 @@ use crate::java::JavaRandom;
 /// `BlockFire.encouragements` / `flammabilities` (`BlockFire.init`).
 fn burn(id: u8) -> (i32, i32) {
     match id {
-        PLANKS | FENCE | OAK_STAIRS | BIRCH_STAIRS | SPRUCE_STAIRS | JUNGLE_STAIRS => (5, 20),
+        PLANKS | DOUBLE_WOODEN_SLAB | WOODEN_SLAB | FENCE | OAK_STAIRS | BIRCH_STAIRS
+        | SPRUCE_STAIRS | JUNGLE_STAIRS => (5, 20),
         LOG | LOG2 | COAL_BLOCK => (5, 5),
         LEAVES | LEAVES2 | WOOL => (30, 60),
         BOOKSHELF => (30, 20),
@@ -43,6 +44,12 @@ impl ServerWorld {
 
     /// `World.canLightningStrikeAt`
     fn rain_at(&mut self, x: i32, y: i32, z: i32) -> bool {
+        self.can_lightning_strike_at(x, y, z)
+    }
+
+    /// `World.canLightningStrikeAt`: rain falls here (no snow biome, not
+    /// cold enough to snow, `canSpawnLightningBolt`).
+    pub fn can_lightning_strike_at(&mut self, x: i32, y: i32, z: i32) -> bool {
         if !self.raining || !self.can_see_sky(x, y, z) {
             return false;
         }
@@ -51,7 +58,13 @@ impl ServerWorld {
             return false;
         }
         let b = self.biome(x, z);
-        b.enable_rain && !b.enable_snow
+        if b.enable_snow {
+            return false;
+        }
+        if self.can_snow_at(x, y, z, false) {
+            return false;
+        }
+        b.enable_rain
     }
 
     fn high_humidity(&mut self, x: i32, z: i32) -> bool {

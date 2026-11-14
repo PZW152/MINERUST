@@ -517,6 +517,13 @@ pub struct ServerWorld {
     pub(crate) update_lcg: i32,
     /// `WorldGenBigTree.heightLimit` of each biome object's generator.
     pub big_tree_limit: [i32; 256],
+    /// `WorldGenerator(true)`: trees and huge mushrooms grown in play set
+    /// their blocks with flag 3 instead of 2 (`setBlockAndNotifyAdequately`).
+    pub gen_notify: bool,
+    /// `provider.dimensionId` and `difficultySetting` (0..3), set by the
+    /// server each tick.
+    pub dim: i32,
+    pub difficulty: i32,
     /// `BlockDynamicLiquid.field_149814_b` for flowing water / flowing lava.
     spread_dirs: [[bool; 4]; 2],
     /// Unloaded chunks kept in memory when there is no save directory.
@@ -595,6 +602,9 @@ impl ServerWorld {
             gen_rand: JavaRandom::new(0),
             update_lcg: 0x2F6E2B1,
             big_tree_limit: [0; 256],
+            gen_notify: false,
+            dim: 0,
+            difficulty: 2,
             spread_dirs: [[false; 4]; 2],
             stash: FastMap::default(),
             save_dir: None,
@@ -2169,7 +2179,10 @@ impl ServerWorld {
         if self.solid_top_surface(x, y, z) {
             return true;
         }
-        matches!(self.block(x, y, z), block::FENCE | block::GLASS)
+        matches!(
+            self.block(x, y, z),
+            block::FENCE | block::NETHER_BRICK_FENCE | block::GLASS | block::COBBLESTONE_WALL
+        )
     }
 
     /// `BlockChest.func_149954_e`
@@ -2324,6 +2337,15 @@ impl ServerWorld {
             || self.material(x, y - 1, z + 1) == Material::Water
     }
 
+    /// The `setBlock` flag of `setBlockAndNotifyAdequately`.
+    pub fn gen_flag(&self) -> i32 {
+        if self.gen_notify {
+            3
+        } else {
+            2
+        }
+    }
+
     /// `Block.canPlaceBlockAt`
     pub fn can_place_block_at(&mut self, id: u8, x: i32, y: i32, z: i32) -> bool {
         let replaceable = self.material(x, y, z).replaceable();
@@ -2409,15 +2431,77 @@ impl ServerWorld {
             }
             block::FLOWING_WATER | block::FLOWING_LAVA => self.check_liquid_collisions(id, x, y, z),
             block::SAND | block::GRAVEL | block::ANVIL => self.schedule_update(x, y, z, id, 2),
+            // BlockBush.onNeighborBlockChange -> checkAndDropBlock
             block::TALLGRASS
             | block::DEADBUSH
             | block::YELLOW_FLOWER
             | block::RED_FLOWER
             | block::BROWN_MUSHROOM
             | block::RED_MUSHROOM
-            | block::WATERLILY => {
-                if !self.can_block_stay(id, x, y, z) {
+            | block::WATERLILY
+            | block::SAPLING
+            | block::WHEAT
+            | block::CARROTS
+            | block::POTATOES
+            | block::PUMPKIN_STEM
+            | block::MELON_STEM
+            | block::NETHER_WART => {
+                let mut r = std::mem::replace(&mut self.rand, JavaRandom::new(0));
+                self.check_and_drop(&mut r, id, x, y, z);
+                self.rand = r;
+            }
+            // BlockCocoa.onNeighborBlockChange
+            block::COCOA => {
+                if !self.cocoa_can_stay(x, y, z) {
+                    let m = self.meta(x, y, z);
+                    let mut r = std::mem::replace(&mut self.rand, JavaRandom::new(0));
+                    self.drop_block_with(&mut r, id, m, x, y, z);
+                    self.rand = r;
                     self.set_block(x, y, z, block::AIR, 0, 2);
+                }
+            }
+            // BlockCake.onNeighborBlockChange: no drop
+            block::CAKE => {
+                if !self.material(x, y - 1, z).is_solid() {
+                    self.set_air(x, y, z);
+                }
+            }
+            // BlockFarmland.onNeighborBlockChange
+            block::FARMLAND => {
+                if self.material(x, y + 1, z).is_solid() {
+                    self.set_block(x, y, z, block::DIRT, 0, 3);
+                }
+            }
+            // BlockFenceGate.onNeighborBlockChange
+            block::FENCE_GATE => {
+                let m = self.meta(x, y, z);
+                let p = self.indirectly_powered(x, y, z);
+                if p || super::redstone::can_provide_power(src) {
+                    if p && m & 4 == 0 {
+                        self.set_meta(x, y, z, m | 4, 2);
+                        self.door_sound(x, y, z);
+                    } else if !p && m & 4 != 0 {
+                        self.set_meta(x, y, z, m & !4, 2);
+                        self.door_sound(x, y, z);
+                    }
+                }
+            }
+            // BlockBed.onNeighborBlockChange: a half alone goes, the foot
+            // dropping the bed
+            block::BED => {
+                let m = self.meta(x, y, z);
+                let d = (m & 3) as usize;
+                const FOOT: [(i32, i32); 4] = [(0, 1), (-1, 0), (0, -1), (1, 0)];
+                let (dx, dz) = FOOT[d];
+                if m & 8 != 0 {
+                    if self.block(x - dx, y, z - dz) != block::BED {
+                        self.set_air(x, y, z);
+                    }
+                } else if self.block(x + dx, y, z + dz) != block::BED {
+                    self.set_air(x, y, z);
+                    let mut r = std::mem::replace(&mut self.rand, JavaRandom::new(0));
+                    self.drop_block_with(&mut r, id, m, x, y, z);
+                    self.rand = r;
                 }
             }
             block::DOUBLE_PLANT => {

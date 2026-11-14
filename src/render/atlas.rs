@@ -494,6 +494,11 @@ impl Atlas {
         // BlockBrewingStand.iconBrewingStandBase
         let t = extra(jar, "brewing_stand_base")?;
         names.insert("brewing_stand_base", t);
+        // BlockStem.getStemIcon
+        for n in ["pumpkin_stem_connected", "melon_stem_connected"] {
+            let t = extra(jar, n)?;
+            names.insert(n, t);
+        }
         let sunflower_front = extra(jar, "double_plant_sunflower_front")?;
         let sunflower_back = extra(jar, "double_plant_sunflower_back")?;
         let mut destroy = [0u16; 10];

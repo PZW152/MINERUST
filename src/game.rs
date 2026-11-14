@@ -386,6 +386,11 @@ pub struct Game {
     particle_rand: crate::java::JavaRandom,
     /// `EntityCrit2FX` emitters: mob, "magicCrit", ticks lived.
     crit_emitters: Vec<(u32, bool, i32)>,
+    /// `EntityPlayer.playerLocation` and the bed's direction while
+    /// sleeping, `sleepTimer`, and whether the chat screen is `GuiSleepMP`.
+    sleeping: Option<([i32; 3], i32)>,
+    sleep_timer: i32,
+    sleep_gui: bool,
     particles: crate::particles::Particles,
     dying: std::collections::HashSet<u32>,
     next_step: f32,
@@ -689,6 +694,9 @@ impl Game {
             rain_sound: 0,
             particle_rand: crate::java::JavaRandom::new(77),
             crit_emitters: Vec::new(),
+            sleeping: None,
+            sleep_timer: 0,
+            sleep_gui: false,
             particles: Default::default(),
             dying: Default::default(),
             next_step: 1.0,
@@ -1385,6 +1393,59 @@ impl Game {
                     self.crit_emitters.push((id, magic, 1));
                 }
                 Event::StopSprinting => self.player.sprinting = false,
+                Event::Sleep(Some((bed, pos))) => {
+                    // NetHandlerPlayClient.handleUseBed -> sleepInBedAt on the
+                    // client: posY is what the server worked out
+                    let d = self.world.peek_meta(bed[0], bed[1], bed[2]) as i32 & 3;
+                    self.sleeping = Some((bed, d));
+                    self.sleep_timer = 0;
+                    self.player.motion = [0.0; 3];
+                    self.player.set_eye_position(pos[0], pos[1], pos[2]);
+                    self.player.prev_pos = self.player.pos;
+                    // Minecraft.runTick: GuiSleepMP while sleeping
+                    let _ = self.open_chat("");
+                    self.sleep_gui = true;
+                }
+                Event::Sleep(None) => {
+                    // S0BPacketAnimation 2: wakeUpPlayer(false, false, false)
+                    self.sleeping = None;
+                    self.sleep_timer = 100;
+                    if self.sleep_gui {
+                        self.sleep_gui = false;
+                        if self.chat_screen.take().is_some() {
+                            self.chat.reset_scroll();
+                            self.screen = Screen::Playing;
+                        }
+                    }
+                }
+                Event::BoneMeal([x, y, z]) => {
+                    // ItemDye.func_150918_a(world, x, y, z, 0): 15
+                    // happyVillager inside the block's bounds
+                    let id = self.world.peek_block(x, y, z);
+                    if crate::block::material(id) != Material::Air {
+                        let w = &self.world;
+                        let get =
+                            |a: i32, b: i32, c: i32| (w.peek_block(a, b, c), w.peek_meta(a, b, c));
+                        let m = w.peek_meta(x, y, z);
+                        let top = crate::shapes::selection(&get, id, m, x, y, z)[4] as f64;
+                        for _ in 0..15 {
+                            let (vx, vy, vz, fx, fy, fz) = crate::util::math::item_rand(|r| {
+                                (
+                                    r.next_gaussian() * 0.02,
+                                    r.next_gaussian() * 0.02,
+                                    r.next_gaussian() * 0.02,
+                                    r.next_float() as f64,
+                                    r.next_float() as f64,
+                                    r.next_float() as f64,
+                                )
+                            });
+                            self.particles.happy_villager(
+                                [x as f64 + fx, y as f64 + fy * top, z as f64 + fz],
+                                [vx, vy, vz],
+                            );
+                        }
+                    }
+                }
                 Event::Using(u) => {
                     self.using = u;
                     self.player.using_item = u.is_some();
@@ -1850,7 +1911,16 @@ impl Game {
         if self.riding.is_some() {
             self.tick_boats();
         }
-        if self.world.loaded(pcx << 4, pcz << 4) && !self.stats.dead {
+        // EntityPlayer.onUpdate: the sleep timer
+        if self.sleeping.is_some() {
+            self.sleep_timer = (self.sleep_timer + 1).min(100);
+        } else if self.sleep_timer > 0 {
+            self.sleep_timer += 1;
+            if self.sleep_timer >= 110 {
+                self.sleep_timer = 0;
+            }
+        }
+        if self.world.loaded(pcx << 4, pcz << 4) && !self.stats.dead && self.sleeping.is_none() {
             let input = if self.screen == Screen::Playing {
                 self.input
             } else {
@@ -2656,6 +2726,17 @@ impl Game {
                 }
             }
             _ => {
+                // PlayerControllerMP.clickBlock: C07 START_DIGGING, which the
+                // server answers with onBlockClicked (cake, note block, fire)
+                let side = self.selected.map_or(1, |(_, f)| match f {
+                    [0, -1, 0] => 0,
+                    [0, 1, 0] => 1,
+                    [0, 0, -1] => 2,
+                    [0, 0, 1] => 3,
+                    [-1, 0, 0] => 4,
+                    _ => 5,
+                });
+                let _ = self.sim.commands.send(Command::ClickBlock(pos, side));
                 if step >= 1.0 {
                     self.block_sound(id, pos, "dig");
                     let (dt, dti) = self.debris(pos);
@@ -3425,6 +3506,26 @@ impl Game {
             }
             return Request::None;
         }
+        if self.sleep_gui && self.chat_screen.is_some() && (code == 1 || code == 28 || code == 156)
+        {
+            // GuiSleepMP.keyTyped
+            if code == 1 {
+                let _ = self.sim.commands.send(Command::LeaveBed);
+            } else {
+                let (w, h) = self.gui_size();
+                let atlas = self.atlas.clone();
+                let ui = crate::gui::Ui::new(&atlas, w, h);
+                if let Some(c) = self.chat_screen.as_mut() {
+                    let t: String = c.field.text.iter().collect::<String>().trim().to_string();
+                    if !t.is_empty() {
+                        let _ = self.sim.commands.send(Command::Chat(t));
+                    }
+                    c.field.set_text(&ui, "");
+                }
+                self.chat.reset_scroll();
+            }
+            return Request::None;
+        }
         if let Some(mut c) = self.chat_screen.take() {
             let (w, h) = self.gui_size();
             let atlas = self.atlas.clone();
@@ -3939,7 +4040,20 @@ impl Game {
             }
             Screen::Window => Request::None,
             Screen::Paused => self.menu_mouse(button, true),
-            Screen::Chat => Request::None,
+            Screen::Chat => {
+                // GuiSleepMP's "Leave Bed"
+                if self.sleep_gui && button == 0 {
+                    let (w, h) = self.gui_size();
+                    let (mx, my) = self.gui_mouse();
+                    let (bx, by) = ((w / 2.0).floor() - 100.0, h - 40.0);
+                    if mx >= bx && my >= by && mx < bx + 200.0 && my < by + 20.0 {
+                        // GuiButton.playPressSound
+                        self.sound("gui.button.press", None, 1.0, 1.0);
+                        let _ = self.sim.commands.send(Command::LeaveBed);
+                    }
+                }
+                Request::None
+            }
             Screen::Sign => {
                 // the Done button
                 let (w, h) = self.gui_size();
@@ -4381,7 +4495,14 @@ impl Game {
         let shake = render::mul(&hurt, &bob);
         let mut view: Mat4 = shake;
         view = render::mul(&view, &render::rot_x(b3));
-        if self.third_person > 0 {
+        if let Some((_, d)) = self.sleeping {
+            // EntityRenderer.orientCamera, sleeping: up 0.3, turned to the
+            // bed (the yaw and pitch turns cancel out), then glTranslatef(0,
+            // yOffset - 1.62 + 1, 0) with the sleeping yOffset of 0.2
+            view = render::mul(&view, &render::translate(0.0, 0.3, 0.0));
+            view = render::mul(&view, &render::rot_y(d as f32 * 90.0));
+            view = render::mul(&view, &render::translate(0.0, 0.2 - 1.62 + 1.0, 0.0));
+        } else if self.third_person > 0 {
             // EntityRenderer.orientCamera: back off, short of the blocks
             let mut d = 4.0f64;
             let yaw = p.yaw;
@@ -4425,8 +4546,10 @@ impl Game {
         } else {
             view = render::mul(&view, &render::translate(0.0, 0.0, -0.1));
         }
-        view = render::mul(&view, &render::rot_x(p.pitch));
-        view = render::mul(&view, &render::rot_y(p.yaw + 180.0));
+        if self.sleeping.is_none() {
+            view = render::mul(&view, &render::rot_x(p.pitch));
+            view = render::mul(&view, &render::rot_y(p.yaw + 180.0));
+        }
         let view_proj = render::mul(&proj, &view);
         let tan = (fov.to_radians() * 0.5).tan();
         let row = |i: usize, s: f32| [view[i] * s, view[4 + i] * s, view[8 + i] * s, 0.0];
@@ -4959,7 +5082,13 @@ impl Game {
         }
         let mut hand: Vec<crate::render::mesher::Vertex> = Vec::new();
         // EntityRenderer.renderHand: first person, GUI shown
-        if !self.stats.dead && self.third_person == 0 && !self.hide_gui && self.loading == 2 {
+        // EntityRenderer.renderHand: not while sleeping
+        if !self.stats.dead
+            && self.third_person == 0
+            && self.sleeping.is_none()
+            && !self.hide_gui
+            && self.loading == 2
+        {
             let (lx, ly, lz) = (
                 math::floor_double(eye[0]),
                 math::floor_double(eye[1]),
@@ -5113,6 +5242,16 @@ impl Game {
             jitter.set_seed(self.ticks as i64 * 312871);
             screens::survival_bars(&mut ui, &self.stats, self.ticks as u32, &mut jitter, under);
             self.jitter = jitter;
+        }
+        // GuiIngame: the sleep fade
+        if self.sleep_timer > 0 {
+            let t = self.sleep_timer;
+            let mut f = t as f32 / 100.0;
+            if f > 1.0 {
+                f = 1.0 - (t - 100) as f32 / 10.0;
+            }
+            let a = ((220.0 * f) as i32) as f32 / 255.0;
+            ui.rect(0.0, 0.0, ui.w, ui.h, 1052704, a);
         }
         // GuiIngame: persistantChatGUI.drawChat(updateCounter)
         {
@@ -5274,6 +5413,19 @@ impl Game {
             Screen::Chat => {
                 if let Some(c) = self.chat_screen.as_mut() {
                     c.draw(&mut ui);
+                }
+                if self.sleep_gui {
+                    let label = self.lang.get("multiplayer.stopSleeping").to_string();
+                    let (w, h) = (ui.w, ui.h);
+                    screens::button(
+                        &mut ui,
+                        (w / 2.0).floor() - 100.0,
+                        h - 40.0,
+                        200.0,
+                        &label,
+                        true,
+                        m,
+                    );
                 }
             }
             Screen::Sign => self.draw_sign_editor(&mut ui, m),

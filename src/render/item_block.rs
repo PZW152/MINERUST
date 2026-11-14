@@ -32,6 +32,8 @@ pub fn render_type(id: u8) -> Option<i32> {
         Shape::Chest => 22,
         Shape::Anvil => 35,
         Shape::Fence => 11,
+        Shape::FenceGate => 21,
+        Shape::Wall => 32,
         Shape::Boxes => match id {
             block::ENCHANTING_TABLE
             | block::TRAPDOOR
@@ -223,6 +225,31 @@ pub fn faces(atlas: &Atlas, id: u8, meta: i32) -> Option<(Vec<ItemFace>, Mat4)> 
                 ],
             ] {
                 f.bounds(b.map(|x| x as f64));
+                f.six(&side_meta, 0.0);
+            }
+            half
+        }
+        21 => {
+            // the fence gate: two posts and a bar, metadata 0
+            f.rb.meta = 0;
+            let c = 0.0625f32;
+            for b in [
+                [0.5 - c, 0.3, 0.0, 0.5 + c, 1.0, c * 2.0],
+                [0.5 - c, 0.3, 1.0 - c * 2.0, 0.5 + c, 1.0, 1.0],
+                [0.5 - c, 0.5, 0.0, 0.5 + c, 1.0 - c, 1.0],
+            ] {
+                f.bounds(b.map(|x| x as f64));
+                f.six(&side_meta, 0.0);
+            }
+            half
+        }
+        32 => {
+            // the wall: a straight piece and the post, with the item's metadata
+            for b in [
+                [0.0, 0.0, 0.3125, 1.0, 0.8125, 0.6875],
+                [0.25, 0.0, 0.25, 0.75, 1.0, 0.75],
+            ] {
+                f.bounds(b);
                 f.six(&side_meta, 0.0);
             }
             half

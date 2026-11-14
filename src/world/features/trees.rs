@@ -31,7 +31,8 @@ fn air_or_leaves(id: u8) -> bool {
 
 #[inline]
 fn set(w: &mut ServerWorld, x: i32, y: i32, z: i32, id: u8, meta: i32) {
-    w.set_block(x, y, z, id, meta, 2);
+    let f = w.gen_flag();
+    w.set_block(x, y, z, id, meta, f);
 }
 
 /// Shared clearance check: radius 0 at the base, 1 along the trunk, `top` for

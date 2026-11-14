@@ -160,21 +160,98 @@ pub fn stairs(get: Get, x: i32, y: i32, z: i32, meta: u8) -> Vec<Bx> {
     out
 }
 
-/// `BlockFence.canConnectFenceTo`
-pub fn fence_connects(id: u8) -> bool {
+/// `BlockFence.canConnectFenceTo`: its own kind of fence, a fence gate,
+/// or an opaque full block other than a gourd (oak and nether brick fences
+/// do not join).
+pub fn fence_connects(own: u8, id: u8) -> bool {
     let b = block::info(id);
-    id == block::FENCE
-        || id == block::NETHER_BRICK_FENCE
+    id == own
+        || id == block::FENCE_GATE
+        || (b.material.is_opaque() && b.normal && b.material != Material::Gourd)
+}
+
+/// `BlockWall.canConnectWallTo`
+pub fn wall_connects(id: u8) -> bool {
+    let b = block::info(id);
+    id == block::COBBLESTONE_WALL
+        || id == block::FENCE_GATE
         || (b.material.is_opaque() && b.normal && b.material != Material::Gourd)
 }
 
 fn fence_links(get: Get, x: i32, y: i32, z: i32) -> [bool; 4] {
+    let own = get(x, y, z).0;
+    let own = if block::info(own).shape == block::Shape::Fence {
+        own
+    } else {
+        block::FENCE
+    };
     [
-        fence_connects(get(x, y, z - 1).0),
-        fence_connects(get(x, y, z + 1).0),
-        fence_connects(get(x - 1, y, z).0),
-        fence_connects(get(x + 1, y, z).0),
+        fence_connects(own, get(x, y, z - 1).0),
+        fence_connects(own, get(x, y, z + 1).0),
+        fence_connects(own, get(x - 1, y, z).0),
+        fence_connects(own, get(x + 1, y, z).0),
     ]
+}
+
+fn wall_links(get: Get, x: i32, y: i32, z: i32) -> [bool; 4] {
+    [
+        wall_connects(get(x, y, z - 1).0),
+        wall_connects(get(x, y, z + 1).0),
+        wall_connects(get(x - 1, y, z).0),
+        wall_connects(get(x + 1, y, z).0),
+    ]
+}
+
+/// `BlockWall.setBlockBoundsBasedOnState`
+pub fn wall(get: Get, x: i32, y: i32, z: i32) -> Bx {
+    let [n, s, w, e] = wall_links(get, x, y, z);
+    let (mut x0, mut x1, mut z0, mut z1, mut y1) = (0.25f32, 0.75f32, 0.25f32, 0.75f32, 1.0f32);
+    if n {
+        z0 = 0.0;
+    }
+    if s {
+        z1 = 1.0;
+    }
+    if w {
+        x0 = 0.0;
+    }
+    if e {
+        x1 = 1.0;
+    }
+    if n && s && !w && !e {
+        y1 = 0.8125;
+        x0 = 0.3125;
+        x1 = 0.6875;
+    } else if !n && !s && w && e {
+        y1 = 0.8125;
+        z0 = 0.3125;
+        z1 = 0.6875;
+    }
+    [x0, 0.0, z0, x1, y1, z1]
+}
+
+/// `BlockFenceGate.setBlockBoundsBasedOnState`
+pub fn fence_gate(meta: u8) -> Bx {
+    let d = meta & 3;
+    if d != 2 && d != 0 {
+        [0.375, 0.0, 0.0, 0.625, 1.0, 1.0]
+    } else {
+        [0.0, 0.0, 0.375, 1.0, 1.0, 0.625]
+    }
+}
+
+/// `BlockCake.setBlockBoundsBasedOnState`
+pub fn cake(meta: u8) -> Bx {
+    let f = 0.0625f32;
+    let f1 = (1 + meta as i32 * 2) as f32 / 16.0;
+    [f1, 0.0, f, 1.0 - f, 0.5, 1.0 - f]
+}
+
+/// `BlockStem.setBlockBoundsBasedOnState`
+pub fn stem(meta: u8) -> Bx {
+    let h = (meta as i32 * 2 + 2) as f32 / 16.0;
+    let f = 0.125f32;
+    [0.5 - f, 0.0, 0.5 - f, 0.5 + f, h, 0.5 + f]
 }
 
 /// `BlockFence.addCollisionBoxesToList` (1.5 blocks high).
@@ -488,6 +565,7 @@ pub fn static_boxes(id: u8, meta: u8) -> Vec<Bx> {
         block::END_PORTAL => vec![[0.0, 0.0, 0.0, 1.0, 0.75, 1.0]],
         block::DRAGON_EGG => vec![[0.0625, 0.0, 0.0625, 0.9375, 1.0, 0.9375]],
         block::PISTON_HEAD => piston_head(meta),
+        block::CAKE => vec![cake(meta)],
         _ => vec![FULL],
     }
 }
@@ -505,7 +583,33 @@ pub fn collision(get: Get, id: u8, meta: u8, x: i32, y: i32, z: i32, out: &mut V
         block::Shape::Pane => out.extend(pane(get, id, x, y, z)),
         block::Shape::Door => out.push(door(door_full_meta(get, x, y, z, meta))),
         block::Shape::Ladder => out.push(ladder(meta)),
+        // BlockFenceGate.getCollisionBoundingBoxFromPool: none when open; the
+        // full metadata picks the axis
+        block::Shape::FenceGate => {
+            if meta & 4 == 0 {
+                out.push(if meta != 2 && meta != 0 {
+                    [0.375, 0.0, 0.0, 0.625, 1.5, 1.0]
+                } else {
+                    [0.0, 0.0, 0.375, 1.0, 1.5, 0.625]
+                });
+            }
+        }
+        // BlockWall: its bounds with maxY 1.5
+        block::Shape::Wall => {
+            let mut b = wall(get, x, y, z);
+            b[4] = 1.5;
+            out.push(b);
+        }
+        block::Shape::Stem => {}
+        // BlockBed.setBounds: 9/16 high
+        block::Shape::Bed => out.push([0.0, 0.0, 0.0, 1.0, 0.5625, 1.0]),
         _ => match id {
+            // BlockCake.getCollisionBoundingBoxFromPool: 7/16 high
+            block::CAKE => {
+                let mut b = cake(meta);
+                b[4] = 0.5 - 0.0625;
+                out.push(b);
+            }
             block::FARMLAND => out.push(FULL),
             block::UNPOWERED_REPEATER | block::POWERED_REPEATER => {
                 out.push([0.0, 0.0, 0.0, 1.0, 0.125, 1.0])
@@ -575,6 +679,10 @@ pub fn selection(get: Get, id: u8, meta: u8, x: i32, y: i32, z: i32) -> Bx {
         block::Shape::Pane => union(&pane(get, id, x, y, z)),
         block::Shape::Door => door(door_full_meta(get, x, y, z, meta)),
         block::Shape::Ladder => ladder(meta),
+        block::Shape::FenceGate => fence_gate(meta),
+        block::Shape::Wall => wall(get, x, y, z),
+        block::Shape::Stem => stem(meta),
+        block::Shape::Bed => [0.0, 0.0, 0.0, 1.0, 0.5625, 1.0],
         // BlockSign.setBlockBoundsBasedOnState
         block::Shape::Sign => {
             if id == block::STANDING_SIGN {

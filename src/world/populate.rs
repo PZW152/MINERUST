@@ -357,7 +357,13 @@ fn grow_tree(w: &mut ServerWorld, r: &mut JavaRandom, t: Tree, x: i32, y: i32, z
 }
 
 /// `func_150572_a`: returns `(block, meta)`.
-fn pick_flower(w: &ServerWorld, id: u8, r: &mut JavaRandom, x: i32, z: i32) -> (u8, i32) {
+pub(crate) fn pick_flower(
+    w: &ServerWorld,
+    id: u8,
+    r: &mut JavaRandom,
+    x: i32,
+    z: i32,
+) -> (u8, i32) {
     let plant = &w.provider.terrain.noise.plant;
     match kind(id) {
         Kind::Forest(1) => {

@@ -27,6 +27,8 @@ pub enum Effect {
     Dispense([i32; 3], i32),
     /// `EntityTNTPrimed` with its fuse.
     Tnt([f64; 3], i32),
+    /// `playAuxSFX(2005)`: bone meal took on this block.
+    BoneMeal([i32; 3]),
 }
 
 /// An axis-aligned box in world space.
@@ -814,7 +816,10 @@ impl ServerWorld {
             4 => self.nc(x, y, z + 1),
             _ => {
                 self.solid_top_surface(x, y - 1, z)
-                    || matches!(self.block(x, y - 1, z), FENCE | GLASS)
+                    || matches!(
+                        self.block(x, y - 1, z),
+                        FENCE | NETHER_BRICK_FENCE | GLASS | COBBLESTONE_WALL
+                    )
             }
         }
     }
@@ -1079,7 +1084,7 @@ impl ServerWorld {
         ));
     }
 
-    fn note_trigger(&mut self, x: i32, y: i32, z: i32) {
+    pub(crate) fn note_trigger(&mut self, x: i32, y: i32, z: i32) {
         if block::material(self.block(x, y + 1, z)) != block::Material::Air {
             return;
         }

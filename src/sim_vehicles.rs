@@ -246,7 +246,7 @@ impl Sim {
     /// `EntityPlayer.mountEntity(null)` on the server:
     /// `EntityLivingBase.dismountEntity`, then the attach packet and
     /// `setPlayerLocation`.
-    fn dismount(&mut self) {
+    pub(super) fn dismount(&mut self) {
         let Some(id) = self.riding.take() else {
             return;
         };

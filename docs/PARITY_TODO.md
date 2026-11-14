@@ -42,7 +42,9 @@
       `onSpawnWithEgg` 的其餘部分（殭屍擊退抗性加成、跟隨距離的 `nextGaussian`、蜘蛛騎士、小殭屍）
 - [ ] 生物的藥水效果（`activePotionsMap`：飛濺藥水的持續效果、節肢剋星緩速、凋零骷髏的凋零）
 - [ ] 物品附魔光澤、手持箱子與掉落箱子的模型
-- [ ] 鋤頭耕地（`ItemHoe.onItemUse`）尚未實作
+- [x] 農業：鋤頭耕地、種子／胡蘿蔔／馬鈴薯／南瓜與西瓜種子／地獄疣的種植（`ItemSeeds`、`ItemSeedFood`）、骨粉
+      （`IGrowable` 全部：作物、莖、樹苗、可可、草地長草與花、高草變雙層、雙層植物、蘑菇變巨型蘑菇）與綠色粒子、
+      可可豆種在叢林原木上
 - [ ] 指令：summon、enchant、gamerule、playsound、spreadplayers、testfor 等，Tab 自動補完
 - [ ] 統計與成就（`StatList` / `AchievementList`）與其畫面；資源包、使用統計（Snooper）、直播畫面
 - [x] 船：`EntityBoat` 兩端物理（客戶端預測、`isBoatEmpty`）、`ItemBoat`、`interactFirst` / `mountEntity` /
@@ -79,8 +81,12 @@
 
 ## B. 缺少的方塊
 
-床、蛋糕、染色玻璃片、南瓜梗／西瓜梗、柵欄門、終界箱、指令方塊、信標、圓石牆、頭顱、陷阱箱、測重壓力板、比較器、
-陽光感測器、漏斗、觸發鐵軌、投擲器
+染色玻璃片、終界箱、指令方塊、信標、頭顱、陷阱箱、測重壓力板、比較器、陽光感測器、漏斗、觸發鐵軌、投擲器
+
+- [x] 床（`renderBlockBed`、放置、睡覺、跳過夜晚、重生點、地獄與終界爆炸、`GuiSleepMP` 與「離開床鋪」、
+      變暗的畫面、躺下的視角）；蛋糕（右鍵與左鍵各吃一片）；南瓜梗／西瓜梗（`renderBlockStem`、成長與結果）；
+      柵欄門（`renderBlockFenceGate`、開關、紅石、夾在圓石牆間降低）；圓石牆（`renderBlockWall`、連接、1.5 格碰撞）
+- [ ] 睡覺時玩家模型躺在床上的畫法（第三人稱）、床的物品 3D 圖示（原版是平面，已一致）
 
 - [x] `Command::Use` 帶上點擊位置（`hitX/Y/Z`）：半磚上下半與合併（`ItemSlab`）、樓梯朝向與倒放、活板門上下、梯子、南瓜、藤蔓、絆線鉤、石英柱、乾草捆
 - [x] 客戶端以 `World.rayTraceBlocks` 選取方塊，選取框為方塊實際範圍
@@ -137,7 +143,10 @@
 - [ ] `Entity` 基底：生物與玩家改用 `entity/base.rs`（水流推動、方塊碰撞反應、火）
 - [ ] 實體依區塊分組（`Chunk.entityLists`），影響 `getEntitiesWithinAABB` 的順序
 - [ ] 方塊屬性表（硬度、爆炸抗性）由 `Block.registerBlocks` 生成
-- [ ] 隨機 tick 與排程 tick 統一為 `Block.updateTick`（樹苗、作物、耕地、莖、地獄疣、可可、熔岩點火……）
+- [x] 隨機 tick：作物、莖、樹苗（含 2x2 巨型雲杉／叢林木／黑橡木、1/10 大橡樹）、地獄疣、可可、耕地乾濕、
+      花草失去支撐時掉落、亮紅石礦石變回、雪塊融化、靜止岩漿點火、傳送門生成殭屍豬人（`src/world/growth.rs`）
+- [ ] 隨機 tick 尚缺：按鈕、壓力板、絆線、偵測鐵軌、紅石火把、流動液體的 `updateTick` 被隨機 tick 呼叫時的效果
+      （原版會因此提早放開按鈕等），目前只在排程 tick 執行
 
 方塊破壞粒子以外的全部粒子類型核對、`RenderGlobal` 的雲層 fancy 模式、半透明在區塊內排序、物品附魔光澤、
 生物裝備渲染、名牌、影子、`EntityRenderer` 的視角晃動與受傷傾斜、第三人稱視角、

@@ -199,6 +199,10 @@ pub struct Play {
     pub wear_rand: JavaRandom,
     /// Stacks that broke (`renderBrokenItemStack`) during that time.
     pub broke: Vec<Stack>,
+    /// `EntityPlayer.canEat(false)` of the server player, and the
+    /// `FoodStats.addStats` calls a dig or use made (cake slices).
+    pub can_eat: bool,
+    pub ate: Vec<(i32, f32)>,
     pub inv: Inventory,
     pub open: Open,
     pub mode: GameMode,
@@ -467,6 +471,8 @@ impl Play {
         Play {
             wear_rand: JavaRandom::new(0),
             broke: Vec::new(),
+            can_eat: false,
+            ate: Vec::new(),
             inv: Inventory::default(),
             open: Open::None,
             mode,
@@ -690,6 +696,14 @@ impl Play {
                     // ItemSword cannot break blocks in creative.
                     return;
                 }
+            }
+        }
+        // BlockBed.onBlockHarvested: in creative the head takes the foot
+        // with it (or the foot would drop the bed)
+        if id == block::BED && self.mode == GameMode::Creative && meta & 8 != 0 {
+            let (dx, dz) = [(0, 1), (-1, 0), (0, -1), (1, 0)][(meta & 3) as usize];
+            if w.block(p[0] - dx, p[1], p[2] - dz) == block::BED {
+                w.set_air(p[0] - dx, p[1], p[2] - dz);
             }
         }
         // Container contents spill out.
@@ -927,6 +941,28 @@ impl Play {
                     w.door_sound(x, y, z);
                     return true;
                 }
+                block::FENCE_GATE => {
+                    // BlockFenceGate.onBlockActivated: opens away from the
+                    // player
+                    let [x, y, z] = target;
+                    let mut m = w.meta(x, y, z);
+                    if m & 4 != 0 {
+                        w.set_meta(x, y, z, m & !4, 2);
+                    } else {
+                        let face = ((self.player.1 * 4.0 / 360.0) as f64 + 0.5).floor() as i32 & 3;
+                        if m & 3 == (face + 2) % 4 {
+                            m = face;
+                        }
+                        w.set_meta(x, y, z, m | 4, 2);
+                    }
+                    w.door_sound(x, y, z);
+                    return true;
+                }
+                block::CAKE => {
+                    // BlockCake.onBlockActivated -> func_150036_b
+                    self.eat_cake(w, target);
+                    return true;
+                }
                 block::DISPENSER => {
                     self.tiles
                         .entry(target)
@@ -986,12 +1022,128 @@ impl Play {
             self.damage_held(1);
             return true;
         }
+        let side = match face {
+            [0, -1, 0] => 0,
+            [0, 1, 0] => 1,
+            [0, 0, -1] => 2,
+            [0, 0, 1] => 3,
+            [-1, 0, 0] => 4,
+            _ => 5,
+        };
+        let [tx, ty, tz] = target;
+        // ItemHoe.onItemUse
+        if (290..=294).contains(&held.id) {
+            if side != 0
+                && w.material(tx, ty + 1, tz) == block::Material::Air
+                && (tid == block::GRASS || tid == block::DIRT)
+            {
+                // Blocks.farmland.stepSound (gravel), as ItemBlock plays it
+                let st = block::step_sound(block::FARMLAND);
+                w.redstone_effects
+                    .push(crate::world::redstone::Effect::Sound(
+                        st.step,
+                        [tx as f64 + 0.5, ty as f64 + 0.5, tz as f64 + 0.5],
+                        (st.volume + 1.0) / 2.0,
+                        st.pitch * 0.8,
+                    ));
+                w.set_block(tx, ty, tz, block::FARMLAND, 0, 3);
+                self.damage_held(1);
+                return true;
+            }
+            return false;
+        }
+        if held.id == 355 {
+            // ItemBed.onItemUse: the foot above the clicked top, the head
+            // one block the way the player looks
+            if side != 1 {
+                return false;
+            }
+            let y = ty + 1;
+            let d = ((self.player.1 * 4.0 / 360.0) as f64 + 0.5).floor() as i32 & 3;
+            let (dx, dz) = [(0, 1), (-1, 0), (0, -1), (1, 0)][d as usize];
+            if w.is_air(tx, y, tz)
+                && w.is_air(tx + dx, y, tz + dz)
+                && w.solid_top_surface(tx, y - 1, tz)
+                && w.solid_top_surface(tx + dx, y - 1, tz + dz)
+            {
+                w.set_block(tx, y, tz, block::BED, d, 3);
+                if w.block(tx, y, tz) == block::BED {
+                    w.set_block(tx + dx, y, tz + dz, block::BED, d + 8, 3);
+                }
+                if self.mode == GameMode::Survival {
+                    self.inv.consume_held();
+                    self.inv_dirty = true;
+                }
+                return true;
+            }
+            return false;
+        }
+        // ItemSeeds / ItemSeedFood: the crop on top of its soil
+        let seed = match held.id {
+            295 => Some((block::WHEAT, block::FARMLAND)),
+            361 => Some((block::PUMPKIN_STEM, block::FARMLAND)),
+            362 => Some((block::MELON_STEM, block::FARMLAND)),
+            372 => Some((block::NETHER_WART, block::SOUL_SAND)),
+            391 => Some((block::CARROTS, block::FARMLAND)),
+            392 => Some((block::POTATOES, block::FARMLAND)),
+            _ => None,
+        };
+        if let Some((crop, soil)) = seed {
+            if side != 1 {
+                return false;
+            }
+            if tid == soil && w.is_air(tx, ty + 1, tz) {
+                w.set_block(tx, ty + 1, tz, crop, 0, 3);
+                if self.mode == GameMode::Survival {
+                    self.inv.consume_held();
+                    self.inv_dirty = true;
+                }
+                return true;
+            }
+            return false;
+        }
+        if held.id == 351 {
+            // ItemDye.onItemUse
+            if held.meta == 15 {
+                if w.bone_meal(tx, ty, tz) {
+                    // playAuxSFX(2005): ItemDye.func_150918_a on the client
+                    w.redstone_effects
+                        .push(crate::world::redstone::Effect::BoneMeal([tx, ty, tz]));
+                    if self.mode == GameMode::Survival {
+                        self.inv.consume_held();
+                        self.inv_dirty = true;
+                    }
+                    return true;
+                }
+            } else if held.meta == 3 {
+                // cocoa beans on the side of a jungle log
+                if tid == block::LOG && w.meta(tx, ty, tz) & 3 == 3 {
+                    if side < 2 {
+                        return false;
+                    }
+                    let p = [tx + face[0], ty, tz + face[2]];
+                    if w.is_air(p[0], p[1], p[2]) {
+                        // BlockCocoa.onBlockPlaced: rotateOpposite[facingToDirection[side]]
+                        const FACING_TO_DIR: [i32; 6] = [-1, -1, 2, 0, 1, 3];
+                        let d = (FACING_TO_DIR[side as usize] + 2) & 3;
+                        w.set_block(p[0], p[1], p[2], block::COCOA, d, 2);
+                        if self.mode == GameMode::Survival {
+                            self.inv.consume_held();
+                            self.inv_dirty = true;
+                        }
+                    }
+                    return true;
+                }
+            }
+            return false;
+        }
         let id = match held.id {
             331 => block::REDSTONE_WIRE,
             356 => block::UNPOWERED_REPEATER,
-            // ItemReed for the brewing stand and the cauldron
+            // ItemReed for the brewing stand, the cauldron and the cake
             379 => block::BREWING_STAND,
             380 => block::CAULDRON,
+            354 => block::CAKE,
             _ => match held.block() {
                 Some(id) => id,
                 None => return false,
@@ -1082,6 +1234,20 @@ impl Play {
         };
         let yaw4 = ((self.player.1 * 4.0 / 360.0) as f64 + 0.5).floor() as i32 & 3;
         match id {
+            block::FENCE_GATE => {
+                // BlockFenceGate.canPlaceBlockAt + onBlockPlacedBy
+                if !w.material(p[0], p[1] - 1, p[2]).is_solid() {
+                    return false;
+                }
+                meta = yaw4;
+            }
+            block::CAKE => {
+                // BlockCake.canPlaceBlockAt: canBlockStay
+                if !w.material(p[0], p[1] - 1, p[2]).is_solid() {
+                    return false;
+                }
+                meta = 0;
+            }
             block::LEVER => {
                 // BlockLever.onBlockPlaced + onBlockPlacedBy
                 let k = match side {
@@ -1188,7 +1354,10 @@ impl Play {
             }
             block::STONE_PRESSURE_PLATE | block::WOODEN_PRESSURE_PLATE => {
                 if !w.solid_top_surface(p[0], p[1] - 1, p[2])
-                    && w.block(p[0], p[1] - 1, p[2]) != block::FENCE
+                    && !matches!(
+                        w.block(p[0], p[1] - 1, p[2]),
+                        block::FENCE | block::NETHER_BRICK_FENCE
+                    )
                 {
                     return false;
                 }
@@ -1343,6 +1512,56 @@ impl Play {
             1 => 5,
             2 => 3,
             _ => 4,
+        }
+    }
+
+    /// `BlockCake.func_150036_b`: a slice when the player may eat.
+    fn eat_cake(&mut self, w: &mut ServerWorld, p: Pos) {
+        if self.can_eat {
+            self.ate.push((2, 0.1));
+            self.can_eat = false;
+            let m = w.meta(p[0], p[1], p[2]) + 1;
+            if m >= 6 {
+                w.set_air(p[0], p[1], p[2]);
+            } else {
+                w.set_meta(p[0], p[1], p[2], m, 2);
+            }
+        }
+    }
+
+    /// `ItemInWorldManager.onBlockClicked` in survival: a fire on the
+    /// clicked side goes out (`World.extinguishFire`), then
+    /// `Block.onBlockClicked` (cake, note block).
+    pub fn click_block(&mut self, w: &mut ServerWorld, p: Pos, side: i32) {
+        const OFF: [[i32; 3]; 6] = [
+            [0, -1, 0],
+            [0, 1, 0],
+            [0, 0, -1],
+            [0, 0, 1],
+            [-1, 0, 0],
+            [1, 0, 0],
+        ];
+        if (0..6).contains(&side) {
+            let o = OFF[side as usize];
+            let f = [p[0] + o[0], p[1] + o[1], p[2] + o[2]];
+            if w.block(f[0], f[1], f[2]) == block::FIRE {
+                // playAuxSFXAtEntity(player, 1004): random.fizz
+                let r = || crate::util::math::math_random() as f32;
+                let pitch = 2.6 + (r() - r()) * 0.8;
+                w.redstone_effects
+                    .push(crate::world::redstone::Effect::Sound(
+                        "random.fizz",
+                        [f[0] as f64 + 0.5, f[1] as f64 + 0.5, f[2] as f64 + 0.5],
+                        0.5,
+                        pitch,
+                    ));
+                w.set_air(f[0], f[1], f[2]);
+            }
+        }
+        match w.block(p[0], p[1], p[2]) {
+            block::CAKE => self.eat_cake(w, p),
+            block::NOTEBLOCK => w.note_trigger(p[0], p[1], p[2]),
+            _ => {}
         }
     }
 

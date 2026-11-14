@@ -59,6 +59,8 @@ enum Kind {
     Reddust,
     /// `EntitySpellParticleFX` with its base texture index
     Spell(i32),
+    /// `EntityAuraFX`: no gravity, slowed by 0.99
+    Aura,
 }
 
 pub struct Particles {
@@ -296,6 +298,22 @@ impl Particles {
             p.color[1] *= 0.8;
             p.sprite = Sprite::Index(66);
         }
+    }
+
+    /// `"happyVillager"`: an `EntityAuraFX` on sprite 82, white.
+    pub fn happy_villager(&mut self, pos: [f64; 3], m: [f64; 3]) {
+        let mut p = self.moving(pos, m);
+        let _ = self.r.next_float() * 0.1 + 0.2;
+        p.scale *= self.r.next_float() * 0.6 + 0.5;
+        for v in &mut p.motion {
+            *v *= 0.02f32 as f64;
+        }
+        p.max_age = (20.0 / (crate::util::math::math_random() * 0.8 + 0.2)) as i32;
+        p.no_clip = true;
+        p.color = [1.0, 1.0, 1.0, 1.0];
+        p.kind = Kind::Aura;
+        p.sprite = Sprite::Index(82);
+        self.add(p);
     }
 
     /// `"crit"` (`EntityCritFX`)
@@ -579,7 +597,7 @@ impl Particles {
                     p.color[2] *= 0.9;
                     p.motion[1] -= 0.02;
                 }
-                Kind::Drip | Kind::Note | Kind::Heart => {}
+                Kind::Drip | Kind::Note | Kind::Heart | Kind::Aura => {}
                 _ => {
                     p.motion[1] -= 0.04 * p.gravity as f64;
                 }
@@ -597,6 +615,7 @@ impl Particles {
                 Kind::Crit => 0.7,
                 Kind::Note => 0.66,
                 Kind::Heart => 0.86,
+                Kind::Aura => 0.99,
                 Kind::Rain | Kind::Drip => 0.98,
                 _ => 0.98,
             };

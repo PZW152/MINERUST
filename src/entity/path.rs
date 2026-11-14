@@ -90,10 +90,18 @@ pub fn stand_at(
                         };
                         full & 4 != 0
                     }
+                    // BlockFenceGate.getBlocksMovement: open
+                    block::FENCE_GATE => w.meta(bx, by, bz) & 4 != 0,
+                    // BlockWall.getBlocksMovement
+                    block::COBBLESTONE_WALL => false,
                     _ => !m.blocks_movement(),
                 };
                 if !passable {
-                    if id == block::FENCE || block::info(id).shape == block::Shape::Fence {
+                    // render type 11, the fence gate, render type 32
+                    if block::info(id).shape == block::Shape::Fence
+                        || id == block::FENCE_GATE
+                        || id == block::COBBLESTONE_WALL
+                    {
                         return -3;
                     }
                     if m != Material::Lava {

@@ -4,6 +4,7 @@ pub mod explosion;
 pub mod features;
 pub mod fire;
 pub mod gen;
+pub mod growth;
 pub mod loot;
 pub mod populate;
 pub mod rail;

@@ -117,6 +117,12 @@ pub const JUKEBOX: u8 = 84;
 pub const FENCE: u8 = 85;
 pub const NETHERRACK: u8 = 87;
 pub const SOUL_SAND: u8 = 88;
+pub const BED: u8 = 26;
+pub const CAKE: u8 = 92;
+pub const PUMPKIN_STEM: u8 = 104;
+pub const MELON_STEM: u8 = 105;
+pub const FENCE_GATE: u8 = 107;
+pub const COBBLESTONE_WALL: u8 = 139;
 pub const GLOWSTONE: u8 = 89;
 pub const LIT_PUMPKIN: u8 = 91;
 pub const UNPOWERED_REPEATER: u8 = 93;
@@ -247,6 +253,14 @@ pub enum Shape {
     BrewingStand,
     /// `renderBlockAnvil` (35)
     Anvil,
+    /// `renderBlockFenceGate` (21)
+    FenceGate,
+    /// `renderBlockWall` (32)
+    Wall,
+    /// `renderBlockStem` (19)
+    Stem,
+    /// `renderBlockBed` (14)
+    Bed,
 }
 
 /// `net.minecraft.block.material.Material`
@@ -287,6 +301,8 @@ pub enum Material {
     DragonEgg,
     /// `Material.anvil`: needs a tool, immovable by pistons.
     Anvil,
+    /// `Material.cake`
+    Cake,
 }
 
 impl Material {
@@ -651,6 +667,12 @@ fn build() -> [BlockInfo; 256] {
         }
     }
     t[FENCE as usize] = base(Shape::Fence, M::Wood, false);
+    t[FENCE_GATE as usize] = base(Shape::FenceGate, M::Wood, false);
+    t[COBBLESTONE_WALL as usize] = base(Shape::Wall, M::Rock, false);
+    t[PUMPKIN_STEM as usize] = base(Shape::Stem, M::Plants, false);
+    t[MELON_STEM as usize] = base(Shape::Stem, M::Plants, false);
+    t[CAKE as usize] = base(Shape::Boxes, M::Cake, false);
+    t[BED as usize] = base(Shape::Bed, M::Cloth, false);
     t[GLASS_PANE as usize] = base(Shape::Pane, M::Glass, false);
     t[IRON_BARS as usize] = base(Shape::Pane, M::Iron, false);
     t[WOODEN_DOOR as usize] = base(Shape::Door, M::Wood, false);
@@ -902,6 +924,57 @@ pub fn texture_name(id: u8, meta: u8, face: usize) -> Option<&'static str> {
         }
         COBBLESTONE => "cobblestone",
         CHEST => "planks_oak",
+        // BlockFenceGate.getIcon: the oak planks
+        FENCE_GATE => "planks_oak",
+        // BlockWall.getIcon
+        COBBLESTONE_WALL => {
+            if meta == 1 {
+                "cobblestone_mossy"
+            } else {
+                "cobblestone"
+            }
+        }
+        PUMPKIN_STEM => "pumpkin_stem_disconnected",
+        MELON_STEM => "melon_stem_disconnected",
+        // BlockCake.getIcon
+        CAKE => match face {
+            1 => "cake_top",
+            0 => "cake_bottom",
+            4 if meta > 0 => "cake_inner",
+            _ => "cake_side",
+        },
+        // BlockBed.getIcon with Direction.bedDirection
+        BED => {
+            if face == 0 {
+                "planks_oak"
+            } else {
+                const BED_DIR: [[usize; 6]; 4] = [
+                    [1, 0, 3, 2, 5, 4],
+                    [1, 0, 5, 4, 2, 3],
+                    [1, 0, 2, 3, 4, 5],
+                    [1, 0, 4, 5, 3, 2],
+                ];
+                let k = BED_DIR[(meta & 3) as usize][face];
+                let head = meta & 8 != 0;
+                if head && k == 2 || !head && k == 3 {
+                    if head {
+                        "bed_head_end"
+                    } else {
+                        "bed_feet_end"
+                    }
+                } else if k == 5 || k == 4 {
+                    if head {
+                        "bed_head_side"
+                    } else {
+                        "bed_feet_side"
+                    }
+                } else if head {
+                    "bed_head_top"
+                } else {
+                    "bed_feet_top"
+                }
+            }
+        }
         // BlockWood.getIcon: metadata out of range is oak
         PLANKS => [
             "planks_oak",

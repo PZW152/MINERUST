@@ -167,6 +167,16 @@ java -cp "out;$CP" XxxHarness tools/xxx_1710.txt
   玩家身上的盔甲在一個 tick 內由 `ServerPlayer.armor_items` 持有（`Sim::armor_in` / `armor_out` 與物品欄同步），
   受傷時當場耗損（耐久附魔用玩家自己的 `e.rand`），保護附魔的隨機部分用 `EnchantmentHelper` 自己的靜態亂數（`enchant::enchantment_rand`）。
   `Item.itemRand` 是 `util::math::item_rand`。生物受傷分 `damage`（無視護甲）、`hurt(.., blockable)`、`drown`（不呼叫 `setBeenAttacked`）。
+- **隨機 tick 與成長**（`src/world/growth.rs`）：`ticks::ticks_randomly` 決定哪些方塊在隨機 tick 呼叫 `updateTick`；
+  作物、莖、樹苗、地獄疣、可可、耕地等在 `ServerWorld::growth_tick`。隨機 tick 期間世界亂數被「借出」（`std::mem::replace`），
+  所以這裡的函式一律用傳進來的 `r`，掉落用 `drop_block_with(r, ..)`，不能呼叫會用 `self.rand` 的 `drop_block_with_chance`。
+  樹苗長成樹時 `ServerWorld.gen_notify = true`，讓樹木產生器的 `set` 用 flag 3（`WorldGenerator(true)`）。
+  骨粉是 `ServerWorld::bone_meal`，客戶端的綠色粒子走 `Event::BoneMeal`。
+- **床**（`src/sim_bed.rs`）：右鍵床由 `Sim::use_bed` 處理（需要玩家位置與附近的怪物，所以不在 `play.rs`）；`Sim.sleeping`、
+  `sleep_timer`、`bed_spawn`（存在玩家 NBT 的 `SpawnX/Y/Z`）。睡滿 100 tick 就跳到隔天早上並清掉雨（`resetRainAndThunder`）。
+  客戶端：`Event::Sleep` → `Game.sleeping`、凍結玩家物理、開 `GuiSleepMP`（`chat_screen` + `sleep_gui`）、畫面變暗、
+  `orientCamera` 的躺姿（平移 0.3、轉向床的方向、`yOffset - 1.62 + 1`）。左鍵開始挖掘時送 `Command::ClickBlock`
+  （`onBlockClicked`：吃蛋糕、彈音符盒、打熄火）。
 - 客戶端只有伺服器送來的快照；容器點擊在客戶端用同一份 `container.rs` 預測，伺服器的 `clicks` 計數讓客戶端丟掉過時的快照。
 - 生物在客戶端有自己的副本：伺服器端 `Mob::track()` 模擬 `EntityTrackerEntry`（1/32 座標、4/32 門檻、S19 頭部），
   客戶端以三步內插（`setPositionAndRotation2`）、`updateDistance` 與肢體擺動自行計算。
@@ -260,6 +270,9 @@ MINERUST_BENCH=10 minerust --seed 12345 --no-save --size 1920 1080 --distance 16
 - 鐵砧：方塊（`renderBlockAnvil` 四個方塊與 uvRotate、損壞頂面、朝向、碰撞箱、掉落、下落與落下實體的繪製、
   物品圖示的 3D 模型）、`ContainerRepair`（`updateRepairOutput` 與原版 25 組比對一致、`canTakeStack`、
   扣等級、12% 損壞與音效、關閉時掉出）、`GuiRepair`（名稱欄、費用文字與三重陰影、紅叉）、`MC|ItemName`
+- 農業與床（2026-11-14，使用者：「優先把試玩時會明顯發現未完成的東西先做完」）：以前作物、樹苗、地獄疣、可可
+  完全不會長（隨機 tick 清單裡沒有它們），種子也種不下去、鋤頭不能耕地、沒有骨粉，床／蛋糕／柵欄門／圓石牆／莖根本不存在。
+  現在全部照原版類別移植，見第 4 節「隨機 tick 與成長」與「床」。
 - 附魔效果（2026-11-14）：近戰改由伺服器計算（見第 4 節「近戰與附魔」），保護系列、水下呼吸、親水性、效率、荊棘、耐久、
   弓的四種附魔都已生效；生物死亡掉落逐類別移植並加上掠奪
 - 方塊物品的 3D 模型：`render/item_block.rs` 移植 `renderBlockAsItem`（`renderItemIn3d` 接受的 render type 0/10/11/13/16/26/27/31/35/39，
@@ -303,7 +316,7 @@ MINERUST_BENCH=10 minerust --seed 12345 --no-save --size 1920 1080 --distance 16
    伺服器只播 `random.break`，而且音高的世界亂數延到 tick 尾才抽）、附魔光澤。
    **生物裝備整套沒有做**（`EntityLiving.equipment`：殭屍與骷髏的隨機盔甲與附魔、骷髏手上的弓、拿起掉落物、掉落裝備），
    `onSpawnWithEgg` 也只做了羊、村民、馬：殭屍的擊退抗性加成（目前固定 0，亂數仍照抽）、所有生物的跟隨距離 `nextGaussian`、
-   蜘蛛騎士、小殭屍、凋零骷髏都還沒有。鋤頭耕地也還沒做。
+   蜘蛛騎士、小殭屍、凋零骷髏都還沒有。
    掉落的另外幾條路徑還沒改走 `drops.rs`：`harvestBlock` 的覆寫（剪刀剪樹葉／草／藤蔓、冰、雪片仍用舊的 `item::drops`）、
    水沖掉火把與植物失去支撐時的掉落、樹葉腐爛。`item::has_subtypes` 是近似（`max_damage == 0`），應改為原版 `getHasSubtypes` 的表。
 1b. （已完成基本形）客戶端預測放置／破壞方塊，見第 4 節「客戶端預測」。尚未預測的：有朝向或需要依附的方塊（原木、活塞、熔爐、
@@ -484,3 +497,21 @@ MINERUST_BENCH=10 minerust --seed 12345 --no-save --size 1920 1080 --distance 16
   基準：同時段重編上一個提交 960 fps／伺服器 5.6 ms，本次 936–986 fps／5.7–5.8 ms，沒有退步（見第 5.3 節的注意）。
   爆擊粒子與附魔爆擊的外觀**只有編譯與邏輯對照**，沒有截圖驗證（截圖模式沒有自動攻擊的參數）。
   **留下**：見第 7 節 1a（生物裝備、生物藥水效果、`onSpawnWithEgg`、鋤頭、釣魚）。
+- `本次（2026-11-14，農業、床與缺少的常見方塊）`：使用者要求「優先把試玩過程中明顯會發現未完成的東西先做完」。盤點後最明顯的是：
+  作物與樹苗永遠不會長、種子種不下去、鋤頭沒有作用、沒有骨粉、床不存在（第一個晚上就會發現）。
+  - 隨機 tick：作物（`BlockCrops.updateTick` 的生長機率 `getMoisture`）、莖（長滿後在旁邊結出南瓜／西瓜）、樹苗（先標記再長，
+    1/10 大橡樹、2x2 巨型雲杉／叢林木、黑橡木必須 2x2、樣式失敗時放回樹苗）、地獄疣、可可、耕地（附近有水變濕、
+    沒有就變乾、乾了又沒作物就變泥土、下雨會濕）、花草作物失去支撐時**掉落物品**（以前直接消失）、亮紅石礦石變回、
+    雪塊在光下融化、靜止岩漿點燃周圍、傳送門生成殭屍豬人。
+  - 物品：鋤頭（草地／泥土，耗損）、六種種子、骨粉（各 `IGrowable` 的 `canFertilize` / `shouldFertilize` / `fertilize`）、
+    可可豆、蛋糕、床。左鍵蛋糕也會吃（`onBlockClicked`），左鍵也能打熄火。
+  - 新方塊：床、蛋糕、南瓜梗、西瓜梗、柵欄門、圓石牆，各自的繪製（`rb.rs` 的 `render_block_fence_gate`、`render_block_wall`、
+    `render_block_bed`、`mesher.rs` 的 `stem`）、碰撞、選取框、物品 3D 圖示（柵欄門、圓石牆）、硬度與爆炸抗性、尋路（柵欄門開著可走）。
+    貼圖已經過 `block_textures_match_the_game`（床的六面依方向也一致）。
+  - 順帶修正：橡木柵欄與地獄磚柵欄以前會互相連接（原版不會）、柵欄會連到柵欄門、木半磚可燃、火把可放在地獄磚柵欄與圓石牆上。
+  - 兩個舊測試（苦力怕、狼）在新隨機 tick 下失敗：查出是測試沒先把玩家移到平台上，玩家還在地面 y=68，與平台上的生物相距超過
+    128 格，原版的 `despawnEntity` 就把牠們移除了；以前只是剛好沒碰到每 40 tick 一次的檢查。已修正測試。
+  **驗證**：新增 `farming_from_hoe_to_harvest`、`stems_bear_fruit_and_saplings_grow`、`cake_and_fence_gate`、`sleeping_skips_the_night`，
+  `cargo test --release` 99 項通過；截圖確認作物、莖結果、柵欄門開關、圓石牆、蛋糕、床，以及睡覺畫面（躺姿、變暗、離開床鋪按鈕）。
+  基準：同時段交替量上一個提交 944–1,122 fps，本次 867–1,095 fps，伺服器 tick 都約 6 ms，沒有退步。
+  **留下**：睡覺時第三人稱的躺姿模型；隨機 tick 對按鈕／壓力板／紅石火把／流動液體的效果；生物裝備、生物藥水效果、附魔光澤。
