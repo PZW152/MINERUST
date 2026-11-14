@@ -385,6 +385,14 @@ pub struct Mob {
     /// `EnchantmentHelper.getLootingModifier` of the player whose damage
     /// was the last to land (0 for any other source), for `onDeath`.
     pub looting: i32,
+    /// `EntityLiving.equipment` (held item, boots, leggings, chestplate,
+    /// helmet) and `equipmentDropChances`.
+    pub equipment: [Option<Stack>; 5],
+    pub drop_chances: [f32; 5],
+    /// `canPickUpLoot`
+    pub can_pick_up_loot: bool,
+    /// The zombie's "Random spawn bonus" to knockback resistance.
+    pub kb_resist: f64,
     pub persistent: bool,
     // per-kind state
     /// Sheep fleece colour / villager profession / skeleton type.
@@ -598,6 +606,8 @@ pub enum Hit {
         kind: Kind,
         /// the attacker's id (Thorns strikes back at it)
         by: u32,
+        /// Fire Aspect of the held weapon: `setFire(level * 4)` on a hit
+        fire: i32,
         amount: f32,
         knock: [f64; 3],
         from: [f64; 3],
@@ -715,6 +725,10 @@ impl Mob {
             target_player: false,
             recently_hit: 0,
             looting: 0,
+            equipment: [None; 5],
+            drop_chances: [0.085; 5],
+            can_pick_up_loot: false,
+            kb_resist: 0.0,
             persistent: false,
             variant: 0,
             sheared: false,
@@ -860,9 +874,71 @@ impl Mob {
         };
     }
 
-    /// `EntitySheep.onSpawnWithEgg` / villager profession and the like.
-    pub fn on_spawn(&mut self, world_rand: &mut JavaRandom) {
+    /// `onSpawnWithEgg`: `EntityLiving`'s follow-range bonus for all but
+    /// the cave spider, then each class's own part.
+    pub fn on_spawn(&mut self, world_rand: &mut JavaRandom, cx: &SpawnCtx) {
+        if self.kind != Kind::CaveSpider {
+            // followRange "Random spawn bonus" (no follow-range attribute
+            // is read here yet; the draw keeps the mob's random in step)
+            let _ = self.rand.next_gaussian() * 0.05;
+        }
         match self.kind {
+            Kind::Skeleton => {
+                // EntitySkeleton.onSpawnWithEgg
+                if cx.nether && self.rand.next_int_n(5) > 0 {
+                    self.variant = 1;
+                    let p = self.pos;
+                    self.set_position(p[0], p[1], p[2]);
+                    self.equipment[0] = Some(Stack::new(272, 0, 1));
+                } else {
+                    self.add_random_armor(cx);
+                    self.equipment[0] = Some(Stack::new(261, 0, 1));
+                    self.enchant_equipment(cx);
+                }
+                self.can_pick_up_loot = self.rand.next_float() < 0.55 * cx.tension;
+                self.halloween(cx);
+            }
+            Kind::Zombie | Kind::PigZombie => {
+                // EntityZombie.onSpawnWithEgg
+                let t = cx.tension;
+                self.can_pick_up_loot = self.rand.next_float() < 0.55 * t;
+                // EntityZombie$GroupData: child and villager from the world's
+                // random (not carried through a pack yet)
+                let child = world_rand.next_float() < 0.05;
+                let villager = world_rand.next_float() < 0.05;
+                let _ = villager;
+                if child {
+                    // the chicken-jockey rolls (an existing chicken nearby,
+                    // else a new one); baby zombies, zombie villagers and
+                    // jockeys are not made yet (HANDOFF section 7)
+                    if world_rand.next_float() >= 0.05 {
+                        let _ = world_rand.next_float() < 0.05;
+                    }
+                }
+                // setBreakDoorsAItask
+                let _ = self.rand.next_float() < t * 0.1;
+                if self.kind == Kind::PigZombie {
+                    // EntityPigZombie.addRandomArmor
+                    self.equipment[0] = Some(Stack::new(283, 0, 1));
+                } else {
+                    self.add_random_armor(cx);
+                    let p = if cx.hard { 0.05 } else { 0.01 };
+                    if self.rand.next_float() < p {
+                        let k = self.rand.next_int_n(3);
+                        self.equipment[0] = Some(Stack::new(if k == 0 { 267 } else { 256 }, 0, 1));
+                    }
+                }
+                self.enchant_equipment(cx);
+                self.halloween(cx);
+                self.kb_resist = self.rand.next_double() * 0.05f32 as f64;
+                let _follow = self.rand.next_double() * 1.5 * t as f64;
+                if self.rand.next_float() < t * 0.05 {
+                    // leader zombie: reinforcement chance and max health
+                    let _ = self.rand.next_double();
+                    let k = self.rand.next_double() * 3.0 + 1.0;
+                    self.health = (self.kind.max_health() as f64 * (1.0 + k)) as f32;
+                }
+            }
             Kind::Sheep => {
                 // EntitySheep.getRandomFleeceColor
                 let i = world_rand.next_int_n(100);
@@ -896,6 +972,118 @@ impl Mob {
                 }
             }
             _ => {}
+        }
+    }
+
+    /// `EntityLiving.addRandomArmor`
+    fn add_random_armor(&mut self, cx: &SpawnCtx) {
+        if self.rand.next_float() < 0.15 * cx.tension {
+            let mut tier = self.rand.next_int_n(2);
+            let stop = if cx.hard { 0.1 } else { 0.25 };
+            for _ in 0..3 {
+                if self.rand.next_float() < 0.095 {
+                    tier += 1;
+                }
+            }
+            for k in (0..4).rev() {
+                if k < 3 && self.rand.next_float() < stop {
+                    break;
+                }
+                if self.equipment[k + 1].is_none() {
+                    if let Some(id) = armor_item_for_slot(k + 1, tier) {
+                        self.equipment[k + 1] = Some(Stack::new(id, 0, 1));
+                    }
+                }
+            }
+        }
+    }
+
+    /// `EntityLiving.enchantEquipment`
+    fn enchant_equipment(&mut self, cx: &SpawnCtx) {
+        let t = cx.tension;
+        if let Some(s) = self.equipment[0] {
+            if self.rand.next_float() < 0.25 * t {
+                let lvl = (5.0 + t * self.rand.next_int_n(18) as f32) as i32;
+                self.equipment[0] = Some(add_random_enchantment(&mut self.rand, s, lvl));
+            }
+        }
+        for k in 0..4 {
+            if let Some(s) = self.equipment[k + 1] {
+                if self.rand.next_float() < 0.5 * t {
+                    let lvl = (5.0 + t * self.rand.next_int_n(18) as f32) as i32;
+                    self.equipment[k + 1] = Some(add_random_enchantment(&mut self.rand, s, lvl));
+                }
+            }
+        }
+    }
+
+    /// The pumpkin of October 31st (`World.getCurrentDate`).
+    fn halloween(&mut self, cx: &SpawnCtx) {
+        if self.equipment[4].is_none() && cx.halloween && self.rand.next_float() < 0.25 {
+            let lit = self.rand.next_float() < 0.1;
+            self.equipment[4] = Some(Stack::new(if lit { 91 } else { 86 }, 0, 1));
+            self.drop_chances[4] = 0.0;
+        }
+    }
+
+    /// The end of `EntitySkeleton.attackEntityWithRangedAttack`: the held
+    /// bow's Power, Punch and Flame, and fire from a wither skeleton.
+    pub fn bow_enchantments(&self, a: &mut Arrow) {
+        use crate::enchant;
+        let held = self.equipment[0];
+        let power = enchant::level(enchant::POWER, held.as_ref());
+        let punch = enchant::level(enchant::PUNCH, held.as_ref());
+        if power > 0 {
+            a.damage += power as f64 * 0.5 + 0.5;
+        }
+        if punch > 0 {
+            a.knockback = punch;
+        }
+        if enchant::level(enchant::FLAME, held.as_ref()) > 0 || self.variant == 1 {
+            a.e.set_fire(100);
+        }
+    }
+
+    /// `getTotalArmorValue`: the worn pieces plus the zombie's 2.
+    pub fn total_armor(&self) -> i32 {
+        let worn: i32 = self.equipment[1..]
+            .iter()
+            .flatten()
+            .filter_map(|s| crate::inventory::armor_points(s.id))
+            .sum();
+        let v = worn + self.kind.natural_armor();
+        if matches!(self.kind, Kind::Zombie | Kind::PigZombie) {
+            v.min(20)
+        } else {
+            v
+        }
+    }
+
+    /// `EntityLiving.dropEquipment(recentlyHit, looting)`
+    fn drop_equipment(&mut self, hit: bool, looting: i32, v: &mut Vec<Stack>) {
+        for j in 0..5 {
+            let Some(mut s) = self.equipment[j] else {
+                continue;
+            };
+            let always = self.drop_chances[j] > 1.0;
+            if (hit || always)
+                && self.rand.next_float() - looting as f32 * 0.01 < self.drop_chances[j]
+            {
+                let max = crate::item::max_damage(s.id);
+                if !always && max > 0 {
+                    let k = (max - 25).max(1);
+                    let inner = self.rand.next_int_n(k) + 1;
+                    let mut l = max - self.rand.next_int_n(inner);
+                    if l > k {
+                        l = k;
+                    }
+                    if l < 1 {
+                        l = 1;
+                    }
+                    s.meta = l;
+                }
+                v.push(s);
+            }
         }
     }
 
@@ -1596,7 +1784,7 @@ impl Mob {
     /// (the zombie's spawn bonus comes with `onSpawnWithEgg`, not ported),
     /// but the draw happens all the same.
     fn knock_back(&mut self, dx: f64, dz: f64) {
-        if self.rand.next_double() < 0.0 {
+        if self.rand.next_double() < self.kb_resist {
             return;
         }
         let f = math::sqrt_double(dx * dx + dz * dz) as f64;
@@ -1618,7 +1806,7 @@ impl Mob {
         if !blockable {
             return a;
         }
-        let k = 25 - self.kind.natural_armor();
+        let k = 25 - self.total_armor();
         let f = a * k as f32;
         f / 25.0
     }
@@ -1630,6 +1818,7 @@ impl Mob {
     /// own `EntityItem`.
     fn drops(&mut self, by_player: bool, looting: i32) -> Vec<Stack> {
         let mut v = self.drop_few_items(by_player, looting);
+        self.drop_equipment(by_player, looting, &mut v);
         if by_player {
             let j = self.rand.next_int_n(200) - looting;
             if j < 5 {
@@ -2195,7 +2384,27 @@ impl Mobs {
         self.next_id += 1;
         let seed = self.rand.next_long();
         let mut m = Mob::new(id, kind, pos, yaw, seed);
-        m.on_spawn(world_rand);
+        let cx = SpawnCtx::default();
+        m.on_spawn(world_rand, &cx);
+        self.list.push(m);
+        id
+    }
+
+    /// `spawn` with the world's local difficulty and dimension.
+    pub fn spawn_in(
+        &mut self,
+        w: &mut ServerWorld,
+        kind: Kind,
+        pos: [f64; 3],
+        yaw: f32,
+        world_rand: &mut JavaRandom,
+    ) -> u32 {
+        let id = self.next_id;
+        self.next_id += 1;
+        let seed = self.rand.next_long();
+        let mut m = Mob::new(id, kind, pos, yaw, seed);
+        let cx = SpawnCtx::of(w, pos);
+        m.on_spawn(world_rand, &cx);
         self.list.push(m);
         id
     }
@@ -2812,8 +3021,16 @@ impl Mobs {
             .iter()
             .filter(|m| m.health > 0.0)
             .map(|m| {
+                // field 13: the equipment (`|` between slots, `-` empty),
+                // field 14: canPickUpLoot and the drop chances
+                let eq: Vec<String> = m
+                    .equipment
+                    .iter()
+                    .map(|s| s.map_or_else(|| "-".to_string(), |s| s.to_code()))
+                    .collect();
+                let dc: Vec<String> = m.drop_chances.iter().map(|c| c.to_string()).collect();
                 format!(
-                    "{},{:?},{:?},{:?},{},{},{},{},{},{},{},{},{}",
+                    "{},{:?},{:?},{:?},{},{},{},{},{},{},{},{},{},{},{}|{}",
                     m.kind.id(),
                     m.pos[0],
                     m.pos[1],
@@ -2826,7 +3043,10 @@ impl Mobs {
                     m.tamed as i32 | (m.sitting as i32) << 1 | (m.player_made as i32) << 2,
                     m.carried,
                     m.carried_meta,
-                    m.angry as i32
+                    m.angry as i32,
+                    eq.join("|"),
+                    m.can_pick_up_loot as i32,
+                    dc.join("|")
                 )
             })
             .collect()
@@ -2913,6 +3133,25 @@ impl Mobs {
             Kind::PigZombie => v.push(("Anger", Nbt::Short(m.anger as i16))),
             _ => {}
         }
+        // EntityLiving.writeEntityToNBT: CanPickUpLoot, Equipment, DropChances
+        v.push(("CanPickUpLoot", Nbt::Byte(m.can_pick_up_loot as i8)));
+        v.push((
+            "Equipment",
+            Nbt::List(
+                10,
+                m.equipment
+                    .iter()
+                    .map(|s| match s {
+                        Some(s) => crate::world::anvil::item_nbt(None, s),
+                        None => compound(vec![]),
+                    })
+                    .collect(),
+            ),
+        ));
+        v.push((
+            "DropChances",
+            Nbt::List(5, m.drop_chances.iter().map(|&c| Nbt::Float(c)).collect()),
+        ));
         compound(v)
     }
 
@@ -2981,6 +3220,15 @@ impl Mobs {
             }
         }
         m.persistent = t.int("PersistenceRequired").unwrap_or(0) != 0;
+        m.can_pick_up_loot = t.int("CanPickUpLoot").unwrap_or(0) != 0;
+        for (k, e) in t.list("Equipment").iter().take(5).enumerate() {
+            m.equipment[k] = crate::world::anvil::item_from_nbt(e);
+        }
+        for (k, c) in t.list("DropChances").iter().take(5).enumerate() {
+            if let Nbt::Float(c) = c {
+                m.drop_chances[k] = *c;
+            }
+        }
         self.list.push(m);
         Some(id)
     }
@@ -3012,6 +3260,16 @@ impl Mobs {
             m.carried = f[10].parse().ok()?;
             m.carried_meta = f[11].parse().ok()?;
             m.angry = f[12] == "1";
+        }
+        if f.len() >= 15 {
+            for (k, c) in f[13].split('|').take(5).enumerate() {
+                m.equipment[k] = crate::item::Stack::from_code(c);
+            }
+            let mut g = f[14].split('|');
+            m.can_pick_up_loot = g.next() == Some("1");
+            for (k, c) in g.take(5).enumerate() {
+                m.drop_chances[k] = c.parse().unwrap_or(0.085);
+            }
         }
         self.list.push(m);
         Some(())
@@ -3746,6 +4004,7 @@ fn chase(m: &mut Mob, w: &mut ServerWorld, player: &PlayerInfo, out: &mut Outcom
         out.hits.push(Hit::Melee {
             kind: m.kind,
             by: m.id,
+            fire: 0,
             amount,
             knock: [0.0; 3],
             from: m.pos,
@@ -3801,9 +4060,7 @@ fn ranged(
             );
             a.damage =
                 (k * 2.0) as f64 + (m.rand.next_gaussian() * 0.25 + (diff as f32 * 0.11f32) as f64);
-            if m.variant == 1 {
-                a.e.set_fire(100);
-            }
+            m.bow_enchantments(&mut a);
             arrows.push(a);
             out.sounds.push((
                 "random.bow",
@@ -4497,16 +4754,8 @@ pub fn natural_spawning(
                     let yaw = rand.next_float() * 360.0;
                     let mut m = mobs.make(kind, [fx, fy, fz], yaw);
                     if can_spawn_here(w, &mut m, &mut rand) {
-                        m.on_spawn(&mut rand);
-                        // EntitySkeleton.onSpawnWithEgg in the Nether
-                        if m.kind == Kind::Skeleton
-                            && w.provider.dim == -1
-                            && m.rand.next_int_n(5) > 0
-                        {
-                            m.variant = 1;
-                            let p = m.pos;
-                            m.set_position(p[0], p[1], p[2]);
-                        }
+                        let cx = SpawnCtx::of(w, m.pos);
+                        m.on_spawn(&mut rand, &cx);
                         mobs.list.push(m);
                         spawned += 1;
                         if spawned >= 4 {
@@ -4562,4 +4811,123 @@ mod loot_tests {
         }
         assert_eq!(n, 33 * 96);
     }
+
+    /// Against `tools/EnchantFxHarness.java`: `onSpawnWithEgg(null)` of
+    /// skeletons, zombies and pigmen at a fixed local difficulty, normal
+    /// and hard, seeded: the equipment with its enchantments,
+    /// `canPickUpLoot`, and the next draw of the mob's and the world's random.
+    #[test]
+    fn spawn_equipment_matches_the_game() {
+        let mut n = 0;
+        for l in include_str!("../../tools/enchant_fx_1710.txt").lines() {
+            let Some(rest) = l.strip_prefix("s ") else {
+                continue;
+            };
+            let (head, tail) = rest.split_once(" |").unwrap();
+            let f: Vec<&str> = head.split(' ').collect();
+            let kind = Kind::from_id(f[0]).unwrap();
+            let tension: f32 = f[1].parse().unwrap();
+            let hard = f[2] == "1";
+            let seed: i64 = f[3].parse().unwrap();
+            let mut m = Mob::new(1, kind, [0.0, 64.0, 0.0], 0.0, seed);
+            m.rand = JavaRandom::new(seed);
+            let mut wr = JavaRandom::new(seed + 1000);
+            let cx = SpawnCtx {
+                tension,
+                hard,
+                nether: false,
+                halloween: false,
+            };
+            m.on_spawn(&mut wr, &cx);
+            let mut got: Vec<String> = m
+                .equipment
+                .iter()
+                .map(|s| match s {
+                    None => "-".to_string(),
+                    Some(s) => {
+                        let mut t = format!("{}:{}", s.id, s.meta);
+                        for (id, lvl) in s.enchantments() {
+                            t.push_str(&format!(".{id}/{lvl}"));
+                        }
+                        t
+                    }
+                })
+                .collect();
+            got.push(format!("loot={}", m.can_pick_up_loot as i32));
+            assert_eq!(got.join(" "), f[4..].join(" "), "{l}");
+            assert_eq!(
+                format!("{} {}", m.rand.next_int(), wr.next_int()),
+                tail,
+                "{l}"
+            );
+            n += 1;
+        }
+        assert_eq!(n, 3 * 5 * 2 * 40);
+    }
+}
+
+/// What `onSpawnWithEgg` reads from the world.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct SpawnCtx {
+    /// `getTensionFactorForBlock` at the mob
+    pub tension: f32,
+    pub hard: bool,
+    /// `provider instanceof WorldProviderHell`
+    pub nether: bool,
+    /// `getCurrentDate()` is October 31st
+    pub halloween: bool,
+}
+
+impl SpawnCtx {
+    pub fn of(w: &mut ServerWorld, pos: [f64; 3]) -> SpawnCtx {
+        SpawnCtx {
+            tension: w.local_difficulty(pos[0], pos[1], pos[2]),
+            hard: w.difficulty == 3,
+            nether: w.provider.dim == -1,
+            halloween: is_halloween(),
+        }
+    }
+}
+
+/// `Calendar.get(MONTH) + 1 == 10 && get(DAY_OF_MONTH) == 31` (UTC).
+fn is_halloween() -> bool {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs() as i64);
+    // civil date from days since 1970-01-01 (Howard Hinnant)
+    let z = secs.div_euclid(86400) + 719468;
+    let era = z.div_euclid(146097);
+    let doe = z - era * 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    m == 10 && d == 31
+}
+
+/// `EntityLiving.getArmorItemForSlot(slot, tier)` (1 boots .. 4 helmet;
+/// leather, gold, chain, iron, diamond)
+fn armor_item_for_slot(slot: usize, tier: i32) -> Option<u16> {
+    if !(0..=4).contains(&tier) {
+        return None;
+    }
+    // item ids by material (leather 298.., chain 302.., iron 306..,
+    // diamond 310.., gold 314..), helmet first
+    let base = [298u16, 314, 302, 306, 310][tier as usize];
+    match slot {
+        4 => Some(base),
+        3 => Some(base + 1),
+        2 => Some(base + 2),
+        1 => Some(base + 3),
+        _ => None,
+    }
+}
+
+/// `EnchantmentHelper.addRandomEnchantment` on a stack (not a book).
+fn add_random_enchantment(r: &mut JavaRandom, s: Stack, level: i32) -> Stack {
+    let list = crate::enchant::build_list(r, &s, level);
+    let mut have = s.enchantments();
+    have.extend(list);
+    s.with_enchantments(&have)
 }

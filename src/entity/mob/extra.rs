@@ -211,6 +211,7 @@ pub fn slime(m: &mut Mob, player: &PlayerInfo, out: &mut Outcome) {
             out.hits.push(Hit::Melee {
                 kind: Kind::Slime,
                 by: m.id,
+                fire: 0,
                 amount: size as f32,
                 knock: [0.0; 3],
                 from: m.pos,

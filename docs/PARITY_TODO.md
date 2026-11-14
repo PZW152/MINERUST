@@ -38,7 +38,9 @@
 - [x] 生物死亡掉落：每種生物的 `dropFewItems`（含掠奪）與 `dropRareDrop` 擲骰，與原版 3,168 組一致；
       終界使者不再掉落手上的方塊（1.7.10 本來就不掉）
 - [x] 生物受傷：天生護甲（殭屍、殭屍豬人 2 點）、`setBeenAttacked` 與擊退抗性的亂數、擊退方向改用 `Math.random()`
-- [ ] 生物裝備（`EntityLiving.equipment`、`addRandomArmor`、`enchantEquipment`、手持弓劍、掉落裝備）與
+- [x] 生物裝備（`EntityLiving.equipment`、`addRandomArmor`、`enchantEquipment`、手持弓劍、掉落裝備、盔甲與手持物品的繪製），
+      骷髏／殭屍／殭屍豬人的 `onSpawnWithEgg`，區域難度與區塊居住時間（與原版 1,200 組一致）
+- [ ] 生物撿拾物品（`canPickUpLoot`）、小殭屍、殭屍村民、雞騎士、蜘蛛騎士、殭屍增援與破門、`InhabitedTime` 存檔，以及
       `onSpawnWithEgg` 的其餘部分（殭屍擊退抗性加成、跟隨距離的 `nextGaussian`、蜘蛛騎士、小殭屍）
 - [ ] 生物的藥水效果（`activePotionsMap`：飛濺藥水的持續效果、節肢剋星緩速、凋零骷髏的凋零）
 - [ ] 物品附魔光澤、手持箱子與掉落箱子的模型

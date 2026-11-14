@@ -1395,21 +1395,61 @@ fn attack_as_mob(m: &mut Mob, t: Target, v: &View, cx: &mut Cx) {
     if m.kind == Kind::Creeper {
         return;
     }
-    // swingItem only with something in the hand
-    if m.kind == Kind::Skeleton {
+    // EntityAIAttackOnCollide: swingItem only with something in the hand
+    let held = m.equipment[0];
+    if held.is_some() {
         m.is_swinging = true;
         m.swing_ticks = 0;
     }
-    let mut amount = m.kind.attack_damage();
+    // the attackDamage attribute: the wither skeleton's base of 4, plus
+    // the held item's weapon modifier
+    let base = if m.kind == Kind::Skeleton && m.variant == 1 {
+        4.0
+    } else {
+        m.kind.attack_damage()
+    };
+    let mut amount = base
+        + held
+            .and_then(|s| crate::item::weapon_damage(s.id))
+            .unwrap_or(0.0);
     let mut effect = None;
     if m.kind == Kind::Skeleton && m.variant == 1 {
-        // a stone sword on the 4.0 base, and EntitySkeleton's wither
-        amount = 4.0 + 5.0;
+        // EntitySkeleton.attackEntityAsMob: wither
         effect = Some((crate::potion::WITHER, 200));
     }
-    if m.kind == Kind::PigZombie {
-        // the golden sword
-        amount += 4.0;
+    // EntityMob.attackEntityAsMob: the held item's enchantments
+    let mut knock = [0.0f64; 3];
+    let mut fire = 0;
+    if matches!(
+        m.kind,
+        Kind::Zombie
+            | Kind::PigZombie
+            | Kind::Skeleton
+            | Kind::Spider
+            | Kind::CaveSpider
+            | Kind::Silverfish
+            | Kind::Enderman
+            | Kind::Blaze
+    ) {
+        let creature = match t {
+            Target::Player => crate::enchant::Creature::Undefined,
+            Target::Mob(id) => cx
+                .others
+                .iter()
+                .find(|v| v.id == id)
+                .map_or(crate::enchant::Creature::Undefined, |v| v.kind.creature()),
+        };
+        amount += crate::enchant::modifier_living(held.as_ref(), creature);
+        let kb = crate::enchant::level(crate::enchant::KNOCKBACK, held.as_ref());
+        if kb > 0 {
+            let r = m.yaw * std::f32::consts::PI / 180.0;
+            knock = [
+                (-crate::util::math::sin(r) * kb as f32 * 0.5) as f64,
+                0.1,
+                (crate::util::math::cos(r) * kb as f32 * 0.5) as f64,
+            ];
+        }
+        fire = crate::enchant::level(crate::enchant::FIRE_ASPECT, held.as_ref());
     }
     let mut lift = 0.0;
     match m.kind {
@@ -1435,8 +1475,9 @@ fn attack_as_mob(m: &mut Mob, t: Target, v: &View, cx: &mut Cx) {
             cx.out.hits.push(Hit::Melee {
                 kind: m.kind,
                 by: m.id,
+                fire,
                 amount,
-                knock: [0.0, lift, 0.0],
+                knock: [knock[0], lift + knock[1], knock[2]],
                 from: m.pos,
                 effect,
             });
@@ -1477,9 +1518,7 @@ fn ranged_attack(m: &mut Mob, t: Target, v: &View, f: f32, cx: &mut Cx) {
         );
         a.damage =
             (f * 2.0) as f64 + (m.rand.next_gaussian() * 0.25 + (diff as f32 * 0.11f32) as f64);
-        if m.variant == 1 {
-            a.e.set_fire(100);
-        }
+        m.bow_enchantments(&mut a);
         cx.arrows.push(a);
         cx.out.sounds.push((
             "random.bow",

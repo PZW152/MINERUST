@@ -56,6 +56,14 @@ public class EnchantFxHarness {
             return null;
         }
 
+        /** The local difficulty onSpawnWithEgg reads, fixed per case. */
+        public float tension;
+
+        @Override
+        public float getTensionFactorForBlock(double x, double y, double z) {
+            return tension;
+        }
+
         @Override
         public boolean spawnEntityInWorld(Entity e) {
             if (e instanceof EntityItem) {
@@ -153,6 +161,7 @@ public class EnchantFxHarness {
         put(w, World.class, "provider", WorldProvider.getProviderForDimension(0));
         put(w, World.class, "worldInfo", new WorldInfo(new NBTTagCompound()));
         put(w, World.class, "rand", new Random(1));
+        put(w, World.class, "theCalendar", java.util.Calendar.getInstance());
         Object[][] mobs = {
             {"Pig", EntityPig.class, 0}, {"Cow", EntityCow.class, 0}, {"MushroomCow", EntityMooshroom.class, 0},
             {"Sheep", EntitySheep.class, 5}, {"Sheep", EntitySheep.class, -1}, {"Chicken", EntityChicken.class, 0},
@@ -201,6 +210,50 @@ public class EnchantFxHarness {
                             }
                             out.println("d " + m[0] + " " + variant + " " + burning + " " + hit + " " + looting + " " + seed + " " + res);
                         }
+        }
+
+        // onSpawnWithEgg(null) with a fixed local difficulty:
+        //   s <mob> <tension> <hard> <seed> <slot0..4> loot=<0|1> |<mob next int> <world next int>
+        // a slot is "-" or id:meta followed by .enchId/lvl for each enchantment
+        Object[][] armed = {
+            {"Skeleton", EntitySkeleton.class}, {"Zombie", EntityZombie.class}, {"PigZombie", EntityPigZombie.class},
+        };
+        float[] tensions = {0.0F, 0.25F, 0.6F, 1.0F, 1.5F};
+        for (Object[] m : armed) {
+            Class<?> c = (Class<?>) m[1];
+            for (float t : tensions)
+                for (int hard = 0; hard < 2; hard++)
+                    for (int seed = 0; seed < 40; seed++) {
+                        w.tension = t;
+                        w.difficultySetting = hard == 1 ? net.minecraft.world.EnumDifficulty.HARD : net.minecraft.world.EnumDifficulty.NORMAL;
+                        EntityLiving e = (EntityLiving) c.getConstructor(World.class).newInstance(w);
+                        Random r = new Random(seed);
+                        put(e, Entity.class, "rand", r);
+                        w.rand = new Random(seed + 1000L);
+                        String res;
+                        try {
+                            e.onSpawnWithEgg(null);
+                            StringBuilder b = new StringBuilder();
+                            for (int k = 0; k < 5; k++) {
+                                ItemStack s = e.getEquipmentInSlot(k);
+                                if (s == null) {
+                                    b.append("- ");
+                                    continue;
+                                }
+                                b.append(Item.getIdFromItem(s.getItem())).append(':').append(s.getItemDamage());
+                                net.minecraft.nbt.NBTTagList l = s.getEnchantmentTagList();
+                                if (l != null)
+                                    for (int i = 0; i < l.tagCount(); i++)
+                                        b.append('.').append(l.getCompoundTagAt(i).getShort("id")).append('/').append(l.getCompoundTagAt(i).getShort("lvl"));
+                                b.append(' ');
+                            }
+                            b.append("loot=").append(e.canPickUpLoot() ? 1 : 0);
+                            res = b + " |" + r.nextInt() + " " + w.rand.nextInt();
+                        } catch (Throwable x) {
+                            res = "ERR " + x;
+                        }
+                        out.println("s " + m[0] + " " + t + " " + hard + " " + seed + " " + res);
+                    }
         }
         out.close();
     }

@@ -262,21 +262,28 @@ fn quad_angles(v: &mut [Part], a: &Anim) {
 
 /// `ModelBiped` with the zombie arm pose when `zombie_arms`.
 fn biped(a: &Anim, thin: bool, zombie_arms: bool) -> Vec<Part> {
+    biped_gap(a, thin, zombie_arms, 0.0)
+}
+
+/// `ModelZombie` / `ModelSkeleton(gap)` posed for `a`: the main model
+/// (gap 0) or an armour model (1.0, or 0.5 for the leggings).
+fn biped_gap(a: &Anim, thin: bool, zombie_arms: bool, g: f32) -> Vec<Part> {
     let (aw, ao) = if thin { (2.0, -1.0) } else { (4.0, -2.0) };
-    let head = Part::new([0.0, 0.0, 0.0]).bx(0.0, 0.0, [-4.0, -8.0, -4.0], [8.0, 8.0, 8.0], 0.0);
-    let hat = Part::new([0.0, 0.0, 0.0]).bx(32.0, 0.0, [-4.0, -8.0, -4.0], [8.0, 8.0, 8.0], 0.5);
-    let body = Part::new([0.0, 0.0, 0.0]).bx(16.0, 16.0, [-4.0, 0.0, -2.0], [8.0, 12.0, 4.0], 0.0);
+    let head = Part::new([0.0, 0.0, 0.0]).bx(0.0, 0.0, [-4.0, -8.0, -4.0], [8.0, 8.0, 8.0], g);
+    let hat =
+        Part::new([0.0, 0.0, 0.0]).bx(32.0, 0.0, [-4.0, -8.0, -4.0], [8.0, 8.0, 8.0], g + 0.5);
+    let body = Part::new([0.0, 0.0, 0.0]).bx(16.0, 16.0, [-4.0, 0.0, -2.0], [8.0, 12.0, 4.0], g);
     let rarm = Part::new([-5.0, 2.0, 0.0]).bx(
         40.0,
         16.0,
         [if thin { -1.0 } else { -3.0 }, -2.0, ao],
         [aw, 12.0, aw],
-        0.0,
+        g,
     );
-    let larm = Part::new([5.0, 2.0, 0.0]).mbx(40.0, 16.0, [-1.0, -2.0, ao], [aw, 12.0, aw], 0.0);
+    let larm = Part::new([5.0, 2.0, 0.0]).mbx(40.0, 16.0, [-1.0, -2.0, ao], [aw, 12.0, aw], g);
     let lx = if thin { 2.0 } else { 1.9 };
-    let rleg = Part::new([-lx, 12.0, 0.1]).bx(0.0, 16.0, [ao, 0.0, ao], [aw, 12.0, aw], 0.0);
-    let lleg = Part::new([lx, 12.0, 0.1]).mbx(0.0, 16.0, [ao, 0.0, ao], [aw, 12.0, aw], 0.0);
+    let rleg = Part::new([-lx, 12.0, 0.1]).bx(0.0, 16.0, [ao, 0.0, ao], [aw, 12.0, aw], g);
+    let lleg = Part::new([lx, 12.0, 0.1]).mbx(0.0, 16.0, [ao, 0.0, ao], [aw, 12.0, aw], g);
     let mut v = vec![head, body, rarm, larm, rleg, lleg, hat];
     let hy = a.head_yaw / (180.0 / PI);
     let hp = a.head_pitch / (180.0 / PI);
@@ -762,6 +769,7 @@ pub fn mob(
     translucent: &mut Vec<Vertex>,
     tex: &dyn Fn(&str) -> Option<Tex>,
     block: &dyn Fn(&mut Vec<Vertex>, u8, u8, &Mat4, [u8; 4]),
+    item: &dyn Fn(&mut Vec<Vertex>, crate::item::Stack, &Mat4, [u8; 4]),
     m: &MobView,
     rel: [f32; 3],
     partial: f32,
@@ -1055,6 +1063,54 @@ pub fn mob(
                 render(&mut d, &pm, p);
             } else {
                 render(&mut d, &mat, p);
+            }
+        }
+    }
+    // RenderBiped: the armour passes (shouldRenderPass, armorItemInSlot(3 -
+    // pass)) on ModelZombie / ModelSkeleton(1.0 or 0.5, true), then
+    // renderEquippedItems' held item from the right arm
+    if matches!(m.kind, Kind::Zombie | Kind::PigZombie | Kind::Skeleton) {
+        for pass in 0..4usize {
+            let Some(s) = m.equipment[4 - pass] else {
+                continue;
+            };
+            for (name, t) in armor_layers(&s, pass) {
+                let Some(tx) = tex(&name) else { continue };
+                let mut d = Draw {
+                    out: &mut *out,
+                    tex: tx,
+                    light,
+                    tint: tint([t[0], t[1], t[2]]),
+                };
+                let gap = if pass == 2 { 0.5 } else { 1.0 };
+                let v = biped_gap(&a, false, true, gap);
+                let show = [
+                    pass == 0,
+                    pass == 1 || pass == 2,
+                    pass == 1,
+                    pass == 1,
+                    pass == 2 || pass == 3,
+                    pass == 2 || pass == 3,
+                    pass == 0,
+                ];
+                for (p, on) in v.iter().zip(show) {
+                    if on {
+                        render(&mut d, &mat, p);
+                    }
+                }
+            }
+        }
+        if let Some(s) = m.equipment[0] {
+            let thin = m.kind == Kind::Skeleton && m.variant != 1;
+            let arm = &biped(&a, thin, true)[2];
+            let am = part_matrix(&mat, arm);
+            let hm = biped_held_matrix(&am, &s, m.kind == Kind::Skeleton);
+            let mut items = Vec::new();
+            item(&mut items, s, &hm, light);
+            // renderItemIn2D draws one winding; models draw both
+            for q in items.chunks(4) {
+                out.extend_from_slice(q);
+                out.extend_from_slice(&[q[3], q[2], q[1], q[0]]);
             }
         }
     }
@@ -1481,6 +1537,35 @@ pub fn armor_parts(pose: &Pose, pass: usize) -> Vec<Part> {
 /// `ModelRenderer.postRender(0.0625)` of the posed right arm.
 pub fn arm_matrix(m: &Mat4, pose: &Pose) -> Mat4 {
     let arm = &biped_pose(pose, 0.0)[2];
+    part_matrix(m, arm)
+}
+
+/// `RenderBiped.renderEquippedItems`: as the player's, except that a full
+/// 3D item goes through `func_82422_c` (`RenderSkeleton` moves it 0.09375
+/// further out).
+pub fn biped_held_matrix(arm: &Mat4, s: &crate::item::Stack, skeleton: bool) -> Mat4 {
+    let (full, _) = full_3d(s.id);
+    let block3d = s.block().is_some();
+    if full && s.id != 261 && !block3d && skeleton {
+        // held_matrix's full-3D branch with the skeleton's offset
+        let sc = super::entities::scale;
+        let (_, around) = full_3d(s.id);
+        let k = 0.625;
+        let mut m = mul(arm, &translate(-0.0625, 0.4375, 0.0625));
+        if around {
+            m = mul(&m, &rot_z(180.0));
+            m = mul(&m, &translate(0.0, -0.125, 0.0));
+        }
+        m = mul(&m, &translate(0.09375, 0.1875, 0.0));
+        m = mul(&m, &sc(k, -k, k));
+        m = mul(&m, &rot_x(-100.0));
+        return mul(&m, &rot_y(45.0));
+    }
+    held_matrix(arm, s, false)
+}
+
+/// `ModelRenderer.postRender(0.0625)` of a posed part.
+pub fn part_matrix(m: &Mat4, arm: &Part) -> Mat4 {
     let mut a = mul(
         m,
         &translate(

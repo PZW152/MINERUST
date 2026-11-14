@@ -4755,6 +4755,7 @@ impl Game {
                 &mut translucent,
                 &|n| atlas.mob_tex(n),
                 &|o, id, meta, mat, l| entities::block_model(o, atlas, id, meta, mat, l),
+                &|o, s, mat, l| entities::render_item(o, atlas, s, mat, l),
                 m,
                 rel,
                 partial,

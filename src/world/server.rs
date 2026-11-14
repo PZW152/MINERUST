@@ -545,6 +545,12 @@ pub struct ServerWorld {
     pub raining: bool,
     /// `World.getCurrentMoonPhaseFactor`
     pub moon_factor: f32,
+    /// `Chunk.inhabitedTime`, and for the chunks the player watches the
+    /// time it was last brought up to date (`PlayerManager$PlayerInstance`).
+    pub inhabited: FastMap<(i32, i32), i64>,
+    watched: FastMap<(i32, i32), i64>,
+    inhabited_batch: i64,
+    watched_area: Option<((i32, i32), i32)>,
     /// Chunks live in vanilla region files (a world opened from 1.7.10).
     pub anvil: bool,
     /// Tile entities, entities and scheduled updates of chunks read from
@@ -616,6 +622,10 @@ impl ServerWorld {
             map_features: true,
             raining: false,
             moon_factor: 1.0,
+            inhabited: FastMap::default(),
+            watched: FastMap::default(),
+            inhabited_batch: 0,
+            watched_area: None,
             anvil: false,
             anvil_loaded: Vec::new(),
             wire_off: false,
@@ -2335,6 +2345,72 @@ impl ServerWorld {
             || self.material(x + 1, y - 1, z) == Material::Water
             || self.material(x, y - 1, z - 1) == Material::Water
             || self.material(x, y - 1, z + 1) == Material::Water
+    }
+
+    /// `PlayerManager.updatePlayerInstances` and the instances' adding and
+    /// removing: a watched chunk adds the time since it was last counted
+    /// when it stops being watched, and every 8000 ticks.
+    pub fn update_inhabited(&mut self, centre: (i32, i32), radius: i32) {
+        let now = self.total_time;
+        if self.watched_area == Some((centre, radius)) {
+            if now - self.inhabited_batch > 8000 {
+                self.inhabited_batch = now;
+                let keys: Vec<(i32, i32)> = self.watched.keys().copied().collect();
+                for k in keys {
+                    let since = self.watched.insert(k, now).unwrap_or(now);
+                    *self.inhabited.entry(k).or_insert(0) += now - since;
+                }
+            }
+            return;
+        }
+        self.watched_area = Some((centre, radius));
+        let mut keep: Vec<(i32, i32)> = Vec::new();
+        for dx in -radius..=radius {
+            for dz in -radius..=radius {
+                keep.push((centre.0 + dx, centre.1 + dz));
+            }
+        }
+        let gone: Vec<(i32, i32)> = self
+            .watched
+            .keys()
+            .copied()
+            .filter(|k| (k.0 - centre.0).abs() > radius || (k.1 - centre.1).abs() > radius)
+            .collect();
+        for k in gone {
+            let since = self.watched.remove(&k).unwrap_or(now);
+            *self.inhabited.entry(k).or_insert(0) += now - since;
+        }
+        for k in keep {
+            self.watched.entry(k).or_insert(now);
+        }
+        if now - self.inhabited_batch > 8000 {
+            self.inhabited_batch = now;
+            let keys: Vec<(i32, i32)> = self.watched.keys().copied().collect();
+            for k in keys {
+                let since = self.watched.insert(k, now).unwrap_or(now);
+                *self.inhabited.entry(k).or_insert(0) += now - since;
+            }
+        }
+    }
+
+    /// `World.getTensionFactorForBlock` (`getLocalDifficulty`).
+    pub fn local_difficulty(&mut self, x: f64, y: f64, z: f64) -> f32 {
+        let (bx, by, bz) = (
+            crate::util::math::floor_double(x),
+            crate::util::math::floor_double(y),
+            crate::util::math::floor_double(z),
+        );
+        let hard = self.difficulty == 3;
+        let mut f = 0.0f32;
+        if (0..256).contains(&by) && self.chunk_exists(bx >> 4, bz >> 4) {
+            let t = *self.inhabited.get(&(bx >> 4, bz >> 4)).unwrap_or(&0) as f32;
+            f += (t / 3600000.0).clamp(0.0, 1.0) * if hard { 1.0 } else { 0.75 };
+            f += self.moon_factor * 0.25;
+        }
+        if self.difficulty <= 1 {
+            f *= self.difficulty as f32 / 2.0;
+        }
+        f.clamp(0.0, if hard { 1.5 } else { 1.0 })
     }
 
     /// The `setBlock` flag of `setBlockAndNotifyAdequately`.

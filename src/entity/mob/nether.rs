@@ -299,6 +299,7 @@ pub fn blaze(
             out.hits.push(Hit::Melee {
                 kind: Kind::Blaze,
                 by: m.id,
+                fire: 0,
                 amount: 6.0,
                 knock: [0.0; 3],
                 from: m.pos,

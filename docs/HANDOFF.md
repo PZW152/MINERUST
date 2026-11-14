@@ -314,9 +314,13 @@ MINERUST_BENCH=10 minerust --seed 12345 --no-save --size 1920 1080 --distance 16
 1a. **附魔效果**：除了釣竿的兩種（釣魚未實作）都已生效，見第 6 節。還沒做的：節肢剋星的緩速（`Mobs::add_effect` 目前是空的，
    因為**生物沒有藥水效果系統**，這也讓飛濺藥水的持續效果、凋零骷髏的凋零對生物無效）、破損物品的碎片粒子（客戶端挖掘時才有，
    伺服器只播 `random.break`，而且音高的世界亂數延到 tick 尾才抽）、附魔光澤。
-   **生物裝備整套沒有做**（`EntityLiving.equipment`：殭屍與骷髏的隨機盔甲與附魔、骷髏手上的弓、拿起掉落物、掉落裝備），
-   `onSpawnWithEgg` 也只做了羊、村民、馬：殭屍的擊退抗性加成（目前固定 0，亂數仍照抽）、所有生物的跟隨距離 `nextGaussian`、
-   蜘蛛騎士、小殭屍、凋零骷髏都還沒有。
+   **生物裝備**已做（2026-11-14）：`Mob.equipment` / `drop_chances` / `can_pick_up_loot`，骷髏、殭屍、殭屍豬人的
+   `onSpawnWithEgg`（與原版 1,200 組比對一致，`spawn_equipment_matches_the_game`），區域難度 `ServerWorld::local_difficulty`
+   （區塊 `inhabited` 照 `PlayerManager` 每 8000 tick 或離開視野時累加）、裝備掉落、護甲值、武器傷害與附魔、骷髏的弓附魔、
+   `RenderBiped` 的盔甲層與手持物品。**還沒做**：撿起地上物品（`canPickUpLoot` 只有旗標）、小殭屍／殭屍村民／雞騎士／
+   蜘蛛騎士（亂數照抽但不生成）、殭屍增援（`summonReinforcements`）與破門、領頭殭屍的增援機率、蜘蛛在困難模式的藥水效果、
+   豹貓生成時的幼貓、馬的 `onSpawnWithEgg` 逐行核對、`InhabitedTime` 還沒寫進存檔（重新載入從 0 開始）、
+   著火的空手殭屍點燃玩家（`EntityZombie.attackEntityAsMob`）。
    掉落的另外幾條路徑還沒改走 `drops.rs`：`harvestBlock` 的覆寫（剪刀剪樹葉／草／藤蔓、冰、雪片仍用舊的 `item::drops`）、
    水沖掉火把與植物失去支撐時的掉落、樹葉腐爛。`item::has_subtypes` 是近似（`max_damage == 0`），應改為原版 `getHasSubtypes` 的表。
 1b. （已完成基本形）客戶端預測放置／破壞方塊，見第 4 節「客戶端預測」。尚未預測的：有朝向或需要依附的方塊（原木、活塞、熔爐、
@@ -515,3 +519,17 @@ MINERUST_BENCH=10 minerust --seed 12345 --no-save --size 1920 1080 --distance 16
   `cargo test --release` 99 項通過；截圖確認作物、莖結果、柵欄門開關、圓石牆、蛋糕、床，以及睡覺畫面（躺姿、變暗、離開床鋪按鈕）。
   基準：同時段交替量上一個提交 944–1,122 fps，本次 867–1,095 fps，伺服器 tick 都約 6 ms，沒有退步。
   **留下**：睡覺時第三人稱的躺姿模型；隨機 tick 對按鈕／壓力板／紅石火把／流動液體的效果；生物裝備、生物藥水效果、附魔光澤。
+- `本次（2026-11-14，生物裝備）`：接著「試玩會發現」的順序，骷髏手上沒有弓、怪物從不穿盔甲是每個晚上都看得到的缺口。
+  - `onSpawnWithEgg`：所有 `EntityLiving` 先抽跟隨距離的 `nextGaussian`（洞穴蜘蛛例外）；骷髏（地獄五分之四是凋零骷髏拿石劍，
+    其餘 `addRandomArmor` + 弓 + `enchantEquipment`）、殭屍（撿拾旗標、`GroupData` 的兩次世界亂數、破門旗標、隨機盔甲、
+    1%／困難 5% 的鐵劍或鐵鏟、附魔、擊退抗性、跟隨距離、領頭殭屍的血量）、殭屍豬人（金劍）、萬聖節南瓜頭。
+    結果與原版 1,200 組（3 種 × 5 個區域難度 × 普通／困難 × 40 個種子）逐項一致，含兩個亂數的下一個值。
+  - 區域難度 `getLocalDifficulty`：月相加區塊的 `inhabitedTime`；`inhabitedTime` 由玩家視野內的區塊累加（`PlayerManager` 的批次規則）。
+  - 戰鬥：生物護甲值改為裝備 + 天生；骷髏的箭吃弓的力量／衝擊／火焰；`EntityMob.attackEntityAsMob` 用攻擊力屬性 + 手持武器、
+    鋒利系列、擊退、燃燒（`Hit::Melee.fire`）；有拿東西才揮手；死亡時 `dropEquipment`（8.5%，掠奪每級 +1%，耐久隨機）。
+  - 繪製：殭屍、殭屍豬人、骷髏的盔甲層（`ModelZombie(1.0 / 0.5)` 的手臂姿勢）與 `RenderBiped.renderEquippedItems` 的手持物品
+    （骷髏的全 3D 物品多移 0.09375）。存檔：區域檔的 `Equipment`、`DropChances`、`CanPickUpLoot`，自有格式加兩個欄位。
+  - 舊測試 `pearls_and_splash_potions` 失敗：測試從離地 0.12 格平丟珍珠，原版的亂數散布往下就會立刻撞到平台，換了亂數序列就中了；
+    改成朝上丟向五格外的牆。
+  **驗證**：`cargo test --release` 100 項通過（新增 `spawn_equipment_matches_the_game`）；截圖確認殭屍豬人的金劍與骷髏的弓。
+  基準：上一個提交 957–984 fps／伺服器 5.6–5.7 ms，本次 980–1,042 fps／5.8–6.0 ms，在雜訊範圍內。

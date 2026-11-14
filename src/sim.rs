@@ -328,6 +328,9 @@ pub struct MobView {
     pub carried: [u8; 2],
     /// Iron golem `attackTimer`.
     pub attack_timer: i32,
+    /// `EntityLiving.equipment` as the client sees it
+    /// (`S04PacketEntityEquipment`).
+    pub equipment: [Option<crate::item::Stack>; 5],
     pub health: f32,
     /// Ender dragon movement history (yaw, y), newest at `ring_index`.
     pub ring: Vec<[f64; 2]>,
@@ -1307,6 +1310,8 @@ impl Sim {
         self.splayer.creative = self.play.mode == GameMode::Creative;
         self.world.dim = self.dim;
         self.world.difficulty = self.difficulty as i32;
+        // PlayerManager: the chunks in view count towards inhabitedTime
+        self.world.update_inhabited(self.centre, self.view);
         if !self.respawn_pending {
             let d = self.difficulty;
             self.splayer.tick(&self.world, d, true);
@@ -1479,7 +1484,10 @@ impl Sim {
                     }
                 }
                 GenEntity::Mob { kind, pos, variant } => {
-                    let id = self.mobs.spawn(kind, pos, 0.0, &mut rnd);
+                    // ItemMonsterPlacer.spawnCreature: onSpawnWithEgg
+                    let id = self
+                        .mobs
+                        .spawn_in(&mut self.world, kind, pos, 0.0, &mut rnd);
                     if let Some(m) = self.mobs.list.iter_mut().find(|m| m.id == id) {
                         m.variant = variant;
                         m.persistent = true;
@@ -2690,9 +2698,13 @@ impl Sim {
             while y > 1 && !self.world.material(bx, y - 1, bz).blocks_movement() {
                 y -= 1;
             }
-            let id = self
-                .mobs
-                .spawn(kind, [x, y as f64, z], yaw + 180.0, &mut rnd);
+            let id = self.mobs.spawn_in(
+                &mut self.world,
+                kind,
+                [x, y as f64, z],
+                yaw + 180.0,
+                &mut rnd,
+            );
             if std::env::var("MINERUST_DBG").is_ok() {
                 eprintln!("summon {:?} at {:.1} {} {:.1}", kind, x, y, z);
             }
@@ -3139,6 +3151,7 @@ impl Sim {
                     | ((m.growing_age < 0) as u32) << 4,
                 carried: [m.carried, m.carried_meta],
                 attack_timer: m.attack_timer,
+                equipment: m.equipment,
                 health: m.health,
                 ring: if m.kind == crate::entity::mob::Kind::EnderDragon {
                     m.ring.to_vec()
@@ -3253,6 +3266,7 @@ impl Sim {
                 Hit::Melee {
                     kind,
                     by,
+                    fire,
                     amount,
                     knock,
                     from,
@@ -3267,8 +3281,17 @@ impl Sim {
                     }
                     let src = Source::mob(kind, 0, from);
                     if self.splayer.attack(&self.world, src, amount, d) {
-                        // EntityMob.attackEntityAsMob, on a hit:
-                        // applyThornEnchantments(player, mob)
+                        // EntityMob.attackEntityAsMob, on a hit: the push,
+                        // Fire Aspect, then applyThornEnchantments(player, mob)
+                        if knock != [0.0; 3] {
+                            for a in 0..3 {
+                                self.splayer.e.motion[a] += knock[a];
+                            }
+                            self.splayer.velocity = Some(self.splayer.e.motion);
+                        }
+                        if fire > 0 {
+                            self.splayer.e.set_fire(fire * 4);
+                        }
                         use crate::entity::mob::Kind as K;
                         if matches!(
                             kind,
@@ -3282,12 +3305,6 @@ impl Sim {
                                 | K::Blaze
                         ) {
                             self.thorns(by);
-                        }
-                        if knock != [0.0; 3] {
-                            for a in 0..3 {
-                                self.splayer.e.motion[a] += knock[a];
-                            }
-                            self.splayer.velocity = Some(self.splayer.e.motion);
                         }
                         match effect {
                             // EntityCaveSpider.attackEntityAsMob
@@ -5003,7 +5020,16 @@ mod tests {
         }
         sim.play.inv.selected = 0;
         sim.play.inv.main[0] = Some(crate::item::Stack::new(368, 0, 1));
-        sim.play.pitch = 0.0;
+        // a little upwards at a wall five blocks ahead: thrown 0.12 above
+        // the floor, a level throw's random spread can dip into the
+        // platform at once
+        sim.play.pitch = -20.0;
+        for dx in -3..4 {
+            for dy in 0..8 {
+                sim.world
+                    .set_block(x + dx, y + dy, z + 5, block::STONE, 0, 3);
+            }
+        }
         let mut moved = None;
         let mut ev = Vec::new();
         sim.step(&[Command::UseAir], &mut ev);
