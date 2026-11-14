@@ -45,6 +45,20 @@ pub fn ticks_randomly(id: u8) -> bool {
             | block::SNOW
             | block::LAVA
             | block::PORTAL
+            // BlockLiquid: every liquid; still water's updateTick is empty
+            | block::FLOWING_WATER
+            | block::FLOWING_LAVA
+            | block::DOUBLE_PLANT
+            | block::TORCH
+            | block::REDSTONE_TORCH
+            | block::UNLIT_REDSTONE_TORCH
+            | block::STONE_BUTTON
+            | block::WOODEN_BUTTON
+            | block::STONE_PRESSURE_PLATE
+            | block::WOODEN_PRESSURE_PLATE
+            | block::DETECTOR_RAIL
+            | block::TRIPWIRE
+            | block::TRIPWIRE_HOOK
     )
 }
 
@@ -114,10 +128,15 @@ impl ServerWorld {
                     }
                 }
             }
-            block::LEAVES | block::LEAVES2 => self.leaf_decay(x, y, z),
+            block::LEAVES | block::LEAVES2 => self.leaf_decay(id, x, y, z, r),
             block::FIRE => self.fire_tick(x, y, z, r),
             block::ICE => {
                 if self.saved_light(false, x, y, z) > 11 - 3 {
+                    if self.provider.dim == -1 {
+                        // provider.isHellWorld
+                        self.set_air(x, y, z);
+                        return;
+                    }
                     self.set_block(x, y, z, block::WATER, 0, 3);
                 }
             }
@@ -127,10 +146,13 @@ impl ServerWorld {
                 }
             }
             block::CACTUS | block::REEDS => {
+                // BlockReed.updateTick: func_150170_e drops the reed
                 if id == block::REEDS
                     && self.block(x, y - 1, z) != block::REEDS
                     && !self.can_block_stay(id, x, y, z)
                 {
+                    let m = self.meta(x, y, z);
+                    self.drop_block_with(r, id, m, x, y, z);
                     self.set_air(x, y, z);
                     return;
                 }
@@ -144,8 +166,9 @@ impl ServerWorld {
                         if m == 15 {
                             self.set_block(x, y + 1, z, id, 0, 3);
                             self.set_meta(x, y, z, 0, 4);
+                            // BlockCactus: onNeighborBlockChange(x, y + 1, z)
                             if id == block::CACTUS && !self.can_block_stay(id, x, y + 1, z) {
-                                self.set_air(x, y + 1, z);
+                                self.destroy_block_with(r, x, y + 1, z);
                             }
                         } else {
                             self.set_meta(x, y, z, m + 1, 4);
@@ -189,6 +212,28 @@ impl ServerWorld {
                 }
             }
             block::VINE => self.vine_tick(x, y, z, r),
+            // BlockDoublePlant.checkAndDropBlock (BlockBush.updateTick)
+            block::DOUBLE_PLANT => self.double_plant_check(r, x, y, z),
+            // BlockTorch.updateTick: a torch without a side yet picks one
+            block::TORCH => {
+                if self.meta(x, y, z) == 0 {
+                    self.torch_added(id, x, y, z);
+                }
+            }
+            // The blocks whose updateTick is the same for a random tick as
+            // for a scheduled one: flowing liquids, redstone torches,
+            // buttons, pressure plates, detector rails, tripwire and hooks
+            block::FLOWING_WATER
+            | block::FLOWING_LAVA
+            | block::REDSTONE_TORCH
+            | block::UNLIT_REDSTONE_TORCH
+            | block::STONE_BUTTON
+            | block::WOODEN_BUTTON
+            | block::STONE_PRESSURE_PLATE
+            | block::WOODEN_PRESSURE_PLATE
+            | block::DETECTOR_RAIL
+            | block::TRIPWIRE
+            | block::TRIPWIRE_HOOK => self.update_tick(id, x, y, z, r),
             _ => {
                 self.growth_tick(id, x, y, z, r);
             }
@@ -197,7 +242,7 @@ impl ServerWorld {
 
     /// `BlockLeaves.updateTick`: leaves flagged for a check decay unless a log
     /// is reachable through at most four leaf blocks.
-    fn leaf_decay(&mut self, x: i32, y: i32, z: i32) {
+    fn leaf_decay(&mut self, id: u8, x: i32, y: i32, z: i32, r: &mut JavaRandom) {
         let meta = self.meta(x, y, z);
         if meta & 8 == 0 || meta & 4 != 0 {
             return;
@@ -261,6 +306,8 @@ impl ServerWorld {
         if s[at(0, 0, 0)] >= 0 {
             self.set_meta(x, y, z, meta & !8, 4);
         } else {
+            // removeLeaves: the sapling and apple chances, then air
+            self.drop_block_with(r, id, meta, x, y, z);
             self.set_air(x, y, z);
         }
     }
@@ -452,5 +499,145 @@ mod tests {
         }
         assert_eq!(w.block(0, 66, 0), block::CACTUS);
         assert_eq!(w.block(0, 67, 0), block::AIR);
+    }
+
+    fn items(w: &ServerWorld) -> Vec<u16> {
+        use crate::world::server::GenEntity;
+        w.gen_entities
+            .iter()
+            .filter_map(|e| match e {
+                GenEntity::ScatteredItem { stack, .. } | GenEntity::Item { stack, .. } => {
+                    Some(stack.id)
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// `BlockCactus.onNeighborBlockChange` breaks it with its drop and the
+    /// break effect; `BlockReed` and `BlockDoublePlant` drop themselves.
+    #[test]
+    fn plants_that_lose_their_place_drop_themselves() {
+        let mut w = flat();
+        w.set_block(0, 63, 0, block::SAND, 0, 2);
+        w.set_block(0, 64, 0, block::CACTUS, 0, 2);
+        w.gen_entities.clear();
+        w.set_block(1, 64, 0, block::STONE, 0, 3);
+        assert_eq!(w.block(0, 64, 0), block::AIR);
+        assert_eq!(items(&w), vec![block::CACTUS as u16]);
+        assert_eq!(w.destroyed.len(), 1, "playAuxSFX(2001)");
+
+        // reeds: the water beside their sand goes
+        w.set_block(5, 63, 4, block::WATER, 0, 2);
+        w.set_block(4, 64, 4, block::REEDS, 0, 2);
+        assert_eq!(w.block(4, 64, 4), block::REEDS);
+        w.gen_entities.clear();
+        w.set_block(5, 63, 4, block::STONE, 0, 3);
+        // not a neighbour of the changed block: it goes on its next tick
+        assert_eq!(w.block(4, 64, 4), block::REEDS);
+        let mut r = JavaRandom::new(1);
+        w.random_tick(block::REEDS, 4, 64, 4, &mut r);
+        assert_eq!(w.block(4, 64, 4), block::AIR);
+        assert_eq!(items(&w), vec![338]);
+
+        // a double plant whose soil goes: one drop from the lower half
+        w.set_block(8, 64, 8, block::DOUBLE_PLANT, 1, 2);
+        w.set_block(8, 65, 8, block::DOUBLE_PLANT, 8, 2);
+        w.gen_entities.clear();
+        w.set_block(8, 63, 8, block::STONE, 0, 3);
+        assert_eq!(w.block(8, 64, 8), block::AIR);
+        assert_eq!(w.block(8, 65, 8), block::AIR);
+        assert_eq!(items(&w), vec![block::DOUBLE_PLANT as u16]);
+    }
+
+    /// `BlockCrops.updateTick` goes on after `BlockBush`'s check removed
+    /// the crop: the growth roll is still drawn (on what is air by then).
+    #[test]
+    fn a_dropped_crop_still_draws_its_growth_roll() {
+        let mut w = flat();
+        w.set_block(0, 64, 0, block::WHEAT, 7, 2);
+        let mut r = JavaRandom::new(7);
+        let mut expect = JavaRandom::new(7);
+        w.gen_entities.clear();
+        w.random_tick(block::WHEAT, 0, 64, 0, &mut r);
+        assert_eq!(w.block(0, 64, 0), block::AIR);
+        let n = items(&w).len();
+        assert!(n >= 2, "ripe wheat drops wheat and seeds: {n}");
+        // the drops' draws, then getMoisture on dirt (1.0): nextInt(26)
+        let _ = crate::drops::drop_block_as_item_with_chance(block::WHEAT, 7, 1.0, 0, &mut expect);
+        assert!(w.block_light_value(0, 65, 0, true) >= 9);
+        expect.next_int_n(26);
+        assert_eq!(r.next_int(), expect.next_int());
+    }
+
+    /// A pressed stone button is released by a random tick as by its
+    /// scheduled one (`BlockButton.updateTick`).
+    #[test]
+    fn random_ticks_release_buttons() {
+        let mut w = flat();
+        let mut r = JavaRandom::new(1);
+        w.set_block(0, 64, 0, block::STONE, 0, 2);
+        w.set_block(1, 64, 0, block::STONE_BUTTON, 1 | 8, 2);
+        assert!(ticks_randomly(block::STONE_BUTTON));
+        w.random_tick(block::STONE_BUTTON, 1, 64, 0, &mut r);
+        assert_eq!(w.block(1, 64, 0), block::STONE_BUTTON);
+        assert_eq!(w.meta(1, 64, 0), 1);
+    }
+
+    /// `BlockDynamicLiquid.func_149813_h`: water drops what it washes
+    /// away, lava hisses at what it flows into and where it meets water.
+    #[test]
+    fn water_washes_torches_out_and_lava_hisses() {
+        use crate::world::redstone::Effect;
+        let mut w = flat();
+        w.set_block(2, 64, 0, block::TORCH, 5, 2);
+        w.set_block(0, 64, 0, block::FLOWING_WATER, 0, 3);
+        w.gen_entities.clear();
+        for _ in 0..40 {
+            w.total_time += 1;
+            w.tick_updates();
+        }
+        assert_eq!(block::material(w.block(2, 64, 0)), Material::Water);
+        assert_eq!(items(&w), vec![block::TORCH as u16]);
+
+        let fizzes = |w: &ServerWorld| {
+            w.redstone_effects
+                .iter()
+                .filter(|e| matches!(e, Effect::Sound("random.fizz", ..)))
+                .count()
+        };
+        let mut w = flat();
+        w.set_block(0, 64, 0, block::FLOWING_LAVA, 0, 3);
+        for _ in 0..40 {
+            w.total_time += 1;
+            w.tick_updates();
+        }
+        assert_eq!(w.block(1, 64, 0), block::FLOWING_LAVA);
+        let spread = fizzes(&w);
+        assert!(spread >= 4, "lava hisses as it spreads: {spread}");
+        // water beside the source: obsidian, and one more hiss
+        w.set_block(0, 65, 0, block::WATER, 0, 3);
+        assert_eq!(w.block(0, 64, 0), block::OBSIDIAN);
+        assert!(fizzes(&w) > spread);
+    }
+
+    /// `BlockLeaves.removeLeaves` drops through `dropBlockAsItem`.
+    #[test]
+    fn decaying_leaves_roll_their_drops() {
+        let mut w = flat();
+        let mut saplings = 0;
+        let mut r = JavaRandom::new(3);
+        for i in 0..400 {
+            w.set_block(8, 64, 8, block::LEAVES, 8, 2);
+            w.gen_entities.clear();
+            w.random_tick(block::LEAVES, 8, 64, 8, &mut r);
+            assert_eq!(w.block(8, 64, 8), block::AIR, "round {i}");
+            saplings += items(&w)
+                .iter()
+                .filter(|&&i| i == block::SAPLING as u16)
+                .count();
+        }
+        // one in twenty
+        assert!((5..60).contains(&saplings), "saplings: {saplings}");
     }
 }

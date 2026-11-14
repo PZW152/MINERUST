@@ -1384,6 +1384,7 @@ impl Sim {
                     },
                     living: true,
                     minecart: false,
+                    arrow: false,
                 });
             }
             for m in &self.mobs.list {
@@ -1395,6 +1396,7 @@ impl Sim {
                         },
                         living: true,
                         minecart: false,
+                        arrow: false,
                     });
                 }
             }
@@ -1407,6 +1409,7 @@ impl Sim {
                     },
                     living: false,
                     minecart: false,
+                    arrow: false,
                 });
             }
             for a in &self.mobs.arrows {
@@ -1417,6 +1420,7 @@ impl Sim {
                     },
                     living: false,
                     minecart: false,
+                    arrow: true,
                 });
             }
             for t in &self.mobs.tnt {
@@ -1427,6 +1431,7 @@ impl Sim {
                     },
                     living: false,
                     minecart: false,
+                    arrow: false,
                 });
             }
             for b in &play.vehicles {
@@ -1438,6 +1443,7 @@ impl Sim {
                     },
                     living: false,
                     minecart: matches!(b.v, crate::entity::vehicle::Vehicle::Cart(_)),
+                    arrow: false,
                 });
             }
             self.world.occupants = occ;
@@ -3293,7 +3299,7 @@ impl Sim {
                             self.splayer.e.set_fire(fire * 4);
                         }
                         use crate::entity::mob::Kind as K;
-                        if matches!(
+                        let entity_mob = matches!(
                             kind,
                             K::Zombie
                                 | K::PigZombie
@@ -3303,8 +3309,27 @@ impl Sim {
                                 | K::Silverfish
                                 | K::Enderman
                                 | K::Blaze
-                        ) {
+                        );
+                        if entity_mob && (knock[0] != 0.0 || knock[2] != 0.0) {
+                            // the Knockback branch slows the attacker too
+                            if let Some(m) = self.mobs.list.iter_mut().find(|m| m.id == by) {
+                                m.motion[0] *= 0.6;
+                                m.motion[2] *= 0.6;
+                            }
+                        }
+                        if entity_mob {
                             self.thorns(by);
+                        }
+                        if matches!(kind, K::Zombie | K::PigZombie) {
+                            // EntityZombie.attackEntityAsMob, after super's
+                            // hit: a burning zombie with empty hands sets
+                            // its victim alight
+                            let id = d as i32;
+                            if let Some(m) = self.mobs.list.iter_mut().find(|m| m.id == by) {
+                                if m.zombie_ignites(id) {
+                                    self.splayer.e.set_fire(2 * id);
+                                }
+                            }
                         }
                         match effect {
                             // EntityCaveSpider.attackEntityAsMob

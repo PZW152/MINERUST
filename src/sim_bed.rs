@@ -116,22 +116,21 @@ impl Sim {
         use crate::entity::mob::Kind as K;
         let (x0, y0, z0) = (p[0] as f64 - 8.0, p[1] as f64 - 5.0, p[2] as f64 - 8.0);
         let (x1, y1, z1) = (p[0] as f64 + 8.0, p[1] as f64 + 5.0, p[2] as f64 + 8.0);
+        // a dying mob is still in the world's entity list
         let near = self.mobs.list.iter().any(|m| {
-            m.health > 0.0
-                && matches!(
-                    m.kind,
-                    K::Zombie
-                        | K::PigZombie
-                        | K::Skeleton
-                        | K::Creeper
-                        | K::Spider
-                        | K::CaveSpider
-                        | K::Enderman
-                        | K::Silverfish
-                        | K::Witch
-                        | K::Blaze
-                )
-                && m.bb.max[0] > x0
+            matches!(
+                m.kind,
+                K::Zombie
+                    | K::PigZombie
+                    | K::Skeleton
+                    | K::Creeper
+                    | K::Spider
+                    | K::CaveSpider
+                    | K::Enderman
+                    | K::Silverfish
+                    | K::Witch
+                    | K::Blaze
+            ) && m.bb.max[0] > x0
                 && m.bb.min[0] < x1
                 && m.bb.max[1] > y0
                 && m.bb.min[1] < y1
@@ -241,8 +240,9 @@ impl Sim {
                         e[1] as f64 + 0.1f32 as f64,
                         e[2] as f64 + 0.5,
                     ];
-                    // up until the player's box is clear
-                    while self.box_blocked(p) && p[1] < 256.0 {
+                    // while (!getCollidingBoundingBoxes(player, bb).isEmpty())
+                    //     setPosition(posX, posY + 1, posZ)
+                    while self.box_blocked(p) {
                         p[1] += 1.0;
                     }
                     return p;
@@ -254,22 +254,14 @@ impl Sim {
         self.spawn
     }
 
+    /// Whether the player's box (0.6 wide, 1.8 high, `Entity.setPosition`)
+    /// with its feet at `feet` touches any collision box.
     fn box_blocked(&mut self, feet: [f64; 3]) -> bool {
-        let x0 = (feet[0] - 0.3).floor() as i32;
-        let x1 = (feet[0] + 0.3).floor() as i32;
-        let y0 = feet[1].floor() as i32;
-        let y1 = (feet[1] + 1.8).floor() as i32;
-        let z0 = (feet[2] - 0.3).floor() as i32;
-        let z1 = (feet[2] + 0.3).floor() as i32;
-        for x in x0..=x1 {
-            for y in y0..=y1 {
-                for z in z0..=z1 {
-                    if block::info(self.world.block(x, y, z)).solid {
-                        return true;
-                    }
-                }
-            }
-        }
-        false
+        let w = (0.6f32 / 2.0) as f64;
+        let bb = crate::entity::player::Aabb {
+            min: [feet[0] - w, feet[1], feet[2] - w],
+            max: [feet[0] + w, feet[1] + 1.8f32 as f64, feet[2] + w],
+        };
+        !crate::entity::player::colliding_boxes(&self.world, &bb).is_empty()
     }
 }

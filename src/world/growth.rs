@@ -39,6 +39,35 @@ impl ServerWorld {
         self.spawn_drops(v, x, y, z);
     }
 
+    /// `World.func_147480_a(x, y, z, true)`: the break effect, the drops,
+    /// then air.
+    pub fn destroy_block_with(&mut self, r: &mut JavaRandom, x: i32, y: i32, z: i32) -> bool {
+        let id = self.block(x, y, z);
+        if block::material(id) == Material::Air {
+            return false;
+        }
+        let m = self.meta(x, y, z);
+        self.destroyed.push(([x, y, z], id, m));
+        self.drop_block_with(r, id, m, x, y, z);
+        self.set_block(x, y, z, block::AIR, 0, 3)
+    }
+
+    /// `BlockDoublePlant.checkAndDropBlock`: the lower half drops the plant
+    /// and takes the upper half with it.
+    pub fn double_plant_check(&mut self, r: &mut JavaRandom, x: i32, y: i32, z: i32) {
+        let id = block::DOUBLE_PLANT;
+        if !self.can_block_stay(id, x, y, z) {
+            let m = self.meta(x, y, z);
+            if m & 8 == 0 {
+                self.drop_block_with(r, id, m, x, y, z);
+                if self.block(x, y + 1, z) == id {
+                    self.set_block(x, y + 1, z, block::AIR, 0, 2);
+                }
+            }
+            self.set_block(x, y, z, block::AIR, 0, 2);
+        }
+    }
+
     /// `BlockBush.canPlaceBlockOn` for the bushes added here.
     fn bush_soil(id: u8, below: u8) -> bool {
         match id {
@@ -130,10 +159,9 @@ impl ServerWorld {
     pub fn growth_tick(&mut self, id: u8, x: i32, y: i32, z: i32, r: &mut JavaRandom) -> bool {
         match id {
             block::WHEAT | block::CARROTS | block::POTATOES => {
-                // BlockCrops.updateTick
-                if self.check_and_drop(r, id, x, y, z) {
-                    return true;
-                }
+                // BlockCrops.updateTick: BlockBush's check first, and the rest
+                // runs even when that just removed the crop (on air by then)
+                self.check_and_drop(r, id, x, y, z);
                 if light(self, x, y + 1, z) >= 9 {
                     let m = self.meta(x, y, z);
                     if m < 7 {
@@ -145,10 +173,8 @@ impl ServerWorld {
                 }
             }
             block::PUMPKIN_STEM | block::MELON_STEM => {
-                // BlockStem.updateTick
-                if self.check_and_drop(r, id, x, y, z) {
-                    return true;
-                }
+                // BlockStem.updateTick (as with crops, no return after the check)
+                self.check_and_drop(r, id, x, y, z);
                 if light(self, x, y + 1, z) >= 9 {
                     let f = self.growth_chance(id, x, y, z);
                     if r.next_int_n((25.0f32 / f) as i32 + 1) == 0 {
@@ -178,10 +204,8 @@ impl ServerWorld {
                 }
             }
             block::SAPLING => {
-                // BlockSapling.updateTick
-                if self.check_and_drop(r, id, x, y, z) {
-                    return true;
-                }
+                // BlockSapling.updateTick (no return after the check either)
+                self.check_and_drop(r, id, x, y, z);
                 if light(self, x, y + 1, z) >= 9 && r.next_int_n(7) == 0 {
                     self.mark_or_grow_sapling(x, y, z, r);
                 }

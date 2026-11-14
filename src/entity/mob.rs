@@ -1046,7 +1046,9 @@ impl Mob {
 
     /// `getTotalArmorValue`: the worn pieces plus the zombie's 2.
     pub fn total_armor(&self) -> i32 {
-        let worn: i32 = self.equipment[1..]
+        // getLastActiveItems: all five slots, the hand included
+        let worn: i32 = self
+            .equipment
             .iter()
             .flatten()
             .filter_map(|s| crate::inventory::armor_points(s.id))
@@ -1839,6 +1841,14 @@ impl Mob {
     /// `Entity.isBurning` on the server
     pub fn burning(&self) -> bool {
         !self.kind.fireproof() && self.fire > 0
+    }
+
+    /// The test in `EntityZombie.attackEntityAsMob` after a hit: empty
+    /// hands, burning, and then (only then) a roll against the difficulty.
+    pub fn zombie_ignites(&mut self, difficulty: i32) -> bool {
+        self.equipment[0].is_none()
+            && self.burning()
+            && self.rand.next_float() < difficulty as f32 * 0.3
     }
 
     /// `dropFewItems(recentlyHit, looting)` of each class.

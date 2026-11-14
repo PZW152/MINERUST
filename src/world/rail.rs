@@ -1,7 +1,7 @@
 //! `BlockRailBase$Rail`: how a placed rail picks its shape from its
 //! neighbours, and `BlockRailBase.onNeighborBlockChange`.
 
-use super::server::{GenEntity, ServerWorld};
+use super::server::ServerWorld;
 use crate::block;
 
 struct Rail {
@@ -303,10 +303,8 @@ pub fn neighbour_changed(w: &mut ServerWorld, x: i32, y: i32, z: i32, src: u8) {
         drop = true;
     }
     if drop {
-        w.gen_entities.push(GenEntity::Item {
-            pos: [x as f64 + 0.5, y as f64 + 0.5, z as f64 + 0.5],
-            stack: crate::item::Stack::new(id as u16, 0, 1),
-        });
+        // dropBlockAsItem(x, y, z, meta, 0), setBlockToAir
+        w.drop_block_with_chance(id, m, x, y, z, 1.0, 0);
         w.set_block(x, y, z, block::AIR, 0, 3);
     } else if id == block::RAIL {
         // BlockRail.func_150048_a

@@ -4,7 +4,7 @@
 //! `BlockPistonBase`, `BlockTNT`, `BlockNote`, `BlockDispenser`, `BlockDoor`,
 //! `BlockTrapDoor`, `BlockTripWireHook`).
 
-use super::server::{GenEntity, ServerWorld};
+use super::server::ServerWorld;
 use crate::block::{self, *};
 use crate::java::JavaRandom;
 
@@ -52,6 +52,8 @@ pub struct Occupant {
     pub living: bool,
     /// An `EntityMinecart` (detector rails)
     pub minecart: bool,
+    /// An `EntityArrow` (wooden buttons)
+    pub arrow: bool,
 }
 
 pub fn can_provide_power(id: u8) -> bool {
@@ -721,7 +723,8 @@ impl ServerWorld {
                     if sig {
                         self.set_block(x, y, z, UNLIT_REDSTONE_TORCH, m, 3);
                         if self.torch_burnout(x, y, z, true) {
-                            let p = 2.6 + (self.rand.next_float() - self.rand.next_float()) * 0.8;
+                            // world.rand, which is `r` here (lent out for the tick)
+                            let p = 2.6 + (r.next_float() - r.next_float()) * 0.8;
                             self.redstone_effects.push(Effect::Sound(
                                 "random.fizz",
                                 [x as f64 + 0.5, y as f64 + 0.5, z as f64 + 0.5],
@@ -760,9 +763,10 @@ impl ServerWorld {
             }
             STONE_BUTTON | WOODEN_BUTTON => {
                 let m = self.meta(x, y, z);
-                if m & 8 != 0 {
-                    // Wooden buttons stay pressed while an arrow touches them; arrows
-                    // stuck in buttons are not tracked, so both release.
+                if m & 8 != 0 && id == WOODEN_BUTTON {
+                    // func_150046_n: stays down while an arrow is in it
+                    self.button_arrows(x, y, z);
+                } else if m & 8 != 0 {
                     self.set_meta(x, y, z, m & 7, 3);
                     self.attached_neighbours(id, m & 7, x, y, z);
                     self.redstone_effects.push(Effect::Sound(
@@ -798,11 +802,11 @@ impl ServerWorld {
         true
     }
 
-    fn drop_block(&mut self, x: i32, y: i32, z: i32, item: u16, meta: i32) {
-        self.gen_entities.push(GenEntity::Item {
-            pos: [x as f64 + 0.5, y as f64 + 0.5, z as f64 + 0.5],
-            stack: crate::item::Stack::new(item, meta, 1),
-        });
+    /// `dropBlockAsItem(x, y, z, meta, 0)` then `setBlockToAir`; the item is
+    /// what the block's own drop rules give.
+    fn drop_block(&mut self, x: i32, y: i32, z: i32, _item: u16, _meta: i32) {
+        let (b, m) = (self.block(x, y, z), self.meta(x, y, z));
+        self.drop_block_with_chance(b, m, x, y, z, 1.0, 0);
         self.set_block(x, y, z, AIR, 0, 3);
     }
 
@@ -999,6 +1003,56 @@ impl ServerWorld {
         self.schedule_update(x, y, z, id, if id == WOODEN_BUTTON { 30 } else { 20 });
     }
 
+    /// `BlockButton.func_150046_n`: a wooden button follows the arrows
+    /// inside its box (pressed while there is one, checked every 30 ticks).
+    pub fn button_arrows(&mut self, x: i32, y: i32, z: i32) {
+        let m = self.meta(x, y, z);
+        let k = m & 7;
+        let down = m & 8 != 0;
+        // func_150043_b
+        let (lo, hi, w) = (0.375f32, 0.625f32, 0.1875f32);
+        let d = if down { 0.0625f32 } else { 0.125f32 };
+        let b: [f32; 6] = match k {
+            1 => [0.0, lo, 0.5 - w, d, hi, 0.5 + w],
+            2 => [1.0 - d, lo, 0.5 - w, 1.0, hi, 0.5 + w],
+            3 => [0.5 - w, lo, 0.0, 0.5 + w, hi, d],
+            // 4; a button has no other side
+            _ => [0.5 - w, lo, 1.0 - d, 0.5 + w, hi, 1.0],
+        };
+        let bb = Aabb6 {
+            min: [
+                x as f64 + b[0] as f64,
+                y as f64 + b[1] as f64,
+                z as f64 + b[2] as f64,
+            ],
+            max: [
+                x as f64 + b[3] as f64,
+                y as f64 + b[4] as f64,
+                z as f64 + b[5] as f64,
+            ],
+        };
+        let any = self
+            .occupants
+            .iter()
+            .any(|o| o.arrow && o.bb.intersects(&bb));
+        let c = [x as f64 + 0.5, y as f64 + 0.5, z as f64 + 0.5];
+        if any && !down {
+            self.set_meta(x, y, z, k | 8, 3);
+            self.attached_neighbours(WOODEN_BUTTON, k, x, y, z);
+            self.redstone_effects
+                .push(Effect::Sound("random.click", c, 0.3, 0.6));
+        }
+        if !any && down {
+            self.set_meta(x, y, z, k, 3);
+            self.attached_neighbours(WOODEN_BUTTON, k, x, y, z);
+            self.redstone_effects
+                .push(Effect::Sound("random.click", c, 0.3, 0.5));
+        }
+        if any {
+            self.schedule_update(x, y, z, WOODEN_BUTTON, 30);
+        }
+    }
+
     /// `BlockBasePressurePlate.onEntityCollidedWithBlock` / `updateTick`.
     pub fn plate_update(&mut self, id: u8, x: i32, y: i32, z: i32, old_power: i32) {
         let sensitive = Aabb6 {
@@ -1181,6 +1235,12 @@ impl ServerWorld {
                 TRIPWIRE => {
                     if self.meta(x, y, z) & 1 == 0 {
                         self.tripwire_check(x, y, z);
+                    }
+                }
+                // BlockButton.onEntityCollidedWithBlock
+                WOODEN_BUTTON => {
+                    if self.meta(x, y, z) & 8 == 0 {
+                        self.button_arrows(x, y, z);
                     }
                 }
                 // BlockRailDetector.onEntityCollidedWithBlock

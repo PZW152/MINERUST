@@ -1,17 +1,16 @@
 //! `BlockTripWire` and `BlockTripWireHook` state updates (attachment bits).
 
-use super::server::{GenEntity, ServerWorld};
+use super::server::ServerWorld;
 use crate::block::{self, TRIPWIRE, TRIPWIRE_HOOK};
 
 const DX: [i32; 4] = [0, -1, 0, 1];
 const DZ: [i32; 4] = [1, 0, -1, 0];
 const OPPOSITE: [i32; 4] = [2, 3, 0, 1];
 
-fn drop(w: &mut ServerWorld, x: i32, y: i32, z: i32, item: u16) {
-    w.gen_entities.push(GenEntity::Item {
-        pos: [x as f64 + 0.5, y as f64 + 0.5, z as f64 + 0.5],
-        stack: crate::item::Stack::new(item, 0, 1),
-    });
+/// `dropBlockAsItem(x, y, z, meta, 0)` then `setBlockToAir`
+fn drop(w: &mut ServerWorld, x: i32, y: i32, z: i32, _item: u16) {
+    let (b, m) = (w.block(x, y, z), w.meta(x, y, z));
+    w.drop_block_with_chance(b, m, x, y, z, 1.0, 0);
     w.set_block(x, y, z, block::AIR, 0, 3);
 }
 

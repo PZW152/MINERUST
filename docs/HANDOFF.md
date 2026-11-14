@@ -321,8 +321,9 @@ MINERUST_BENCH=10 minerust --seed 12345 --no-save --size 1920 1080 --distance 16
    蜘蛛騎士（亂數照抽但不生成）、殭屍增援（`summonReinforcements`）與破門、領頭殭屍的增援機率、蜘蛛在困難模式的藥水效果、
    豹貓生成時的幼貓、馬的 `onSpawnWithEgg` 逐行核對、`InhabitedTime` 還沒寫進存檔（重新載入從 0 開始）、
    著火的空手殭屍點燃玩家（`EntityZombie.attackEntityAsMob`）。
-   掉落的另外幾條路徑還沒改走 `drops.rs`：`harvestBlock` 的覆寫（剪刀剪樹葉／草／藤蔓、冰、雪片仍用舊的 `item::drops`）、
-   水沖掉火把與植物失去支撐時的掉落、樹葉腐爛。`item::has_subtypes` 是近似（`max_damage == 0`），應改為原版 `getHasSubtypes` 的表。
+   掉落還沒改走 `drops.rs` 的只剩 `harvestBlock` 的覆寫（剪刀剪樹葉／草／藤蔓、冰、雪片仍用舊的 `item::drops`，
+   `play.rs` 約 737、752 行）。失去支撐、水沖、樹葉腐爛、甘蔗／仙人掌／雙層植物都已改走 `drops.rs`（2026-11-14 稽核）。
+   `item::has_subtypes` 是近似（`max_damage == 0`），應改為原版 `getHasSubtypes` 的表。
 1b. （已完成基本形）客戶端預測放置／破壞方塊，見第 4 節「客戶端預測」。尚未預測的：有朝向或需要依附的方塊（原木、活塞、熔爐、
    火把、樓梯、半磚、門……，要把 `play.rs` 裡決定中繼值的邏輯抽成兩端共用）、沙與礫石、TNT、雙層植物的另一半。
    預測時的光照只是暫時估計（六個鄰居最大值減一），伺服器快照到了才是真的。
@@ -344,6 +345,14 @@ MINERUST_BENCH=10 minerust --seed 12345 --no-save --size 1920 1080 --distance 16
 - 平坦、巨型群系、放大化等世界類型尚未改變生成；獎勵箱、極限模式尚未生效。
 - 聊天打字與創造搜尋用 `text_input()` 走 `Game::text_key`，按鍵事件需要字元時記得接上。
 - Bash heredoc 內含撇號會壞；修補腳本請寫成檔案再執行。
+- **世界亂數的「借出」是結構性問題（未解決）。** 全專案有 31 處 `std::mem::replace(&mut w.rand, JavaRandom::new(0))`：
+  把 `world.rand` 拿出來當參數 `r` 傳給 tick／生成函式，結束再放回去。借出期間 `self.rand` 是種子 0 的假產生器，
+  所以**在借出期間被間接呼叫、又自己去用 `self.rand` 的程式**（最常見的是 `set_block` → `on_neighbor_change` →
+  `check_and_drop` / `drop_block_with_chance`）抽到的是假亂數，而且抽完就被丟掉——原版這時用的是同一個 `world.rand`，
+  亂數順序會因此與原版分岔（例：火燒掉花下面的方塊、莖旁邊結出南瓜時鄰居的檢查）。寫新程式時：手上有 `r` 就一路往下傳
+  （`drop_block_with(r, ..)`、`destroy_block_with(r, ..)`、`fizz(.., r)`），不要在可能已借出的路徑上呼叫會自己借的函式。
+  徹底的解法是把 `on_neighbor_change` / `on_block_added` 也改成接收 `r`，或讓 tick 函式直接用 `self.rand`、只在呼叫
+  世界生成器（樹、巨型蘑菇）時借出；這是一次大範圍的機械式改寫，還沒做。
 
 ## 9. 開發日誌
 
@@ -539,3 +548,37 @@ MINERUST_BENCH=10 minerust --seed 12345 --no-save --size 1920 1080 --distance 16
   `getSystemTime` 捲動公式逐角計算；新的 Vulkan 管線 `pipe_gui_glint`（kind 13，相加混合），`Frame.ui_glint` 記錄要用它畫的頂點範圍，
   照順序穿插繪製，所以之後畫的背景與工具提示仍會蓋住光澤。截圖確認。`cargo test --release` 100 項通過。
   **留下**：世界中的光澤（手持、掉落物、盔甲模型的 `shouldRenderPass` 回傳 15 那一層）、方塊物品圖示的光澤。
+- `本次（2026-11-14，稽核上一輪 Opus 5.5 的四個提交 + 修正）`：使用者要求檢查上一輪較低階模型的成果。逐行對照了
+  `growth.rs`（作物、莖、樹苗、地獄疣、可可、耕地、靜止岩漿、傳送門、骨粉全部分支）、`ticks.rs`、`sim_bed.rs`、
+  `play.rs` 的鋤頭／種子／床／骨粉、生物的 `dropEquipment` / `getTotalArmorValue` / `attackEntityAsMob`、`Ui::glint` 的貼圖座標。
+  有 Java 對照測試的部分（掉落表、附魔、生怪裝備）沒有發現錯誤；**錯都出在沒有對照測試、靠讀原始碼移植的邊角**：
+  - `BlockCrops` / `BlockStem` / `BlockSapling.updateTick`：`super.updateTick`（失去支撐就掉落）之後原版**不會 return**，
+    仍然對著已經變成空氣的那一格判斷光照並抽成長的 `nextInt`。上一輪寫成提前返回，亂數順序因此少抽一次。
+  - 隨機 tick 清單缺了一半：原版 `setTickRandomly(true)` 的還有所有液體（`BlockLiquid`）、雙層植物、火把、紅石火把、
+    兩種按鈕、壓力板、偵測鐵軌、絆線、絆線鉤。現在都會被隨機 tick 呼叫各自的 `updateTick`（按下的按鈕會被提早放開等，
+    這是原版行為）。PARITY_TODO 的這一項已關閉。
+  - 掉落：甘蔗失去水或被隨機 tick 檢查到（`func_150170_e`）、仙人掌旁邊放方塊（`func_147480_a(…, true)`，含 2001 破壞特效）、
+    雙層植物下半失去土壤、樹葉腐爛（`removeLeaves` 的樹苗／蘋果機率）以前都是直接變空氣不掉東西。火把、告示牌、門、
+    紅石線／中繼器／拉桿／壓力板／活板門、鐵軌、絆線與絆線鉤失去支撐時改走 `dropBlockAsItem`（以前固定生在方塊正中央、
+    不抽位置亂數）。
+  - **水沖掉方塊不掉落**（`BlockDynamicLiquid.func_149813_h`）：火把、紅石、作物、花被水沖走以前直接消失，現在掉落。
+    同一個函式裡岩漿流進任何一格都會 `random.fizz`；岩漿遇水（`func_149805_n`，不論有沒有變成黑曜石／圓石）與
+    往下流到水變石頭也有，以前完全沒有聲音。
+  - 木按鈕：以前註解寫明「不追蹤箭，所以直接放開」，是準則 1 禁止的簡化。現在 `button_arrows` 是 `func_150046_n`
+    的移植（箭射中會按下，箭還插著就每 30 tick 續按），`Occupant` 多了 `arrow` 旗標。
+  - 紅石火把燒毀的音高用了 `self.rand`（那時已被借出，抽到的是假亂數），改用 `r`。由此查出上面第 8 節的結構性問題。
+  - 冰在地獄融化直接消失（`provider.isHellWorld`）。
+  - 床：重生點往上找空位改用真正的碰撞箱（以前用 `info.solid` 近似，半磚、柵欄會判錯，還多了 y < 256 的上限）；
+    「附近有怪物」不再排除瀕死的怪物（原版 `getEntitiesWithinAABB` 不管血量）。
+  - 生物近戰：`EntityMob.attackEntityAsMob` 擊退附魔命中後攻擊者自己 `motionX/Z *= 0.6` 沒做；
+    `EntityZombie.attackEntityAsMob` 的「著火的空手殭屍點燃玩家」（`rand.nextFloat() < 難度 * 0.3`，只在空手且著火時才抽）
+    補上；`getTotalArmorValue` 要算全部五格裝備（含手上）。
+  **驗證**：`cargo test --release` 105 項通過，新增五個測試（`plants_that_lose_their_place_drop_themselves`、
+  `a_dropped_crop_still_draws_its_growth_roll`、`random_ticks_release_buttons`、`decaying_leaves_roll_their_drops`、
+  `water_washes_torches_out_and_lava_hisses`）。基準：同時段交替各量三次，上一提交 628–634 fps／伺服器 5.7–5.9 ms，
+  本次 623–643 fps／5.7–5.9 ms，沒有退步（機器上使用者正在玩另一份 minerust，絕對值偏低）。
+  **沒有驗證的**：木按鈕與箭、殭屍點燃玩家、擊退後的減速只有編譯與原始碼對照，沒有測試也沒有實機操作；
+  岩漿的嘶嘶聲沒有實際聽過（截圖模式關閉聲音）。
+  **稽核沒涵蓋的**：`sim.rs` 的 `attack_mob`（玩家近戰）、`server_player.rs` 的受傷流程、`rb.rs` 新增的柵欄門／牆／床繪製、
+  `mob.rs` 其餘約 900 行改動。這些有的有對照測試（附魔數值），繪製只有截圖；下一位請接著對。
+  `cargo clippy` 有 8 個預設為 deny 的 `approx_constant`（`0.70710677`、`3.1415927` 寫成字面值），不影響 `cargo build`，未處理。

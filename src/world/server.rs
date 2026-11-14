@@ -2072,15 +2072,13 @@ impl ServerWorld {
             }
         };
         if drop {
-            self.gen_entities.push(GenEntity::Item {
-                pos: [x as f64 + 0.5, y as f64 + 0.5, z as f64 + 0.5],
-                stack: crate::item::Stack::new(323, 0, 1),
-            });
+            let m = self.meta(x, y, z);
+            self.drop_block_with_chance(id, m, x, y, z, 1.0, 0);
             self.set_block(x, y, z, block::AIR, 0, 3);
         }
     }
 
-    fn torch_added(&mut self, id: u8, x: i32, y: i32, z: i32) {
+    pub(crate) fn torch_added(&mut self, id: u8, x: i32, y: i32, z: i32) {
         let nc = |w: &mut ServerWorld, x: i32, y: i32, z: i32| {
             block::info(w.block(x, y, z)).normal_cube()
         };
@@ -2108,15 +2106,8 @@ impl ServerWorld {
             || nc(self, x, y, z + 1)
             || self.torch_can_stand_on(x, y - 1, z);
         if !can && self.block(x, y, z) == id {
-            let drop = if id == block::TORCH {
-                block::TORCH
-            } else {
-                block::REDSTONE_TORCH
-            };
-            self.gen_entities.push(GenEntity::Item {
-                pos: [x as f64 + 0.5, y as f64 + 0.5, z as f64 + 0.5],
-                stack: crate::item::Stack::new(drop as u16, 0, 1),
-            });
+            let m = self.meta(x, y, z);
+            self.drop_block_with_chance(id, m, x, y, z, 1.0, 0);
             self.set_block(x, y, z, block::AIR, 0, 3);
         }
     }
@@ -2138,11 +2129,8 @@ impl ServerWorld {
                 }
             }
             if broke {
-                let item = if id == block::WOODEN_DOOR { 324 } else { 330 };
-                self.gen_entities.push(GenEntity::Item {
-                    pos: [x as f64 + 0.5, y as f64 + 0.5, z as f64 + 0.5],
-                    stack: crate::item::Stack::new(item, 0, 1),
-                });
+                // dropBlockAsItem(x, y, z, meta, 0) of the lower half
+                self.drop_block_with_chance(id, m, x, y, z, 1.0, 0);
             } else {
                 let p = self.indirectly_powered(x, y, z) || self.indirectly_powered(x, y + 1, z);
                 if (p || super::redstone::can_provide_power(src)) && src != id {
@@ -2278,6 +2266,10 @@ impl ServerWorld {
             } else if m <= 4 {
                 self.set_block(x, y, z, block::COBBLESTONE, 0, 3);
             }
+            // the hiss comes whether or not the lava turned to stone
+            let mut r = std::mem::replace(&mut self.rand, JavaRandom::new(0));
+            self.fizz(x, y, z, &mut r);
+            self.rand = r;
         }
     }
 
@@ -2581,22 +2573,26 @@ impl ServerWorld {
                 }
             }
             block::DOUBLE_PLANT => {
-                if !self.can_block_stay(id, x, y, z) {
-                    let m = self.meta(x, y, z);
-                    if m & 8 == 0 && self.block(x, y + 1, z) == id {
-                        self.set_block(x, y + 1, z, block::AIR, 0, 2);
-                    }
-                    self.set_block(x, y, z, block::AIR, 0, 2);
-                }
+                let mut r = std::mem::replace(&mut self.rand, JavaRandom::new(0));
+                self.double_plant_check(&mut r, x, y, z);
+                self.rand = r;
             }
+            // BlockReed.onNeighborBlockChange -> func_150170_e: drops itself
             block::REEDS => {
                 if !self.reed_can_place(x, y, z) {
+                    let m = self.meta(x, y, z);
+                    let mut r = std::mem::replace(&mut self.rand, JavaRandom::new(0));
+                    self.drop_block_with(&mut r, id, m, x, y, z);
+                    self.rand = r;
                     self.set_air(x, y, z);
                 }
             }
+            // BlockCactus.onNeighborBlockChange: func_147480_a(x, y, z, true)
             block::CACTUS => {
                 if !self.can_block_stay(id, x, y, z) {
-                    self.set_air(x, y, z);
+                    let mut r = std::mem::replace(&mut self.rand, JavaRandom::new(0));
+                    self.destroy_block_with(&mut r, x, y, z);
+                    self.rand = r;
                 }
             }
             block::SNOW_LAYER => {
@@ -2720,9 +2716,35 @@ impl ServerWorld {
         }
     }
 
-    fn spread_to(&mut self, id: u8, x: i32, y: i32, z: i32, level: i32) {
+    /// `BlockDynamicLiquid.func_149813_h`: lava hisses at whatever it flows
+    /// into, water drops it as an item first.
+    fn spread_to(&mut self, id: u8, x: i32, y: i32, z: i32, level: i32, r: &mut JavaRandom) {
         if self.can_spread_to(block::material(id), x, y, z) {
+            if block::material(id) == Material::Lava {
+                self.fizz(x, y, z, r);
+            } else {
+                let (b, m) = (self.block(x, y, z), self.meta(x, y, z));
+                self.drop_block_with(r, b, m, x, y, z);
+            }
             self.set_block(x, y, z, id, level, 3);
+        }
+    }
+
+    /// `BlockLiquid.func_149799_m`: the hiss, and eight smoke particles
+    /// that the server's world has nobody to show to.
+    fn fizz(&mut self, x: i32, y: i32, z: i32, r: &mut JavaRandom) {
+        let pitch = 2.6 + (r.next_float() - r.next_float()) * 0.8;
+        self.redstone_effects.push(super::redstone::Effect::Sound(
+            "random.fizz",
+            [x as f64 + 0.5, y as f64 + 0.5, z as f64 + 0.5],
+            0.5,
+            pitch,
+        ));
+        for _ in 0..8 {
+            let _ = (
+                crate::util::math::math_random(),
+                crate::util::math::math_random(),
+            );
         }
     }
 
@@ -2873,12 +2895,13 @@ impl ServerWorld {
         if self.can_spread_to(mat, x, y - 1, z) {
             if mat == Material::Lava && self.material(x, y - 1, z) == Material::Water {
                 self.set_block(x, y - 1, z, block::STONE, 0, 3);
+                self.fizz(x, y - 1, z, rand);
                 return;
             }
             if level >= 8 {
-                self.spread_to(id, x, y - 1, z, level);
+                self.spread_to(id, x, y - 1, z, level, rand);
             } else {
-                self.spread_to(id, x, y - 1, z, level + 8);
+                self.spread_to(id, x, y - 1, z, level + 8, rand);
             }
         } else if level >= 0 && (level == 0 || self.blocks_spreading(x, y - 1, z)) {
             // Vanilla keeps the result in an instance field of the block
@@ -2895,16 +2918,16 @@ impl ServerWorld {
                 return;
             }
             if self.spread_dirs[slot][0] {
-                self.spread_to(id, x - 1, y, z, next);
+                self.spread_to(id, x - 1, y, z, next, rand);
             }
             if self.spread_dirs[slot][1] {
-                self.spread_to(id, x + 1, y, z, next);
+                self.spread_to(id, x + 1, y, z, next, rand);
             }
             if self.spread_dirs[slot][2] {
-                self.spread_to(id, x, y, z - 1, next);
+                self.spread_to(id, x, y, z - 1, next, rand);
             }
             if self.spread_dirs[slot][3] {
-                self.spread_to(id, x, y, z + 1, next);
+                self.spread_to(id, x, y, z + 1, next, rand);
             }
         }
     }
