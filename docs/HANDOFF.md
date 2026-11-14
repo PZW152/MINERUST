@@ -582,3 +582,6 @@ MINERUST_BENCH=10 minerust --seed 12345 --no-save --size 1920 1080 --distance 16
   **稽核沒涵蓋的**：`sim.rs` 的 `attack_mob`（玩家近戰）、`server_player.rs` 的受傷流程、`rb.rs` 新增的柵欄門／牆／床繪製、
   `mob.rs` 其餘約 900 行改動。這些有的有對照測試（附魔數值），繪製只有截圖；下一位請接著對。
   `cargo clippy` 有 8 個預設為 deny 的 `approx_constant`（`0.70710677`、`3.1415927` 寫成字面值），不影響 `cargo build`，未處理。
+- `本次（2026-11-14，相依套件）`：GitHub Dependabot 回報 `zip` 2.6.1 有三個漏洞（AES HMAC 繞過、符號連結目標無上限、雙標頭解析差異），
+  升到 9.x（鎖定 9.5.1，`default-features = false` + `deflate`，`cargo tree -i cc` 確認沒有 C 相依）。本專案只按名稱讀自己的 jar，
+  實際風險低，但沒有理由留著。105 項測試通過，截圖確認 jar 的材質、字型照常載入。
