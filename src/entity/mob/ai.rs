@@ -147,6 +147,8 @@ pub enum Ai {
         parent: Option<u32>,
         delay: i32,
     },
+    /// The tasks of wolves, ocelots and iron golems.
+    Pet(Pet),
     // --- targetTasks ---
     HurtByTarget {
         calls_for_help: bool,
@@ -293,7 +295,8 @@ impl Mob {
 
     /// `canNavigate` (every mob here swims: `setCanSwim(true)`)
     fn can_navigate(&self, w: &ServerWorld) -> bool {
-        self.on_ground || self.in_liquid(w)
+        // the iron golem has no EntityAISwimming, so no setCanSwim(true)
+        self.on_ground || self.kind != Kind::IronGolem && self.in_liquid(w)
     }
 
     /// `PathFinder.createEntityPathTo(entity, x, y, z, range)`
@@ -815,6 +818,7 @@ impl Ai {
     /// `getMutexBits`
     fn mutex(&self) -> i32 {
         match self {
+            Ai::Pet(p) => p.mutex(),
             Ai::Swimming => 4,
             Ai::Panic { .. } | Ai::Wander { .. } | Ai::CreeperSwell { .. } => 1,
             Ai::AvoidEntity { .. } | Ai::FleeSun { .. } => 1,
@@ -829,6 +833,7 @@ impl Ai {
 
     fn should_execute(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
         match self {
+            Ai::Pet(p) => p.should_execute(m, cx),
             Ai::Swimming => m.in_liquid(cx.w),
             Ai::Panic { pos, .. } => {
                 if m.revenge.is_none() && m.fire <= 0 {
@@ -1059,6 +1064,7 @@ impl Ai {
 
     fn continue_executing(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
         match self {
+            Ai::Pet(p) => p.continue_executing(m, cx),
             Ai::Panic { .. } | Ai::Wander { .. } | Ai::AvoidEntity { .. } | Ai::FleeSun { .. } => {
                 !m.no_path()
             }
@@ -1113,6 +1119,7 @@ impl Ai {
             Ai::Panic { speed, pos } | Ai::Wander { speed, pos } | Ai::FleeSun { speed, pos } => {
                 m.try_move_to_xyz(cx.w, pos[0], pos[1], pos[2], *speed);
             }
+            Ai::Pet(p) => p.start_executing(m, cx),
             Ai::Tempt { avoid_water, .. } => {
                 *avoid_water = m.avoids_water;
                 m.avoids_water = false;
@@ -1206,6 +1213,7 @@ impl Ai {
                 *time = -1;
             }
             Ai::CreeperSwell { target } => *target = None,
+            Ai::Pet(p) => p.reset_task(m),
             Ai::AvoidEntity { closest, .. } => *closest = None,
             Ai::RestrictSun => m.avoid_sun = false,
             Ai::EatGrass { timer } => *timer = 0,
@@ -1219,6 +1227,7 @@ impl Ai {
 
     fn update_task(&mut self, m: &mut Mob, cx: &mut Cx) {
         match self {
+            Ai::Pet(p) => p.update_task(m, cx),
             Ai::Swimming => {
                 if m.rand.next_float() < 0.8 {
                     m.jumping = true;
@@ -1402,6 +1411,21 @@ fn attack_as_mob(m: &mut Mob, t: Target, v: &View, cx: &mut Cx) {
         // the golden sword
         amount += 4.0;
     }
+    let mut lift = 0.0;
+    match m.kind {
+        // EntityWolf.attackEntityAsMob
+        Kind::Wolf => amount = if m.tamed { 4.0 } else { 2.0 },
+        // EntityOcelot.attackEntityAsMob
+        Kind::Ocelot => amount = 3.0,
+        // EntityIronGolem.attackEntityAsMob: thrown upwards
+        Kind::IronGolem => {
+            m.attack_timer = 10;
+            amount = (7 + m.rand.next_int_n(15)) as f32;
+            lift = 0.4f32 as f64;
+            cx.out.sounds.push(("mob.irongolem.throw", m.pos, 1.0, 1.0));
+        }
+        _ => {}
+    }
     if m.kind == Kind::CaveSpider {
         // EntityCaveSpider.attackEntityAsMob: poison by difficulty
         effect = Some((crate::potion::POISON, -1));
@@ -1411,7 +1435,7 @@ fn attack_as_mob(m: &mut Mob, t: Target, v: &View, cx: &mut Cx) {
             cx.out.hits.push(Hit::Melee {
                 kind: m.kind,
                 amount,
-                knock: [0.0; 3],
+                knock: [0.0, lift, 0.0],
                 from: m.pos,
                 effect,
             });
@@ -1424,7 +1448,7 @@ fn attack_as_mob(m: &mut Mob, t: Target, v: &View, cx: &mut Cx) {
                 from: m.id,
                 amount,
                 at: m.pos,
-                lift: 0.0,
+                lift,
             });
         }
     }
@@ -1511,6 +1535,9 @@ pub fn uses_tasks(k: Kind) -> bool {
             | Kind::Sheep
             | Kind::Chicken
             | Kind::Villager
+            | Kind::Wolf
+            | Kind::Ocelot
+            | Kind::IronGolem
     )
 }
 
@@ -1754,6 +1781,11 @@ fn build(m: &mut Mob) {
 pub(super) fn update(m: &mut Mob, cx: &mut Cx) {
     if m.tasks.is_empty() {
         build(m);
+        build_pet(m);
+    }
+    if m.kind == Kind::IronGolem && m.attack_timer > 0 {
+        // EntityIronGolem.onLivingUpdate
+        m.attack_timer -= 1;
     }
     // EntityLivingBase.onEntityUpdate: the attacker is forgotten after 100
     // ticks, or once it is dead
@@ -1779,6 +1811,14 @@ pub(super) fn update(m: &mut Mob, cx: &mut Cx) {
     m.move_helper();
     m.look_update();
     m.target_player = m.attack_target == Some(Target::Player);
+    if m.kind == Kind::Wolf {
+        // EntityWolf.setAttackTarget: angry while it has one, unless tamed
+        if m.attack_target.is_none() {
+            m.angry = false;
+        } else if !m.tamed {
+            m.angry = true;
+        }
+    }
 }
 
 /// `EntityAIHurtByTarget.startExecuting` with `entityCallsForHelp`: the
@@ -1803,6 +1843,847 @@ pub(super) fn answer_calls(list: &mut [Mob], calls: &[Call]) {
                 m.attack_target = Some(c.target);
             }
         }
+    }
+}
+
+// ----------------------------------------- wolves, ocelots and iron golems
+
+/// The tasks of `EntityTameable`s and of the iron golem.
+#[derive(Clone, Debug)]
+pub enum Pet {
+    /// `EntityAISit`
+    Sit,
+    /// `EntityAIFollowOwner(pet, speed, minDist, maxDist)`
+    FollowOwner {
+        speed: f64,
+        min: f32,
+        max: f32,
+        recalc: i32,
+        old_water: bool,
+    },
+    /// `EntityAIBeg`
+    Beg { dist: f32, timeout: i32 },
+    /// `EntityAILeapAtTarget`
+    Leap { y: f32, target: Option<Target> },
+    /// `EntityAIOwnerHurtByTarget`
+    OwnerHurtByTarget {
+        timestamp: i32,
+        found: Option<Target>,
+        st: TargetState,
+    },
+    /// `EntityAIOwnerHurtTarget`
+    OwnerHurtTarget {
+        timestamp: i32,
+        found: Option<Target>,
+        st: TargetState,
+    },
+    /// `EntityAITargetNonTamed(pet, class, chance, false)`
+    TargetNonTamed {
+        kind: Kind,
+        chance: i32,
+        found: Option<Target>,
+        st: TargetState,
+    },
+    /// `EntityAITempt` with `scaredByPlayerMovement` (the ocelot's fish)
+    TemptScared {
+        speed: f64,
+        item: u16,
+        delay: i32,
+        at: [f64; 3],
+        pitch: f64,
+        yaw: f64,
+        avoid_water: bool,
+    },
+    /// `EntityAIAvoidEntity(ocelot, EntityPlayer.class, ...)`
+    AvoidPlayer {
+        dist: f32,
+        far: f64,
+        near: f64,
+        path: Option<Vec<Pt>>,
+    },
+    /// `EntityAIOcelotSit`
+    OcelotSit {
+        speed: f64,
+        timer: i32,
+        sitting_timer: i32,
+        max_stay: i32,
+        block: [i32; 3],
+    },
+    /// `EntityAIOcelotAttack`
+    OcelotAttack {
+        victim: Option<Target>,
+        countdown: i32,
+    },
+    /// `EntityAIMoveTowardsTarget`
+    MoveTowardsTarget {
+        speed: f64,
+        max: f32,
+        pos: [f64; 3],
+        target: Option<Target>,
+    },
+    /// `EntityAILookAtVillager`
+    LookAtVillager {
+        villager: Option<u32>,
+        look_time: i32,
+    },
+    /// `EntityAINearestAttackableTarget(golem, EntityLiving.class, 0, false,
+    /// true, IMob.mobSelector)`
+    GolemTarget {
+        found: Option<Target>,
+        st: TargetState,
+        search_status: i32,
+        search_delay: i32,
+    },
+}
+
+/// `ItemFood.isWolfsFavoriteMeat` (`EntityWolf.isBreedingItem`)
+fn wolf_meat(id: u16) -> bool {
+    matches!(id, 319 | 320 | 363 | 364 | 365 | 366 | 367)
+}
+
+/// `isSuitableTarget` for a tamed animal, with `shouldAttackEntity`: not
+/// its owner, not another pet of the owner's, not a creeper or a ghast.
+fn pet_suitable(m: &Mob, t: Option<Target>, cx: &Cx) -> bool {
+    let Some(t) = t else { return false };
+    match t {
+        Target::Player => false,
+        Target::Mob(id) => {
+            let Some(o) = cx.others.iter().find(|o| o.id == id) else {
+                return false;
+            };
+            if o.tamed || matches!(o.kind, Kind::Creeper | Kind::Ghast) {
+                return false;
+            }
+            is_suitable_target(m, Some(t), false, cx)
+        }
+    }
+}
+
+/// `EntityAITarget.canEasilyReach`
+fn can_easily_reach(m: &mut Mob, v: &View, delay: &mut i32, cx: &mut Cx) -> bool {
+    *delay = 10 + m.rand.next_int_n(5);
+    let Some(p) = m.path_to_entity(cx.w, v) else {
+        return false;
+    };
+    let Some(e) = p.last() else { return false };
+    let dx = e.x - math::floor_double(v.pos[0]);
+    let dz = e.z - math::floor_double(v.pos[2]);
+    (dx * dx + dz * dz) as f64 <= 2.25
+}
+
+/// `EntityAIOcelotSit.canSitOnBlock` (beds are not in the game yet; a
+/// chest counts whether or not someone has it open)
+fn can_sit_on(w: &mut ServerWorld, p: [i32; 3]) -> bool {
+    matches!(w.block(p[0], p[1], p[2]), block::CHEST | block::LIT_FURNACE)
+}
+
+impl Pet {
+    fn mutex(&self) -> i32 {
+        match self {
+            Pet::Sit | Pet::Leap { .. } | Pet::OcelotSit { .. } => 5,
+            Pet::FollowOwner { .. } | Pet::TemptScared { .. } => 3,
+            Pet::OcelotAttack { .. } | Pet::LookAtVillager { .. } => 3,
+            Pet::Beg { .. } => 2,
+            _ => 1,
+        }
+    }
+
+    fn should_execute(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        match self {
+            Pet::Sit => {
+                if !m.tamed || m.in_water || !m.on_ground {
+                    return false;
+                }
+                // the owner under attack nearby gets the pet up
+                if m.dist2(cx.player.feet) < 144.0 && cx.player.last_attacker.is_some() {
+                    false
+                } else {
+                    m.sit_order
+                }
+            }
+            Pet::FollowOwner { min, .. } => {
+                if !m.tamed || m.sitting {
+                    return false;
+                }
+                !(m.dist2(cx.player.feet) < (*min * *min) as f64)
+            }
+            Pet::Beg { dist, .. } => {
+                closest_player(m, cx, *dist as f64).is_some() && begs_for(m, cx)
+            }
+            Pet::Leap { target, .. } => {
+                *target = m.attack_target;
+                let Some(v) = target.and_then(|t| cx.view(t)) else {
+                    return false;
+                };
+                let d = m.dist2_to(&v);
+                if d < 4.0 || d > 16.0 {
+                    return false;
+                }
+                if !m.on_ground {
+                    return false;
+                }
+                m.rand.next_int_n(5) == 0
+            }
+            Pet::OwnerHurtByTarget {
+                timestamp, found, ..
+            } => {
+                if !m.tamed {
+                    return false;
+                }
+                *found = cx.player.last_attacker.map(Target::Mob);
+                cx.player.revenge_timer != *timestamp && pet_suitable(m, *found, cx)
+            }
+            Pet::OwnerHurtTarget {
+                timestamp, found, ..
+            } => {
+                if !m.tamed {
+                    return false;
+                }
+                *found = cx.player.last_attacked.map(Target::Mob);
+                cx.player.last_attack_time != *timestamp && pet_suitable(m, *found, cx)
+            }
+            Pet::TargetNonTamed {
+                kind,
+                chance,
+                found,
+                ..
+            } => {
+                if m.tamed {
+                    return false;
+                }
+                if *chance > 0 && m.rand.next_int_n(*chance) != 0 {
+                    return false;
+                }
+                let range = m.kind.follow_range() as f64;
+                let bb = expand(&m.bb, range, 4.0, range);
+                let ids: Vec<(u32, [f64; 3])> = mobs_within(m, cx, Cls::Kind(*kind), bb)
+                    .map(|o| (o.id, o.pos))
+                    .collect();
+                let mut best: Option<(f64, u32)> = None;
+                for (id, pos) in ids {
+                    if is_suitable_target(m, Some(Target::Mob(id)), false, cx) {
+                        let d = m.dist2(pos);
+                        if best.map_or(true, |b| d < b.0) {
+                            best = Some((d, id));
+                        }
+                    }
+                }
+                *found = best.map(|b| Target::Mob(b.1));
+                found.is_some()
+            }
+            Pet::TemptScared { item, delay, .. } => {
+                if *delay > 0 {
+                    *delay -= 1;
+                    return false;
+                }
+                closest_player(m, cx, 10.0).is_some() && cx.player.held == Some(*item)
+            }
+            Pet::AvoidPlayer { dist, path, .. } => {
+                if m.tamed {
+                    return false;
+                }
+                if closest_player(m, cx, *dist as f64).is_none() {
+                    return false;
+                }
+                let at = cx.player.feet;
+                let Some(v) = m.random_target(cx.w, 16, 7, Some(at)) else {
+                    return false;
+                };
+                let d = |a: [f64; 3], b: [f64; 3]| {
+                    (a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)
+                };
+                if d(at, v) < d(at, m.pos) {
+                    return false;
+                }
+                *path = m.path_to_xyz(cx.w, v[0], v[1], v[2]);
+                path.as_ref()
+                    .and_then(|p| p.last())
+                    .is_some_and(|e| e.x == v[0] as i32 && e.y == v[1] as i32 && e.z == v[2] as i32)
+            }
+            Pet::OcelotSit { block, .. } => {
+                if !(m.tamed && !m.sitting && m.rand.next_double() <= 0.0065f32 as f64) {
+                    return false;
+                }
+                // isNearValidBlock
+                let y = m.pos[1] as i32;
+                let mut best = 2.147483647e9f64;
+                let mut x = m.pos[0] as i32 - 8;
+                while (x as f64) < m.pos[0] + 8.0 {
+                    let mut z = m.pos[2] as i32 - 8;
+                    while (z as f64) < m.pos[2] + 8.0 {
+                        if can_sit_on(cx.w, [x, y, z]) && cx.w.is_air(x, y + 1, z) {
+                            let d = m.dist2([x as f64, y as f64, z as f64]);
+                            if d < best {
+                                *block = [x, y, z];
+                                best = d;
+                            }
+                        }
+                        z += 1;
+                    }
+                    x += 1;
+                }
+                best < 2.147483647e9
+            }
+            Pet::OcelotAttack { victim, .. } => {
+                *victim = m.attack_target.filter(|t| cx.view(*t).is_some());
+                victim.is_some()
+            }
+            Pet::MoveTowardsTarget {
+                max, pos, target, ..
+            } => {
+                *target = m.attack_target;
+                let Some(v) = target.and_then(|t| cx.view(t)) else {
+                    return false;
+                };
+                if m.dist2_to(&v) > (*max * *max) as f64 {
+                    return false;
+                }
+                // findRandomTargetBlockTowards: the mirror of "away from"
+                let mirror = [
+                    2.0 * m.pos[0] - v.pos[0],
+                    2.0 * m.pos[1] - v.pos[1],
+                    2.0 * m.pos[2] - v.pos[2],
+                ];
+                match m.random_target(cx.w, 16, 7, Some(mirror)) {
+                    Some(p) => {
+                        *pos = p;
+                        true
+                    }
+                    None => false,
+                }
+            }
+            Pet::LookAtVillager { villager, .. } => {
+                if !cx.day {
+                    return false;
+                }
+                if m.rand.next_int_n(8000) != 0 {
+                    return false;
+                }
+                let bb = expand(&m.bb, 6.0, 2.0, 6.0);
+                let mut best: Option<(f64, u32)> = None;
+                for o in mobs_within(m, cx, Cls::Kind(Kind::Villager), bb) {
+                    let d = m.dist2(o.pos);
+                    if best.map_or(true, |b| d <= b.0) {
+                        best = Some((d, o.id));
+                    }
+                }
+                *villager = best.map(|b| b.1);
+                villager.is_some()
+            }
+            Pet::GolemTarget {
+                found,
+                search_status,
+                search_delay,
+                ..
+            } => {
+                let range = m.kind.follow_range() as f64;
+                let bb = expand(&m.bb, range, 4.0, range);
+                // IMob.mobSelector, and canAttackClass: no creepers
+                let ids: Vec<(u32, [f64; 3])> = mobs_within(m, cx, Cls::Living, bb)
+                    .filter(|o| o.kind.hostile() && !matches!(o.kind, Kind::Creeper | Kind::Ghast))
+                    .map(|o| (o.id, o.pos))
+                    .collect();
+                let mut best: Option<(f64, u32)> = None;
+                for (id, pos) in ids {
+                    let t = Target::Mob(id);
+                    if !is_suitable_target(m, Some(t), false, cx) {
+                        continue;
+                    }
+                    // nearbyOnly
+                    *search_delay -= 1;
+                    if *search_delay <= 0 {
+                        *search_status = 0;
+                    }
+                    if *search_status == 0 {
+                        let v = cx.view(t).unwrap();
+                        *search_status = if can_easily_reach(m, &v, search_delay, cx) {
+                            1
+                        } else {
+                            2
+                        };
+                    }
+                    if *search_status == 2 {
+                        continue;
+                    }
+                    let d = m.dist2(pos);
+                    if best.map_or(true, |b| d < b.0) {
+                        best = Some((d, id));
+                    }
+                }
+                *found = best.map(|b| Target::Mob(b.1));
+                found.is_some()
+            }
+        }
+    }
+
+    fn continue_executing(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        match self {
+            Pet::FollowOwner { max, .. } => {
+                !m.no_path() && m.dist2(cx.player.feet) > (*max * *max) as f64 && !m.sitting
+            }
+            Pet::Beg { dist, timeout } => {
+                if !cx.player.alive {
+                    return false;
+                }
+                if m.dist2(cx.player.feet) > (*dist * *dist) as f64 {
+                    false
+                } else {
+                    *timeout > 0 && begs_for(m, cx)
+                }
+            }
+            Pet::Leap { .. } => !m.on_ground,
+            Pet::OwnerHurtByTarget { st, .. }
+            | Pet::OwnerHurtTarget { st, .. }
+            | Pet::TargetNonTamed { st, .. }
+            | Pet::GolemTarget { st, .. } => target_continue(m, false, st, cx),
+            Pet::TemptScared { at, pitch, yaw, .. } => {
+                let p = cx.player;
+                if m.dist2(p.feet) < 36.0 {
+                    let d = (p.feet[0] - at[0]).powi(2)
+                        + (p.feet[1] - at[1]).powi(2)
+                        + (p.feet[2] - at[2]).powi(2);
+                    if d > 0.010000000000000002 {
+                        return false;
+                    }
+                    if (p.pitch as f64 - *pitch).abs() > 5.0 || (p.yaw as f64 - *yaw).abs() > 5.0 {
+                        return false;
+                    }
+                } else {
+                    *at = p.feet;
+                }
+                *pitch = p.pitch as f64;
+                *yaw = p.yaw as f64;
+                self.should_execute(m, cx)
+            }
+            Pet::AvoidPlayer { .. } => !m.no_path(),
+            Pet::OcelotSit {
+                timer,
+                sitting_timer,
+                max_stay,
+                block,
+                ..
+            } => *timer <= *max_stay && *sitting_timer <= 60 && can_sit_on(cx.w, *block),
+            Pet::OcelotAttack { victim, .. } => {
+                let Some(v) = victim.and_then(|t| cx.view(t)) else {
+                    return false;
+                };
+                if m.dist2_to(&v) > 225.0 {
+                    false
+                } else {
+                    !m.no_path() || self.should_execute(m, cx)
+                }
+            }
+            Pet::MoveTowardsTarget { max, target, .. } => {
+                let Some(v) = target.and_then(|t| cx.view(t)) else {
+                    return false;
+                };
+                !m.no_path() && m.dist2_to(&v) < (*max * *max) as f64
+            }
+            Pet::LookAtVillager { look_time, .. } => *look_time > 0,
+            Pet::Sit => self.should_execute(m, cx),
+        }
+    }
+
+    fn start_executing(&mut self, m: &mut Mob, cx: &mut Cx) {
+        match self {
+            Pet::Sit => {
+                m.clear_path();
+                m.sitting = true;
+            }
+            Pet::FollowOwner {
+                recalc, old_water, ..
+            } => {
+                *recalc = 0;
+                *old_water = m.avoids_water;
+                m.avoids_water = false;
+            }
+            Pet::Beg { timeout, .. } => {
+                *timeout = 40 + m.rand.next_int_n(40);
+            }
+            Pet::Leap { y, target } => {
+                if let Some(v) = target.and_then(|t| cx.view(t)) {
+                    let dx = v.pos[0] - m.pos[0];
+                    let dz = v.pos[2] - m.pos[2];
+                    let h = math::sqrt_double(dx * dx + dz * dz) as f64;
+                    m.motion[0] += dx / h * 0.5 * 0.8f32 as f64 + m.motion[0] * 0.2f32 as f64;
+                    m.motion[2] += dz / h * 0.5 * 0.8f32 as f64 + m.motion[2] * 0.2f32 as f64;
+                    m.motion[1] = *y as f64;
+                }
+            }
+            Pet::OwnerHurtByTarget {
+                timestamp,
+                found,
+                st,
+            } => {
+                m.attack_target = *found;
+                *timestamp = cx.player.revenge_timer;
+                *st = TargetState::default();
+            }
+            Pet::OwnerHurtTarget {
+                timestamp,
+                found,
+                st,
+            } => {
+                m.attack_target = *found;
+                *timestamp = cx.player.last_attack_time;
+                *st = TargetState::default();
+            }
+            Pet::TargetNonTamed { found, st, .. } => {
+                m.attack_target = *found;
+                *st = TargetState::default();
+            }
+            Pet::GolemTarget {
+                found,
+                st,
+                search_status,
+                search_delay,
+            } => {
+                m.attack_target = *found;
+                *st = TargetState::default();
+                *search_status = 0;
+                *search_delay = 0;
+            }
+            Pet::TemptScared {
+                at, avoid_water, ..
+            } => {
+                *at = cx.player.feet;
+                *avoid_water = m.avoids_water;
+                m.avoids_water = false;
+            }
+            Pet::AvoidPlayer { far, path, .. } => {
+                let p = path.take();
+                m.set_path(cx.w, p, *far);
+            }
+            Pet::OcelotSit {
+                speed,
+                timer,
+                sitting_timer,
+                max_stay,
+                block,
+            } => {
+                m.try_move_to_xyz(
+                    cx.w,
+                    block[0] as f64 + 0.5,
+                    (block[1] + 1) as f64,
+                    block[2] as f64 + 0.5,
+                    *speed,
+                );
+                *timer = 0;
+                *sitting_timer = 0;
+                let n = m.rand.next_int_n(1200) + 1200;
+                *max_stay = m.rand.next_int_n(n) + 1200;
+                m.sit_order = false;
+            }
+            Pet::MoveTowardsTarget { speed, pos, .. } => {
+                m.try_move_to_xyz(cx.w, pos[0], pos[1], pos[2], *speed);
+            }
+            Pet::LookAtVillager { look_time, .. } => *look_time = 400,
+            Pet::OcelotAttack { .. } => {}
+        }
+    }
+
+    fn reset_task(&mut self, m: &mut Mob) {
+        match self {
+            Pet::Sit | Pet::OcelotSit { .. } => m.sitting = false,
+            Pet::FollowOwner { old_water, .. } => {
+                m.clear_path();
+                m.avoids_water = *old_water;
+            }
+            Pet::OwnerHurtByTarget { .. }
+            | Pet::OwnerHurtTarget { .. }
+            | Pet::TargetNonTamed { .. }
+            | Pet::GolemTarget { .. } => m.attack_target = None,
+            Pet::TemptScared {
+                delay, avoid_water, ..
+            } => {
+                m.clear_path();
+                *delay = 100;
+                m.avoids_water = *avoid_water;
+            }
+            Pet::OcelotAttack { victim, .. } => {
+                *victim = None;
+                m.clear_path();
+            }
+            Pet::MoveTowardsTarget { target, .. } => *target = None,
+            Pet::LookAtVillager { villager, .. } => *villager = None,
+            _ => {}
+        }
+    }
+
+    fn update_task(&mut self, m: &mut Mob, cx: &mut Cx) {
+        match self {
+            Pet::FollowOwner { speed, recalc, .. } => {
+                let v = cx.view(Target::Player).unwrap();
+                m.look_at_entity(&v, 10.0, 40.0);
+                if m.sitting {
+                    return;
+                }
+                *recalc -= 1;
+                if *recalc > 0 {
+                    return;
+                }
+                *recalc = 10;
+                if m.try_move_to_entity(cx.w, &v, *speed) {
+                    return;
+                }
+                if m.dist2_to(&v) < 144.0 {
+                    return;
+                }
+                // out of reach: appear beside the owner
+                let x0 = math::floor_double(v.pos[0]) - 2;
+                let z0 = math::floor_double(v.pos[2]) - 2;
+                let y = math::floor_double(v.bb.min[1]);
+                for i in 0..=4 {
+                    for k in 0..=4 {
+                        if (i < 1 || k < 1 || i > 3 || k > 3)
+                            && cx.w.solid_top_surface(x0 + i, y - 1, z0 + k)
+                            && !block::info(cx.w.block(x0 + i, y, z0 + k)).normal_cube()
+                            && !block::info(cx.w.block(x0 + i, y + 1, z0 + k)).normal_cube()
+                        {
+                            // setLocationAndAngles
+                            m.set_position(
+                                ((x0 + i) as f32 + 0.5) as f64,
+                                y as f64,
+                                ((z0 + k) as f32 + 0.5) as f64,
+                            );
+                            m.prev_pos = m.pos;
+                            m.clear_path();
+                            return;
+                        }
+                    }
+                }
+            }
+            Pet::Beg { timeout, .. } => {
+                let p = cx.player;
+                m.look(
+                    [p.feet[0], p.feet[1] + 1.62f32 as f64, p.feet[2]],
+                    10.0,
+                    40.0,
+                );
+                *timeout -= 1;
+            }
+            Pet::TemptScared { speed, .. } => {
+                let v = cx.view(Target::Player).unwrap();
+                m.look_at_entity(&v, 30.0, 40.0);
+                if m.dist2_to(&v) < 6.25 {
+                    m.clear_path();
+                } else {
+                    m.try_move_to_entity(cx.w, &v, *speed);
+                }
+            }
+            Pet::AvoidPlayer { far, near, .. } => {
+                m.path_speed = if m.dist2(cx.player.feet) < 49.0 {
+                    *near
+                } else {
+                    *far
+                };
+            }
+            Pet::OcelotSit {
+                speed,
+                timer,
+                sitting_timer,
+                block,
+                ..
+            } => {
+                *timer += 1;
+                m.sit_order = false;
+                if m.dist2([block[0] as f64, (block[1] + 1) as f64, block[2] as f64]) > 1.0 {
+                    m.sitting = false;
+                    m.try_move_to_xyz(
+                        cx.w,
+                        block[0] as f64 + 0.5,
+                        (block[1] + 1) as f64,
+                        block[2] as f64 + 0.5,
+                        *speed,
+                    );
+                    *sitting_timer += 1;
+                } else if !m.sitting {
+                    m.sitting = true;
+                } else {
+                    *sitting_timer -= 1;
+                }
+            }
+            Pet::OcelotAttack { victim, countdown } => {
+                let Some(t) = *victim else { return };
+                let Some(v) = cx.view(t) else { return };
+                m.look_at_entity(&v, 30.0, 30.0);
+                let reach = (m.width() * 2.0 * (m.width() * 2.0)) as f64;
+                let d2 = m.dist2([v.pos[0], v.bb.min[1], v.pos[2]]);
+                let mut speed = 0.8;
+                if d2 > reach && d2 < 16.0 {
+                    speed = 1.33;
+                } else if d2 < 225.0 {
+                    speed = 0.6;
+                }
+                m.try_move_to_entity(cx.w, &v, speed);
+                *countdown = (*countdown - 1).max(0);
+                if !(d2 > reach) && *countdown <= 0 {
+                    *countdown = 20;
+                    attack_as_mob(m, t, &v, cx);
+                }
+            }
+            Pet::LookAtVillager {
+                villager,
+                look_time,
+            } => {
+                if let Some(v) = villager.and_then(|id| cx.view(Target::Mob(id))) {
+                    m.look_at_entity(&v, 30.0, 30.0);
+                }
+                *look_time -= 1;
+            }
+            _ => {}
+        }
+    }
+}
+
+/// `EntityAIBeg.hasPlayerGotBoneInHand`
+fn begs_for(m: &Mob, cx: &Cx) -> bool {
+    match cx.player.held {
+        None => false,
+        Some(id) => !m.tamed && id == 352 || wolf_meat(id),
+    }
+}
+
+fn follow_owner(speed: f64, min: f32, max: f32) -> Ai {
+    Ai::Pet(Pet::FollowOwner {
+        speed,
+        min,
+        max,
+        recalc: 0,
+        old_water: false,
+    })
+}
+
+fn target_non_tamed(kind: Kind, chance: i32) -> Ai {
+    Ai::Pet(Pet::TargetNonTamed {
+        kind,
+        chance,
+        found: None,
+        st: TargetState::default(),
+    })
+}
+
+/// The constructors of `EntityWolf`, `EntityOcelot` and `EntityIronGolem`
+/// (without `EntityAIMate` and the village tasks).
+fn build_pet(m: &mut Mob) {
+    let (t, tt) = (&mut m.tasks, &mut m.target_tasks);
+    let leap = |y: f32| Ai::Pet(Pet::Leap { y, target: None });
+    match m.kind {
+        Kind::Wolf => {
+            t.add(1, Ai::Swimming);
+            t.add(2, Ai::Pet(Pet::Sit));
+            t.add(3, leap(0.4));
+            t.add(4, attack_on_collide(None, 1.0, true));
+            t.add(5, follow_owner(1.0, 10.0, 2.0));
+            t.add(7, wander(1.0));
+            t.add(
+                8,
+                Ai::Pet(Pet::Beg {
+                    dist: 8.0,
+                    timeout: 0,
+                }),
+            );
+            t.add(9, watch(Cls::Player, 8.0));
+            t.add(9, look_idle());
+            tt.add(
+                1,
+                Ai::Pet(Pet::OwnerHurtByTarget {
+                    timestamp: 0,
+                    found: None,
+                    st: TargetState::default(),
+                }),
+            );
+            tt.add(
+                2,
+                Ai::Pet(Pet::OwnerHurtTarget {
+                    timestamp: 0,
+                    found: None,
+                    st: TargetState::default(),
+                }),
+            );
+            tt.add(3, hurt_by_target(true));
+            tt.add(4, target_non_tamed(Kind::Sheep, 200));
+        }
+        Kind::Ocelot => {
+            t.add(1, Ai::Swimming);
+            t.add(2, Ai::Pet(Pet::Sit));
+            t.add(
+                3,
+                Ai::Pet(Pet::TemptScared {
+                    speed: 0.6,
+                    item: 349,
+                    delay: 0,
+                    at: [0.0; 3],
+                    pitch: 0.0,
+                    yaw: 0.0,
+                    avoid_water: false,
+                }),
+            );
+            t.add(
+                4,
+                Ai::Pet(Pet::AvoidPlayer {
+                    dist: 16.0,
+                    far: 0.8,
+                    near: 1.33,
+                    path: None,
+                }),
+            );
+            t.add(5, follow_owner(1.0, 10.0, 5.0));
+            t.add(
+                6,
+                Ai::Pet(Pet::OcelotSit {
+                    speed: 1.33,
+                    timer: 0,
+                    sitting_timer: 0,
+                    max_stay: 0,
+                    block: [0; 3],
+                }),
+            );
+            t.add(7, leap(0.3));
+            t.add(
+                8,
+                Ai::Pet(Pet::OcelotAttack {
+                    victim: None,
+                    countdown: 0,
+                }),
+            );
+            t.add(10, wander(0.8));
+            t.add(11, watch(Cls::Player, 10.0));
+            tt.add(1, target_non_tamed(Kind::Chicken, 750));
+        }
+        Kind::IronGolem => {
+            t.add(1, attack_on_collide(None, 1.0, true));
+            t.add(
+                2,
+                Ai::Pet(Pet::MoveTowardsTarget {
+                    speed: 0.9,
+                    max: 32.0,
+                    pos: [0.0; 3],
+                    target: None,
+                }),
+            );
+            t.add(
+                5,
+                Ai::Pet(Pet::LookAtVillager {
+                    villager: None,
+                    look_time: 0,
+                }),
+            );
+            t.add(6, wander(0.6));
+            t.add(7, watch(Cls::Player, 6.0));
+            t.add(8, look_idle());
+            tt.add(2, hurt_by_target(false));
+            tt.add(
+                3,
+                Ai::Pet(Pet::GolemTarget {
+                    found: None,
+                    st: TargetState::default(),
+                    search_status: 0,
+                    search_delay: 0,
+                }),
+            );
+        }
+        _ => {}
     }
 }
 

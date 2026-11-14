@@ -398,6 +398,10 @@ pub struct Sim {
     /// The mob the player hit last and the last one that hit the player.
     last_attacked: Option<u32>,
     last_attacker: Option<u32>,
+    /// `EntityLivingBase.lastAttackerTime` and `revengeTimer` of the player
+    /// (in ticks of this world).
+    last_attacked_time: i32,
+    last_attacker_time: i32,
     unknown_level_keys: Vec<(String, String)>,
     pub play: Play,
     spawn: [f64; 3],
@@ -590,6 +594,8 @@ impl Sim {
             player: None,
             last_attacked: None,
             last_attacker: None,
+            last_attacked_time: 0,
+            last_attacker_time: 0,
             unknown_level_keys: Vec::new(),
             play: Play::new(cfg.mode),
             spawn: [0.0; 3],
@@ -1095,6 +1101,7 @@ impl Sim {
                 knockback,
             } => {
                 self.last_attacked = Some(id);
+                self.last_attacked_time = self.world.total_time as i32;
                 // attackTargetEntityWithCurrentItem: addExhaustion(0.3)
                 self.splayer.food.add_exhaustion(0.3);
                 let mut out = crate::entity::mob::Outcome::default();
@@ -2579,7 +2586,10 @@ impl Sim {
                 for p in parts {
                     match p {
                         "tamed" => m.tamed = true,
-                        "sit" => m.sitting = true,
+                        "sit" => {
+                            m.sitting = true;
+                            m.sit_order = true;
+                        }
                         "big" => m.set_slime_size(4),
                         "hang" => m.hanging = true,
                         v => {
@@ -2813,10 +2823,17 @@ impl Sim {
                 && !self.splayer.dead,
             alive: !self.splayer.dead,
             sneaking: self.motion_flags.1,
+            revenge_timer: self.last_attacker_time,
+            last_attack_time: self.last_attacked_time,
             armor_pieces: play.inv.armor.iter().flatten().count() as i32,
             held,
-            last_attacked: self.last_attacked,
-            last_attacker: self.last_attacker,
+            // both are forgotten after 100 ticks (onEntityUpdate)
+            last_attacked: self
+                .last_attacked
+                .filter(|_| self.world.total_time as i32 - self.last_attacked_time <= 100),
+            last_attacker: self
+                .last_attacker
+                .filter(|_| self.world.total_time as i32 - self.last_attacker_time <= 100),
         };
         // World.getCurrentMoonPhaseFactor
         self.world.moon_factor = [1.0, 0.75, 0.5, 0.25, 0.0, 0.25, 0.5, 0.75]
@@ -2928,6 +2945,7 @@ impl Sim {
         for o in outs {
             if o.attacker.is_some() {
                 self.last_attacker = o.attacker;
+                self.last_attacker_time = self.world.total_time as i32;
             }
             particles.extend(o.particles);
             for (p, st) in o.drops {
@@ -4846,6 +4864,79 @@ mod tests {
         assert!(sim.splayer.living.health < before, "struck back");
     }
 
+    /// `EntityAIOwnerHurtTarget`: a tamed wolf goes for what its owner
+    /// hit. `EntityAINearestAttackableTarget` with `IMob.mobSelector`: an
+    /// iron golem goes for a zombie and hurts it.
+    #[test]
+    fn wolves_and_golems_pick_their_targets() {
+        use crate::entity::mob::{ai::Target, Kind};
+        let (mut sim, x, y, z) = redstone_sim();
+        arena(&mut sim, x, y, z);
+        // a roof, so the zombie does not burn up
+        for dx in -2..14 {
+            for dz in -2..14 {
+                sim.world
+                    .set_block(x + dx, y + 5, z + dz, block::STONE, 0, 3);
+            }
+        }
+        let feet = [x as f64 + 0.5, (y + 1) as f64, z as f64 + 0.5];
+        let mut r = JavaRandom::new(5);
+        let at = |dx: f64, dz: f64| [x as f64 + dx, (y + 1) as f64, z as f64 + dz];
+        let wolf = sim.mobs.spawn(Kind::Wolf, at(2.5, 2.5), 0.0, &mut r);
+        sim.mobs
+            .list
+            .iter_mut()
+            .find(|m| m.id == wolf)
+            .unwrap()
+            .tamed = true;
+        let zombie = sim.mobs.spawn(Kind::Zombie, at(8.5, 2.5), 0.0, &mut r);
+        steps(&mut sim, 5);
+        sim.step(
+            &[
+                Command::Player(feet, [0.0, 0.0], false),
+                Command::Attack {
+                    id: zombie,
+                    damage: 1.0,
+                    crit: false,
+                    knockback: 0,
+                },
+            ],
+            &mut Vec::new(),
+        );
+        let mut went = false;
+        for _ in 0..40 {
+            sim.step(&[Command::Player(feet, [0.0, 0.0], false)], &mut Vec::new());
+            let w = sim.mobs.list.iter().find(|m| m.id == wolf).unwrap();
+            went |= w.attack_target == Some(Target::Mob(zombie));
+        }
+        assert!(went, "the wolf went for the zombie its owner hit");
+
+        let golem = sim.mobs.spawn(Kind::IronGolem, at(6.5, 8.5), 0.0, &mut r);
+        let mut hunted = false;
+        for _ in 0..200 {
+            sim.step(&[Command::Player(feet, [0.0, 0.0], false)], &mut Vec::new());
+            if let Some(g) = sim.mobs.list.iter().find(|m| m.id == golem) {
+                hunted |= matches!(g.attack_target, Some(Target::Mob(_)));
+            }
+            if !sim
+                .mobs
+                .list
+                .iter()
+                .any(|m| m.id == zombie && m.health > 0.0)
+            {
+                break;
+            }
+        }
+        assert!(hunted, "the golem chose a monster");
+        assert!(
+            !sim.mobs
+                .list
+                .iter()
+                .any(|m| m.id == zombie && m.health > 0.0),
+            "and the zombie is dead"
+        );
+    }
+
     /// `EntityAIPanic` after a blow, `EntityAITempt` with wheat in hand.
     #[test]
     fn cows_panic_and_follow_wheat() {
@@ -5008,12 +5099,16 @@ mod tests {
             let w = sim.mobs.list.iter().find(|m| m.id == wid).unwrap();
             if w.tamed {
                 tamed = true;
-                assert!(w.sitting);
+                // told to sit (aiSit.setSitting); EntityAISit acts on it
+                assert!(w.sit_order);
                 assert_eq!(w.health, 20.0);
                 break;
             }
         }
         assert!(tamed, "a bone tames one time in three");
+        steps(&mut sim, 20);
+        let w = sim.mobs.list.iter().find(|m| m.id == wid).unwrap();
+        assert!(w.sitting, "sat down");
     }
 
     #[test]

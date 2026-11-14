@@ -265,12 +265,16 @@ MINERUST_BENCH=10 minerust --seed 12345 --no-save --size 1920 1080 --distance 16
    - 半透明分段目前不做深度排序（1.7.10 也不排序，保持一致）。
 
 1. **生物 AI：第一階段已完成，第二階段待做**（使用者 2026-11-14：「完成 AI 先」）。架構見第 4 節「生物 AI」。
-   已改用原版任務系統的生物：殭屍、骷髏（含凋零骷髏）、苦力怕、女巫、豬、牛、哞菇、羊、雞、村民（部分任務）；
+   已改用原版任務系統的生物：殭屍、骷髏（含凋零骷髏）、苦力怕、女巫、豬、牛、哞菇、羊、雞、村民（部分任務）、
+   狼、豹貓、鐵魔像（`ai.rs` 的 `Pet` 列舉：Sit、FollowOwner、Beg、Leap、OwnerHurtByTarget、OwnerHurtTarget、TargetNonTamed、
+   帶「被玩家動作嚇跑」的 Tempt、AvoidPlayer、OcelotSit、OcelotAttack、MoveTowardsTarget、LookAtVillager、魔像的目標搜尋含 `canEasilyReach`）；
    已改用原版舊式 AI（`EntityCreature.updateEntityActionState`）的：蜘蛛、洞穴蜘蛛、蠹魚、殭屍豬人。
    **第二階段（還在舊的手寫處理函式上）**：
-   - 狼、豹貓、鐵魔像、馬（`mob/extra.rs` 的 `tameable` / `golem` / `horse`）：原版是任務式，需要
-     `EntityAISit`、`LeapAtTarget`（已讀過原始碼）、`FollowOwner`、`Beg`、`OwnerHurtByTarget`、`OwnerHurtTarget`、`TargetNonTamed`、
-     `OcelotSit`、`OcelotAttack`、`DefendVillage`、`LookAtVillager`、`MoveTowardsTarget`、`RunAroundLikeCrazy`。
+   - 馬（`mob/extra.rs` 的 `horse` 仍借用舊的 `animal()`）：需要 `RunAroundLikeCrazy`、`Panic`、`Mate`、`FollowParent`、`Wander` 等。
+   - 狼／豹貓／魔像沒掛上的：`EntityAIMate`、魔像的 `DefendVillage`、`MoveThroughVillage`、`MoveTowardsRestriction`（都要村莊資料）、
+     魔像碰到怪物時 1/20 機率轉為目標（`collideWithEntity`）、拿花（`setHoldingRose` 只有計時沒有畫）、狼的乞食歪頭與甩水動畫、
+     狼被非玩家打時傷害減半、豹貓 `OcelotSit` 對床與「箱子有人在用」的判斷。
+   - 坐下：`sit_order` 是玩家的指令（`EntityAISit.isSitting`），`sitting` 是實際狀態，由任務在下一次評估時設定。
    - 沒掛上的任務：`EntityAIMate`（需要先做繁殖：餵食、`inLove`、生小孩）、`ControlledByPlayer`（騎豬）、殭屍的 `BreakDoor`、
      `MoveTowardsRestriction`、`MoveThroughVillage`（需要村莊資料 `VillageCollection`）、村民的交易／開門／回屋／繁殖／跟隨魔像／玩耍。
    - 自帶 `updateEntityActionState` 的：終界使者、烈焰使者、史萊姆／岩漿怪、惡魂、蝙蝠、魷魚（`extra.rs`、`nether.rs` 的函式沒有對過原始碼）。
@@ -423,4 +427,8 @@ MINERUST_BENCH=10 minerust --seed 12345 --no-save --size 1920 1080 --distance 16
   潛行讓敵對生物的偵測距離變 0.8 倍。
   **驗證**：`cargo test --release` 90 項通過，新增四個行為測試（殭屍追擊並命中、牛被小麥吸引與被打逃跑、骷髏射箭、殭屍豬人被打才還手）。
   伺服器 tick 沒有變慢（機器上仍有別的遊戲在跑，數字僅供參考：約 6 ms）。**沒有實機觀察過**各生物的實際走位與轉頭是否自然。
+- `本次（2026-11-14，生物 AI 第二階段）`：狼、豹貓、鐵魔像改掛原版任務（`ai.rs` 的 `Pet`），刪掉 `extra.rs` 的 `tameable`、`golem`、
+  `follow_owner`、`attack_other`。玩家的「最後攻擊者／最後攻擊對象」加了時間戳並在 100 tick 後遺忘（`getRevengeTimer`、`getLastAttackerTime`），
+  狼靠它決定要不要幫主人。測試 `wolves_and_golems_pick_their_targets`（馴服的狼去追主人打過的殭屍、魔像找上殭屍並打死牠），
+  馴服測試改為檢查 `sit_order` 後等任務讓牠坐下。`cargo test --release` 91 項通過。
   **查到的既有錯誤，待修**：武器附魔（鋒利系列、擊退、燃燒、掠奪）、保護系列、水下呼吸、荊棘、弓的附魔、附魔光澤都還沒接。

@@ -438,6 +438,8 @@ pub struct Mob {
     /// `EntityLiving`'s `currentTarget`, `numTicksToChaseTarget` and
     /// `randomYawVelocity`.
     old_jump: bool,
+    /// `EntityAISit.isSitting`: told to sit (`sitting` is whether it does).
+    pub sit_order: bool,
     idle_target: bool,
     idle_ticks: i32,
     random_yaw: f32,
@@ -514,6 +516,9 @@ pub struct PlayerInfo {
     /// `isEntityAlive()`
     pub alive: bool,
     pub sneaking: bool,
+    /// `getRevengeTimer()` and `getLastAttackerTime()` of the player.
+    pub revenge_timer: i32,
+    pub last_attack_time: i32,
     /// Worn armour pieces (`getArmorVisibility` is a quarter of it).
     pub armor_pieces: i32,
     /// Item ids the player holds (for tempting).
@@ -699,6 +704,7 @@ impl Mob {
             nav_last_tick: 0,
             nav_last_pos: [0.0; 3],
             old_jump: false,
+            sit_order: false,
             idle_target: false,
             idle_ticks: 0,
             random_yaw: 0.0,
@@ -706,7 +712,14 @@ impl Mob {
             // getNavigator().setAvoidsWater(true) in the constructor
             avoids_water: matches!(
                 kind,
-                Kind::Pig | Kind::Cow | Kind::Mooshroom | Kind::Sheep | Kind::Villager
+                Kind::Pig
+                    | Kind::Cow
+                    | Kind::Mooshroom
+                    | Kind::Sheep
+                    | Kind::Villager
+                    | Kind::Wolf
+                    | Kind::Ocelot
+                    | Kind::IronGolem
             ),
             wing: 0.0,
             prev_wing: 0.0,
@@ -763,6 +776,11 @@ impl Mob {
     }
 
     /// `EntitySlime.setSlimeSize`
+    /// `setAttackTarget(null)`
+    pub fn clear_ai_target(&mut self) {
+        self.attack_target = None;
+    }
+
     pub fn set_slime_size(&mut self, size: i32) {
         self.variant = size;
         self.health = (size * size) as f32;
@@ -1492,7 +1510,8 @@ impl Mob {
         match self.kind {
             Kind::Bat => self.hanging = false,
             Kind::Enderman => self.angry = true,
-            Kind::Wolf | Kind::Ocelot => self.sitting = false,
+            // aiSit.setSitting(false)
+            Kind::Wolf | Kind::Ocelot => self.sit_order = false,
             _ => {}
         }
         if !ai::uses_tasks(self.kind)
@@ -2502,7 +2521,8 @@ impl Mobs {
                 // EntityWolf.interact: a bone tames one time in three
                 if m.rand.next_int_n(3) == 0 {
                     m.tamed = true;
-                    m.sitting = true;
+                    m.sit_order = true;
+                    m.clear_ai_target();
                     m.target_mob = None;
                     m.target_player = false;
                     m.health = 20.0;
@@ -2540,7 +2560,7 @@ impl Mobs {
                 }
                 if m.rand.next_int_n(3) == 0 {
                     m.tamed = true;
-                    m.sitting = true;
+                    m.sit_order = true;
                     m.variant = 1 + m.rand.next_int_n(3);
                     heart(m, out, true);
                 } else {
@@ -2549,8 +2569,10 @@ impl Mobs {
                 Some(one_less(held.unwrap()))
             }
             (Kind::Wolf | Kind::Ocelot, _) if m.tamed => {
-                m.sitting = !m.sitting;
+                // aiSit.setSitting(!isSitting()); the path and the target go
+                m.sit_order = !m.sitting;
                 m.path.clear();
+                m.clear_ai_target();
                 m.target_mob = None;
                 None
             }
@@ -2732,12 +2754,14 @@ impl Mobs {
             Kind::Wolf => {
                 m.angry = t.int("Angry").unwrap_or(0) != 0;
                 m.sitting = t.int("Sitting").unwrap_or(0) != 0;
+                m.sit_order = m.sitting;
                 m.variant = t.int("CollarColor").unwrap_or(14) as i32;
                 m.tamed = t.string("Owner").map_or(false, |o| !o.is_empty());
             }
             Kind::Ocelot => {
                 m.variant = t.int("CatType").unwrap_or(0) as i32;
                 m.sitting = t.int("Sitting").unwrap_or(0) != 0;
+                m.sit_order = m.sitting;
                 m.tamed = t.string("Owner").map_or(false, |o| !o.is_empty());
             }
             Kind::Horse => {
@@ -2780,6 +2804,7 @@ impl Mobs {
             let flags: i32 = f[9].parse().ok()?;
             m.tamed = flags & 1 != 0;
             m.sitting = flags & 2 != 0;
+            m.sit_order = m.sitting;
             m.player_made = flags & 4 != 0;
             m.carried = f[10].parse().ok()?;
             m.carried_meta = f[11].parse().ok()?;
@@ -3264,9 +3289,7 @@ fn tick_mob(
                 }
             }
             Kind::Enderman => extra::enderman(m, w, player, day, out),
-            Kind::Wolf | Kind::Ocelot => extra::tameable(m, w, player, others, strikes, out),
             Kind::Horse => extra::horse(m, w, player, out),
-            Kind::IronGolem => extra::golem(m, w, player, others, strikes, out),
             _ => animal(m, w, player, out),
         }
         // look at the player now and then (EntityAIWatchClosest)
