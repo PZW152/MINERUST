@@ -303,7 +303,7 @@ pub struct MobView {
     pub squish: [f32; 2],
     /// Squid pitch, yaw, rotation, tentacle angle (previous, current).
     pub sq: [[f32; 4]; 2],
-    /// 1 tamed, 2 sitting, 4 angry or screaming, 8 hanging bat.
+    /// 1 tamed, 2 sitting, 4 angry or screaming, 8 hanging bat, 16 child.
     pub flags: u32,
     /// Enderman carried block and data.
     pub carried: [u8; 2],
@@ -2416,7 +2416,7 @@ impl Sim {
         }
     }
 
-    /// `--summon Kind[:tamed|:sit|:big|:n],...`: a row of mobs four blocks in
+    /// `--summon Kind[:tamed|:sit|:baby|:big|:n],...`: a row of mobs four blocks in
     /// front of the player once the world is up (for checking models).
     fn summon_once(&mut self) {
         static DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -2589,6 +2589,11 @@ impl Sim {
                         "sit" => {
                             m.sitting = true;
                             m.sit_order = true;
+                        }
+                        "baby" => {
+                            m.growing_age = -24000;
+                            let p = m.pos;
+                            m.set_position(p[0], p[1], p[2]);
                         }
                         "big" => m.set_slime_size(4),
                         "hang" => m.hanging = true,
@@ -3013,7 +3018,8 @@ impl Sim {
                 flags: m.tamed as u32
                     | (m.sitting as u32) << 1
                     | (m.angry as u32) << 2
-                    | (m.hanging as u32) << 3,
+                    | (m.hanging as u32) << 3
+                    | ((m.growing_age < 0) as u32) << 4,
                 carried: [m.carried, m.carried_meta],
                 attack_timer: m.attack_timer,
                 health: m.health,
@@ -4935,6 +4941,43 @@ mod tests {
                 .any(|m| m.id == zombie && m.health > 0.0),
             "and the zombie is dead"
         );
+    }
+
+    /// `EntityAnimal.interact` and `EntityAIMate`: two fed cows come
+    /// together and have one calf; the parents cannot breed for a while.
+    #[test]
+    fn fed_cows_have_a_calf() {
+        use crate::entity::mob::Kind;
+        let (mut sim, x, y, z) = redstone_sim();
+        arena(&mut sim, x, y, z);
+        let feet = [x as f64 + 0.5, (y + 1) as f64, z as f64 + 0.5];
+        let mut r = JavaRandom::new(5);
+        let at = |dx: f64, dz: f64| [x as f64 + dx, (y + 1) as f64, z as f64 + dz];
+        let a = sim.mobs.spawn(Kind::Cow, at(4.5, 4.5), 0.0, &mut r);
+        let b = sim.mobs.spawn(Kind::Cow, at(8.5, 4.5), 0.0, &mut r);
+        let wheat = Some(crate::item::Stack::new(296, 0, 8));
+        for id in [a, b] {
+            let mut out = crate::entity::mob::Outcome::default();
+            let left = sim.mobs.interact(id, wheat, feet, &mut out);
+            assert_eq!(left.flatten().map(|s| s.count), Some(7), "one wheat eaten");
+        }
+        // (grown cows may spawn elsewhere meanwhile: count the young)
+        let calves = |sim: &Sim| {
+            sim.mobs
+                .list
+                .iter()
+                .filter(|m| m.kind == Kind::Cow && m.growing_age < 0)
+                .count()
+        };
+        assert_eq!(calves(&sim), 0);
+        for _ in 0..300 {
+            sim.step(&[Command::Player(feet, [0.0, 0.0], false)], &mut Vec::new());
+        }
+        assert_eq!(calves(&sim), 1, "one calf");
+        for id in [a, b] {
+            let m = sim.mobs.list.iter().find(|m| m.id == id).unwrap();
+            assert!(m.growing_age > 0 && m.in_love == 0, "the parents rest");
+        }
     }
 
     /// `EntityAIPanic` after a blow, `EntityAITempt` with wheat in hand.

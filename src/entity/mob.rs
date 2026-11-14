@@ -440,6 +440,8 @@ pub struct Mob {
     old_jump: bool,
     /// `EntityAISit.isSitting`: told to sit (`sitting` is whether it does).
     pub sit_order: bool,
+    /// `EntityAnimal.inLove`: ticks of love left after being fed.
+    pub in_love: i32,
     idle_target: bool,
     idle_ticks: i32,
     random_yaw: f32,
@@ -705,6 +707,7 @@ impl Mob {
             nav_last_pos: [0.0; 3],
             old_jump: false,
             sit_order: false,
+            in_love: 0,
             idle_target: false,
             idle_ticks: 0,
             random_yaw: 0.0,
@@ -797,6 +800,11 @@ impl Mob {
             }
             // EntitySkeleton.setSkeletonType(1)
             Kind::Skeleton if self.variant == 1 => (0.72, 2.34),
+            // EntityAgeable.setScaleForAge: the young are half the size
+            k if self.growing_age < 0 && k.animal() => {
+                let (w, h) = k.size();
+                (w * 0.5, h * 0.5)
+            }
             k => k.size(),
         }
     }
@@ -1507,6 +1515,8 @@ impl Mob {
             }
         }
         self.health -= applied;
+        // EntityAnimal.attackEntityFrom
+        self.in_love = 0;
         match self.kind {
             Kind::Bat => self.hanging = false,
             Kind::Enderman => self.angry = true,
@@ -1804,6 +1814,8 @@ pub struct Outcome {
     pub attacker: Option<u32>,
     /// `EntityAIHurtByTarget` calling the mobs around for help.
     pub calls: Vec<ai::Call>,
+    /// `EntityAIMate.spawnBaby`
+    pub births: Vec<ai::Birth>,
 }
 
 /// `Entity.moveEntity` for a primed TNT box.
@@ -1946,6 +1958,7 @@ impl Mobs {
                             );
                             if let Some(c) = self.list.iter_mut().find(|m| m.id == cid) {
                                 c.growing_age = -24000;
+                                c.set_position(p[0], p[1], p[2]);
                             }
                         }
                     }
@@ -2079,6 +2092,9 @@ impl Mobs {
                 width: m.dims().0,
                 height: m.dims().1,
                 growing_age: m.growing_age,
+                in_love: m.in_love > 0,
+                sitting: m.sitting,
+                variant: m.variant,
             })
             .collect();
         let mut strikes: Vec<Strike> = Vec::new();
@@ -2107,6 +2123,22 @@ impl Mobs {
         }
         ai::answer_calls(&mut self.list, &out.calls);
         out.calls.clear();
+        // EntityAIMate.spawnBaby: the other parent, then the young one
+        for b in std::mem::take(&mut out.births) {
+            if let Some(o) = self.list.iter_mut().find(|m| m.id == b.parents[1]) {
+                o.growing_age = 6000;
+                o.in_love = 0;
+            }
+            let mut c = self.make(b.kind, b.pos, 0.0);
+            c.growing_age = -24000;
+            c.set_position(b.pos[0], b.pos[1], b.pos[2]);
+            c.variant = b.variant;
+            if b.tamed {
+                c.tamed = true;
+            }
+            c.persistent = true;
+            self.list.push(c);
+        }
         self.fireballs.extend(balls);
         // EntityFireball.onUpdate
         let mut k = 0;
@@ -2568,6 +2600,14 @@ impl Mobs {
                 }
                 Some(one_less(held.unwrap()))
             }
+            // EntityAnimal.interact: its food puts a grown animal in love
+            // for 600 ticks (func_146082_f)
+            (_, Some(id)) if ai::breeding_item(m, id) && m.growing_age == 0 && m.in_love <= 0 => {
+                m.in_love = 600;
+                m.clear_ai_target();
+                heart(m, out, true);
+                Some(one_less(held.unwrap()))
+            }
             (Kind::Wolf | Kind::Ocelot, _) if m.tamed => {
                 // aiSit.setSitting(!isSitting()); the path and the target go
                 m.sit_order = !m.sitting;
@@ -2670,6 +2710,13 @@ impl Mobs {
             ("Health", Nbt::Short(m.health.ceil() as i16)),
             ("PersistenceRequired", Nbt::Byte(m.persistent as i8)),
         ];
+        // EntityAgeable.writeEntityToNBT, EntityAnimal.writeEntityToNBT
+        if m.kind.animal() || m.kind == Kind::Villager {
+            v.push(("Age", Nbt::Int(m.growing_age)));
+        }
+        if m.kind.animal() {
+            v.push(("InLove", Nbt::Int(m.in_love)));
+        }
         match m.kind {
             Kind::Sheep => {
                 v.push(("Color", Nbt::Byte(m.variant as i8)));
@@ -2734,6 +2781,11 @@ impl Mobs {
         };
         let mut m = self.make(kind, at, yaw);
         let id = m.id;
+        m.growing_age = t.int("Age").unwrap_or(0) as i32;
+        m.in_love = t.int("InLove").unwrap_or(0) as i32;
+        if m.growing_age < 0 {
+            m.set_position(at[0], at[1], at[2]);
+        }
         match kind {
             Kind::Slime | Kind::MagmaCube => {
                 m.set_slime_size(t.int("Size").unwrap_or(0) as i32 + 1)
@@ -2993,8 +3045,34 @@ fn tick_mob(
     // EntityAgeable.onLivingUpdate
     if m.growing_age < 0 {
         m.growing_age += 1;
+        if m.growing_age == 0 {
+            // setScaleForAge: grown up
+            let p = m.pos;
+            m.set_position(p[0], p[1], p[2]);
+        }
     } else if m.growing_age > 0 {
         m.growing_age -= 1;
+    }
+    // EntityAnimal.onLivingUpdate: love lasts while fully grown
+    if m.growing_age != 0 {
+        m.in_love = 0;
+    }
+    if m.in_love > 0 {
+        m.in_love -= 1;
+        if m.in_love % 10 == 0 {
+            let v = [
+                m.rand.next_gaussian() * 0.02,
+                m.rand.next_gaussian() * 0.02,
+                m.rand.next_gaussian() * 0.02,
+            ];
+            let (wd, ht) = m.dims();
+            let p = [
+                m.pos[0] + (m.rand.next_float() * wd * 2.0) as f64 - wd as f64,
+                m.pos[1] + 0.5 + (m.rand.next_float() * ht) as f64,
+                m.pos[2] + (m.rand.next_float() * wd * 2.0) as f64 - wd as f64,
+            ];
+            out.particles.push(("heart", p, v));
+        }
     }
     m.prev_pos = m.pos;
     m.prev_body_yaw = m.body_yaw;

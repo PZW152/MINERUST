@@ -15,6 +15,10 @@ pub struct Other {
     pub height: f32,
     /// `EntityAgeable.getGrowingAge`
     pub growing_age: i32,
+    /// `EntityAnimal.isInLove`
+    pub in_love: bool,
+    pub sitting: bool,
+    pub variant: i32,
 }
 
 /// A blow one mob deals another, applied once every mob has moved.

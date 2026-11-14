@@ -271,11 +271,11 @@ MINERUST_BENCH=10 minerust --seed 12345 --no-save --size 1920 1080 --distance 16
    已改用原版舊式 AI（`EntityCreature.updateEntityActionState`）的：蜘蛛、洞穴蜘蛛、蠹魚、殭屍豬人。
    **第二階段（還在舊的手寫處理函式上）**：
    - 馬（`mob/extra.rs` 的 `horse` 仍借用舊的 `animal()`）：需要 `RunAroundLikeCrazy`、`Panic`、`Mate`、`FollowParent`、`Wander` 等。
-   - 狼／豹貓／魔像沒掛上的：`EntityAIMate`、魔像的 `DefendVillage`、`MoveThroughVillage`、`MoveTowardsRestriction`（都要村莊資料）、
+   - 狼／豹貓／魔像沒掛上的：魔像的 `DefendVillage`、`MoveThroughVillage`、`MoveTowardsRestriction`（都要村莊資料）、
      魔像碰到怪物時 1/20 機率轉為目標（`collideWithEntity`）、拿花（`setHoldingRose` 只有計時沒有畫）、狼的乞食歪頭與甩水動畫、
      狼被非玩家打時傷害減半、豹貓 `OcelotSit` 對床與「箱子有人在用」的判斷。
    - 坐下：`sit_order` 是玩家的指令（`EntityAISit.isSitting`），`sitting` 是實際狀態，由任務在下一次評估時設定。
-   - 沒掛上的任務：`EntityAIMate`（需要先做繁殖：餵食、`inLove`、生小孩）、`ControlledByPlayer`（騎豬）、殭屍的 `BreakDoor`、
+   - 沒掛上的任務：`ControlledByPlayer`（騎豬）、殭屍的 `BreakDoor`、
      `MoveTowardsRestriction`、`MoveThroughVillage`（需要村莊資料 `VillageCollection`）、村民的交易／開門／回屋／繁殖／跟隨魔像／玩耍。
    - 自帶 `updateEntityActionState` 的：終界使者、烈焰使者、史萊姆／岩漿怪、惡魂、蝙蝠、魷魚（`extra.rs`、`nether.rs` 的函式沒有對過原始碼）。
    - 蠹魚鑽進石頭與召喚同伴（`EntitySilverfish.updateEntityActionState` 的覆寫）。
@@ -431,4 +431,11 @@ MINERUST_BENCH=10 minerust --seed 12345 --no-save --size 1920 1080 --distance 16
   `follow_owner`、`attack_other`。玩家的「最後攻擊者／最後攻擊對象」加了時間戳並在 100 tick 後遺忘（`getRevengeTimer`、`getLastAttackerTime`），
   狼靠它決定要不要幫主人。測試 `wolves_and_golems_pick_their_targets`（馴服的狼去追主人打過的殭屍、魔像找上殭屍並打死牠），
   馴服測試改為檢查 `sit_order` 後等任務讓牠坐下。`cargo test --release` 91 項通過。
+- `本次（2026-11-14，繁殖）`：`EntityAnimal.interact`（各自的食物讓成年動物進入 600 tick 的求愛狀態）、`EntityAIMate`（找 8 格內同類、
+  靠近、60 tick 後生下小孩；父母 6000 tick 內不能再繁殖；愛心粒子與 1–7 點經驗）、小羊顏色照父母兩種染料的合成結果或隨機取一方、
+  小狼／小貓繼承馴服狀態。幼體：碰撞箱減半（`setScaleForAge`），模型照 `ModelQuadruped` / `ModelChicken` 的 `isChild`
+  （頭不縮小、身體縮一半）繪製，24000 tick 後長大；`Age`、`InLove` 寫進存檔。`--summon Cow:baby` 可直接生幼體。
+  同一 tick 內兩隻都想生的情況用 `Outcome.births` 互相看見，確保只生一隻。
+  測試 `fed_cows_have_a_calf`；截圖確認小牛、小豬、小羊、小雞的模型。`cargo test --release` 92 項通過。
+  **留下**：狼、豹貓、馬的幼體模型（`model2.rs`）還沒有 `isChild` 的畫法；餵幼體加速成長是 1.8 才有的，不需要做。
   **查到的既有錯誤，待修**：武器附魔（鋒利系列、擊退、燃燒、掠奪）、保護系列、水下呼吸、荊棘、弓的附魔、附魔光澤都還沒接。

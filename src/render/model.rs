@@ -1027,8 +1027,35 @@ pub fn mob(
             light: lt,
             tint: tint(col),
         };
-        for p in parts(m, &a, age, layer, partial) {
-            render(&mut d, &mat, &p);
+        // The young (ModelQuadruped.render / ModelChicken.render with
+        // isChild): the head at full size, moved down and forward, the
+        // rest at half size standing on the ground.
+        let child = m.flags & 16 != 0;
+        let heads = match m.kind {
+            Kind::Pig | Kind::Cow | Kind::Mooshroom | Kind::Sheep => 1,
+            Kind::Chicken => 3,
+            _ => 0,
+        };
+        let (cy, cz) = match m.kind {
+            Kind::Pig => (4.0, 4.0),
+            Kind::Cow | Kind::Mooshroom => (8.0, 6.0),
+            Kind::Chicken => (5.0, 2.0),
+            _ => (8.0, 4.0),
+        };
+        for (i, p) in parts(m, &a, age, layer, partial).iter().enumerate() {
+            if child && heads > 0 {
+                let pm = if i < heads {
+                    mul(&mat, &translate(0.0, cy * 0.0625, cz * 0.0625))
+                } else {
+                    mul(
+                        &mul(&mat, &super::entities::scale(0.5, 0.5, 0.5)),
+                        &translate(0.0, 24.0 * 0.0625, 0.0),
+                    )
+                };
+                render(&mut d, &pm, p);
+            } else {
+                render(&mut d, &mat, p);
+            }
         }
     }
     // RenderEnderman.renderEquippedItems: the carried block

@@ -1594,6 +1594,14 @@ fn tempt(speed: f64, item: u16) -> Ai {
     }
 }
 
+fn mate(speed: f64) -> Ai {
+    Ai::Pet(Pet::Mate {
+        speed,
+        mate: None,
+        delay: 0,
+    })
+}
+
 fn follow_parent(speed: f64) -> Ai {
     Ai::FollowParent {
         speed,
@@ -1720,6 +1728,7 @@ fn build(m: &mut Mob) {
         Kind::Pig => {
             t.add(0, Ai::Swimming);
             t.add(1, panic(1.25));
+            t.add(3, mate(1.0));
             t.add(4, tempt(1.2, 398));
             t.add(4, tempt(1.2, 391));
             t.add(5, follow_parent(1.1));
@@ -1730,6 +1739,7 @@ fn build(m: &mut Mob) {
         Kind::Cow | Kind::Mooshroom => {
             t.add(0, Ai::Swimming);
             t.add(1, panic(2.0));
+            t.add(2, mate(1.0));
             t.add(3, tempt(1.25, 296));
             t.add(4, follow_parent(1.25));
             t.add(5, wander(1.0));
@@ -1739,6 +1749,7 @@ fn build(m: &mut Mob) {
         Kind::Sheep => {
             t.add(0, Ai::Swimming);
             t.add(1, panic(1.25));
+            t.add(2, mate(1.0));
             t.add(3, tempt(1.1, 296));
             t.add(4, follow_parent(1.1));
             t.add(5, Ai::EatGrass { timer: 0 });
@@ -1749,6 +1760,7 @@ fn build(m: &mut Mob) {
         Kind::Chicken => {
             t.add(0, Ai::Swimming);
             t.add(1, panic(1.4));
+            t.add(2, mate(1.0));
             t.add(3, tempt(1.0, 295));
             t.add(4, follow_parent(1.1));
             t.add(5, wander(1.0));
@@ -1782,6 +1794,11 @@ pub(super) fn update(m: &mut Mob, cx: &mut Cx) {
     if m.tasks.is_empty() {
         build(m);
         build_pet(m);
+    }
+    if cx.out.births.iter().any(|b| b.parents[1] == m.id) {
+        // spawnBaby: targetMate.setGrowingAge(6000), resetInLove()
+        m.growing_age = 6000;
+        m.in_love = 0;
     }
     if m.kind == Kind::IronGolem && m.attack_timer > 0 {
         // EntityIronGolem.onLivingUpdate
@@ -1818,6 +1835,30 @@ pub(super) fn update(m: &mut Mob, cx: &mut Cx) {
         } else if !m.tamed {
             m.angry = true;
         }
+    }
+}
+
+/// A baby `EntityAIMate.spawnBaby` asked for; the second parent's love
+/// and age are reset when it is born.
+#[derive(Clone, Copy, Debug)]
+pub struct Birth {
+    pub kind: Kind,
+    pub pos: [f64; 3],
+    pub parents: [u32; 2],
+    pub variant: i32,
+    pub tamed: bool,
+}
+
+/// `EntityAnimal.isBreedingItem` of the mob's class.
+pub fn breeding_item(m: &Mob, id: u16) -> bool {
+    match m.kind {
+        Kind::Pig => id == 391,
+        Kind::Cow | Kind::Mooshroom | Kind::Sheep => id == 296,
+        // EntityChicken: any ItemSeeds
+        Kind::Chicken => matches!(id, 295 | 361 | 362 | 372),
+        Kind::Wolf => m.tamed && wolf_meat(id),
+        Kind::Ocelot => m.tamed && id == 349,
+        _ => false,
     }
 }
 
@@ -1926,6 +1967,12 @@ pub enum Pet {
         villager: Option<u32>,
         look_time: i32,
     },
+    /// `EntityAIMate`
+    Mate {
+        speed: f64,
+        mate: Option<u32>,
+        delay: i32,
+    },
     /// `EntityAINearestAttackableTarget(golem, EntityLiving.class, 0, false,
     /// true, IMob.mobSelector)`
     GolemTarget {
@@ -1982,7 +2029,7 @@ impl Pet {
         match self {
             Pet::Sit | Pet::Leap { .. } | Pet::OcelotSit { .. } => 5,
             Pet::FollowOwner { .. } | Pet::TemptScared { .. } => 3,
-            Pet::OcelotAttack { .. } | Pet::LookAtVillager { .. } => 3,
+            Pet::OcelotAttack { .. } | Pet::LookAtVillager { .. } | Pet::Mate { .. } => 3,
             Pet::Beg { .. } => 2,
             _ => 1,
         }
@@ -2152,6 +2199,24 @@ impl Pet {
                     None => false,
                 }
             }
+            Pet::Mate { mate, .. } => {
+                if m.in_love <= 0 {
+                    return false;
+                }
+                // getNearbyMate: the nearest that canMateWith
+                let bb = expand(&m.bb, 8.0, 8.0, 8.0);
+                let mut best: Option<(f64, u32)> = None;
+                for o in mobs_within(m, cx, Cls::Kind(m.kind), bb) {
+                    if can_mate_with(m, o, cx) {
+                        let d = m.dist2(o.pos);
+                        if best.map_or(true, |b| d < b.0) {
+                            best = Some((d, o.id));
+                        }
+                    }
+                }
+                *mate = best.map(|b| b.1);
+                mate.is_some()
+            }
             Pet::LookAtVillager { villager, .. } => {
                 if !cx.day {
                     return false;
@@ -2280,6 +2345,14 @@ impl Pet {
                 !m.no_path() && m.dist2_to(&v) < (*max * *max) as f64
             }
             Pet::LookAtVillager { look_time, .. } => *look_time > 0,
+            Pet::Mate { mate, delay, .. } => {
+                let Some(id) = *mate else { return false };
+                // alive, still in love (not the other half of a birth this
+                // tick), and the 60 ticks not over
+                cx.others.iter().any(|o| o.id == id && o.in_love)
+                    && !cx.out.births.iter().any(|b| b.parents.contains(&id))
+                    && *delay < 60
+            }
             Pet::Sit => self.should_execute(m, cx),
         }
     }
@@ -2378,7 +2451,7 @@ impl Pet {
                 m.try_move_to_xyz(cx.w, pos[0], pos[1], pos[2], *speed);
             }
             Pet::LookAtVillager { look_time, .. } => *look_time = 400,
-            Pet::OcelotAttack { .. } => {}
+            Pet::OcelotAttack { .. } | Pet::Mate { .. } => {}
         }
     }
 
@@ -2406,6 +2479,10 @@ impl Pet {
             }
             Pet::MoveTowardsTarget { target, .. } => *target = None,
             Pet::LookAtVillager { villager, .. } => *villager = None,
+            Pet::Mate { mate, delay, .. } => {
+                *mate = None;
+                *delay = 0;
+            }
             _ => {}
         }
     }
@@ -2531,9 +2608,99 @@ impl Pet {
                 }
                 *look_time -= 1;
             }
+            Pet::Mate { speed, mate, delay } => {
+                let Some(id) = *mate else { return };
+                let Some(v) = cx.view(Target::Mob(id)) else {
+                    return;
+                };
+                m.look_at_entity(&v, 10.0, 40.0);
+                m.try_move_to_entity(cx.w, &v, *speed);
+                *delay += 1;
+                if *delay >= 60 && m.dist2_to(&v) < 9.0 {
+                    spawn_baby(m, id, cx);
+                }
+            }
             _ => {}
         }
     }
+}
+
+/// `EntityAnimal.canMateWith` and its overrides.
+fn can_mate_with(m: &Mob, o: &Other, cx: &Cx) -> bool {
+    // the other half of a birth earlier this tick is no longer in love
+    if cx.out.births.iter().any(|b| b.parents.contains(&o.id)) {
+        return false;
+    }
+    match m.kind {
+        // EntityWolf: both tamed, the other not sitting
+        Kind::Wolf => m.tamed && o.tamed && !o.sitting && m.in_love > 0 && o.in_love,
+        // EntityOcelot: both tamed
+        Kind::Ocelot => m.tamed && o.tamed && m.in_love > 0 && o.in_love,
+        _ => m.in_love > 0 && o.in_love,
+    }
+}
+
+/// `EntityAIMate.spawnBaby`
+fn spawn_baby(m: &mut Mob, mate: u32, cx: &mut Cx) {
+    let other = cx.others.iter().find(|o| o.id == mate);
+    // createChild
+    let variant = match m.kind {
+        // EntitySheep.getDyeBasedOnParents: the two dyes crafted together,
+        // or one parent's colour
+        Kind::Sheep => {
+            let a = 15 - m.variant;
+            let b = 15 - other.map_or(m.variant, |o| o.variant);
+            let cells = [
+                Some(Stack::new(351, a, 1)),
+                Some(Stack::new(351, b, 1)),
+                None,
+                None,
+            ];
+            let dye = match crate::crafting::find_matching(&crate::crafting::Grid {
+                cells: &cells,
+                width: 2,
+            }) {
+                Some(s) if s.id == 351 => s.meta,
+                _ => {
+                    if cx.w.rand.next_boolean() {
+                        a
+                    } else {
+                        b
+                    }
+                }
+            };
+            15 - dye
+        }
+        // the tame ocelot's skin; the wolf's collar starts over
+        Kind::Ocelot if m.tamed => m.variant,
+        _ => 0,
+    };
+    cx.out.births.push(Birth {
+        kind: m.kind,
+        pos: m.pos,
+        parents: [m.id, mate],
+        variant,
+        tamed: m.tamed && matches!(m.kind, Kind::Wolf | Kind::Ocelot),
+    });
+    m.growing_age = 6000;
+    m.in_love = 0;
+    let (w, h) = m.dims();
+    for _ in 0..7 {
+        let v = [
+            m.rand.next_gaussian() * 0.02,
+            m.rand.next_gaussian() * 0.02,
+            m.rand.next_gaussian() * 0.02,
+        ];
+        let p = [
+            m.pos[0] + (m.rand.next_float() * w * 2.0) as f64 - w as f64,
+            m.pos[1] + 0.5 + (m.rand.next_float() * h) as f64,
+            m.pos[2] + (m.rand.next_float() * w * 2.0) as f64 - w as f64,
+        ];
+        cx.out.particles.push(("heart", p, v));
+    }
+    // doMobLoot
+    let xp = m.rand.next_int_n(7) + 1;
+    cx.out.orbs.push((m.pos, xp));
 }
 
 /// `EntityAIBeg.hasPlayerGotBoneInHand`
@@ -2575,6 +2742,7 @@ fn build_pet(m: &mut Mob) {
             t.add(3, leap(0.4));
             t.add(4, attack_on_collide(None, 1.0, true));
             t.add(5, follow_owner(1.0, 10.0, 2.0));
+            t.add(6, mate(1.0));
             t.add(7, wander(1.0));
             t.add(
                 8,
@@ -2647,6 +2815,7 @@ fn build_pet(m: &mut Mob) {
                     countdown: 0,
                 }),
             );
+            t.add(9, mate(0.8));
             t.add(10, wander(0.8));
             t.add(11, watch(Cls::Player, 10.0));
             tt.add(1, target_non_tamed(Kind::Chicken, 750));
