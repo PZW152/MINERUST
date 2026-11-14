@@ -95,12 +95,14 @@ pub enum Command {
     Respawn,
     /// `/give`: adds the stack to the inventory.
     Give(crate::item::Stack),
-    /// Left click on a mob (`attackTargetEntityWithCurrentItem`).
+    /// Left click on a mob or vehicle (`C02PacketUseEntity` ATTACK; the
+    /// server runs `attackTargetEntityWithCurrentItem`). `crit` is the
+    /// client's falling state (`fallDistance > 0`, airborne, not on a
+    /// ladder, in water or riding), `sprint` its `isSprinting`.
     Attack {
         id: u32,
-        damage: f32,
         crit: bool,
-        knockback: i32,
+        sprint: bool,
     },
     /// Whether mobs may target and hurt the player.
     PlayerState {
@@ -201,6 +203,11 @@ pub enum Event {
     },
     /// `S19PacketEntityStatus` 2: the hurt animation and sound.
     Hurt,
+    /// `S0BPacketAnimation` 4 / 5: an `EntityCrit2FX` of "crit" (false) or
+    /// "magicCrit" (true) on the mob.
+    CritFx(u32, bool),
+    /// The server's `setSprinting(false)` (entity metadata flag 3).
+    StopSprinting,
     /// `setItemInUse` started (stack, ticks) or `clearItemInUse` (None).
     Using(Option<(crate::item::Stack, i32)>),
     /// `S19PacketEntityStatus` 9: the item use finished.
@@ -380,6 +387,10 @@ pub struct Sim {
     track_check: Option<[f64; 3]>,
     /// The item in use started or stopped this tick.
     using_changed: bool,
+    /// `setSprinting(false)` after a knockback hit, for the client.
+    stop_sprinting: bool,
+    /// `S0BPacketAnimation` 4 (critical) / 5 (magic critical) on a mob.
+    crit_fx: Vec<(u32, bool)>,
     /// `S27PacketExplosion` pushes for the client this tick.
     push_add: [f64; 3],
     /// `EntityPlayerMP`: the server side of the player.
@@ -579,6 +590,8 @@ impl Sim {
             motion_flags: (false, false, false),
             push_add: [0.0; 3],
             using_changed: false,
+            stop_sprinting: false,
+            crit_fx: Vec::new(),
             teleport_to: None,
             chat_out: Vec::new(),
             mode_changed: false,
@@ -932,7 +945,12 @@ impl Sim {
                 ACTIONS_DONE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 let mut play = std::mem::replace(&mut self.play, Play::new(GameMode::Survival));
                 let id = self.world.block(p[0], p[1], p[2]);
+                std::mem::swap(&mut play.wear_rand, &mut self.splayer.e.rand);
                 play.dig(&mut self.world, p);
+                std::mem::swap(&mut play.wear_rand, &mut self.splayer.e.rand);
+                for s in play.broke.drain(..) {
+                    self.splayer.fx.push(crate::entity::base::Fx::BrokenItem(s));
+                }
                 // Block.harvestBlock: player.addExhaustion(0.025)
                 if play.mode == GameMode::Survival
                     && id != crate::block::AIR
@@ -954,7 +972,12 @@ impl Sim {
                     return;
                 }
                 let mut play = std::mem::replace(&mut self.play, Play::new(GameMode::Survival));
+                std::mem::swap(&mut play.wear_rand, &mut self.splayer.e.rand);
                 let used = play.use_block(&mut self.world, target, face, sneaking, hit);
+                std::mem::swap(&mut play.wear_rand, &mut self.splayer.e.rand);
+                for s in play.broke.drain(..) {
+                    self.splayer.fx.push(crate::entity::base::Fx::BrokenItem(s));
+                }
                 self.play = play;
                 if !used {
                     // Minecraft.func_147121_ag: sendUseItem
@@ -1075,15 +1098,12 @@ impl Sim {
 
     fn apply_more(&mut self, cmd: &Command) {
         match *cmd {
-            Command::Attack {
-                id,
-                damage,
-                knockback,
-                ..
-            } if id & crate::entity::vehicle::VEHICLE_ID != 0 => {
-                // attackTargetEntityWithCurrentItem: addExhaustion(0.3)
+            Command::Attack { id, sprint, .. } if id & crate::entity::vehicle::VEHICLE_ID != 0 => {
+                // attackTargetEntityWithCurrentItem against a non-living
+                // entity: no enchantment part, no critical hit
                 self.splayer.food.add_exhaustion(0.3);
-                self.attack_vehicle(id, damage, knockback);
+                let damage = self.player_attack_damage();
+                self.attack_vehicle(id, damage, sprint as i32);
             }
             Command::Interact { id } if id & crate::entity::vehicle::VEHICLE_ID != 0 => {
                 self.interact_vehicle(id);
@@ -1094,29 +1114,31 @@ impl Sim {
                 jump,
                 sneak,
             } => self.ride_input(strafe, forward, jump, sneak),
-            Command::Attack {
-                id,
-                damage,
-                crit,
-                knockback,
-            } => {
-                self.last_attacked = Some(id);
-                self.last_attacked_time = self.world.total_time as i32;
-                // attackTargetEntityWithCurrentItem: addExhaustion(0.3)
-                self.splayer.food.add_exhaustion(0.3);
-                let mut out = crate::entity::mob::Outcome::default();
-                let (feet, yaw) = self.play.player;
-                self.mobs
-                    .attack(id, damage, crit, feet, yaw, knockback, &mut out);
-                self.pending_out.push(out);
-            }
+            Command::Attack { id, crit, sprint } => self.attack_mob(id, crit, sprint),
             Command::PlayerState { attackable } => self.player_attackable = attackable,
             Command::Interact { id } => {
                 let mut out = crate::entity::mob::Outcome::default();
                 let held = self.play.inv.held();
                 let (feet, _) = self.play.player;
-                if let Some(next) = self.mobs.interact(id, held, feet, &mut out) {
+                if let Some(mut next) = self.mobs.interact(id, held, feet, &mut out) {
                     let i = self.play.inv.selected;
+                    // shears on a sheep, flint and steel on a creeper:
+                    // ItemStack.damageItem(1, player)
+                    if out.wear > 0 {
+                        if let Some(s) = held {
+                            let creative = self.play.mode == GameMode::Creative;
+                            let (left, broke) = crate::enchant::damage_item(
+                                s,
+                                out.wear,
+                                creative,
+                                &mut self.splayer.e.rand,
+                            );
+                            if broke {
+                                self.splayer.fx.push(crate::entity::base::Fx::BrokenItem(s));
+                            }
+                            next = left;
+                        }
+                    }
                     if self.play.mode == GameMode::Survival || held.map_or(false, |s| s.id == 325) {
                         self.play.inv.main[i] = next;
                     }
@@ -1216,10 +1238,10 @@ impl Sim {
 
     /// Advances the world by one tick and reports what the client must know.
     pub fn step(&mut self, commands: &[Command], events: &mut Vec<Event>) {
-        self.splayer.living.armor = self.play.inv.armor_value();
         for c in commands {
             self.apply(c);
         }
+        self.armor_in();
         // NetHandlerPlayServer.onNetworkTick
         if self.play.creative_drops > 0 {
             self.play.creative_drops -= 1;
@@ -2130,10 +2152,12 @@ impl Sim {
     }
 
     /// `ItemBow.onPlayerStoppedUsing`
-    fn fire_bow(&mut self, _st: crate::item::Stack, left: i32) {
+    fn fire_bow(&mut self, st: crate::item::Stack, left: i32) {
+        use crate::enchant;
         let creative = self.play.mode == GameMode::Creative;
+        let infinite = creative || enchant::level(enchant::INFINITY, Some(&st)) > 0;
         let has_arrow = self.play.inv.main.iter().flatten().any(|s| s.id == 262);
-        if !creative && !has_arrow {
+        if !infinite && !has_arrow {
             return;
         }
         let j = 72000 - left;
@@ -2148,14 +2172,37 @@ impl Sim {
         let (feet, yaw) = self.play.player;
         let pitch = self.play.pitch;
         let crit = f == 1.0;
-        let p = 1.0 / (self.world.rand.next_float() * 0.4 + 1.2) + f * 0.5;
+        let power = enchant::level(enchant::POWER, Some(&st));
+        let punch = enchant::level(enchant::PUNCH, Some(&st));
+        let flame = enchant::level(enchant::FLAME, Some(&st)) > 0;
+        // var1.damageItem(1, player) on the stack being used
+        let sel = self.play.inv.selected;
+        if let Some(b) = self.play.inv.main[sel].filter(|b| b.id == 261) {
+            let (left, broke) = enchant::damage_item(b, 1, creative, &mut self.splayer.e.rand);
+            if broke {
+                self.splayer.fx.push(crate::entity::base::Fx::BrokenItem(b));
+            }
+            self.play.inv.main[sel] = left;
+        }
+        // playSoundAtEntity(player, "random.bow", 1, 1 / (itemRand.nextFloat() * 0.4 + 1.2) + f * 0.5)
+        let p = 1.0 / crate::util::math::item_rand(|r| r.next_float() * 0.4 + 1.2) + f * 0.5;
         self.pending_out.push(crate::entity::mob::Outcome {
             sounds: vec![("random.bow", [feet[0], feet[1] + 1.62, feet[2]], 1.0, p)],
             ..Default::default()
         });
-        self.mobs
-            .shoot_player_arrow(feet, yaw, pitch, f * 2.0, crit, creative);
-        if !creative {
+        let a = self
+            .mobs
+            .shoot_player_arrow(feet, yaw, pitch, f * 2.0, crit, infinite);
+        if power > 0 {
+            a.damage += power as f64 * 0.5 + 0.5;
+        }
+        if punch > 0 {
+            a.knockback = punch;
+        }
+        if flame {
+            a.e.set_fire(100);
+        }
+        if !infinite {
             // InventoryPlayer.consumeInventoryItem(Items.arrow)
             if let Some(i) = self
                 .play
@@ -2174,20 +2221,8 @@ impl Sim {
                     None
                 };
             }
-            // ItemStack.damageItem(1, player)
-            let sel = self.play.inv.selected;
-            if let Some(mut b) = self.play.inv.main[sel] {
-                if b.id == 261 {
-                    b.meta += 1;
-                    self.play.inv.main[sel] = if b.meta > crate::item::max_damage(261) {
-                        None
-                    } else {
-                        Some(b)
-                    };
-                }
-            }
-            self.play.inv_dirty = true;
         }
+        self.play.inv_dirty = true;
     }
 
     /// The directory of a dimension's chunks and data (`DIM-1`, `DIM1`).
@@ -2832,6 +2867,7 @@ impl Sim {
             last_attack_time: self.last_attacked_time,
             armor_pieces: play.inv.armor.iter().flatten().count() as i32,
             held,
+            looting: crate::enchant::level(crate::enchant::LOOTING, play.inv.held().as_ref()),
             // both are forgotten after 100 ticks (onEntityUpdate)
             last_attacked: self
                 .last_attacked
@@ -3135,6 +3171,7 @@ impl Sim {
             match h {
                 Hit::Melee {
                     kind,
+                    by,
                     amount,
                     knock,
                     from,
@@ -3149,6 +3186,22 @@ impl Sim {
                     }
                     let src = Source::mob(kind, 0, from);
                     if self.splayer.attack(&self.world, src, amount, d) {
+                        // EntityMob.attackEntityAsMob, on a hit:
+                        // applyThornEnchantments(player, mob)
+                        use crate::entity::mob::Kind as K;
+                        if matches!(
+                            kind,
+                            K::Zombie
+                                | K::PigZombie
+                                | K::Skeleton
+                                | K::Spider
+                                | K::CaveSpider
+                                | K::Silverfish
+                                | K::Enderman
+                                | K::Blaze
+                        ) {
+                            self.thorns(by);
+                        }
                         if knock != [0.0; 3] {
                             for a in 0..3 {
                                 self.splayer.e.motion[a] += knock[a];
@@ -3183,7 +3236,15 @@ impl Sim {
                     amount, shooter, ..
                 } => {
                     let src = Source::arrow(pos_of(&self.mobs, shooter));
-                    self.splayer.attack(&self.world, src, amount, d);
+                    // EntityArrow.onUpdate: on a hit from a living shooter,
+                    // applyThornEnchantments(player, shooter)
+                    if self.splayer.attack(&self.world, src, amount, d) {
+                        if let Some(id) =
+                            shooter.filter(|&i| self.mobs.list.iter().any(|m| m.id == i))
+                        {
+                            self.thorns(id);
+                        }
+                    }
                 }
                 Hit::Fireball {
                     amount,
@@ -3265,6 +3326,60 @@ impl Sim {
         }
     }
 
+    /// `EnchantmentHelper.applyThornEnchantments(player, attacker)`: each
+    /// Thorns enchantment on the worn pieces, in order, runs
+    /// `EnchantmentThorns.onUserHurt` with the player's random; the piece
+    /// that pays is always the first one with Thorns
+    /// (`getEnchantedItem`).
+    fn thorns(&mut self, attacker: u32) {
+        use crate::enchant;
+        let items = self.splayer.armor_items;
+        for s in items.iter().flatten() {
+            let lv = s
+                .enchantments()
+                .into_iter()
+                .filter(|e| e.0 == enchant::THORNS)
+                .map(|e| e.1)
+                .collect::<Vec<_>>();
+            for l in lv {
+                let first = self
+                    .splayer
+                    .armor_items
+                    .iter()
+                    .position(|a| enchant::level(enchant::THORNS, a.as_ref()) > 0);
+                let r = &mut self.splayer.e.rand;
+                let cost = if enchant::thorns_should_hit(l, r) {
+                    let dmg = enchant::thorns_damage(l, r) as f32;
+                    let mut out = crate::entity::mob::Outcome::default();
+                    let feet = self.play.player.0;
+                    let yaw = self.play.player.1;
+                    // causeThornsDamage(player): blockable, from the player
+                    self.mobs.attack(attacker, dmg, feet, yaw, &mut out);
+                    if let Some(m) = self.mobs.list.iter_mut().find(|m| m.id == attacker) {
+                        m.looting = enchant::level(enchant::LOOTING, self.play.inv.held().as_ref());
+                        out.sounds.push(("damage.thorns", m.pos, 0.5, 1.0));
+                    }
+                    self.pending_out.push(out);
+                    3
+                } else {
+                    1
+                };
+                if let Some(i) = first {
+                    let p = self.splayer.armor_items[i].unwrap();
+                    let creative = self.play.mode == GameMode::Creative;
+                    let (left, broke) =
+                        enchant::damage_item(p, cost, creative, &mut self.splayer.e.rand);
+                    if broke {
+                        self.splayer.fx.push(crate::entity::base::Fx::BrokenItem(p));
+                    }
+                    self.splayer.armor_items[i] = left;
+                    self.splayer.armor_changed = true;
+                    self.splayer.armor_updated();
+                }
+            }
+        }
+    }
+
     /// `EntityArrow.onCollideWithPlayer` for the arrows in reach.
     fn pick_up_arrows(&mut self, events: &mut Vec<Event>) {
         if self.splayer.dead || self.respawn_pending {
@@ -3305,15 +3420,174 @@ impl Sim {
         }
     }
 
-    /// The player's state for the client, and the consequences of dying.
-    fn player_events(&mut self, events: &mut Vec<Event>) {
-        // EntityPlayer.damageArmor, and getTotalArmorValue for the next hit
-        for a in std::mem::take(&mut self.splayer.armor_wear) {
-            if self.play.inv.damage_armor(a) {
-                self.play.inv_dirty = true;
+    /// `getEntityAttribute(attackDamage).getAttributeValue()` with the held
+    /// item's weapon modifier applied (`EntityLivingBase.onUpdate` swaps it
+    /// whenever the held stack changes).
+    fn player_attack_damage(&self) -> f32 {
+        let mut a = self.splayer.living.attrs.attack_damage.clone();
+        if let Some(d) = self
+            .play
+            .inv
+            .held()
+            .and_then(|s| crate::item::weapon_damage(s.id))
+        {
+            // Item.field_111210_e, the one UUID every weapon shares
+            a.apply(crate::entity::living::Modifier {
+                uuid: 0xCB3F55D3_645C_4F38_A497_9C13A33DB5CF,
+                amount: d as f64,
+                op: 0,
+            });
+        }
+        a.value() as f32
+    }
+
+    /// `EntityPlayer.attackTargetEntityWithCurrentItem` against a mob.
+    fn attack_mob(&mut self, id: u32, crit: bool, sprint: bool) {
+        use crate::enchant;
+        use crate::entity::mob::Kind;
+        let held = self.play.inv.held();
+        let Some(m) = self.mobs.list.iter().find(|m| m.id == id) else {
+            return;
+        };
+        let kind = m.kind;
+        // The dragon is hit through an EntityDragonPart and the crystal is
+        // not an EntityLivingBase: neither gets the living-only parts.
+        let living = !matches!(kind, Kind::EnderDragon | Kind::EnderCrystal);
+        let mut f = self.player_attack_damage();
+        let mut kb = 0;
+        let mut ench = 0.0f32;
+        if living {
+            ench = enchant::modifier_living(held.as_ref(), kind.creature());
+            kb += enchant::level(enchant::KNOCKBACK, held.as_ref());
+        }
+        if sprint {
+            kb += 1;
+        }
+        if !(f > 0.0 || ench > 0.0) {
+            return;
+        }
+        let crit = crit && living && !self.splayer.living.active(crate::potion::BLINDNESS);
+        if crit && f > 0.0 {
+            f *= 1.5;
+        }
+        f += ench;
+        let fire = enchant::level(enchant::FIRE_ASPECT, held.as_ref());
+        let mut lit = false;
+        if living && fire > 0 {
+            if let Some(m) = self.mobs.list.iter_mut().find(|m| m.id == id) {
+                if !m.burning() {
+                    lit = true;
+                    m.set_fire(1);
+                }
             }
         }
-        self.splayer.living.armor = self.play.inv.armor_value();
+        let mut out = crate::entity::mob::Outcome::default();
+        let (feet, yaw) = self.play.player;
+        let hit = self.mobs.attack(id, f, feet, yaw, &mut out);
+        if hit {
+            if kb > 0 {
+                self.mobs.add_velocity(
+                    id,
+                    [
+                        (-crate::util::math::sin(yaw * std::f32::consts::PI / 180.0)
+                            * kb as f32
+                            * 0.5) as f64,
+                        0.1,
+                        (crate::util::math::cos(yaw * std::f32::consts::PI / 180.0)
+                            * kb as f32
+                            * 0.5) as f64,
+                    ],
+                );
+                // motionX/Z *= 0.6 on the server's copy; setSprinting(false)
+                // reaches the client through the entity metadata
+                self.splayer.e.motion[0] *= 0.6;
+                self.splayer.e.motion[2] *= 0.6;
+                self.stop_sprinting = true;
+            }
+            // onCriticalHit / onEnchantmentCritical: S0BPacketAnimation 4 / 5
+            if crit {
+                self.crit_fx.push((id, false));
+            }
+            if ench > 0.0 {
+                self.crit_fx.push((id, true));
+            }
+            self.last_attacked = Some(id);
+            self.last_attacked_time = self.world.total_time as i32;
+            if living {
+                // applyThornEnchantments(target, player): mobs wear nothing
+                // applyArthropodEnchantments(player, target): Bane of
+                // Arthropods slows the target, drawing from the player's rand
+                for d in enchant::arthropod_slowness(
+                    held.as_ref(),
+                    kind.creature(),
+                    &mut self.splayer.e.rand,
+                ) {
+                    self.mobs.add_effect(id, crate::potion::MOVE_SLOWDOWN, d, 3);
+                }
+            }
+            // ItemStack.hitEntity on the mob (the dragon itself for a part)
+            if kind != Kind::EnderCrystal {
+                if let Some(s) = held {
+                    let cost = match crate::item::tool(s.id).map(|t| t.kind) {
+                        Some(crate::item::ToolKind::Sword) => 1,
+                        Some(crate::item::ToolKind::Hoe) | None => 0,
+                        Some(_) => 2,
+                    };
+                    if cost > 0 {
+                        let creative = self.play.mode == GameMode::Creative;
+                        let (left, broke) =
+                            enchant::damage_item(s, cost, creative, &mut self.splayer.e.rand);
+                        if broke {
+                            self.splayer.fx.push(crate::entity::base::Fx::BrokenItem(s));
+                        }
+                        let i = self.play.inv.selected;
+                        self.play.inv.main[i] = left;
+                        self.play.inv_dirty = true;
+                    }
+                }
+            }
+            if living {
+                if fire > 0 {
+                    if let Some(m) = self.mobs.list.iter_mut().find(|m| m.id == id) {
+                        m.set_fire(fire * 4);
+                    }
+                }
+                // the killer's looting for onDeath
+                if let Some(m) = self.mobs.list.iter_mut().find(|m| m.id == id) {
+                    m.looting = enchant::level(enchant::LOOTING, held.as_ref());
+                }
+            }
+            self.splayer.food.add_exhaustion(0.3);
+        } else if lit {
+            if let Some(m) = self.mobs.list.iter_mut().find(|m| m.id == id) {
+                m.fire = 0;
+            }
+        }
+        self.pending_out.push(out);
+    }
+
+    /// Copies the worn pieces into the server player before anything can
+    /// hurt it (`getLastActiveItems`, `getTotalArmorValue`).
+    fn armor_in(&mut self) {
+        self.armor_out();
+        self.splayer.armor_items = self.play.inv.armor;
+        self.splayer.armor_updated();
+    }
+
+    /// Writes back what hits did to the worn pieces.
+    fn armor_out(&mut self) {
+        if std::mem::take(&mut self.splayer.armor_changed) {
+            self.play.inv.armor = self.splayer.armor_items;
+            self.play.inv_dirty = true;
+        }
+        self.splayer.armor_items = self.play.inv.armor;
+        self.splayer.armor_updated();
+    }
+
+    /// The player's state for the client, and the consequences of dying.
+    fn player_events(&mut self, events: &mut Vec<Event>) {
+        // the worn pieces as damage left them
+        self.armor_out();
         let fx = std::mem::take(&mut self.splayer.fx);
         let mut sounds = Vec::new();
         let mut parts = Vec::new();
@@ -3321,6 +3595,13 @@ impl Sim {
             match f {
                 crate::entity::base::Fx::Sound(n, p, v, pi) => sounds.push((n, p, v, pi)),
                 crate::entity::base::Fx::Particle(n, p, m) => parts.push((n, p, m)),
+                crate::entity::base::Fx::BrokenItem(_) => {
+                    // renderBrokenItemStack: playSound("random.break", 0.8,
+                    // 0.8 + worldObj.rand.nextFloat() * 0.4); its particles
+                    // are client-side and the server's do nothing
+                    let p = 0.8 + self.world.rand.next_float() * 0.4;
+                    sounds.push(("random.break", self.splayer.e.pos, 0.8, p));
+                }
                 // Block.onFallenUpon: farmland is trampled
                 crate::entity::base::Fx::Walk(x, y, z, id) => {
                     if id == crate::block::FARMLAND
@@ -3360,6 +3641,12 @@ impl Sim {
         let splashes = std::mem::take(&mut self.mobs.splashes);
         if !splashes.is_empty() {
             events.push(Event::Splashes(splashes));
+        }
+        for (id, magic) in std::mem::take(&mut self.crit_fx) {
+            events.push(Event::CritFx(id, magic));
+        }
+        if std::mem::take(&mut self.stop_sprinting) {
+            events.push(Event::StopSprinting);
         }
         if std::mem::take(&mut self.using_changed) {
             events.push(Event::Using(self.splayer.using.map(|(_, st, n)| (st, n))));
@@ -4449,9 +4736,8 @@ mod tests {
             sim.step(
                 &[Command::Attack {
                     id: cid,
-                    damage: 1.0,
                     crit: false,
-                    knockback: 0,
+                    sprint: false,
                 }],
                 &mut Vec::new(),
             );
@@ -4605,9 +4891,8 @@ mod tests {
             sim.step(
                 &[Command::Attack {
                     id,
-                    damage: 1.0,
                     crit: false,
-                    knockback: 0,
+                    sprint: false,
                 }],
                 &mut Vec::new(),
             );
@@ -4828,6 +5113,101 @@ mod tests {
         assert!(sim.splayer.living.health < before, "and hit");
     }
 
+    /// `attackTargetEntityWithCurrentItem` with an enchanted sword
+    /// (Sharpness, Smite, Fire Aspect, Knockback, the zombie's 2 armour),
+    /// Feather Falling on the player's boots and an enchanted bow.
+    #[test]
+    fn enchanted_weapons_and_armour() {
+        use crate::enchant::*;
+        use crate::entity::living::{Difficulty, Source, SourceKind};
+        use crate::entity::mob::Kind;
+        use crate::item::Stack;
+        let (mut sim, x, y, z) = redstone_sim();
+        arena(&mut sim, x, y, z);
+        sim.play.mode = GameMode::Survival;
+        let feet = [x as f64 + 0.5, (y + 1) as f64, z as f64 + 0.5];
+        let mut r = JavaRandom::new(5);
+        let at = [x as f64 + 2.5, (y + 1) as f64, z as f64 + 0.5];
+        let a = sim.mobs.spawn(Kind::Zombie, at, 0.0, &mut r);
+        let b = sim
+            .mobs
+            .spawn(Kind::Zombie, [at[0], at[1], at[2] + 6.0], 0.0, &mut r);
+        let sel = sim.play.inv.selected;
+        let sword = Stack::new(276, 0, 1).with_enchantments(&[
+            (SHARPNESS, 5),
+            (FIRE_ASPECT, 2),
+            (KNOCKBACK, 1),
+        ]);
+        sim.play.inv.main[sel] = Some(sword);
+        sim.step(
+            &[
+                Command::Player(feet, [-90.0, 0.0], false),
+                Command::Attack {
+                    id: a,
+                    crit: false,
+                    sprint: false,
+                },
+            ],
+            &mut Vec::new(),
+        );
+        let m = sim.mobs.list.iter().find(|m| m.id == a).unwrap();
+        // (1 + 7 + 5 * 1.25) through 2 points of armour
+        let want = 20.0 - (14.25f32 * 23.0) / 25.0;
+        assert_eq!(m.health, want);
+        assert!(m.fire > 140, "fire aspect: {}", m.fire);
+        assert!(m.motion[0].abs() > 0.4, "knockback: {:?}", m.motion);
+        assert_eq!(sim.play.inv.main[sel].unwrap().meta, 1, "the sword wears");
+        // Smite V against the undead: 1 + 7 + 12.5
+        sim.play.inv.main[sel] = Some(Stack::new(276, 0, 1).with_enchantments(&[(SMITE, 5)]));
+        sim.step(
+            &[
+                Command::Player(feet, [0.0, 0.0], false),
+                Command::Attack {
+                    id: b,
+                    crit: false,
+                    sprint: false,
+                },
+            ],
+            &mut Vec::new(),
+        );
+        let m = sim.mobs.list.iter().find(|m| m.id == b).unwrap();
+        assert_eq!(m.health, 20.0 - (20.5f32 * 23.0) / 25.0);
+        // a 10-point fall: Feather Falling IV adds 18, halved to 9..18
+        sim.play.inv.armor[3] =
+            Some(Stack::new(313, 0, 1).with_enchantments(&[(FEATHER_FALLING, 4)]));
+        sim.armor_in();
+        sim.splayer.living.health = 20.0;
+        sim.splayer.living.hurt_resistant_time = 0;
+        sim.splayer.attack(
+            &sim.world,
+            Source::named(SourceKind::Fall),
+            10.0,
+            Difficulty::Normal,
+        );
+        let h = sim.splayer.living.health;
+        assert!(
+            (20.0 - 10.0 * 16.0 / 25.0..=20.0 - 10.0 * 7.0 / 25.0).contains(&h),
+            "{h}"
+        );
+        // Power V, Punch II, Flame, Infinity: no arrow needed
+        let bow = Stack::new(261, 0, 1).with_enchantments(&[
+            (POWER, 5),
+            (PUNCH, 2),
+            (FLAME, 1),
+            (INFINITY, 1),
+        ]);
+        sim.play.inv.main[sel] = Some(bow);
+        let before = sim.mobs.arrows.len();
+        sim.fire_bow(bow, 72000 - 20);
+        assert_eq!(sim.mobs.arrows.len(), before + 1);
+        let arrow = sim.mobs.arrows.last().unwrap();
+        assert_eq!(arrow.damage, 2.0 + 5.0 * 0.5 + 0.5);
+        assert_eq!(arrow.knockback, 2);
+        assert_eq!(arrow.pickup, 2);
+        assert_eq!(arrow.e.fire, 2000);
+        assert_eq!(sim.play.inv.main[sel].unwrap().meta, 1, "the bow wears");
+    }
+
     /// The old AI (`EntityCreature.updateEntityActionState`): a zombie
     /// pigman leaves the player alone until it is hit, then comes for it.
     #[test]
@@ -4854,9 +5234,8 @@ mod tests {
                 Command::Player(feet, [0.0, 0.0], false),
                 Command::Attack {
                     id,
-                    damage: 1.0,
                     crit: false,
-                    knockback: 0,
+                    sprint: false,
                 },
             ],
             &mut Vec::new(),
@@ -4902,9 +5281,8 @@ mod tests {
                 Command::Player(feet, [0.0, 0.0], false),
                 Command::Attack {
                     id: zombie,
-                    damage: 1.0,
                     crit: false,
-                    knockback: 0,
+                    sprint: false,
                 },
             ],
             &mut Vec::new(),
@@ -5008,9 +5386,8 @@ mod tests {
                 Command::Player(feet, [0.0, 0.0], false),
                 Command::Attack {
                     id,
-                    damage: 1.0,
                     crit: false,
-                    knockback: 0,
+                    sprint: false,
                 },
             ],
             &mut Vec::new(),
@@ -5107,15 +5484,8 @@ mod tests {
         m.set_slime_size(4);
         m.health = 0.5;
         let mut out = crate::entity::mob::Outcome::default();
-        sim.mobs.attack(
-            id,
-            5.0,
-            false,
-            [x as f64, y as f64, z as f64],
-            0.0,
-            0,
-            &mut out,
-        );
+        sim.mobs
+            .attack(id, 5.0, [x as f64, y as f64, z as f64], 0.0, &mut out);
         steps(&mut sim, 1);
         let small: Vec<i32> = sim
             .mobs

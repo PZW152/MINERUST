@@ -159,6 +159,14 @@ java -cp "out;$CP" XxxHarness tools/xxx_1710.txt
     生物之間不能在同一 tick 互相改狀態，所以攻擊別的生物走 `Strike`，`HurtByTarget` 的呼叫同伴走 `Outcome.calls`，迴圈結束後套用。
   - `build()` 是各生物建構子裡的 `addTask` 清單；新增生物時照原版建構子抄優先序。`uses_tasks` / `uses_old` 決定走哪一條路，
     其餘生物仍走 `tick_mob` 裡舊的 `match`。
+- **近戰與附魔**：客戶端只送 `Command::Attack { id, crit, sprint }`（`crit` 是客戶端的墜落狀態），
+  伺服器的 `Sim::attack_mob` 是 `attackTargetEntityWithCurrentItem` 的移植：攻擊力屬性加上手持武器的修飾值（`item::weapon_damage`）、
+  `enchant::modifier_living`、擊退、燃燒、命中後的爆擊粒子事件（`Event::CritFx` → 客戶端的 `EntityCrit2FX` 發射器，`magicCrit` 是附魔爆擊）、
+  `setSprinting(false)`（`Event::StopSprinting`）、武器耗損、掠奪等級記在生物身上（`Mob.looting`，`onDeath` 用）。
+  原版客戶端對生物的 `attackEntityFrom` 一律回傳 false，所以客戶端**不**減速、不自己出爆擊粒子；船與礦車例外（客戶端回傳 true）。
+  玩家身上的盔甲在一個 tick 內由 `ServerPlayer.armor_items` 持有（`Sim::armor_in` / `armor_out` 與物品欄同步），
+  受傷時當場耗損（耐久附魔用玩家自己的 `e.rand`），保護附魔的隨機部分用 `EnchantmentHelper` 自己的靜態亂數（`enchant::enchantment_rand`）。
+  `Item.itemRand` 是 `util::math::item_rand`。生物受傷分 `damage`（無視護甲）、`hurt(.., blockable)`、`drown`（不呼叫 `setBeenAttacked`）。
 - 客戶端只有伺服器送來的快照；容器點擊在客戶端用同一份 `container.rs` 預測，伺服器的 `clicks` 計數讓客戶端丟掉過時的快照。
 - 生物在客戶端有自己的副本：伺服器端 `Mob::track()` 模擬 `EntityTrackerEntry`（1/32 座標、4/32 門檻、S19 頭部），
   客戶端以三步內插（`setPositionAndRotation2`）、`updateDistance` 與肢體擺動自行計算。
@@ -209,6 +217,7 @@ minerust --seed 12345 --no-save --size 854 480 --screenshot out.png 6
 | 皮甲染色配方 | `tools/DyeHarness.java` → `tools/dyes_1710.txt`（測試 `armor_dyes_match_the_game`） |
 | 方塊貼圖（每個方塊 × 中繼值 × 面的 `Block.getIcon`） | `tools/IconHarness.java` → `tools/icons_1710.txt`（測試 `block_textures_match_the_game`；由專屬繪製函式自選貼圖的方塊列在測試的 `OWN` 裡） |
 | 鐵砧的修理／合併／命名費用 | `tools/RepairHarness.java` 讀 `tools/repair_cases.txt` → `tools/repair_1710.txt`（測試 `anvil_matches_the_game`） |
+| 附魔效果（保護 × 傷害來源、鋒利系列 × 生物屬性、耐久、荊棘）與生物死亡掉落（33 種 × 掠奪 0–3 × 擊殺者是否玩家 × 著火） | `tools/EnchantFxHarness.java` → `tools/enchant_fx_1710.txt`（測試 `effects_match_the_game`、`death_loot_matches_the_game`；生物以假 World 建構後直接呼叫 `dropFewItems` / `dropRareDrop`） |
 
 新增系統時照同樣模式：寫 Harness → 存文字檔 → Rust 測試比對。
 
@@ -231,6 +240,10 @@ MINERUST_BENCH=10 minerust --seed 12345 --no-save --size 1920 1080 --distance 16
 
 伺服器 tick：視距 16 閒置平均 5.0 ms、最差 11.4 ms（預算 50 ms）。
 
+**注意**：2026-11-14 起這台機器同一個 `bed27ea` 之後的版本只量得到 900–1,000 fps（上一個提交 `c6294d6` 重編後實測 960 fps、
+伺服器 5.6 ms），與表中 1,311 fps 的差距是機器狀態（GPU 功耗只有 8 W，疑似電池模式），不是程式退步。
+比較時請**同一時間**重編上一個提交一起量（`git worktree add ../base HEAD` + `CARGO_TARGET_DIR=target/base`）。
+
 ## 6. 進度（截至本次推送）
 
 已完成且有驗證的大項見 README 的「已移植」與 PARITY_TODO 的勾選項。近期完成：
@@ -247,6 +260,8 @@ MINERUST_BENCH=10 minerust --seed 12345 --no-save --size 1920 1080 --distance 16
 - 鐵砧：方塊（`renderBlockAnvil` 四個方塊與 uvRotate、損壞頂面、朝向、碰撞箱、掉落、下落與落下實體的繪製、
   物品圖示的 3D 模型）、`ContainerRepair`（`updateRepairOutput` 與原版 25 組比對一致、`canTakeStack`、
   扣等級、12% 損壞與音效、關閉時掉出）、`GuiRepair`（名稱欄、費用文字與三重陰影、紅叉）、`MC|ItemName`
+- 附魔效果（2026-11-14）：近戰改由伺服器計算（見第 4 節「近戰與附魔」），保護系列、水下呼吸、親水性、效率、荊棘、耐久、
+  弓的四種附魔都已生效；生物死亡掉落逐類別移植並加上掠奪
 - 方塊物品的 3D 模型：`render/item_block.rs` 移植 `renderBlockAsItem`（`renderItemIn3d` 接受的 render type 0/10/11/13/16/26/27/31/35/39，
   含 `setBlockBoundsForItemRender` 的尺寸），物品欄以 `enableGUIStandardItemLighting` 打光，掉落物與手持物品共用同一份模型
 
@@ -283,8 +298,12 @@ MINERUST_BENCH=10 minerust --seed 12345 --no-save --size 1920 1080 --distance 16
    - 蠹魚鑽進石頭與召喚同伴（`EntitySilverfish.updateEntityActionState` 的覆寫）。
    - `EntityAITarget` 的 `nearbyOnly`（`canEasilyReach`）與家的範圍（`isWithinHomeDistance`）沒有做，目前沒有生物用到。
    - 高壓苦力怕（閃電）、殭屍的增援（`summonReinforcements`）、玩家隱形時的偵測距離已做但護甲件數只算有沒有穿。
-1a. **附魔效果**：時運與絲綢之觸已經由 `drops.rs` 生效（玩家挖掘）。其餘尚未作用（鋒利／不死剋星／節肢剋星、擊退、燃燒、掠奪、
-   效率、耐久、保護系列、水下呼吸、親水性、荊棘、力量／衝擊／火焰／無限、海之眷顧、魚餌）。
+1a. **附魔效果**：除了釣竿的兩種（釣魚未實作）都已生效，見第 6 節。還沒做的：節肢剋星的緩速（`Mobs::add_effect` 目前是空的，
+   因為**生物沒有藥水效果系統**，這也讓飛濺藥水的持續效果、凋零骷髏的凋零對生物無效）、破損物品的碎片粒子（客戶端挖掘時才有，
+   伺服器只播 `random.break`，而且音高的世界亂數延到 tick 尾才抽）、附魔光澤。
+   **生物裝備整套沒有做**（`EntityLiving.equipment`：殭屍與骷髏的隨機盔甲與附魔、骷髏手上的弓、拿起掉落物、掉落裝備），
+   `onSpawnWithEgg` 也只做了羊、村民、馬：殭屍的擊退抗性加成（目前固定 0，亂數仍照抽）、所有生物的跟隨距離 `nextGaussian`、
+   蜘蛛騎士、小殭屍、凋零骷髏都還沒有。鋤頭耕地也還沒做。
    掉落的另外幾條路徑還沒改走 `drops.rs`：`harvestBlock` 的覆寫（剪刀剪樹葉／草／藤蔓、冰、雪片仍用舊的 `item::drops`）、
    水沖掉火把與植物失去支撐時的掉落、樹葉腐爛。`item::has_subtypes` 是近似（`max_damage == 0`），應改為原版 `getHasSubtypes` 的表。
 1b. （已完成基本形）客戶端預測放置／破壞方塊，見第 4 節「客戶端預測」。尚未預測的：有朝向或需要依附的方塊（原木、活塞、熔爐、
@@ -443,3 +462,25 @@ MINERUST_BENCH=10 minerust --seed 12345 --no-save --size 1920 1080 --distance 16
 - `本次（2026-11-14）`：史萊姆對照原始碼修正兩處；夜間 30 秒壓力測試（敵對生物自然生成）沒有當機，伺服器 tick 平均 4.5 ms
   （機器上仍有別的遊戲在跑）。
   **查到的既有錯誤，待修**：武器附魔（鋒利系列、擊退、燃燒、掠奪）、保護系列、水下呼吸、荊棘、弓的附魔、附魔光澤都還沒接。
+- `本次（2026-11-14，附魔效果與生物掉落）`：使用者要求「接力完善整個項目」，照第 7 節的順序做附魔效果。
+  - 近戰搬到伺服器（第 4 節「近戰與附魔」）：鋒利／不死剋星／節肢剋星、擊退、燃燒（目標未著火時先點 1 秒，沒打中就熄滅）、
+    爆擊只在命中時、失明時不爆擊、武器耗損（劍 1、工具 2、鋤頭 0）、`EntityCrit2FX`（三個 tick、每次最多 16 顆）與 `magicCrit`。
+    順帶修掉：客戶端以前會在打生物時自己減速 0.6 並出爆擊粒子（原版只有打船和礦車才會）；疲勞值以前不論打中與否都加。
+  - 玩家受傷：`applyArmorCalculations` 先算護甲值再當場耗損盔甲（以前延到 tick 尾）、保護系列（含摔落、火焰、爆炸、彈射物）、
+    火焰保護縮短著火時間（`Ent.fire_protection`）、水下呼吸、荊棘（殭屍等 `EntityMob` 近戰與骷髏的箭會觸發，史萊姆、狼、魔像不會）。
+    爆炸保護減少擊退的那行在 1.7.10 是 `floor` 一個小於 1 的數，永遠是 0，所以只有傷害減免。
+  - 挖掘：`getCurrentPlayerStrVsBlock` 完整移植（效率、急迫、挖掘疲勞、親水性）；以前急迫與挖掘疲勞也沒有作用。
+  - 耐久：`attemptDamageItem` 用在工具挖掘（含剪刀的五種方塊）、打火石、剪羊毛、點燃苦力怕、弓、武器、盔甲；壞掉時播 `random.break`。
+  - 弓：力量、衝擊、火焰、無限（無限或創造不需要箭，箭不能撿）；弓聲的音高改用 `Item.itemRand`，不再消耗世界亂數。
+  - 生物：受傷時天生護甲（殭屍、殭屍豬人 2 點），擊退方向的小亂數改用 `Math.random()`、`setBeenAttacked` 與擊退抗性各抽一次 `nextDouble`
+    （以前用生物自己的亂數，亂數順序與原版不同）；溺水類傷害（終界使者、烈焰使者碰水、魷魚上岸）不呼叫 `setBeenAttacked`。
+  - 生物死亡掉落改為逐類別的 `dropFewItems(recentlyHit, looting)` 與 `rand.nextInt(200) - looting < 5` 的稀有掉落（所有生物都會抽這一次），
+    每個 `dropItem` 各自一個掉落物；修正：終界使者掉落手上的方塊（原版不會）、殭屍豬人的金錠機率、蜘蛛眼的短路判斷、
+    雞／牛／豬／惡魂等的掠奪加成、馬依種類（殭屍馬四分之一不掉）。玩家的箭殺死生物以前不算玩家擊殺（沒有經驗與稀有掉落），已修正；
+    馴服的狼殺死的也算。剪羊毛現在要求不是小羊。
+  **驗證**：新增 `tools/EnchantFxHarness.java`（4,178 行參考值）與三個測試：`effects_match_the_game`、`death_loot_matches_the_game`
+  （3,168 組全部一致，含下一個 `nextInt`）、`enchanted_weapons_and_armour`（經伺服器的完整流程：鋒利 V 打殭屍的血量逐位元相等、
+  不死剋星 V、燃燒與擊退、摔落保護 IV 的範圍、力量 V／衝擊 II／火焰／無限的箭）。`cargo test --release` 95 項通過。
+  基準：同時段重編上一個提交 960 fps／伺服器 5.6 ms，本次 936–986 fps／5.7–5.8 ms，沒有退步（見第 5.3 節的注意）。
+  爆擊粒子與附魔爆擊的外觀**只有編譯與邏輯對照**，沒有截圖驗證（截圖模式沒有自動攻擊的參數）。
+  **留下**：見第 7 節 1a（生物裝備、生物藥水效果、`onSpawnWithEgg`、鋤頭、釣魚）。

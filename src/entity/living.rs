@@ -524,7 +524,7 @@ impl Living {
 
     /// `applyPotionDamageCalculations`; `ench` is
     /// `EnchantmentHelper.getEnchantmentModifierDamage` of the armour.
-    pub fn potion_calc(&self, s: &Source, mut a: f32, ench: i32) -> f32 {
+    pub fn potion_calc(&self, s: &Source, mut a: f32, ench: impl FnOnce() -> i32) -> f32 {
         if s.absolute {
             return a;
         }
@@ -538,7 +538,7 @@ impl Living {
         if a <= 0.0 {
             return 0.0;
         }
-        let e = ench.min(20);
+        let e = ench().min(20);
         if e > 0 {
             let f = a * (25 - e) as f32;
             a = f / 25.0;

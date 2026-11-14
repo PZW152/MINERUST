@@ -285,6 +285,28 @@ const KINDS: [(ToolKind, &str); 5] = [
     (ToolKind::Hoe, "hoe"),
 ];
 
+/// The "Weapon modifier" of `Item.getItemAttributeModifiers` (operation 0
+/// on `attackDamage`): `ItemSword` 4 + the material's
+/// `getDamageVsEntity`, `ItemTool` its base (axe 3, pickaxe 2, spade 1)
+/// plus the same. Hoes are not `ItemTool`s and have none.
+pub fn weapon_damage(id: ItemId) -> Option<f32> {
+    let t = tool(id)?;
+    // ToolMaterial.getDamageVsEntity: wood 0, stone 1, iron 2, emerald 3, gold 0
+    let mat = match t.max_uses {
+        131 => 1.0,
+        250 => 2.0,
+        1561 => 3.0,
+        _ => 0.0,
+    };
+    match t.kind {
+        ToolKind::Sword => Some(4.0 + mat),
+        ToolKind::Axe => Some(3.0 + mat),
+        ToolKind::Pickaxe => Some(2.0 + mat),
+        ToolKind::Shovel => Some(1.0 + mat),
+        ToolKind::Hoe => None,
+    }
+}
+
 pub fn tool(id: ItemId) -> Option<ToolInfo> {
     for (m, row) in TOOL_IDS.iter().enumerate() {
         for (k, &tid) in row.iter().enumerate() {
@@ -794,19 +816,66 @@ pub fn dig_speed(held: Option<Stack>, id: u8) -> f32 {
     }
 }
 
-/// `Block.getPlayerRelativeBlockHardness`: progress per tick.
+/// What `EntityPlayer.getCurrentPlayerStrVsBlock` reads off the player
+/// besides the held stack.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Digger {
+    /// `isInsideOfMaterial(Material.water)` at the eyes
+    pub in_water: bool,
+    pub on_ground: bool,
+    /// amplifiers of Haste (`digSpeed`) and Mining Fatigue (`digSlowdown`)
+    pub haste: Option<i32>,
+    pub fatigue: Option<i32>,
+    /// `EnchantmentHelper.getAquaAffinityModifier` of the worn armour
+    pub aqua_affinity: bool,
+}
+
+/// `EntityPlayer.getCurrentPlayerStrVsBlock`
+pub fn player_dig_speed(held: Option<Stack>, id: u8, p: &Digger) -> f32 {
+    let mut f = dig_speed(held, id);
+    if f > 1.0 {
+        let e = crate::enchant::level(crate::enchant::EFFICIENCY, held.as_ref());
+        if e > 0 && held.is_some() {
+            let k = (e * e + 1) as f32;
+            // !canItemHarvestBlock && !(f > 1): never true inside f > 1
+            f += k;
+        }
+    }
+    if let Some(a) = p.haste {
+        f *= 1.0 + (a + 1) as f32 * 0.2;
+    }
+    if let Some(a) = p.fatigue {
+        f *= 1.0 - (a + 1) as f32 * 0.2;
+    }
+    if p.in_water && !p.aqua_affinity {
+        f /= 5.0;
+    }
+    if !p.on_ground {
+        f /= 5.0;
+    }
+    f
+}
+
+/// `break_progress_by` for a player with no effects or armour.
 pub fn break_progress(held: Option<Stack>, id: u8, in_water: bool, on_ground: bool) -> f32 {
+    break_progress_by(
+        held,
+        id,
+        &Digger {
+            in_water,
+            on_ground,
+            ..Default::default()
+        },
+    )
+}
+
+/// `Block.getPlayerRelativeBlockHardness`: progress per tick.
+pub fn break_progress_by(held: Option<Stack>, id: u8, p: &Digger) -> f32 {
     let h = hardness(id);
     if h < 0.0 {
         return 0.0;
     }
-    let mut speed = dig_speed(held, id);
-    if in_water {
-        speed /= 5.0;
-    }
-    if !on_ground {
-        speed /= 5.0;
-    }
+    let speed = player_dig_speed(held, id, p);
     if h == 0.0 {
         return 1.0;
     }

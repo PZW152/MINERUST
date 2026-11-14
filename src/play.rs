@@ -194,6 +194,11 @@ pub struct ItemView {
 }
 
 pub struct Play {
+    /// The player's own random (`EntityPlayerMP.getRNG()`), lent by the
+    /// server player while a dig or use runs, for `ItemStack.damageItem`.
+    pub wear_rand: JavaRandom,
+    /// Stacks that broke (`renderBrokenItemStack`) during that time.
+    pub broke: Vec<Stack>,
     pub inv: Inventory,
     pub open: Open,
     pub mode: GameMode,
@@ -460,6 +465,8 @@ impl InvView {
 impl Play {
     pub fn new(mode: GameMode) -> Play {
         Play {
+            wear_rand: JavaRandom::new(0),
+            broke: Vec::new(),
             inv: Inventory::default(),
             open: Open::None,
             mode,
@@ -753,23 +760,33 @@ impl Play {
                 }
             }
             w.rand = rnd;
-            // Tools lose durability (ItemTool.onBlockDestroyed).
+            // Item.onBlockDestroyed: ItemTool 1 and ItemSword 2 for a block
+            // of non-zero hardness (ItemHoe is neither), ItemShears 1 for
+            // leaves, cobweb, grass, vines and tripwire
             if let Some(s) = held {
-                if let Some(t) = item::tool(s.id) {
-                    if crate::item::hardness(id) != 0.0 {
-                        let cost = if t.kind == item::ToolKind::Sword {
-                            2
-                        } else {
+                let cost = match item::tool(s.id).map(|t| t.kind) {
+                    Some(item::ToolKind::Sword) if item::hardness(id) != 0.0 => 2,
+                    Some(item::ToolKind::Hoe) | None => 0,
+                    Some(_) if item::hardness(id) != 0.0 => 1,
+                    _ => 0,
+                };
+                let cost = if s.id == 359 {
+                    match block::material(id) {
+                        block::Material::Leaves => 1,
+                        _ if matches!(
+                            id,
+                            block::WEB | block::TALLGRASS | block::VINE | block::TRIPWIRE
+                        ) =>
+                        {
                             1
-                        };
-                        let d = s.meta + cost;
-                        self.inv.main[self.inv.selected] = if d > t.max_uses {
-                            None
-                        } else {
-                            Some(Stack { meta: d, ..s })
-                        };
-                        self.inv_dirty = true;
+                        }
+                        _ => 0,
                     }
+                } else {
+                    cost
+                };
+                if cost > 0 {
+                    self.damage_held(cost);
                 }
             }
             // Breaking ice leaves water unless it rests on air.
@@ -1329,20 +1346,17 @@ impl Play {
         }
     }
 
-    /// Wears the held item by `n` uses (`ItemStack.damageItem`).
+    /// Wears the held item by `n` uses (`ItemStack.damageItem` with the
+    /// player's random, so Unbreaking can spare it).
     fn damage_held(&mut self, n: i32) {
-        if self.mode != GameMode::Survival {
-            return;
-        }
         let i = self.inv.selected;
         if let Some(s) = self.inv.main[i] {
-            let max = crate::item::max_damage(s.id);
-            let d = s.meta + n;
-            self.inv.main[i] = if max > 0 && d > max {
-                None
-            } else {
-                Some(Stack { meta: d, ..s })
-            };
+            let creative = self.mode == GameMode::Creative;
+            let (left, broke) = crate::enchant::damage_item(s, n, creative, &mut self.wear_rand);
+            if broke {
+                self.broke.push(s);
+            }
+            self.inv.main[i] = left;
             self.inv_dirty = true;
         }
     }

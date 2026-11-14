@@ -210,6 +210,7 @@ pub fn slime(m: &mut Mob, player: &PlayerInfo, out: &mut Outcome) {
             let _ = f;
             out.hits.push(Hit::Melee {
                 kind: Kind::Slime,
+                by: m.id,
                 amount: size as f32,
                 knock: [0.0; 3],
                 from: m.pos,
@@ -258,7 +259,7 @@ pub fn enderman(
 ) {
     let wet = m.wet(w);
     if wet {
-        m.damage(1.0, None);
+        m.drown(1.0);
     }
     // mobGriefing: pick up or put down a block
     if m.carried == 0 {
@@ -437,7 +438,7 @@ pub fn squid(m: &mut Mob, w: &mut ServerWorld) {
         m.sq[0] = (m.sq[0] as f64 + (-90.0 - m.sq[0] as f64) * 0.02) as f32;
         // EntityWaterMob: suffocates on land
         if m.ticks % 20 == 0 && m.rand.next_int_n(3) == 0 {
-            m.damage(2.0, None);
+            m.drown(2.0);
         }
     }
     let mm = m.motion;

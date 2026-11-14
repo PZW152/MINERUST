@@ -124,9 +124,11 @@ pub struct ServerPlayer {
     /// `itemInUse` / `itemInUseCount`: the hotbar slot, the stack as it was
     /// when use began, and the ticks left.
     pub using: Option<(usize, crate::item::Stack, i32)>,
-    /// `damageArmor` amounts not yet taken off the worn pieces (the
-    /// inventory lives with the container state).
-    pub armor_wear: Vec<f32>,
+    /// `inventory.armorInventory` (`getLastActiveItems`): a copy of the
+    /// worn pieces for the duration of a tick, taken from the inventory
+    /// before damage can happen and written back when `armor_changed`.
+    pub armor_items: [Option<crate::item::Stack>; 4],
+    pub armor_changed: bool,
 }
 
 impl ServerPlayer {
@@ -166,7 +168,8 @@ impl ServerPlayer {
             last_sent: None,
             entity_age: 0,
             using: None,
-            armor_wear: Vec::new(),
+            armor_items: [None; 4],
+            armor_changed: false,
         }
     }
 
@@ -497,6 +500,50 @@ impl ServerPlayer {
         self.velocity = Some(*m);
     }
 
+    /// After the worn pieces changed: the armour value and the Fire
+    /// Protection that `setFire` reads.
+    pub fn armor_updated(&mut self) {
+        self.living.armor = self.total_armor();
+        self.e.fire_protection =
+            crate::enchant::max_level_in(crate::enchant::FIRE_PROTECTION, &self.armor_items);
+    }
+
+    /// `getTotalArmorValue`: the `damageReduceAmount` of the worn pieces.
+    pub fn total_armor(&self) -> i32 {
+        self.armor_items
+            .iter()
+            .flatten()
+            .filter_map(|s| crate::inventory::armor_points(s.id))
+            .sum()
+    }
+
+    /// `InventoryPlayer.damageArmor`: every worn `ItemArmor` takes
+    /// `damage / 4` (at least 1) through `ItemStack.damageItem` with the
+    /// player's random, so Unbreaking can spare it.
+    fn damage_armor(&mut self, damage: f32) {
+        let mut n = damage / 4.0;
+        if n < 1.0 {
+            n = 1.0;
+        }
+        for i in 0..4 {
+            let Some(s) = self.armor_items[i] else {
+                continue;
+            };
+            if crate::inventory::armor_points(s.id).is_none() {
+                continue;
+            }
+            let (left, broke) =
+                crate::enchant::damage_item(s, n as i32, self.creative, &mut self.e.rand);
+            if broke {
+                self.fx.push(Fx::BrokenItem(s));
+            }
+            self.armor_items[i] = left;
+            self.armor_changed = true;
+        }
+        self.e.fire_protection =
+            crate::enchant::max_level_in(crate::enchant::FIRE_PROTECTION, &self.armor_items);
+    }
+
     /// `EntityPlayer.damageEntity`
     fn damage_entity(&mut self, src: &Source, mut a: f32) {
         // isBlocking: a sword held up halves what gets through
@@ -506,12 +553,21 @@ impl ServerPlayer {
         if !src.unblockable && blocking && a > 0.0 {
             a = (1.0 + a) * 0.5;
         }
-        // applyArmorCalculations: damageArmor(damage) before the reduction
-        if !src.unblockable {
-            self.armor_wear.push(a);
-        }
-        let a = self.living.armor_calc(src, a);
-        let a = self.living.potion_calc(src, a, 0);
+        // applyArmorCalculations: getTotalArmorValue, then damageArmor,
+        // then the reduction
+        let a = if src.unblockable {
+            a
+        } else {
+            self.living.armor = self.total_armor();
+            let k = 25 - self.living.armor;
+            let f = a * k as f32;
+            self.damage_armor(a);
+            f / 25.0
+        };
+        let items = self.armor_items;
+        let a = self
+            .living
+            .potion_calc(src, a, || crate::enchant::modifier_damage(&items, src));
         let before = a;
         let a = (a - self.living.absorption).max(0.0);
         self.living.absorption -= before - a;
@@ -696,7 +752,12 @@ impl ServerPlayer {
         }
         if self.living.health > 0.0 && self.e.is_inside_of_material(wv, Material::Water, 0.12) {
             if !self.living.active(potion::WATER_BREATHING) && !self.creative {
-                self.air -= 1;
+                // decreaseAirSupply: Respiration may keep the breath
+                let r =
+                    crate::enchant::max_level_in(crate::enchant::RESPIRATION, &self.armor_items);
+                if !(r > 0 && self.e.rand.next_int_n(r + 1) > 0) {
+                    self.air -= 1;
+                }
                 if self.air == -20 {
                     self.air = 0;
                     for _ in 0..8 {

@@ -384,6 +384,8 @@ pub struct Game {
     weather: crate::sim::Weather,
     rain_sound: i32,
     particle_rand: crate::java::JavaRandom,
+    /// `EntityCrit2FX` emitters: mob, "magicCrit", ticks lived.
+    crit_emitters: Vec<(u32, bool, i32)>,
     particles: crate::particles::Particles,
     dying: std::collections::HashSet<u32>,
     next_step: f32,
@@ -686,6 +688,7 @@ impl Game {
             weather: Default::default(),
             rain_sound: 0,
             particle_rand: crate::java::JavaRandom::new(77),
+            crit_emitters: Vec::new(),
             particles: Default::default(),
             dying: Default::default(),
             next_step: 1.0,
@@ -1376,6 +1379,12 @@ impl Game {
                         self.player.motion = v;
                     }
                 }
+                Event::CritFx(id, magic) => {
+                    // EntityCrit2FX: its constructor runs onUpdate once
+                    self.crit_emitter_update(id, magic);
+                    self.crit_emitters.push((id, magic, 1));
+                }
+                Event::StopSprinting => self.player.sprinting = false,
                 Event::Using(u) => {
                     self.using = u;
                     self.player.using_item = u.is_some();
@@ -2146,6 +2155,7 @@ impl Game {
     /// Per-tick particle spawning around the player.
     fn tick_particles(&mut self) {
         self.particles.tick(&self.world);
+        self.tick_crit_emitters();
         // EntityPickupFX.onUpdate: three ticks
         for p in self.pickups.iter_mut() {
             p.1 += 1;
@@ -2445,39 +2455,30 @@ impl Game {
         self.sound(name, Some(c), vol, pitch);
     }
 
-    /// Damage, knockback and experience from mobs.
-    /// `EntityPlayer.attackTargetEntityWithCurrentItem` on the client side:
-    /// damage of the held item, critical hits and sprint knockback.
+    /// `PlayerControllerMP.attackEntity`: the attack goes to the server
+    /// (`C02PacketUseEntity`), and the client runs its own
+    /// `attackTargetEntityWithCurrentItem`. Against a mob that does nothing
+    /// (`EntityLivingBase.attackEntityFrom` is false on a client world);
+    /// against a boat or minecart, whose client-side `attackEntityFrom` is
+    /// true, a sprint hit pushes it and slows the player.
     fn attack_mob(&mut self, id: u32) {
-        let held = self.view.inv.held();
-        let mut dmg = 1.0f32;
-        if let Some(s) = held {
-            if let Some(t) = crate::item::tool(s.id) {
-                let mat = match t.max_uses {
-                    59 => 0.0,
-                    131 => 1.0,
-                    250 => 2.0,
-                    1561 => 3.0,
-                    _ => 0.0,
-                };
-                let base = match t.kind {
-                    crate::item::ToolKind::Sword => 4.0,
-                    crate::item::ToolKind::Axe => 3.0,
-                    crate::item::ToolKind::Pickaxe => 2.0,
-                    crate::item::ToolKind::Shovel => 1.0,
-                    crate::item::ToolKind::Hoe => -mat,
-                };
-                dmg += base + mat;
-            }
-        }
         let vehicle = id & crate::entity::vehicle::VEHICLE_ID != 0;
+        // EntityLivingBase.isOnLadder at the feet
+        let ladder = {
+            let b = self.world.peek_block(
+                math::floor_double(self.player.pos[0]),
+                math::floor_double(self.player.bb.min[1]),
+                math::floor_double(self.player.pos[2]),
+            );
+            b == crate::block::LADDER || b == crate::block::VINE
+        };
         let crit = self.stats.fall_distance > 0.0
             && !self.player.on_ground
+            && !ladder
             && !self.player.in_water
-            && self.riding.is_none()
-            && !vehicle;
-        if vehicle && self.player.sprinting {
-            // the client's own attackTargetEntityWithCurrentItem knocks its boat
+            && self.riding.is_none();
+        let sprint = self.player.sprinting;
+        if vehicle && sprint {
             let r = std::f32::consts::PI;
             let yaw = self.player.yaw;
             if let Some(c) = self.boats.iter_mut().find(|c| c.v.id() == id) {
@@ -2486,33 +2487,52 @@ impl Game {
                 e.motion[1] += 0.1;
                 e.motion[2] += (math::cos(yaw * r / 180.0) * 0.5) as f64;
             }
-        }
-        let knockback = if self.player.sprinting { 1 } else { 0 };
-        if knockback > 0 {
             self.player.motion[0] *= 0.6;
             self.player.motion[2] *= 0.6;
             self.player.sprinting = false;
         }
-        if crit {
-            if let Some(m) = self.mobs.iter().find(|m| m.id == id) {
-                let c = [m.pos[0], (m.bb[1] + m.bb[4]) / 2.0, m.pos[2]];
-                for _ in 0..16 {
-                    let r = &mut self.particle_rand;
-                    let mv = [
-                        r.next_float() as f64 * 2.0 - 1.0,
-                        r.next_float() as f64 * 2.0 - 1.0 + 0.2,
-                        r.next_float() as f64 * 2.0 - 1.0,
-                    ];
-                    self.particles.crit(c, mv);
-                }
+        let _ = self.sim.commands.send(Command::Attack { id, crit, sprint });
+    }
+
+    /// `EntityCrit2FX.onUpdate` for each live emitter: up to 16 particles
+    /// inside the mob's box, three ticks in a row.
+    fn tick_crit_emitters(&mut self) {
+        let mut list = std::mem::take(&mut self.crit_emitters);
+        for e in list.iter_mut() {
+            self.crit_emitter_update(e.0, e.1);
+            e.2 += 1;
+        }
+        list.retain(|e| e.2 < 3);
+        self.crit_emitters = list;
+    }
+
+    fn crit_emitter_update(&mut self, id: u32, magic: bool) {
+        let Some(m) = self.mobs.iter().find(|m| m.id == id) else {
+            return;
+        };
+        let (pos, bb) = (m.pos, m.bb);
+        let w = (bb[3] - bb[0]) as f32;
+        let h = (bb[4] - bb[1]) as f32;
+        for _ in 0..16 {
+            let r = &mut self.particle_rand;
+            let x = (r.next_float() * 2.0 - 1.0) as f64;
+            let y = (r.next_float() * 2.0 - 1.0) as f64;
+            let z = (r.next_float() * 2.0 - 1.0) as f64;
+            if x * x + y * y + z * z > 1.0 {
+                continue;
+            }
+            let p = [
+                pos[0] + x * w as f64 / 4.0,
+                bb[1] + (h / 2.0) as f64 + y * h as f64 / 4.0,
+                pos[2] + z * w as f64 / 4.0,
+            ];
+            let mv = [x, y + 0.2, z];
+            if magic {
+                self.particles.magic_crit(p, mv);
+            } else {
+                self.particles.crit(p, mv);
             }
         }
-        let _ = self.sim.commands.send(Command::Attack {
-            id,
-            damage: dmg,
-            crit,
-            knockback,
-        });
     }
 
     /// Block under the crosshair within survival reach (4.5 blocks).
@@ -2603,8 +2623,24 @@ impl Game {
             self.particles.hit(pos, side, dt, dti);
         }
         let in_water = self.player.eye_material(&self.world, self.eye(0.0)) == Material::Water;
-        let step =
-            crate::item::break_progress(self.view.inv.held(), id, in_water, self.player.on_ground);
+        let amp = |p: i32| {
+            self.stats
+                .effects
+                .iter()
+                .find(|e| e.id == p)
+                .map(|e| e.amplifier)
+        };
+        let digger = crate::item::Digger {
+            in_water,
+            on_ground: self.player.on_ground,
+            haste: amp(crate::potion::DIG_SPEED),
+            fatigue: amp(crate::potion::DIG_SLOWDOWN),
+            aqua_affinity: crate::enchant::max_level_in(
+                crate::enchant::AQUA_AFFINITY,
+                &self.view.inv.armor,
+            ) > 0,
+        };
+        let step = crate::item::break_progress_by(self.view.inv.held(), id, &digger);
         match self.dig {
             Some(d) if d.pos == pos => {
                 let damage = d.damage + step;

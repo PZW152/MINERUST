@@ -1434,6 +1434,7 @@ fn attack_as_mob(m: &mut Mob, t: Target, v: &View, cx: &mut Cx) {
         Target::Player => {
             cx.out.hits.push(Hit::Melee {
                 kind: m.kind,
+                by: m.id,
                 amount,
                 knock: [0.0, lift, 0.0],
                 from: m.pos,

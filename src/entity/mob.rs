@@ -163,6 +163,23 @@ impl Kind {
                 | Kind::EnderDragon
         )
     }
+    /// `getCreatureAttribute`
+    pub fn creature(self) -> crate::enchant::Creature {
+        use crate::enchant::Creature;
+        match self {
+            Kind::Zombie | Kind::PigZombie | Kind::Skeleton => Creature::Undead,
+            Kind::Spider | Kind::CaveSpider | Kind::Silverfish => Creature::Arthropod,
+            _ => Creature::Undefined,
+        }
+    }
+    /// `getTotalArmorValue` without equipment: `EntityZombie` (and so the
+    /// pigman) adds 2.
+    pub fn natural_armor(self) -> i32 {
+        match self {
+            Kind::Zombie | Kind::PigZombie => 2,
+            _ => 0,
+        }
+    }
     /// `isImmuneToFire`
     pub fn fireproof(self) -> bool {
         matches!(
@@ -365,6 +382,9 @@ pub struct Mob {
     attack_cooldown: i32,
     pub target_player: bool,
     recently_hit: i32,
+    /// `EnchantmentHelper.getLootingModifier` of the player whose damage
+    /// was the last to land (0 for any other source), for `onDeath`.
+    pub looting: i32,
     pub persistent: bool,
     // per-kind state
     /// Sheep fleece colour / villager profession / skeleton type.
@@ -525,6 +545,9 @@ pub struct PlayerInfo {
     pub armor_pieces: i32,
     /// Item ids the player holds (for tempting).
     pub held: Option<u16>,
+    /// `getLootingModifier` of the held stack, for kills by the player's
+    /// arrows (`onDeath` asks the damage source's entity).
+    pub looting: i32,
 }
 
 impl PlayerInfo {
@@ -573,6 +596,8 @@ pub enum Hit {
     /// effect given on a hit (duration -1: the cave spider's, by difficulty).
     Melee {
         kind: Kind,
+        /// the attacker's id (Thorns strikes back at it)
+        by: u32,
         amount: f32,
         knock: [f64; 3],
         from: [f64; 3],
@@ -689,6 +714,7 @@ impl Mob {
             attack_cooldown: 0,
             target_player: false,
             recently_hit: 0,
+            looting: 0,
             persistent: false,
             variant: 0,
             sheared: false,
@@ -1478,40 +1504,70 @@ impl Mob {
         }
     }
 
+    /// `attackEntityFrom` with a source that bypasses armour.
     pub fn damage(&mut self, amount: f32, from: Option<[f64; 3]>) -> bool {
+        self.hurt_by(amount, from, false, false)
+    }
+
+    /// `attackEntityFrom(DamageSource.drown, amount)`: the one source that
+    /// skips `setBeenAttacked`.
+    pub fn drown(&mut self, amount: f32) -> bool {
+        self.hurt_by(amount, None, false, true)
+    }
+
+    /// `attackEntityFrom`; `blockable` is `!source.isUnblockable()`, when
+    /// `damageEntity` takes the armour off (`applyArmorCalculations`).
+    pub fn hurt(&mut self, amount: f32, from: Option<[f64; 3]>, blockable: bool) -> bool {
+        self.hurt_by(amount, from, blockable, false)
+    }
+
+    fn hurt_by(
+        &mut self,
+        amount: f32,
+        from: Option<[f64; 3]>,
+        blockable: bool,
+        drown: bool,
+    ) -> bool {
         if self.health <= 0.0 {
             return false;
         }
         let applied;
+        let fresh;
+        if self.hurt_resistant as f32 > 10.0 && amount <= self.last_damage {
+            return false;
+        }
+        self.looting = 0;
         if self.hurt_resistant as f32 > 10.0 {
             if amount <= self.last_damage {
                 return false;
             }
-            applied = amount - self.last_damage;
+            applied = self.armor_calc(amount - self.last_damage, blockable);
             self.last_damage = amount;
+            fresh = false;
         } else {
             self.last_damage = amount;
             self.hurt_resistant = 20;
-            applied = amount;
+            applied = self.armor_calc(amount, blockable);
             self.hurt_time = 10;
+            fresh = true;
+        }
+        if fresh {
+            // setBeenAttacked: velocityChanged = rand.nextDouble() >= resistance
+            if !drown {
+                let _ = self.rand.next_double();
+            }
             if let Some(a) = from {
-                // knockBack
-                let (mut dx, mut dz) = (a[0] - self.pos[0], a[2] - self.pos[2]);
+                // the direction loop takes Math.random(), not the mob's rand
+                let mut dx = a[0] - self.pos[0];
+                let mut dz = a[2] - self.pos[2];
                 while dx * dx + dz * dz < 1.0e-4 {
-                    dx = (self.rand.next_double() - self.rand.next_double()) * 0.01;
-                    dz = (self.rand.next_double() - self.rand.next_double()) * 0.01;
+                    dx = (math::math_random() - math::math_random()) * 0.01;
+                    dz = (math::math_random() - math::math_random()) * 0.01;
                 }
-                let f = (dx * dx + dz * dz).sqrt();
-                let k = 0.4f32 as f64;
-                self.motion[0] /= 2.0;
-                self.motion[1] /= 2.0;
-                self.motion[2] /= 2.0;
-                self.motion[0] -= dx / f * k;
-                self.motion[1] += k;
-                self.motion[2] -= dz / f * k;
-                if self.motion[1] > 0.4f32 as f64 {
-                    self.motion[1] = 0.4f32 as f64;
-                }
+                self.knock_back(dx, dz);
+            } else {
+                // attackedAtYaw = (int)(Math.random() * 2.0) * 180
+                let _ = math::math_random();
             }
         }
         self.health -= applied;
@@ -1536,134 +1592,198 @@ impl Mob {
         true
     }
 
-    /// `dropFewItems` + `dropEquipment`: what the mob leaves when killed.
-    fn drops(&mut self, by_player: bool) -> Vec<Stack> {
-        let burning = self.fire > 0;
+    /// `EntityLivingBase.knockBack`: no mob here has knockback resistance
+    /// (the zombie's spawn bonus comes with `onSpawnWithEgg`, not ported),
+    /// but the draw happens all the same.
+    fn knock_back(&mut self, dx: f64, dz: f64) {
+        if self.rand.next_double() < 0.0 {
+            return;
+        }
+        let f = math::sqrt_double(dx * dx + dz * dz) as f64;
+        let k = 0.4f32 as f64;
+        self.motion[0] /= 2.0;
+        self.motion[1] /= 2.0;
+        self.motion[2] /= 2.0;
+        self.motion[0] -= dx / f * k;
+        self.motion[1] += k;
+        self.motion[2] -= dz / f * k;
+        if self.motion[1] > 0.4f32 as f64 {
+            self.motion[1] = 0.4f32 as f64;
+        }
+    }
+
+    /// `applyArmorCalculations` (mobs wear nothing, so `damageArmor` and
+    /// the enchantment part of `applyPotionDamageCalculations` do nothing).
+    fn armor_calc(&self, a: f32, blockable: bool) -> f32 {
+        if !blockable {
+            return a;
+        }
+        let k = 25 - self.kind.natural_armor();
+        let f = a * k as f32;
+        f / 25.0
+    }
+
+    /// `EntityLivingBase.onDeath`'s loot: `dropFewItems(recentlyHit > 0,
+    /// looting)`, `dropEquipment` (mobs here wear nothing) and, after a
+    /// player's hit, `rand.nextInt(200) - looting < 5` for `dropRareDrop`.
+    /// Every `dropItem(item, 1)` is its own stack of one, as each makes its
+    /// own `EntityItem`.
+    fn drops(&mut self, by_player: bool, looting: i32) -> Vec<Stack> {
+        let mut v = self.drop_few_items(by_player, looting);
+        if by_player {
+            let j = self.rand.next_int_n(200) - looting;
+            if j < 5 {
+                self.drop_rare_drop(&mut v);
+            }
+        }
+        v
+    }
+
+    /// `Entity.setFire` (mobs wear nothing, so no Fire Protection).
+    pub fn set_fire(&mut self, seconds: i32) {
+        let t = seconds * 20;
+        if self.fire < t {
+            self.fire = t;
+        }
+    }
+
+    /// `Entity.isBurning` on the server
+    pub fn burning(&self) -> bool {
+        !self.kind.fireproof() && self.fire > 0
+    }
+
+    /// `dropFewItems(recentlyHit, looting)` of each class.
+    fn drop_few_items(&mut self, hit: bool, l: i32) -> Vec<Stack> {
+        let burning = self.burning();
         let mut v = Vec::new();
-        let mut add = |id: u16, meta: i32, n: i32| {
-            if n > 0 {
-                v.push(Stack::new(id, meta, n as u32));
+        let r = &mut self.rand;
+        let mut each = |v: &mut Vec<Stack>, id: u16, meta: i32, n: i32| {
+            for _ in 0..n {
+                v.push(Stack::new(id, meta, 1));
             }
         };
-        let r = &mut self.rand;
+        // EntityLiving.dropFewItems with getDropItem
+        let living = |r: &mut JavaRandom, v: &mut Vec<Stack>, id: u16| {
+            let mut n = r.next_int_n(3);
+            if l > 0 {
+                n += r.next_int_n(l + 1);
+            }
+            for _ in 0..n {
+                v.push(Stack::new(id, 0, 1));
+            }
+        };
         match self.kind {
             Kind::Pig => {
-                let n = r.next_int_n(3) + 1;
-                add(if burning { 320 } else { 319 }, 0, n);
+                let n = r.next_int_n(3) + 1 + r.next_int_n(1 + l);
+                each(&mut v, if burning { 320 } else { 319 }, 0, n);
             }
             Kind::Cow | Kind::Mooshroom => {
-                let n = r.next_int_n(3);
-                add(334, 0, n);
-                let n = r.next_int_n(3) + 1;
-                add(if burning { 364 } else { 363 }, 0, n);
+                let n = r.next_int_n(3) + r.next_int_n(1 + l);
+                each(&mut v, 334, 0, n);
+                let n = r.next_int_n(3) + 1 + r.next_int_n(1 + l);
+                each(&mut v, if burning { 364 } else { 363 }, 0, n);
             }
             Kind::Sheep => {
                 if !self.sheared {
-                    add(block::WOOL as u16, self.variant, 1);
+                    v.push(Stack::new(block::WOOL as u16, self.variant, 1));
                 }
             }
             Kind::Chicken => {
-                let n = r.next_int_n(3);
-                add(288, 0, n);
-                add(if burning { 366 } else { 365 }, 0, 1);
+                let n = r.next_int_n(3) + r.next_int_n(1 + l);
+                each(&mut v, 288, 0, n);
+                each(&mut v, if burning { 366 } else { 365 }, 0, 1);
             }
-            Kind::Zombie => {
-                let n = r.next_int_n(3);
-                add(367, 0, n);
-                if by_player && r.next_int_n(200) < 5 {
-                    match r.next_int_n(3) {
-                        0 => add(265, 0, 1),
-                        1 => add(391, 0, 1),
-                        _ => add(392, 0, 1),
-                    }
-                }
-            }
-            Kind::Skeleton if self.variant == 1 => {
-                // wither skeletons: coal instead of arrows, now and then a skull
-                let n = r.next_int_n(3) - 1;
-                add(263, 0, n);
-                let n = r.next_int_n(3);
-                add(352, 0, n);
-                if by_player && r.next_int_n(200) < 5 {
-                    add(397, 1, 1);
-                }
-            }
+            Kind::Zombie => living(r, &mut v, 367),
             Kind::Skeleton => {
-                let n = r.next_int_n(3);
-                add(262, 0, n);
-                let n = r.next_int_n(3);
-                add(352, 0, n);
+                if self.variant == 1 {
+                    let n = r.next_int_n(3 + l) - 1;
+                    each(&mut v, 263, 0, n);
+                } else {
+                    let n = r.next_int_n(3 + l);
+                    each(&mut v, 262, 0, n);
+                }
+                let n = r.next_int_n(3 + l);
+                each(&mut v, 352, 0, n);
             }
-            Kind::Creeper => {
-                let n = r.next_int_n(3);
-                add(289, 0, n);
-            }
+            Kind::Creeper => living(r, &mut v, 289),
             Kind::Spider | Kind::CaveSpider => {
-                let n = r.next_int_n(3);
-                add(287, 0, n);
-                if by_player && r.next_int_n(3) == 0 {
-                    add(375, 0, 1);
+                living(r, &mut v, 287);
+                if hit && (r.next_int_n(3) == 0 || r.next_int_n(1 + l) > 0) {
+                    each(&mut v, 375, 0, 1);
                 }
             }
             Kind::Witch => {
                 let n = r.next_int_n(3) + 1;
                 for _ in 0..n {
-                    let k = r.next_int_n(3);
+                    let mut k = r.next_int_n(3);
                     let item = [348, 353, 331, 375, 374, 289, 280, 280][r.next_int_n(8) as usize];
-                    add(item, 0, k);
+                    if l > 0 {
+                        k += r.next_int_n(l + 1);
+                    }
+                    each(&mut v, item, 0, k);
                 }
             }
             Kind::Slime => {
+                // getDropItem: slime balls from the smallest only
                 if self.variant == 1 {
-                    let n = r.next_int_n(3);
-                    add(341, 0, n);
-                }
-            }
-            Kind::Enderman => {
-                let n = r.next_int_n(2);
-                add(368, 0, n);
-            }
-            Kind::Squid => {
-                let n = r.next_int_n(3) + 1;
-                add(351, 0, n);
-            }
-            Kind::Horse => {
-                let n = r.next_int_n(3);
-                add(334, 0, n);
-            }
-            Kind::IronGolem => {
-                let n = r.next_int_n(3);
-                add(block::RED_FLOWER as u16, 0, n);
-                let n = 3 + r.next_int_n(3);
-                add(265, 0, n);
-            }
-            Kind::Ghast => {
-                let n = r.next_int_n(2);
-                add(370, 0, n);
-                let n = r.next_int_n(3);
-                add(289, 0, n);
-            }
-            Kind::PigZombie => {
-                let n = r.next_int_n(2);
-                add(367, 0, n);
-                let n = r.next_int_n(2);
-                add(371, 0, n);
-                if by_player && r.next_int_n(200) < 5 {
-                    add(266, 0, 1);
-                }
-            }
-            Kind::Blaze => {
-                if by_player {
-                    let n = r.next_int_n(2);
-                    add(369, 0, n);
+                    living(r, &mut v, 341);
                 }
             }
             Kind::MagmaCube => {
                 if self.variant > 1 {
-                    let n = r.next_int_n(4) - 2;
-                    add(378, 0, n);
+                    let mut n = r.next_int_n(4) - 2;
+                    if l > 0 {
+                        n += r.next_int_n(l + 1);
+                    }
+                    each(&mut v, 378, 0, n);
                 }
             }
+            Kind::Enderman => {
+                let n = r.next_int_n(2 + l);
+                each(&mut v, 368, 0, n);
+            }
+            Kind::Squid => {
+                let n = r.next_int_n(3 + l) + 1;
+                each(&mut v, 351, 0, n);
+            }
+            Kind::Horse => {
+                // EntityHorse.getDropItem draws first: a zombie horse drops
+                // nothing one time in four
+                let none = r.next_int_n(4) == 0;
+                let item = match self.variant >> 16 {
+                    4 => Some(352),
+                    3 => (!none).then_some(367),
+                    _ => Some(334),
+                };
+                if let Some(id) = item {
+                    living(r, &mut v, id);
+                }
+            }
+            Kind::IronGolem => {
+                let n = r.next_int_n(3);
+                each(&mut v, block::RED_FLOWER as u16, 0, n);
+                let n = 3 + r.next_int_n(3);
+                each(&mut v, 265, 0, n);
+            }
+            Kind::Ghast => {
+                let n = r.next_int_n(2) + r.next_int_n(1 + l);
+                each(&mut v, 370, 0, n);
+                let n = r.next_int_n(3) + r.next_int_n(1 + l);
+                each(&mut v, 289, 0, n);
+            }
+            Kind::PigZombie => {
+                let n = r.next_int_n(2 + l);
+                each(&mut v, 367, 0, n);
+                let n = r.next_int_n(2 + l);
+                each(&mut v, 371, 0, n);
+            }
+            Kind::Blaze => {
+                if hit {
+                    let n = r.next_int_n(2 + l);
+                    each(&mut v, 369, 0, n);
+                }
+            }
+            // getDropItem is null (item 0 or -1), or dropFewItems is empty
             Kind::Villager
             | Kind::Silverfish
             | Kind::Bat
@@ -1672,10 +1792,24 @@ impl Mob {
             | Kind::EnderDragon
             | Kind::EnderCrystal => {}
         }
-        if self.kind == Kind::Enderman && self.carried != 0 {
-            v.push(Stack::new(self.carried as u16, self.carried_meta as i32, 1));
-        }
         v
+    }
+
+    /// `dropRareDrop(int)` (the argument is unused in 1.7.10).
+    fn drop_rare_drop(&mut self, v: &mut Vec<Stack>) {
+        match self.kind {
+            Kind::Zombie => {
+                let id = match self.rand.next_int_n(3) {
+                    0 => 265,
+                    1 => 391,
+                    _ => 392,
+                };
+                v.push(Stack::new(id, 0, 1));
+            }
+            Kind::PigZombie => v.push(Stack::new(266, 0, 1)),
+            Kind::Skeleton if self.variant == 1 => v.push(Stack::new(397, 1, 1)),
+            _ => {}
+        }
     }
 
     /// `getExperiencePoints`: animals and squid draw from the world's random.
@@ -1816,6 +1950,10 @@ pub struct Outcome {
     pub calls: Vec<ai::Call>,
     /// `EntityAIMate.spawnBaby`
     pub births: Vec<ai::Birth>,
+    /// Uses the held item lost to a right click on a mob
+    /// (`damageItem(n, player)`, applied by the caller with the player's
+    /// random).
+    pub wear: i32,
 }
 
 /// `Entity.moveEntity` for a primed TNT box.
@@ -1943,7 +2081,7 @@ impl Mobs {
                             if t.kind == TK::Snowball && m.kind == Kind::Blaze {
                                 amount = 3.0;
                             }
-                            m.damage(amount, from);
+                            m.hurt(amount, from, true);
                         }
                     }
                     // EntityPlayer.attackEntityFrom returns at once for 0
@@ -2009,7 +2147,7 @@ impl Mobs {
         v: f32,
         crit: bool,
         creative: bool,
-    ) {
+    ) -> &mut Arrow {
         let id = self.rand.next_int() as u32;
         let mut a = Arrow::from_look(
             id,
@@ -2025,6 +2163,7 @@ impl Mobs {
             a.pickup = 2;
         }
         self.arrows.push(a);
+        self.arrows.last_mut().unwrap()
     }
 
     /// `BehaviorProjectileDispense` for arrows: `EntityArrow` launched along
@@ -2159,7 +2298,9 @@ impl Mobs {
                         nether::Impact::Mob(id) => {
                             if let Some(t) = self.list.iter_mut().find(|m| m.id == id) {
                                 let dmg = if f.small { 5.0 } else { 6.0 };
-                                if !(f.small && t.kind.fireproof()) && t.damage(dmg, Some(f.pos)) {
+                                if !(f.small && t.kind.fireproof())
+                                    && t.hurt(dmg, Some(f.pos), true)
+                                {
                                     if f.small && !t.kind.fireproof() {
                                         t.fire = 100;
                                     }
@@ -2197,10 +2338,19 @@ impl Mobs {
         }
         self.arrows.extend(new_arrows);
         for st in strikes {
+            // attackEntityFrom: a tamed wolf's kill counts as the player's
+            // for loot (recentlyHit, attackingPlayer null so no looting)
+            let tamed_wolf = self
+                .list
+                .iter()
+                .any(|m| m.id == st.from && m.kind == Kind::Wolf && m.tamed);
             let Some(t) = self.list.iter_mut().find(|m| m.id == st.target) else {
                 continue;
             };
-            if t.damage(st.amount, Some(st.at)) {
+            if t.hurt(st.amount, Some(st.at), true) {
+                if tamed_wolf {
+                    t.recently_hit = 100;
+                }
                 t.set_revenge(Some(ai::Target::Mob(st.from)));
                 t.motion[1] += st.lift;
                 out.sounds.push((mob_sound(t, false), t.pos, 1.0, 1.0));
@@ -2256,7 +2406,8 @@ impl Mobs {
             let m = &mut self.list[i];
             if m.health <= 0.0 && m.death_time == 0 {
                 let by_player = m.recently_hit > 0;
-                for s in m.drops(by_player) {
+                let looting = m.looting;
+                for s in m.drops(by_player, looting) {
                     out.drops.push(([m.pos[0], m.pos[1] + 0.0, m.pos[2]], s));
                 }
                 let s = mob_sound(m, true);
@@ -2342,28 +2493,25 @@ impl Mobs {
         self.tick_throwables(w, player, out);
     }
 
-    /// `EntityPlayer.attackTargetEntityWithCurrentItem`
+    /// `attackEntityFrom(DamageSource.causePlayerDamage(player), damage)`
+    /// on a mob (and the dragon's `attackEntityFromPart`); true when it
+    /// took the hit.
     pub fn attack(
         &mut self,
         id: u32,
         damage: f32,
-        crit: bool,
         attacker: [f64; 3],
         yaw: f32,
-        knockback: i32,
         out: &mut Outcome,
-    ) {
+    ) -> bool {
+        let _ = yaw;
         let Some(m) = self.list.iter_mut().find(|m| m.id == id) else {
-            return;
+            return false;
         };
         if m.health <= 0.0 {
-            return;
+            return false;
         }
         let mut dmg = damage;
-        // EntityPlayer.attackTargetEntityWithCurrentItem: a falling blow
-        if crit && dmg > 0.0 {
-            dmg *= 1.5;
-        }
         if m.kind == Kind::EnderDragon {
             // attackEntityFromPart: only the head takes full damage, and the
             // dragon breaks off to a point just ahead of itself
@@ -2401,9 +2549,10 @@ impl Mobs {
             }
         }
         let Some(m) = self.list.iter_mut().find(|m| m.id == id) else {
-            return;
+            return false;
         };
-        if m.damage(dmg, Some(attacker)) {
+        let hit = m.hurt(dmg, Some(attacker), true);
+        if hit {
             m.recently_hit = 100;
             m.set_revenge(Some(ai::Target::Player));
             if ai::uses_old(m.kind) {
@@ -2411,12 +2560,6 @@ impl Mobs {
             }
             if m.kind.hostile() {
                 m.target_player = true;
-            }
-            if knockback > 0 {
-                let r = yaw * std::f32::consts::PI / 180.0;
-                m.motion[0] += (-r.sin() * knockback as f32 * 0.5) as f64;
-                m.motion[1] += 0.1;
-                m.motion[2] += (r.cos() * knockback as f32 * 0.5) as f64;
             }
             let s = mob_sound(m, false);
             if !s.is_empty() {
@@ -2426,6 +2569,25 @@ impl Mobs {
                 m.target_player = true;
             }
         }
+        hit
+    }
+
+    /// `Entity.addVelocity` on a mob (the dragon's parts take it, not the
+    /// dragon).
+    pub fn add_velocity(&mut self, id: u32, v: [f64; 3]) {
+        if let Some(m) = self.list.iter_mut().find(|m| m.id == id) {
+            if m.kind != Kind::EnderDragon {
+                for a in 0..3 {
+                    m.motion[a] += v[a];
+                }
+            }
+        }
+    }
+
+    /// `addPotionEffect` on a mob. Mobs do not keep potion effects yet
+    /// (see HANDOFF); the call is where Bane of Arthropods' slowness lands.
+    pub fn add_effect(&mut self, id: u32, potion: i32, duration: i32, amplifier: i32) {
+        let _ = (id, potion, duration, amplifier);
     }
 
     /// Mob under the crosshair: nearest hit along the look ray within `reach`.
@@ -2492,7 +2654,7 @@ impl Mobs {
             }
         };
         match (m.kind, item) {
-            (Kind::Sheep, Some(359)) if !m.sheared => {
+            (Kind::Sheep, Some(359)) if !m.sheared && m.growing_age >= 0 => {
                 // EntitySheep.onSheared
                 m.sheared = true;
                 let n = 1 + m.rand.next_int_n(3);
@@ -2503,13 +2665,8 @@ impl Mobs {
                     ));
                 }
                 out.sounds.push(("mob.sheep.shear", m.pos, 1.0, 1.0));
-                let s = held.unwrap();
-                let d = s.meta + 1;
-                Some(if d > crate::item::max_damage(s.id) {
-                    None
-                } else {
-                    Some(Stack { meta: d, ..s })
-                })
+                out.wear = 1;
+                Some(held)
             }
             (Kind::Creeper, Some(259)) => {
                 // EntityCreeper.interact: flint and steel lights the fuse
@@ -2521,14 +2678,8 @@ impl Mobs {
                     pitch,
                 ));
                 m.ignited = true;
-                // ItemStack.damageItem(1, player)
-                let s = held.unwrap();
-                let d = s.meta + 1;
-                Some(if d > crate::item::max_damage(s.id) {
-                    None
-                } else {
-                    Some(Stack { meta: d, ..s })
-                })
+                out.wear = 1;
+                Some(held)
             }
             (Kind::Cow | Kind::Mooshroom, Some(325)) => {
                 // EntityCow.interact: a bucket of milk
@@ -3121,7 +3272,8 @@ fn tick_mob(
         m.fire = 0;
     }
     if m.in_material(w, &m.bb, Material::Lava) && !m.kind.fireproof() {
-        m.damage(4.0, None);
+        // DamageSource.lava is blockable
+        m.hurt(4.0, None, true);
         m.fire = 300;
     }
     if m.kind.fireproof() {
@@ -3593,6 +3745,7 @@ fn chase(m: &mut Mob, w: &mut ServerWorld, player: &PlayerInfo, out: &mut Outcom
         let _ = knock;
         out.hits.push(Hit::Melee {
             kind: m.kind,
+            by: m.id,
             amount,
             knock: [0.0; 3],
             from: m.pos,
@@ -3785,10 +3938,16 @@ fn tick_arrows(
                             Shooter::Player => Some(player.feet),
                             _ => from,
                         };
-                        let ok = m.damage(h.damage as f32, src);
+                        let ok = m.hurt(h.damage as f32, src, true);
                         if ok {
                             match a.shooter {
-                                Shooter::Player => m.set_revenge(Some(ai::Target::Player)),
+                                Shooter::Player => {
+                                    // attackEntityFrom: the source's entity is
+                                    // a player
+                                    m.recently_hit = 100;
+                                    m.set_revenge(Some(ai::Target::Player));
+                                    m.looting = player.looting;
+                                }
                                 Shooter::Mob(id) => m.set_revenge(Some(ai::Target::Mob(id))),
                                 _ => {}
                             }
@@ -3927,7 +4086,7 @@ fn explode(
             }),
             ex::TAG_MOB => {
                 if let Some(m) = mobs.list.iter_mut().find(|m| m.id as usize == k) {
-                    m.damage(b.damage, None);
+                    m.hurt(b.damage, None, true);
                     for a in 0..3 {
                         m.motion[a] += b.push[a];
                     }
@@ -4356,5 +4515,49 @@ pub fn natural_spawning(
             }
         }
         w.rand = rand;
+    }
+}
+
+#[cfg(test)]
+mod loot_tests {
+    use super::*;
+
+    /// Against `tools/EnchantFxHarness.java`: `dropFewItems(hit, looting)`
+    /// and the rare-drop roll of `onDeath` for every mob, seeded, with the
+    /// next `rand.nextInt` to check the draws.
+    #[test]
+    fn death_loot_matches_the_game() {
+        let mut n = 0;
+        for l in include_str!("../../tools/enchant_fx_1710.txt").lines() {
+            let Some(rest) = l.strip_prefix("d ") else {
+                continue;
+            };
+            let (head, tail) = rest.split_once(" |").map_or((rest, ""), |x| x);
+            let f: Vec<&str> = head.split(' ').collect();
+            let kind = Kind::from_id(f[0]).unwrap();
+            let int = |i: usize| f[i].parse::<i32>().unwrap();
+            let (variant, burning, hit, looting, seed) = (int(1), int(2), int(3), int(4), int(5));
+            let mut m = Mob::new(1, kind, [0.0, 64.0, 0.0], 0.0, seed as i64);
+            match kind {
+                Kind::Skeleton => m.variant = variant,
+                Kind::Slime | Kind::MagmaCube => m.set_slime_size(variant),
+                Kind::Sheep if variant < 0 => m.sheared = true,
+                Kind::Sheep => m.variant = variant,
+                Kind::Horse => m.variant = variant << 16,
+                _ => {}
+            }
+            m.rand = JavaRandom::new(seed as i64);
+            m.fire = burning * 100;
+            let got: Vec<String> = m
+                .drops(hit == 1, looting)
+                .iter()
+                .map(|s| format!("{}:{}:{}", s.id, s.meta, s.count))
+                .collect();
+            let want: Vec<&str> = f[6..].iter().copied().filter(|x| !x.is_empty()).collect();
+            assert_eq!(got, want, "{l}");
+            assert_eq!(m.rand.next_int().to_string(), tail, "{l}");
+            n += 1;
+        }
+        assert_eq!(n, 33 * 96);
     }
 }

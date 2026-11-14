@@ -281,6 +281,7 @@ pub fn dragon(
                 // EntityDragon.collideWithEntities: addVelocity only
                 out.hits.push(Hit::Melee {
                     kind: Kind::EnderDragon,
+                    by: m.id,
                     amount: 0.0,
                     knock: [dx / d2 * 4.0, 0.2f32 as f64, dz / d2 * 4.0],
                     from: m.pos,
@@ -294,6 +295,7 @@ pub fn dragon(
         if hb.intersects(&pb) {
             out.hits.push(Hit::Melee {
                 kind: Kind::EnderDragon,
+                by: m.id,
                 amount: 10.0,
                 knock: [0.0, 0.0, 0.0],
                 from: m.pos,

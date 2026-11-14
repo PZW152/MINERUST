@@ -37,6 +37,9 @@ pub enum Fx {
     Collide(i32, i32, i32, u8),
     /// `Entity.kill` (below y = -64)
     Kill,
+    /// `EntityLivingBase.renderBrokenItemStack`: the "random.break" sound,
+    /// whose pitch takes the world's random.
+    BrokenItem(crate::item::Stack),
 }
 
 #[derive(Clone, Debug)]
@@ -65,6 +68,9 @@ pub struct Ent {
     pub in_water: bool,
     pub first_update: bool,
     pub fire: i32,
+    /// The highest Fire Protection level worn (`getLastActiveItems`; 0 for
+    /// entities without equipment).
+    pub fire_protection: i32,
     pub fire_resistance: i32,
     pub immune_to_fire: bool,
     pub ticks_existed: i32,
@@ -126,6 +132,7 @@ impl Ent {
             in_water: false,
             first_update: true,
             fire: 0,
+            fire_protection: 0,
             fire_resistance: 1,
             immune_to_fire: false,
             ticks_existed: 0,
@@ -296,10 +303,12 @@ impl Ent {
         }
     }
 
-    /// `Entity.setFire` (without the Fire Protection reduction, which
-    /// living entities apply themselves).
+    /// `Entity.setFire` with `EnchantmentProtection.getFireTimeForEntity`.
     pub fn set_fire(&mut self, seconds: i32) {
-        let t = seconds * 20;
+        let mut t = seconds * 20;
+        if self.fire_protection > 0 {
+            t -= crate::util::math::floor_float(t as f32 * (self.fire_protection as f32 * 0.15));
+        }
         if self.fire < t {
             self.fire = t;
         }

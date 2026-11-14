@@ -32,8 +32,17 @@
 - [x] 聊天設定畫面、載入畫面（`LoadingScreenRenderer` / `GuiDownloadTerrain`）、發射器介面
 - [x] 附魔台：`ContainerEnchantment`、`GuiEnchantment`（書本、銀河字母）、`TileEntityEnchantmentTableRenderer`；
       `EnchantmentHelper.buildEnchantmentList` 與附魔台等級和原版逐筆一致
-- [ ] 附魔效果作用在戰鬥、挖掘、盔甲、弓、釣竿；附魔台書架粒子
+- [x] 附魔效果：鋒利／不死剋星／節肢剋星、擊退、燃燒、掠奪、保護四系列與摔落保護、水下呼吸、親水性、荊棘、效率、
+      耐久（工具、武器、盔甲、弓、剪刀、打火石）、力量／衝擊／火焰／無限（`tools/EnchantFxHarness.java` 比對）
+- [ ] 附魔效果尚缺：海之眷顧與魚餌（釣魚未實作）、節肢剋星的緩速（生物還沒有藥水效果系統）、附魔台書架粒子
+- [x] 生物死亡掉落：每種生物的 `dropFewItems`（含掠奪）與 `dropRareDrop` 擲骰，與原版 3,168 組一致；
+      終界使者不再掉落手上的方塊（1.7.10 本來就不掉）
+- [x] 生物受傷：天生護甲（殭屍、殭屍豬人 2 點）、`setBeenAttacked` 與擊退抗性的亂數、擊退方向改用 `Math.random()`
+- [ ] 生物裝備（`EntityLiving.equipment`、`addRandomArmor`、`enchantEquipment`、手持弓劍、掉落裝備）與
+      `onSpawnWithEgg` 的其餘部分（殭屍擊退抗性加成、跟隨距離的 `nextGaussian`、蜘蛛騎士、小殭屍）
+- [ ] 生物的藥水效果（`activePotionsMap`：飛濺藥水的持續效果、節肢剋星緩速、凋零骷髏的凋零）
 - [ ] 物品附魔光澤、手持箱子與掉落箱子的模型
+- [ ] 鋤頭耕地（`ItemHoe.onItemUse`）尚未實作
 - [ ] 指令：summon、enchant、gamerule、playsound、spreadplayers、testfor 等，Tab 自動補完
 - [ ] 統計與成就（`StatList` / `AchievementList`）與其畫面；資源包、使用統計（Snooper）、直播畫面
 - [x] 船：`EntityBoat` 兩端物理（客戶端預測、`isBoatEmpty`）、`ItemBoat`、`interactFirst` / `mountEntity` /

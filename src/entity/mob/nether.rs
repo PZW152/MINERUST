@@ -264,7 +264,7 @@ pub fn blaze(
     out: &mut Outcome,
 ) {
     if m.wet(w) {
-        m.damage(1.0, None);
+        m.drown(1.0);
     }
     m.teleport_delay -= 1;
     if m.teleport_delay <= 0 {
@@ -298,6 +298,7 @@ pub fn blaze(
             let _ = f;
             out.hits.push(Hit::Melee {
                 kind: Kind::Blaze,
+                by: m.id,
                 amount: 6.0,
                 knock: [0.0; 3],
                 from: m.pos,

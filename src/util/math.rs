@@ -139,6 +139,20 @@ pub fn ceiling_float_int(f: f32) -> i32 {
     }
 }
 
+static ITEM_RANDOM: std::sync::Mutex<Option<crate::java::JavaRandom>> = std::sync::Mutex::new(None);
+
+/// `Item.itemRand`: the static `new Random()` every item shares.
+pub fn item_rand<T>(f: impl FnOnce(&mut crate::java::JavaRandom) -> T) -> T {
+    let mut g = ITEM_RANDOM.lock().unwrap();
+    let r = g.get_or_insert_with(|| {
+        let t = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos() as i64);
+        crate::java::JavaRandom::new(t.wrapping_mul(0x2545F4914F6CDD1D) ^ 0x5DEECE66D)
+    });
+    f(r)
+}
+
 static MATH_RANDOM: std::sync::Mutex<Option<crate::java::JavaRandom>> = std::sync::Mutex::new(None);
 
 /// `Math.random()`: its own `new Random()`, apart from every world or

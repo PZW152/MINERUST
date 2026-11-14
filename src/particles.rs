@@ -126,6 +126,10 @@ impl Particles {
         p
     }
 
+    fn last_mut(&mut self) -> Option<&mut Particle> {
+        self.list.last_mut()
+    }
+
     fn add(&mut self, p: Particle) {
         if self.list.len() >= 4000 {
             self.list.remove(0);
@@ -281,6 +285,17 @@ impl Particles {
     /// `"hugeexplosion"`: an emitter of `largeexplode` for 8 ticks.
     pub fn huge_explosion(&mut self, pos: [f64; 3]) {
         self.huge.push((pos, 8));
+    }
+
+    /// `"magicCrit"`: an `EntityCritFX` tinted (red × 0.3, green × 0.8) on
+    /// the next sprite (`nextTextureIndexX`).
+    pub fn magic_crit(&mut self, pos: [f64; 3], m: [f64; 3]) {
+        self.crit(pos, m);
+        if let Some(p) = self.last_mut() {
+            p.color[0] *= 0.3;
+            p.color[1] *= 0.8;
+            p.sprite = Sprite::Index(66);
+        }
     }
 
     /// `"crit"` (`EntityCritFX`)

@@ -346,9 +346,311 @@ pub fn random_name(r: &mut JavaRandom) -> String {
     s
 }
 
+// ------------------------------------------------------------ effects
+
+pub const PROTECTION: i32 = 0;
+pub const FIRE_PROTECTION: i32 = 1;
+pub const FEATHER_FALLING: i32 = 2;
+pub const BLAST_PROTECTION: i32 = 3;
+pub const PROJECTILE_PROTECTION: i32 = 4;
+pub const RESPIRATION: i32 = 5;
+pub const AQUA_AFFINITY: i32 = 6;
+pub const THORNS: i32 = 7;
+pub const SHARPNESS: i32 = 16;
+pub const SMITE: i32 = 17;
+pub const BANE_OF_ARTHROPODS: i32 = 18;
+pub const KNOCKBACK: i32 = 19;
+pub const FIRE_ASPECT: i32 = 20;
+pub const LOOTING: i32 = 21;
+pub const EFFICIENCY: i32 = 32;
+pub const SILK_TOUCH: i32 = 33;
+pub const UNBREAKING: i32 = 34;
+pub const FORTUNE: i32 = 35;
+pub const POWER: i32 = 48;
+pub const PUNCH: i32 = 49;
+pub const FLAME: i32 = 50;
+pub const INFINITY: i32 = 51;
+pub const LUCK_OF_THE_SEA: i32 = 61;
+pub const LURE: i32 = 62;
+
+/// `EnumCreatureAttribute`
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Creature {
+    Undefined,
+    Undead,
+    Arthropod,
+}
+
+/// `ItemStack.getEnchantmentTagList` as `(id, lvl)` pairs read with
+/// `getShort`: the `ench` list only (an enchanted book's
+/// `StoredEnchantments` do nothing).
+fn tag_list(s: &Stack) -> Vec<(i32, i32)> {
+    let Some(t) = s.nbt() else {
+        return Vec::new();
+    };
+    t.list("ench")
+        .iter()
+        .map(|e| {
+            (
+                e.int("id").unwrap_or(0) as i16 as i32,
+                e.int("lvl").unwrap_or(0) as i16 as i32,
+            )
+        })
+        .collect()
+}
+
+/// `EnchantmentHelper.getEnchantmentLevel`: the first entry with this id.
+pub fn level(id: i32, s: Option<&Stack>) -> i32 {
+    let Some(s) = s else { return 0 };
+    tag_list(s)
+        .into_iter()
+        .find(|e| e.0 == id)
+        .map_or(0, |e| e.1)
+}
+
+/// `EnchantmentHelper.getMaxEnchantmentLevel` over worn items.
+pub fn max_level_in(id: i32, items: &[Option<Stack>]) -> i32 {
+    items
+        .iter()
+        .map(|s| level(id, s.as_ref()))
+        .fold(0, |a, l| if l > a { l } else { a })
+}
+
+/// The enchantments that exist (`Enchantment.enchantmentsList[id] != null`)
+/// in the stack's list order, as `applyEnchantmentModifier` visits them.
+fn known(s: &Stack) -> impl Iterator<Item = (Ench, i32)> {
+    tag_list(s)
+        .into_iter()
+        .filter_map(|(id, l)| by_id(id).map(|e| (e.2, l)))
+}
+
+static ENCHANTMENT_RAND: std::sync::Mutex<Option<JavaRandom>> = std::sync::Mutex::new(None);
+
+/// `EnchantmentHelper.enchantmentRand`: a static `new Random()` of its own.
+fn enchantment_rand<T>(f: impl FnOnce(&mut JavaRandom) -> T) -> T {
+    let mut g = ENCHANTMENT_RAND.lock().unwrap();
+    let r = g.get_or_insert_with(|| {
+        let t = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos() as i64);
+        JavaRandom::new(t.wrapping_mul(181783497276652981) ^ 0x5DEECE66D)
+    });
+    f(r)
+}
+
+/// `Enchantment.calcModifierDamage` (only `EnchantmentProtection`
+/// overrides it).
+fn calc_modifier_damage(e: Ench, l: i32, src: &crate::entity::living::Source) -> i32 {
+    use crate::entity::living::SourceKind;
+    let Ench::Protection(t) = e else { return 0 };
+    // DamageSource.canHarmInCreative: only outOfWorld
+    if src.kind == SourceKind::OutOfWorld {
+        return 0;
+    }
+    let f = (6 + l * l) as f32 / 3.0;
+    let floor = |x: f32| crate::util::math::floor_float(x);
+    if t == 0 {
+        floor(f * 0.75)
+    } else if t == 1 && src.fire {
+        floor(f * 1.25)
+    } else if t == 2 && src.kind == SourceKind::Fall {
+        floor(f * 2.5)
+    } else if t == 3 && src.explosion {
+        floor(f * 1.5)
+    } else if t == 4 && src.projectile {
+        floor(f * 1.5)
+    } else {
+        0
+    }
+}
+
+/// `EnchantmentHelper.getEnchantmentModifierDamage(getLastActiveItems(), source)`:
+/// the protection total capped at 25, then halved with a random part.
+pub fn modifier_damage(items: &[Option<Stack>], src: &crate::entity::living::Source) -> i32 {
+    let mut m = 0;
+    for s in items.iter().flatten() {
+        for (e, l) in known(s) {
+            m += calc_modifier_damage(e, l, src);
+        }
+    }
+    if m > 25 {
+        m = 25;
+    }
+    (m + 1 >> 1) + enchantment_rand(|r| r.next_int_n((m >> 1) + 1))
+}
+
+/// `EnchantmentHelper.getModifierForCreature`: the extra melee damage of
+/// Sharpness, Smite and Bane of Arthropods (`calcDamageByCreature`).
+pub fn modifier_living(s: Option<&Stack>, c: Creature) -> f32 {
+    let mut m = 0.0f32;
+    let Some(s) = s else { return m };
+    for (e, l) in known(s) {
+        m += match e {
+            Ench::Damage(0) => l as f32 * 1.25,
+            Ench::Damage(1) if c == Creature::Undead => l as f32 * 2.5,
+            Ench::Damage(2) if c == Creature::Arthropod => l as f32 * 2.5,
+            _ => 0.0,
+        };
+    }
+    m
+}
+
+/// The `onEntityDamaged` calls of `applyArthropodEnchantments` with the
+/// attacker's held item: Bane of Arthropods slows an arthropod down for
+/// `20 + rand.nextInt(10 * level)` ticks at amplifier 3. Returns the
+/// durations, one per enchantment that applies.
+pub fn arthropod_slowness(s: Option<&Stack>, c: Creature, r: &mut JavaRandom) -> Vec<i32> {
+    let mut v = Vec::new();
+    let Some(s) = s else { return v };
+    for (e, l) in known(s) {
+        if e == Ench::Damage(2) && c == Creature::Arthropod {
+            v.push(20 + r.next_int_n(10 * l));
+        }
+    }
+    v
+}
+
+/// `EnchantmentThorns.shouldHit`
+pub fn thorns_should_hit(level: i32, r: &mut JavaRandom) -> bool {
+    if level <= 0 {
+        false
+    } else {
+        r.next_float() < 0.15 * level as f32
+    }
+}
+
+/// `EnchantmentThorns.getDamage`
+pub fn thorns_damage(level: i32, r: &mut JavaRandom) -> i32 {
+    if level > 10 {
+        level - 10
+    } else {
+        1 + r.next_int_n(4)
+    }
+}
+
+/// `EnchantmentDurability.negateDamage`
+pub fn negate_damage(s: &Stack, level: i32, r: &mut JavaRandom) -> bool {
+    if crate::container::armor_type(s.id).is_some() && r.next_float() < 0.6 {
+        false
+    } else {
+        r.next_int_n(level + 1) > 0
+    }
+}
+
+/// `ItemStack.attemptDamageItem`: wears the stack by `n` uses less what
+/// Unbreaking saves; true when it broke (its damage passed the maximum).
+pub fn attempt_damage_item(s: &mut Stack, n: i32, r: &mut JavaRandom) -> bool {
+    // isItemStackDamageable
+    let max = crate::item::max_damage(s.id);
+    if max <= 0 {
+        return false;
+    }
+    let mut n = n;
+    if n > 0 {
+        let u = level(UNBREAKING, Some(s));
+        let mut saved = 0;
+        let mut i = 0;
+        while u > 0 && i < n {
+            if negate_damage(s, u, r) {
+                saved += 1;
+            }
+            i += 1;
+        }
+        n -= saved;
+        if n <= 0 {
+            return false;
+        }
+    }
+    s.meta += n;
+    s.meta > max
+}
+
+/// `ItemStack.damageItem` for a player (creative mode does nothing): the
+/// stack afterwards, `None` when it broke (`renderBrokenItemStack`,
+/// `stackSize--`).
+pub fn damage_item(s: Stack, n: i32, creative: bool, r: &mut JavaRandom) -> (Option<Stack>, bool) {
+    if creative {
+        return (Some(s), false);
+    }
+    let mut s = s;
+    if attempt_damage_item(&mut s, n, r) {
+        if s.count <= 1 {
+            return (None, true);
+        }
+        s.count -= 1;
+        s.meta = 0;
+        return (Some(s), true);
+    }
+    (Some(s), false)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Against `tools/EnchantFxHarness.java`: Protection by source, the
+    /// creature damage, Unbreaking and Thorns with seeded randoms.
+    #[test]
+    fn effects_match_the_game() {
+        use crate::entity::living::{Source, SourceKind};
+        let src = |n: &str| match n {
+            "generic" => Source::named(SourceKind::Generic),
+            "inFire" => Source::named(SourceKind::InFire),
+            "onFire" => Source::named(SourceKind::OnFire),
+            "lava" => Source::named(SourceKind::Lava),
+            "fall" => Source::named(SourceKind::Fall),
+            "outOfWorld" => Source::named(SourceKind::OutOfWorld),
+            "magic" => Source::named(SourceKind::Magic),
+            "explosion" => Source::explosion(None),
+            "arrow" => Source::arrow(None),
+            "fireball" => Source::fireball(None),
+            _ => panic!("{n}"),
+        };
+        let mut n = [0; 4];
+        for l in include_str!("../tools/enchant_fx_1710.txt").lines() {
+            let f: Vec<&str> = l.split(' ').collect();
+            let int = |i: usize| f[i].parse::<i32>().unwrap();
+            match f[0] {
+                "p" => {
+                    let e = by_id(int(1)).unwrap().2;
+                    let got = calc_modifier_damage(e, int(2), &src(f[3]));
+                    assert_eq!(got, int(4), "{l}");
+                    n[0] += 1;
+                }
+                "c" => {
+                    let c = [Creature::Undefined, Creature::Undead, Creature::Arthropod]
+                        [int(3) as usize];
+                    let s = Stack::new(276, 0, 1).with_enchantments(&[(int(1), int(2))]);
+                    let want: f32 = f[4].parse().unwrap();
+                    assert_eq!(modifier_living(Some(&s), c), want, "{l}");
+                    n[1] += 1;
+                }
+                "u" => {
+                    let id: u16 = f[1].parse().unwrap();
+                    let max = crate::item::max_damage(id);
+                    let mut s = Stack::new(id, max - 2, 1);
+                    if int(2) > 0 {
+                        s = s.with_enchantments(&[(UNBREAKING, int(2))]);
+                    }
+                    let mut r = JavaRandom::new(int(4) as i64);
+                    let broke = attempt_damage_item(&mut s, int(3), &mut r);
+                    let got = format!("{} {} |{}", s.meta, broke, r.next_int());
+                    assert_eq!(got, f[5..].join(" "), "{l}");
+                    n[2] += 1;
+                }
+                "t" => {
+                    let mut r = JavaRandom::new(int(2) as i64);
+                    let hit = thorns_should_hit(int(1), &mut r);
+                    let d = thorns_damage(int(1), &mut r);
+                    let got = format!("{} {} |{}", hit, d, r.next_int());
+                    assert_eq!(got, f[3..].join(" "), "{l}");
+                    n[3] += 1;
+                }
+                _ => {}
+            }
+        }
+        assert_eq!(n, [300, 54, 576, 80]);
+    }
 
     /// Against `tools/EnchantHarness.java`.
     #[test]
