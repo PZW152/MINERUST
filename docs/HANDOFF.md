@@ -277,7 +277,9 @@ MINERUST_BENCH=10 minerust --seed 12345 --no-save --size 1920 1080 --distance 16
    - 坐下：`sit_order` 是玩家的指令（`EntityAISit.isSitting`），`sitting` 是實際狀態，由任務在下一次評估時設定。
    - 沒掛上的任務：`ControlledByPlayer`（騎豬）、殭屍的 `BreakDoor`、
      `MoveTowardsRestriction`、`MoveThroughVillage`（需要村莊資料 `VillageCollection`）、村民的交易／開門／回屋／繁殖／跟隨魔像／玩耍。
-   - 自帶 `updateEntityActionState` 的：終界使者、烈焰使者、史萊姆／岩漿怪、惡魂、蝙蝠、魷魚（`extra.rs`、`nether.rs` 的函式沒有對過原始碼）。
+   - 自帶 `updateEntityActionState` 的：終界使者、烈焰使者、惡魂、蝙蝠、魷魚（`extra.rs`、`nether.rs` 的函式還沒有逐行對過原始碼）。
+     史萊姆／岩漿怪已對過 `EntitySlime.onUpdate` / `updateEntityActionState`：大致相符，修了兩處（`prevSquishFactor` 在新值之後才設、
+     找玩家改用 `getClosestVulnerablePlayerToEntity`）。
    - 蠹魚鑽進石頭與召喚同伴（`EntitySilverfish.updateEntityActionState` 的覆寫）。
    - `EntityAITarget` 的 `nearbyOnly`（`canEasilyReach`）與家的範圍（`isWithinHomeDistance`）沒有做，目前沒有生物用到。
    - 高壓苦力怕（閃電）、殭屍的增援（`summonReinforcements`）、玩家隱形時的偵測距離已做但護甲件數只算有沒有穿。
@@ -438,4 +440,6 @@ MINERUST_BENCH=10 minerust --seed 12345 --no-save --size 1920 1080 --distance 16
   同一 tick 內兩隻都想生的情況用 `Outcome.births` 互相看見，確保只生一隻。
   測試 `fed_cows_have_a_calf`；截圖確認小牛、小豬、小羊、小雞的模型。`cargo test --release` 92 項通過。
   **留下**：狼、豹貓、馬的幼體模型（`model2.rs`）還沒有 `isChild` 的畫法；餵幼體加速成長是 1.8 才有的，不需要做。
+- `本次（2026-11-14）`：史萊姆對照原始碼修正兩處；夜間 30 秒壓力測試（敵對生物自然生成）沒有當機，伺服器 tick 平均 4.5 ms
+  （機器上仍有別的遊戲在跑）。
   **查到的既有錯誤，待修**：武器附魔（鋒利系列、擊退、燃燒、掠奪）、保護系列、水下呼吸、荊棘、弓的附魔、附魔光澤都還沒接。

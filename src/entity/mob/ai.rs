@@ -2869,10 +2869,15 @@ pub fn uses_old(k: Kind) -> bool {
 
 /// `World.getClosestVulnerablePlayerToEntity`
 fn closest_vulnerable_player(m: &Mob, cx: &Cx, dist: f64) -> Option<Target> {
-    let p = cx.player;
+    vulnerable_player_within(m, cx.player, dist).then_some(Target::Player)
+}
+
+/// Whether the player is one `getClosestVulnerablePlayerToEntity(mob,
+/// dist)` would return: sneaking and invisibility shorten the distance.
+pub(super) fn vulnerable_player_within(m: &Mob, p: &PlayerInfo, dist: f64) -> bool {
     // capabilities.disableDamage, isEntityAlive
     if !p.attackable || !p.alive {
-        return None;
+        return false;
     }
     let d2 = m.dist2(p.feet);
     let mut reach = dist;
@@ -2884,11 +2889,7 @@ fn closest_vulnerable_player(m: &Mob, cx: &Cx, dist: f64) -> Option<Target> {
         let v = (p.armor_pieces as f32 / 4.0).max(0.1);
         reach *= (0.7f32 * v) as f64;
     }
-    if dist < 0.0 || d2 < reach * reach {
-        Some(Target::Player)
-    } else {
-        None
-    }
+    dist < 0.0 || d2 < reach * reach
 }
 
 /// `findPlayerToAttack` of the mob's class.

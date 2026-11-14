@@ -159,11 +159,13 @@ impl Mob {
 /// `EntitySlime.onUpdate` + `updateEntityActionState`.
 pub fn slime(m: &mut Mob, player: &PlayerInfo, out: &mut Outcome) {
     let size = m.variant.max(1);
-    m.prev_squish = m.squish;
+    // EntitySlime.onUpdate sets prevSquishFactor after the new factor
     m.squish += (m.squish_amount - m.squish) * 0.5;
+    m.prev_squish = m.squish;
     // landing (tracked by `was_on_ground` in tick_mob)
     m.squish_amount *= 0.6;
-    let near = player.attackable && m.dist2(player.feet) < 256.0;
+    // getClosestVulnerablePlayerToEntity(this, 16.0)
+    let near = ai::vulnerable_player_within(m, player, 16.0);
     if near {
         // faceEntity(player, 10, 20)
         let (dx, dz) = (player.feet[0] - m.pos[0], player.feet[2] - m.pos[2]);
