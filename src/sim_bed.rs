@@ -200,7 +200,16 @@ impl Sim {
     /// `EntityPlayer.onUpdate`'s sleep part on the server, then
     /// `WorldServer.tick`'s `areAllPlayersAsleep`: with the only player
     /// fully asleep the night is skipped and the weather cleared.
+    /// `EntityPlayer.attackEntityFrom`: a sleeping player that is attacked
+    /// gets up (`wakeUpPlayer(true, true, false)`).
+    pub(super) fn wake_if_hurt(&mut self) {
+        if std::mem::take(&mut self.splayer.attacked) && self.sleeping.is_some() {
+            self.wake_up(true, false);
+        }
+    }
+
     pub(super) fn tick_sleep(&mut self) {
+        self.wake_if_hurt();
         if let Some(loc) = self.sleeping {
             self.sleep_timer = (self.sleep_timer + 1).min(100);
             if self.world.block(loc[0], loc[1], loc[2]) != block::BED {

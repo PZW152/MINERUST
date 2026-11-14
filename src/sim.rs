@@ -1371,6 +1371,26 @@ impl Sim {
         }
         let mut play = std::mem::replace(&mut self.play, Play::new(GameMode::Survival));
         play.tick(&mut self.world);
+        // EntityFallingBlock.fall: attackEntityFrom(anvil / fallingBlock) on
+        // every entity in the block's box
+        for (bb, amount, anvil) in std::mem::take(&mut play.falling_hits) {
+            use crate::entity::living::{Source, SourceKind};
+            let kind = if anvil {
+                SourceKind::Anvil
+            } else {
+                SourceKind::FallingBlock
+            };
+            if !self.respawn_pending && Self::player_box(play.player.0).intersects(&bb) {
+                let d = self.difficulty;
+                self.splayer
+                    .attack(&self.world, Source::of(kind), amount, d);
+            }
+            for m in self.mobs.list.iter_mut() {
+                if m.bb.intersects(&bb) {
+                    m.hurt_by_falling(amount);
+                }
+            }
+        }
         // Entity contact with pressure plates and tripwire.
         {
             use crate::world::redstone::{Aabb6, Occupant};
@@ -3106,6 +3126,7 @@ impl Sim {
         }
         self.world.rand = rnd;
         self.apply_player_hits(hits);
+        self.wake_if_hurt();
         if !sounds.is_empty() {
             events.push(Event::Sounds(sounds));
         }
@@ -3637,7 +3658,21 @@ impl Sim {
             self.last_attacked = Some(id);
             self.last_attacked_time = self.world.total_time as i32;
             if living {
-                // applyThornEnchantments(target, player): mobs wear nothing
+                // applyThornEnchantments(target, player): the target's
+                // armour may carry Thorns (enchantEquipment)
+                let wearer = self
+                    .mobs
+                    .list
+                    .iter_mut()
+                    .find(|m| m.id == id)
+                    .map(|m| (m.thorns_hits(), m.pos));
+                if let Some((hits, pos)) = wearer {
+                    let d = self.difficulty;
+                    for dmg in hits {
+                        let src = crate::entity::living::Source::thorns(id, pos);
+                        self.splayer.attack(&self.world, src, dmg, d);
+                    }
+                }
                 // applyArthropodEnchantments(player, target): Bane of
                 // Arthropods slows the target, drawing from the player's rand
                 for d in enchant::arthropod_slowness(
@@ -4544,6 +4579,92 @@ mod tests {
         back.load_drops(&bytes, &mut r);
         assert_eq!(back.items.len(), 1);
         assert_eq!(back.items[0].stack.count, 5);
+    }
+
+    /// `EntityPlayerMP.field_147101_bU`, `EntityFallingBlock.fall` with the
+    /// helmet rule of `EntityLivingBase.attackEntityFrom`, and Thorns on a
+    /// mob's armour (`EnchantmentHelper.func_151384_a`).
+    #[test]
+    fn spawn_protection_anvils_and_mob_thorns() {
+        use crate::entity::living::{Difficulty, Source, SourceKind};
+        use crate::entity::mob::Kind;
+        use crate::item::Stack;
+        let (mut sim, x, y, z) = redstone_sim();
+        arena(&mut sim, x, y, z);
+        sim.play.mode = GameMode::Survival;
+        let feet = [x as f64 + 0.5, (y + 1) as f64, z as f64 + 0.5];
+        let here = Command::Player(feet, [-90.0, 0.0], false);
+        sim.step(&[here.clone()], &mut Vec::new());
+
+        // nothing but the void hurts for the first 60 ticks
+        let cactus = Source::named(SourceKind::Cactus);
+        sim.splayer.respawn_invulnerable = 60;
+        assert!(!sim
+            .splayer
+            .attack(&sim.world, cactus, 1.0, Difficulty::Normal));
+        for _ in 0..61 {
+            sim.step(&[here.clone()], &mut Vec::new());
+        }
+        assert!(sim.splayer.respawn_invulnerable <= 0);
+        assert_eq!(sim.splayer.living.health, 20.0);
+
+        // an anvil from seven blocks up, onto an iron helmet
+        sim.play.inv.armor[3] = Some(Stack::new(306, 0, 1));
+        for dy in 1..12 {
+            sim.world.set_block(x, y + dy, z, block::AIR, 0, 3);
+        }
+        sim.world.set_block(x, y + 9, z, block::ANVIL, 0, 3);
+        for _ in 0..60 {
+            sim.step(&[here.clone()], &mut Vec::new());
+        }
+        let after_anvil = sim.splayer.living.health;
+        assert!(after_anvil < 20.0, "the anvil hurt: {after_anvil}");
+        let helmet = sim.play.inv.armor[3].expect("the helmet survives one anvil");
+        assert!(helmet.meta > 4, "the helmet took it: {}", helmet.meta);
+
+        // a cow in a Thorns III chestplate, punched until it bites back
+        for dy in 1..12 {
+            sim.world.set_block(x, y + dy, z, block::AIR, 0, 3);
+        }
+        sim.splayer.living.health = 20.0;
+        let mut r = JavaRandom::new(5);
+        let at = [x as f64 + 2.5, (y + 1) as f64, z as f64 + 0.5];
+        let cow = sim.mobs.spawn(Kind::Cow, at, 0.0, &mut r);
+        let plate = Stack::new(307, 0, 1).with_enchantments(&[(crate::enchant::THORNS, 3)]);
+        if let Some(m) = sim.mobs.list.iter_mut().find(|m| m.id == cow) {
+            m.equipment[3] = Some(plate);
+            m.health = 10.0;
+        }
+        let mut lowest = 20.0f32;
+        for _ in 0..8 {
+            if let Some(m) = sim.mobs.list.iter_mut().find(|m| m.id == cow) {
+                m.health = 10.0;
+            }
+            sim.step(
+                &[
+                    here.clone(),
+                    Command::Attack {
+                        id: cow,
+                        crit: false,
+                        sprint: false,
+                    },
+                ],
+                &mut Vec::new(),
+            );
+            lowest = lowest.min(sim.splayer.living.health);
+            for _ in 0..12 {
+                sim.step(&[here.clone()], &mut Vec::new());
+            }
+        }
+        assert!(lowest < 20.0, "Thorns III never hit in eight punches");
+        let worn = sim
+            .mobs
+            .list
+            .iter()
+            .find(|m| m.id == cow)
+            .and_then(|m| m.equipment[3])
+            .map_or(i32::MAX, |s| s.meta);
+        assert!(worn >= 8, "the chestplate pays 1 or 3 a punch: {worn}");
     }
 
     /// ItemFood, ItemPotion and ItemBow through setItemInUse.

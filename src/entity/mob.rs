@@ -1843,6 +1843,66 @@ impl Mob {
         !self.kind.fireproof() && self.fire > 0
     }
 
+    /// `EnchantmentHelper.applyThornEnchantments(this, attacker)` on the
+    /// wearer's side: every Thorns enchantment on the five equipment slots
+    /// rolls with this mob's random (`EnchantmentThorns.onUserHurt`), and
+    /// the first piece that has Thorns pays 3 uses for a hit, 1 for a miss.
+    /// Returns the damage of each hit for the attacker, in order.
+    pub fn thorns_hits(&mut self) -> Vec<f32> {
+        use crate::enchant;
+        let mut out = Vec::new();
+        for j in 0..5 {
+            let Some(s) = self.equipment[j] else { continue };
+            for (id, l) in s.enchantments() {
+                if id != enchant::THORNS {
+                    continue;
+                }
+                // getEnchantedItem, looked up before the roll
+                let first = self
+                    .equipment
+                    .iter()
+                    .position(|a| enchant::level(enchant::THORNS, a.as_ref()) > 0);
+                let cost = if enchant::thorns_should_hit(l, &mut self.rand) {
+                    out.push(enchant::thorns_damage(l, &mut self.rand) as f32);
+                    3
+                } else {
+                    1
+                };
+                if let Some(i) = first {
+                    let p = self.equipment[i].unwrap();
+                    let (left, _) = enchant::damage_item(p, cost, false, &mut self.rand);
+                    self.equipment[i] = left;
+                }
+            }
+        }
+        out
+    }
+
+    /// An id for a projectile this mob launches this tick. The game takes
+    /// entity ids from a static counter, never from the shooter's random;
+    /// a mob launches at most one a tick, so its id and age give a
+    /// distinct, reproducible one.
+    pub fn projectile_id(&self) -> u32 {
+        (self.id.wrapping_mul(0x9E37_79B1) ^ (self.ticks as u32).wrapping_mul(0x85EB_CA6B))
+            | 0x8000_0000
+    }
+
+    /// `EntityLivingBase.attackEntityFrom` for `DamageSource.anvil` and
+    /// `fallingBlock`: a worn helmet takes `amount * 4 + rand * amount * 2`
+    /// uses and the damage drops to three quarters.
+    pub fn hurt_by_falling(&mut self, amount: f32) -> bool {
+        let mut a = amount;
+        if self.health > 0.0 {
+            if let Some(h) = self.equipment[4] {
+                let n = (a * 4.0 + self.rand.next_float() * a * 2.0) as i32;
+                let (left, _) = crate::enchant::damage_item(h, n, false, &mut self.rand);
+                self.equipment[4] = left;
+                a *= 0.75;
+            }
+        }
+        self.hurt(a, None, true)
+    }
+
     /// The test in `EntityZombie.attackEntityAsMob` after a hit: empty
     /// hands, burning, and then (only then) a roll against the difficulty.
     pub fn zombie_ignites(&mut self, difficulty: i32) -> bool {
@@ -4054,7 +4114,7 @@ fn ranged(
             // EntitySkeleton.attackEntityWithRangedAttack
             let k = f.clamp(0.1, 1.0);
             let diff = player.difficulty;
-            let id = m.rand.next_int() as u32;
+            let id = m.projectile_id();
             // posY + getEyeHeight (height * 0.85)
             let eye = m.pos[1] + (m.dims().1 * 0.85) as f64;
             let mut a = Arrow::at_target(
@@ -4080,7 +4140,7 @@ fn ranged(
             ));
         } else {
             // EntityWitch.attackEntityWithRangedAttack
-            let id = m.rand.next_int() as u32;
+            let id = m.projectile_id();
             let eye = m.pos[1] + (m.dims().1 * 0.85) as f64;
             let mut t = super::throwable::Throwable::thrown(
                 id,

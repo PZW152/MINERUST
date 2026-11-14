@@ -1501,7 +1501,7 @@ fn ranged_attack(m: &mut Mob, t: Target, v: &View, f: f32, cx: &mut Cx) {
     let player = cx.player;
     if m.kind == Kind::Skeleton {
         let diff = player.difficulty;
-        let id = m.rand.next_int() as u32;
+        let id = m.projectile_id();
         // posY + getEyeHeight
         let eye = m.pos[1] + (m.dims().1 * 0.85) as f64;
         let height = (v.bb.max[1] - v.bb.min[1]) as f32;
@@ -1528,7 +1528,7 @@ fn ranged_attack(m: &mut Mob, t: Target, v: &View, f: f32, cx: &mut Cx) {
         ));
     } else if t == Target::Player {
         // EntityWitch
-        let id = m.rand.next_int() as u32;
+        let id = m.projectile_id();
         let eye = m.pos[1] + (m.dims().1 * 0.85) as f64;
         let mut p = crate::entity::throwable::Throwable::thrown(
             id,

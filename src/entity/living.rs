@@ -275,6 +275,16 @@ impl Source {
         s
     }
 
+    /// `DamageSource.causeThornsDamage(user)`: an `EntityDamageSource`
+    /// flagged magic, scaled by difficulty when the wearer is a mob.
+    pub fn thorns(id: u32, pos: [f64; 3]) -> Source {
+        let mut s = Source::of(SourceKind::Thorns);
+        s.attacker = Some((id, pos));
+        s.magic = true;
+        s.difficulty_scaled = true;
+        s
+    }
+
     /// `DamageSource.setExplosionSource(explosion)`
     pub fn explosion(attacker: Option<(u32, [f64; 3])>) -> Source {
         let mut s = Source::of(SourceKind::Explosion);

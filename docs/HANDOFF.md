@@ -319,8 +319,7 @@ MINERUST_BENCH=10 minerust --seed 12345 --no-save --size 1920 1080 --distance 16
    （區塊 `inhabited` 照 `PlayerManager` 每 8000 tick 或離開視野時累加）、裝備掉落、護甲值、武器傷害與附魔、骷髏的弓附魔、
    `RenderBiped` 的盔甲層與手持物品。**還沒做**：撿起地上物品（`canPickUpLoot` 只有旗標）、小殭屍／殭屍村民／雞騎士／
    蜘蛛騎士（亂數照抽但不生成）、殭屍增援（`summonReinforcements`）與破門、領頭殭屍的增援機率、蜘蛛在困難模式的藥水效果、
-   豹貓生成時的幼貓、馬的 `onSpawnWithEgg` 逐行核對、`InhabitedTime` 還沒寫進存檔（重新載入從 0 開始）、
-   著火的空手殭屍點燃玩家（`EntityZombie.attackEntityAsMob`）。
+   豹貓生成時的幼貓、馬的 `onSpawnWithEgg` 逐行核對、`InhabitedTime` 還沒寫進存檔（重新載入從 0 開始）。
    掉落還沒改走 `drops.rs` 的只剩 `harvestBlock` 的覆寫（剪刀剪樹葉／草／藤蔓、冰、雪片仍用舊的 `item::drops`，
    `play.rs` 約 737、752 行）。失去支撐、水沖、樹葉腐爛、甘蔗／仙人掌／雙層植物都已改走 `drops.rs`（2026-11-14 稽核）。
    `item::has_subtypes` 是近似（`max_damage == 0`），應改為原版 `getHasSubtypes` 的表。
@@ -585,3 +584,28 @@ MINERUST_BENCH=10 minerust --seed 12345 --no-save --size 1920 1080 --distance 16
 - `本次（2026-11-14，相依套件）`：GitHub Dependabot 回報 `zip` 2.6.1 有三個漏洞（AES HMAC 繞過、符號連結目標無上限、雙標頭解析差異），
   升到 9.x（鎖定 9.5.1，`default-features = false` + `deflate`，`cargo tree -i cc` 確認沒有 C 相依）。本專案只按名稱讀自己的 jar，
   實際風險低，但沒有理由留著。105 項測試通過，截圖確認 jar 的材質、字型照常載入。
+- `本次（2026-11-15，稽核第二輪：玩家近戰、玩家受傷、方塊繪製、生物其餘部分）`：接續上一段「稽核沒涵蓋的」。
+  - **繪製沒有問題**：`render_block_bed`、`render_block_fence_gate`、`render_block_wall` 逐行對過 `RenderBlocks`
+    （頂面 UV 的四種方向、翻轉面、每一組 `setRenderBounds`、`uvRotateTop`），全部相符。
+  - **玩家近戰 `Sim::attack_mob`**：流程與 `attackTargetEntityWithCurrentItem` 相符，只有一處過時：註解寫「生物不穿盔甲，
+    所以 `applyThornEnchantments` 沒事做」，但下一個提交就讓生物穿盔甲了（`enchantEquipment` 會給荊棘）。
+    新增 `Mob::thorns_hits`（五格裝備上的每個荊棘各用生物自己的亂數擲一次、第一件有荊棘的裝備付 3 或 1 點耐久）與
+    `Source::thorns`，打穿荊棘盔甲的殭屍現在會被反傷。
+  - **玩家受傷 `ServerPlayer::attack_inner`**（更早幾輪寫的，這次才對）：
+    - `EntityPlayerMP.field_147101_bU`：進入世界與重生後 60 tick 內除了虛空以外不受傷，以前沒有。
+    - 睡覺時受到攻擊會醒來（`wakeUpPlayer(true, true, false)`），以前會繼續睡。
+    - `DamageSource.anvil` / `fallingBlock`：頭盔承受 `amount * 4 + rand * amount * 2` 點耐久、傷害變四分之三。
+    - `setBeenAttacked` 的 `rand.nextDouble()` 沒抽；擊退方向重抽與「沒有攻擊者」時的 `attackedAtYaw` 用的是 `Math.random()`，
+      以前用玩家自己的亂數；死亡音效只在不是無敵時間內的那一下才播（以前一律播，多抽一次音高）。
+  - **鐵砧砸不到任何東西**：`EntityFallingBlock.fall` 算出的傷害（`FallingBlock.hurt`）從來沒有人讀。現在 `Play.falling_hits`
+    交給 `Sim`，對箱內的玩家、生物（同樣有頭盔規則，`Mob::hurt_by_falling`）與掉落物（`EntityItem.attackEntityFrom`）生效。
+  - **骷髏與女巫每射一次就多抽一個 `nextInt`**：為了替箭／藥水取編號而從生物自己的亂數抽（原版的實體編號是靜態計數器）。
+    改為 `Mob::projectile_id`（由生物編號與年齡導出，不動亂數）。四處：`ai.rs` 兩處、`mob.rs` 舊式路徑兩處。
+  **驗證**：`cargo test --release` 106 項通過，新增 `spawn_protection_anvils_and_mob_thorns`（60 tick 無敵、九格高的鐵砧砸中
+  戴鐵頭盔的玩家後血量下降且頭盔耗損、穿荊棘 III 胸甲的牛被打八拳後玩家受傷且胸甲耗損）；`server_player` 的單元測試改用
+  已過無敵時間的玩家。基準：本次 1,085／1,086 fps、伺服器 5.6–5.7 ms；`7083356` 的編譯 1,021–1,063 fps、5.9 ms，沒有退步。
+  **沒有驗證的**：睡覺被打醒、`setBeenAttacked` 等亂數順序的修正只有原始碼對照；沒有 Java 對照測試可以證明整段
+  `attackEntityFrom` 的亂數順序逐次相同。
+  **留下**：生物的裝備耗損到壞掉時，原版會留下一個數量 0 的物品堆（仍算護甲、仍畫出來、死亡時不掉落），這裡直接清空欄位；
+  `EntityLivingBase.attackEntityFrom` 的 `limbSwingAmount = 1.5` 與 `attackedAtYaw`（受傷時的鏡頭傾斜）仍未做；
+  經驗球被鐵砧砸到（`EntityXPOrb.attackEntityFrom`）沒接。上一段提到的世界亂數借出問題仍未處理。

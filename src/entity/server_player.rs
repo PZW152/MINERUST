@@ -121,6 +121,12 @@ pub struct ServerPlayer {
     pub xp_cooldown: i32,
     /// Ticks since the last attack from an entity (`entityAge`).
     pub entity_age: i32,
+    /// `EntityPlayerMP.field_147101_bU`: 60 ticks after joining or
+    /// respawning during which nothing but the void hurts.
+    pub respawn_invulnerable: i32,
+    /// Set by an attack that got as far as `EntityPlayer.attackEntityFrom`
+    /// wakes a sleeper; the owner of the bed state clears it.
+    pub attacked: bool,
     /// `itemInUse` / `itemInUseCount`: the hotbar slot, the stack as it was
     /// when use began, and the ticks left.
     pub using: Option<(usize, crate::item::Stack, i32)>,
@@ -167,6 +173,8 @@ impl ServerPlayer {
             on_ground: false,
             last_sent: None,
             entity_age: 0,
+            respawn_invulnerable: 60,
+            attacked: false,
             using: None,
             armor_items: [None; 4],
             armor_changed: false,
@@ -406,6 +414,10 @@ impl ServerPlayer {
         diff: Difficulty,
     ) -> bool {
         let _ = w;
+        // EntityPlayerMP.attackEntityFrom
+        if self.respawn_invulnerable > 0 && src.kind != SourceKind::OutOfWorld {
+            return false;
+        }
         // capabilities.disableDamage && !canHarmInCreative
         if self.creative && src.kind != SourceKind::OutOfWorld {
             return false;
@@ -414,6 +426,8 @@ impl ServerPlayer {
         if self.living.health <= 0.0 {
             return false;
         }
+        // isPlayerSleeping: wakeUpPlayer(true, true, false)
+        self.attacked = true;
         if src.difficulty_scaled {
             match diff {
                 Difficulty::Peaceful => amount = 0.0,
@@ -428,6 +442,21 @@ impl ServerPlayer {
         // EntityLivingBase.attackEntityFrom
         if src.fire && self.living.active(potion::FIRE_RESISTANCE) {
             return false;
+        }
+        if matches!(src.kind, SourceKind::Anvil | SourceKind::FallingBlock) {
+            // the helmet takes it: getEquipmentInSlot(4)
+            if let Some(h) = self.armor_items[3] {
+                let n = (amount * 4.0 + self.e.rand.next_float() * amount * 2.0) as i32;
+                let (left, broke) =
+                    crate::enchant::damage_item(h, n, self.creative, &mut self.e.rand);
+                if broke {
+                    self.fx.push(Fx::BrokenItem(h));
+                }
+                self.armor_items[3] = left;
+                self.armor_changed = true;
+                self.armor_updated();
+                amount *= 0.75;
+            }
         }
         let mut fresh = true;
         if self.living.hurt_resistant_time as f32 > self.living.max_hurt_resistant_time as f32 / 2.0
@@ -449,21 +478,33 @@ impl ServerPlayer {
         }
         if fresh {
             self.hurt_anim = true;
+            if src.kind != SourceKind::Drown {
+                // setBeenAttacked: velocityChanged = rand.nextDouble() >=
+                // the knockback resistance (0 for a player, so always sent)
+                let _ = self.e.rand.next_double();
+            }
             if let Some((_, from)) = src.attacker {
+                // the retry for an attacker on the same spot is Math.random
+                let rnd = math::math_random;
                 let mut dx = from[0] - self.e.pos[0];
                 let mut dz = from[2] - self.e.pos[2];
                 while dx * dx + dz * dz < 1.0e-4 {
-                    dx = (self.e.rand.next_double() - self.e.rand.next_double()) * 0.01;
-                    dz = (self.e.rand.next_double() - self.e.rand.next_double()) * 0.01;
+                    dx = (rnd() - rnd()) * 0.01;
+                    dz = (rnd() - rnd()) * 0.01;
                 }
                 self.knock_back(dx, dz);
+            } else {
+                // attackedAtYaw = (int)(Math.random() * 2.0) * 180
+                let _ = math::math_random();
             }
         }
         if self.living.health <= 0.0 {
-            // getDeathSound
-            let pitch = self.sound_pitch();
-            self.fx
-                .push(Fx::Sound("game.player.die", self.e.pos, 1.0, pitch));
+            // getDeathSound, only for a hit outside the invulnerable time
+            if fresh {
+                let pitch = self.sound_pitch();
+                self.fx
+                    .push(Fx::Sound("game.player.die", self.e.pos, 1.0, pitch));
+            }
             self.on_death();
         } else if fresh {
             // getHurtSound
@@ -715,6 +756,8 @@ impl ServerPlayer {
     /// state: `Entity.onEntityUpdate`, `EntityLivingBase.onEntityUpdate`,
     /// potion effects, `FoodStats.onUpdate` and the peaceful regeneration.
     pub fn tick(&mut self, w: &ServerWorld, diff: Difficulty, natural_regen: bool) {
+        // EntityPlayerMP.onUpdate
+        self.respawn_invulnerable -= 1;
         if !self.have_pos || self.dead {
             if self.dead {
                 self.living.death_time += 1;
@@ -1088,6 +1131,13 @@ mod tests {
         w
     }
 
+    /// A player past the 60 ticks of `field_147101_bU`.
+    fn settled() -> ServerPlayer {
+        let mut p = ServerPlayer::new();
+        p.respawn_invulnerable = 0;
+        p
+    }
+
     fn at(p: &mut ServerPlayer, w: &ServerWorld, y: f64, ground: bool) {
         p.moved(w, [0.5, y, 0.5], ground, false, false, false);
     }
@@ -1095,7 +1145,7 @@ mod tests {
     #[test]
     fn fall_damage_is_distance_minus_three() {
         let w = world();
-        let mut p = ServerPlayer::new();
+        let mut p = settled();
         at(&mut p, &w, 11.0, false);
         for i in 0..10 {
             at(&mut p, &w, 10.0 - i as f64, false);
@@ -1108,7 +1158,7 @@ mod tests {
     #[test]
     fn creative_takes_no_fall_damage() {
         let w = world();
-        let mut p = ServerPlayer::new();
+        let mut p = settled();
         p.creative = true;
         at(&mut p, &w, 40.0, false);
         at(&mut p, &w, 1.0, true);
@@ -1121,7 +1171,7 @@ mod tests {
         for y in 1..5 {
             w.set_block(0, y, 0, block::WATER, 0, 2);
         }
-        let mut p = ServerPlayer::new();
+        let mut p = settled();
         at(&mut p, &w, 1.0, true);
         for _ in 0..319 {
             p.tick(&w, Difficulty::Normal, true);
@@ -1134,7 +1184,7 @@ mod tests {
     #[test]
     fn hurt_resistance_blocks_repeated_damage() {
         let w = world();
-        let mut p = ServerPlayer::new();
+        let mut p = settled();
         at(&mut p, &w, 1.0, true);
         let lava = Source::named(SourceKind::Lava);
         assert!(p.attack(&w, lava, 4.0, Difficulty::Normal));
@@ -1145,7 +1195,7 @@ mod tests {
     #[test]
     fn regenerates_when_fed_and_scales_mob_damage() {
         let w = world();
-        let mut p = ServerPlayer::new();
+        let mut p = settled();
         at(&mut p, &w, 1.0, true);
         p.living.health = 10.0;
         for _ in 0..80 {
@@ -1163,7 +1213,7 @@ mod tests {
     #[test]
     fn resistance_and_poison() {
         let w = world();
-        let mut p = ServerPlayer::new();
+        let mut p = settled();
         at(&mut p, &w, 1.0, true);
         p.living.add_effect(Effect::new(potion::RESISTANCE, 100, 1));
         // (1 + 1) * 5 = 10 of 25 taken off

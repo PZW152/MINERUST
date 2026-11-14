@@ -209,6 +209,9 @@ pub struct Play {
     pub items: Vec<ItemEntity>,
     /// `EntityFallingBlock`s
     pub falling: Vec<crate::entity::falling::FallingBlock>,
+    /// `EntityFallingBlock.fall` this tick: the block's box, the damage
+    /// and whether it is an anvil, for the owner of the other entities.
+    pub falling_hits: Vec<(Aabb, f32, bool)>,
     /// Experience orbs to spawn (`dropXpOnBlockBreak`, `SlotFurnace`).
     pub orbs: Vec<([f64; 3], i32)>,
     /// Boats and minecarts with their trackers.
@@ -480,6 +483,7 @@ impl Play {
             falling: Vec::new(),
             vehicles: Vec::new(),
             orbs: Vec::new(),
+            falling_hits: Vec::new(),
             next_item: 1,
             pitch: 0.0,
             fx: Vec::new(),
@@ -2249,6 +2253,17 @@ impl Play {
         let mut drops = Vec::new();
         for f in falling.iter_mut() {
             f.tick(w, &mut drops, &mut self.fx);
+            if let Some((bb, amount)) = f.hurt.take() {
+                // the items it lands on are entities of the list too
+                // (EntityItem.attackEntityFrom)
+                for e in self.items.iter_mut() {
+                    if !e.e.dead && e.bb().intersects(&bb) {
+                        e.attack(None, false, amount);
+                    }
+                }
+                self.falling_hits
+                    .push((bb, amount, f.block == block::ANVIL));
+            }
         }
         falling.retain(|f| !f.e.dead);
         self.falling = falling;
