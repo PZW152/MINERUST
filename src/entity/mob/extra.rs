@@ -10,6 +10,11 @@ pub struct Other {
     pub kind: Kind,
     pub pos: [f64; 3],
     pub tamed: bool,
+    pub bb: Aabb,
+    pub width: f32,
+    pub height: f32,
+    /// `EntityAgeable.getGrowingAge`
+    pub growing_age: i32,
 }
 
 /// A blow one mob deals another, applied once every mob has moved.

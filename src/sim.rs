@@ -2811,6 +2811,9 @@ impl Sim {
             attackable: self.player_attackable
                 && play.mode == GameMode::Survival
                 && !self.splayer.dead,
+            alive: !self.splayer.dead,
+            sneaking: self.motion_flags.1,
+            armor_pieces: play.inv.armor.iter().flatten().count() as i32,
             held,
             last_attacked: self.last_attacked,
             last_attacker: self.last_attacker,
@@ -4661,10 +4664,12 @@ mod tests {
         it.e.motion = [0.0; 3];
         it.pickup_delay = 100;
         sim.play.items.push(it);
-        let before = sim.play.items[0].e.pos[0];
+        // (other items may lie around: a chicken's egg, say)
+        let at = |sim: &Sim| sim.play.items.iter().find(|i| i.id == 999).unwrap().e.pos[0];
+        let before = at(&sim);
         sim.world.toggle_lever(x - 1, y + 1, z);
         steps(&mut sim, 3);
-        let after = sim.play.items[0].e.pos[0];
+        let after = at(&sim);
         assert!(after > before + 0.4, "pushed from {before} to {after}");
     }
 
@@ -4753,6 +4758,166 @@ mod tests {
         put(&mut sim, 126, 0.0, [x + 6, y + 1, z], [0, 0, 1], 0.9);
         assert_eq!(sim.world.block(x + 6, y + 1, z + 1), block::WOODEN_SLAB);
         assert_eq!(sim.world.meta(x + 6, y + 1, z + 1), 8);
+    }
+
+    /// A stone floor with nothing on it around the test site.
+    fn arena(sim: &mut Sim, x: i32, y: i32, z: i32) {
+        for dx in -2..14 {
+            for dz in -2..14 {
+                sim.world.set_block(x + dx, y, z + dz, block::STONE, 0, 3);
+                for dy in 1..5 {
+                    sim.world
+                        .set_block(x + dx, y + dy, z + dz, block::AIR, 0, 3);
+                }
+            }
+        }
+    }
+
+    /// The task AI (`EntityAITasks`): a zombie takes the nearest player it
+    /// can see as its target (`EntityAINearestAttackableTarget`), walks up
+    /// (`EntityAIAttackOnCollide`) and hits.
+    #[test]
+    fn zombie_hunts_the_player() {
+        use crate::entity::mob::{ai::Target, Kind};
+        let (mut sim, x, y, z) = redstone_sim();
+        arena(&mut sim, x, y, z);
+        sim.play.mode = GameMode::Survival;
+        let feet = [x as f64 + 0.5, (y + 1) as f64, z as f64 + 0.5];
+        let mut r = JavaRandom::new(5);
+        let id = sim.mobs.spawn(
+            Kind::Zombie,
+            [x as f64 + 9.5, (y + 1) as f64, z as f64 + 0.5],
+            0.0,
+            &mut r,
+        );
+        let before = sim.splayer.living.health;
+        let mut targeted = false;
+        for _ in 0..200 {
+            sim.step(&[Command::Player(feet, [0.0, 0.0], false)], &mut Vec::new());
+            let m = sim.mobs.list.iter().find(|m| m.id == id).unwrap();
+            targeted |= m.attack_target == Some(Target::Player);
+            if sim.splayer.living.health < before {
+                break;
+            }
+        }
+        assert!(targeted, "the zombie chose the player");
+        assert!(sim.splayer.living.health < before, "and hit");
+    }
+
+    /// The old AI (`EntityCreature.updateEntityActionState`): a zombie
+    /// pigman leaves the player alone until it is hit, then comes for it.
+    #[test]
+    fn pigman_is_neutral_until_hit() {
+        use crate::entity::mob::Kind;
+        let (mut sim, x, y, z) = redstone_sim();
+        arena(&mut sim, x, y, z);
+        sim.play.mode = GameMode::Survival;
+        let feet = [x as f64 + 0.5, (y + 1) as f64, z as f64 + 0.5];
+        let mut r = JavaRandom::new(5);
+        let id = sim.mobs.spawn(
+            Kind::PigZombie,
+            [x as f64 + 3.5, (y + 1) as f64, z as f64 + 0.5],
+            0.0,
+            &mut r,
+        );
+        let before = sim.splayer.living.health;
+        for _ in 0..100 {
+            sim.step(&[Command::Player(feet, [0.0, 0.0], false)], &mut Vec::new());
+        }
+        assert_eq!(sim.splayer.living.health, before, "left alone");
+        sim.step(
+            &[
+                Command::Player(feet, [0.0, 0.0], false),
+                Command::Attack {
+                    id,
+                    damage: 1.0,
+                    crit: false,
+                    knockback: 0,
+                },
+            ],
+            &mut Vec::new(),
+        );
+        for _ in 0..200 {
+            sim.step(&[Command::Player(feet, [0.0, 0.0], false)], &mut Vec::new());
+            if sim.splayer.living.health < before {
+                break;
+            }
+        }
+        assert!(sim.splayer.living.health < before, "struck back");
+    }
+
+    /// `EntityAIPanic` after a blow, `EntityAITempt` with wheat in hand.
+    #[test]
+    fn cows_panic_and_follow_wheat() {
+        use crate::entity::mob::Kind;
+        let (mut sim, x, y, z) = redstone_sim();
+        arena(&mut sim, x, y, z);
+        let feet = [x as f64 + 0.5, (y + 1) as f64, z as f64 + 5.5];
+        let mut r = JavaRandom::new(5);
+        let start = [x as f64 + 8.5, (y + 1) as f64, z as f64 + 5.5];
+        let id = sim.mobs.spawn(Kind::Cow, start, 0.0, &mut r);
+        let pos = |sim: &Sim| sim.mobs.list.iter().find(|m| m.id == id).unwrap().pos;
+        // wheat: the cow comes within 2.5 blocks
+        sim.play.inv.main[sim.play.inv.selected] = Some(crate::item::Stack::new(296, 0, 1));
+        for _ in 0..200 {
+            sim.step(&[Command::Player(feet, [0.0, 0.0], false)], &mut Vec::new());
+        }
+        let p = pos(&sim);
+        let d = ((p[0] - feet[0]).powi(2) + (p[2] - feet[2]).powi(2)).sqrt();
+        assert!(d < 3.5, "tempted to {d} blocks away");
+        // a blow: it runs
+        sim.play.inv.main[sim.play.inv.selected] = None;
+        let from = pos(&sim);
+        let mut moved = 0.0f64;
+        sim.step(
+            &[
+                Command::Player(feet, [0.0, 0.0], false),
+                Command::Attack {
+                    id,
+                    damage: 1.0,
+                    crit: false,
+                    knockback: 0,
+                },
+            ],
+            &mut Vec::new(),
+        );
+        for _ in 0..60 {
+            sim.step(&[Command::Player(feet, [0.0, 0.0], false)], &mut Vec::new());
+            let p = pos(&sim);
+            moved = moved.max(((p[0] - from[0]).powi(2) + (p[2] - from[2]).powi(2)).sqrt());
+        }
+        assert!(moved > 2.0, "panicked {moved} blocks");
+    }
+
+    /// `EntityAIArrowAttack`: a skeleton that has seen the player for a
+    /// second shoots.
+    #[test]
+    fn skeleton_shoots_the_player() {
+        use crate::entity::mob::Kind;
+        let (mut sim, x, y, z) = redstone_sim();
+        arena(&mut sim, x, y, z);
+        // a roof: in the sun it would burn and run for shade (EntityAIFleeSun)
+        for dx in -2..14 {
+            for dz in -2..14 {
+                sim.world
+                    .set_block(x + dx, y + 5, z + dz, block::STONE, 0, 3);
+            }
+        }
+        sim.play.mode = GameMode::Survival;
+        let feet = [x as f64 + 0.5, (y + 1) as f64, z as f64 + 0.5];
+        let mut r = JavaRandom::new(5);
+        sim.mobs.spawn(
+            Kind::Skeleton,
+            [x as f64 + 8.5, (y + 1) as f64, z as f64 + 0.5],
+            0.0,
+            &mut r,
+        );
+        let mut shot = false;
+        for _ in 0..200 {
+            sim.step(&[Command::Player(feet, [0.0, 0.0], false)], &mut Vec::new());
+            shot |= !sim.mobs.arrows.is_empty();
+        }
+        assert!(shot, "an arrow was shot");
     }
 
     /// EntityCreeper.interact: flint and steel lights the fuse, which then

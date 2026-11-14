@@ -10,6 +10,7 @@ use crate::java::JavaRandom;
 use crate::util::math;
 use crate::world::server::ServerWorld;
 
+pub mod ai;
 mod end;
 mod extra;
 mod nether;
@@ -416,6 +417,30 @@ pub struct Mob {
     pub player_made: bool,
     /// Another mob this one is after (wolves, golems).
     target_mob: Option<u32>,
+    /// `EntityLiving.tasks` and `targetTasks`, for the mobs of `ai::uses_tasks`.
+    tasks: ai::Tasks,
+    target_tasks: ai::Tasks,
+    /// `getAttackTarget()`
+    pub attack_target: Option<ai::Target>,
+    /// `getAITarget()` (the last attacker) and `getRevengeTimer()`.
+    revenge: Option<ai::Target>,
+    revenge_timer: i32,
+    /// `EntityLookHelper.deltaLookYaw` / `deltaLookPitch` of `look_at`.
+    look_delta: (f32, f32),
+    /// `PathNavigate`: `totalTicks`, `ticksAtLastPos`, `lastPosCheck`,
+    /// `noSunPathfind`, `avoidsWater`.
+    nav_ticks: i32,
+    nav_last_tick: i32,
+    nav_last_pos: [f64; 3],
+    avoid_sun: bool,
+    avoids_water: bool,
+    /// The old AI: `isJumping` as it stays between ticks, and
+    /// `EntityLiving`'s `currentTarget`, `numTicksToChaseTarget` and
+    /// `randomYawVelocity`.
+    old_jump: bool,
+    idle_target: bool,
+    idle_ticks: i32,
+    random_yaw: f32,
     /// Ghast `waypointX/Y/Z`.
     waypoint: [f64; 3],
     /// Zombie pigman `angerLevel` and `randomSoundDelay`.
@@ -486,6 +511,11 @@ pub struct PlayerInfo {
     pub last_attacked: Option<u32>,
     pub last_attacker: Option<u32>,
     pub attackable: bool,
+    /// `isEntityAlive()`
+    pub alive: bool,
+    pub sneaking: bool,
+    /// Worn armour pieces (`getArmorVisibility` is a quarter of it).
+    pub armor_pieces: i32,
     /// Item ids the player holds (for tempting).
     pub held: Option<u16>,
 }
@@ -659,6 +689,25 @@ impl Mob {
             prev_fuse: 0,
             fuse_dir: -1,
             ignited: false,
+            tasks: ai::Tasks::default(),
+            target_tasks: ai::Tasks::default(),
+            attack_target: None,
+            revenge: None,
+            revenge_timer: 0,
+            look_delta: (10.0, 40.0),
+            nav_ticks: 0,
+            nav_last_tick: 0,
+            nav_last_pos: [0.0; 3],
+            old_jump: false,
+            idle_target: false,
+            idle_ticks: 0,
+            random_yaw: 0.0,
+            avoid_sun: false,
+            // getNavigator().setAvoidsWater(true) in the constructor
+            avoids_water: matches!(
+                kind,
+                Kind::Pig | Kind::Cow | Kind::Mooshroom | Kind::Sheep | Kind::Villager
+            ),
             wing: 0.0,
             prev_wing: 0.0,
             wing_dest: 0.0,
@@ -1446,9 +1495,10 @@ impl Mob {
             Kind::Wolf | Kind::Ocelot => self.sitting = false,
             _ => {}
         }
-        if self.kind == Kind::Horse
-            || (self.kind.animal() && !matches!(self.kind, Kind::Wolf | Kind::Ocelot))
-            || self.kind == Kind::Villager
+        if !ai::uses_tasks(self.kind)
+            && (self.kind == Kind::Horse
+                || (self.kind.animal() && !matches!(self.kind, Kind::Wolf | Kind::Ocelot))
+                || self.kind == Kind::Villager)
         {
             self.task = Task::Panic;
             self.task_ticks = 0;
@@ -1733,6 +1783,8 @@ pub struct Outcome {
     pub particles: Vec<Puff>,
     /// The mob that last hurt the player this tick.
     pub attacker: Option<u32>,
+    /// `EntityAIHurtByTarget` calling the mobs around for help.
+    pub calls: Vec<ai::Call>,
 }
 
 /// `Entity.moveEntity` for a primed TNT box.
@@ -2004,6 +2056,10 @@ impl Mobs {
                 kind: m.kind,
                 pos: m.pos,
                 tamed: m.tamed,
+                bb: m.bb,
+                width: m.dims().0,
+                height: m.dims().1,
+                growing_age: m.growing_age,
             })
             .collect();
         let mut strikes: Vec<Strike> = Vec::new();
@@ -2030,6 +2086,8 @@ impl Mobs {
             }
             m.track();
         }
+        ai::answer_calls(&mut self.list, &out.calls);
+        out.calls.clear();
         self.fireballs.extend(balls);
         // EntityFireball.onUpdate
         let mut k = 0;
@@ -2092,6 +2150,7 @@ impl Mobs {
                 continue;
             };
             if t.damage(st.amount, Some(st.at)) {
+                t.set_revenge(Some(ai::Target::Mob(st.from)));
                 t.motion[1] += st.lift;
                 out.sounds.push((mob_sound(t, false), t.pos, 1.0, 1.0));
                 // EntityAIHurtByTarget
@@ -2295,6 +2354,10 @@ impl Mobs {
         };
         if m.damage(dmg, Some(attacker)) {
             m.recently_hit = 100;
+            m.set_revenge(Some(ai::Target::Player));
+            if ai::uses_old(m.kind) {
+                m.attack_target = Some(ai::Target::Player);
+            }
             if m.kind.hostile() {
                 m.target_player = true;
             }
@@ -3039,159 +3102,189 @@ fn tick_mob(
     }
 
     // ---------------------------------------------------------------- AI
-    let pdist2 = m.dist2(player.feet);
-    let sees_player = player.attackable
-        && pdist2 < (m.kind.follow_range() as f64).powi(2)
-        && m.can_see(w, player.eye());
-    // targeting
-    if m.kind == Kind::PigZombie {
-        // EntityPigZombie: neutral until angered
-        if m.anger_sound > 0 {
-            m.anger_sound -= 1;
-            if m.anger_sound == 0 {
-                let p = ((m.rand.next_float() - m.rand.next_float()) * 0.2 + 1.0) * 1.8;
-                out.sounds.push(("mob.zombiepig.zpigangry", m.pos, 2.0, p));
+    let tasked = ai::uses_tasks(m.kind);
+    if tasked {
+        // EntityLiving.updateAITasks
+        let mut cx = ai::Cx {
+            w: &mut *w,
+            player,
+            others,
+            out: &mut *out,
+            arrows: &mut *arrows,
+            strikes: &mut *strikes,
+            day,
+        };
+        ai::update(m, &mut cx);
+        if m.kind == Kind::Creeper {
+            creeper_fuse(m, out, explosions);
+        }
+    }
+    let old = ai::uses_old(m.kind);
+    if old {
+        // EntityCreature.updateEntityActionState
+        let mut cx = ai::Cx {
+            w: &mut *w,
+            player,
+            others,
+            out: &mut *out,
+            arrows: &mut *arrows,
+            strikes: &mut *strikes,
+            day,
+        };
+        ai::old_update(m, &mut cx);
+    }
+    if !tasked && !old {
+        let pdist2 = m.dist2(player.feet);
+        let sees_player = player.attackable
+            && pdist2 < (m.kind.follow_range() as f64).powi(2)
+            && m.can_see(w, player.eye());
+        // targeting
+        if m.kind == Kind::PigZombie {
+            // EntityPigZombie: neutral until angered
+            if m.anger_sound > 0 {
+                m.anger_sound -= 1;
+                if m.anger_sound == 0 {
+                    let p = ((m.rand.next_float() - m.rand.next_float()) * 0.2 + 1.0) * 1.8;
+                    out.sounds.push(("mob.zombiepig.zpigangry", m.pos, 2.0, p));
+                }
+            }
+            if m.anger > 0 {
+                m.anger -= 1;
+            }
+            m.target_player = m.anger > 0 && player.attackable;
+        }
+        if m.kind.hostile()
+            && !matches!(
+                m.kind,
+                Kind::Enderman | Kind::Slime | Kind::PigZombie | Kind::EnderDragon
+            )
+        {
+            let spider_calm = matches!(m.kind, Kind::Spider | Kind::CaveSpider) && {
+                let (x, y, z) = m.feet_block();
+                brightness(w, x, y, z) > 0.5
+            };
+            if !player.attackable {
+                m.target_player = false;
+            } else if !m.target_player && sees_player && !spider_calm && pdist2 < 16.0 * 16.0 {
+                m.target_player = true;
+            } else if m.target_player && pdist2 > (m.kind.follow_range() as f64).powi(2) {
+                m.target_player = false;
+            }
+            if spider_calm && m.target_player && m.rand.next_int_n(100) == 0 {
+                m.target_player = false;
             }
         }
-        if m.anger > 0 {
-            m.anger -= 1;
+        // swimming (EntityAISwimming)
+        if (m.in_water || m.in_material(w, &m.bb, Material::Lava)) && m.rand.next_float() < 0.8 {
+            m.jumping = true;
         }
-        m.target_player = m.anger > 0 && player.attackable;
-    }
-    if m.kind.hostile()
-        && !matches!(
-            m.kind,
-            Kind::Enderman | Kind::Slime | Kind::PigZombie | Kind::EnderDragon
-        )
-    {
-        let spider_calm = matches!(m.kind, Kind::Spider | Kind::CaveSpider) && {
-            let (x, y, z) = m.feet_block();
-            brightness(w, x, y, z) > 0.5
-        };
-        if !player.attackable {
-            m.target_player = false;
-        } else if !m.target_player && sees_player && !spider_calm && pdist2 < 16.0 * 16.0 {
-            m.target_player = true;
-        } else if m.target_player && pdist2 > (m.kind.follow_range() as f64).powi(2) {
-            m.target_player = false;
-        }
-        if spider_calm && m.target_player && m.rand.next_int_n(100) == 0 {
-            m.target_player = false;
-        }
-    }
-    // swimming (EntityAISwimming)
-    if (m.in_water || m.in_material(w, &m.bb, Material::Lava)) && m.rand.next_float() < 0.8 {
-        m.jumping = true;
-    }
-    match m.kind {
-        Kind::Zombie | Kind::Spider | Kind::CaveSpider | Kind::Silverfish => {
-            if m.target_player {
-                chase(m, w, player, out);
-            } else if m.kind == Kind::Zombie && !villagers.is_empty() {
-                // EntityAIAttackOnCollide against villagers
-                if let Some(v) = villagers
-                    .iter()
-                    .copied()
-                    .filter(|v| m.dist2(*v) < 16.0 * 16.0)
-                    .min_by(|a, b| m.dist2(*a).partial_cmp(&m.dist2(*b)).unwrap())
-                {
-                    m.look_at = Some([v[0], v[1] + 1.62, v[2]]);
-                    if m.no_path() || m.ticks % 20 == 0 {
-                        m.path_to(w, v[0], v[1], v[2], 1.0);
+        match m.kind {
+            Kind::Zombie | Kind::Spider | Kind::CaveSpider | Kind::Silverfish => {
+                if m.target_player {
+                    chase(m, w, player, out);
+                } else if m.kind == Kind::Zombie && !villagers.is_empty() {
+                    // EntityAIAttackOnCollide against villagers
+                    if let Some(v) = villagers
+                        .iter()
+                        .copied()
+                        .filter(|v| m.dist2(*v) < 16.0 * 16.0)
+                        .min_by(|a, b| m.dist2(*a).partial_cmp(&m.dist2(*b)).unwrap())
+                    {
+                        m.look_at = Some([v[0], v[1] + 1.62, v[2]]);
+                        if m.no_path() || m.ticks % 20 == 0 {
+                            m.path_to(w, v[0], v[1], v[2], 1.0);
+                        }
+                    } else {
+                        wander(m, w, 1.0, 120);
                     }
                 } else {
                     wander(m, w, 1.0, 120);
                 }
-            } else {
-                wander(m, w, 1.0, 120);
             }
-        }
-        Kind::Skeleton if m.variant == 1 => {
-            if m.target_player {
-                chase(m, w, player, out);
-            } else {
-                wander(m, w, 1.0, 120);
+            Kind::Skeleton if m.variant == 1 => {
+                if m.target_player {
+                    chase(m, w, player, out);
+                } else {
+                    wander(m, w, 1.0, 120);
+                }
             }
-        }
-        Kind::Skeleton | Kind::Witch => {
-            if m.target_player {
-                ranged(m, w, player, arrows, out);
-            } else {
-                if m.kind == Kind::Skeleton && day && m.fire > 0 {
-                    // EntityAIFleeSun
-                    if m.no_path() {
-                        if let Some(t) = m.random_target(w, 10, 3, None) {
-                            if !w.can_see_sky(t[0] as i32, t[1] as i32, t[2] as i32) {
-                                m.path_to(w, t[0], t[1], t[2], 1.0);
+            Kind::Skeleton | Kind::Witch => {
+                if m.target_player {
+                    ranged(m, w, player, arrows, out);
+                } else {
+                    if m.kind == Kind::Skeleton && day && m.fire > 0 {
+                        // EntityAIFleeSun
+                        if m.no_path() {
+                            if let Some(t) = m.random_target(w, 10, 3, None) {
+                                if !w.can_see_sky(t[0] as i32, t[1] as i32, t[2] as i32) {
+                                    m.path_to(w, t[0], t[1], t[2], 1.0);
+                                }
                             }
                         }
                     }
+                    wander(m, w, 1.0, 120);
                 }
-                wander(m, w, 1.0, 120);
             }
-        }
-        Kind::Creeper => {
-            creeper(m, w, player, out, explosions);
-        }
-        Kind::Villager => {
-            // EntityAIAvoidEntity(zombie, 8)
-            if let Some(z) = zombies.iter().copied().find(|z| m.dist2(*z) < 64.0) {
-                if m.task != Task::Flee || m.no_path() {
-                    if let Some(t) = m.random_target(w, 16, 7, Some(z)) {
-                        m.path_to(w, t[0], t[1], t[2], 0.6);
-                        m.task = Task::Flee;
+            Kind::Villager => {
+                // EntityAIAvoidEntity(zombie, 8)
+                if let Some(z) = zombies.iter().copied().find(|z| m.dist2(*z) < 64.0) {
+                    if m.task != Task::Flee || m.no_path() {
+                        if let Some(t) = m.random_target(w, 16, 7, Some(z)) {
+                            m.path_to(w, t[0], t[1], t[2], 0.6);
+                            m.task = Task::Flee;
+                        }
                     }
+                } else {
+                    if m.task == Task::Flee {
+                        m.task = Task::Idle;
+                    }
+                    if pdist2 < 9.0 && m.rand.next_float() < 0.02 {
+                        m.look_at = Some(player.eye());
+                    }
+                    wander(m, w, 0.6, 120);
                 }
-            } else {
-                if m.task == Task::Flee {
-                    m.task = Task::Idle;
+            }
+            Kind::Slime | Kind::MagmaCube => extra::slime(m, player, out),
+            Kind::PigZombie => {
+                if m.target_player {
+                    chase(m, w, player, out);
+                } else {
+                    wander(m, w, 1.0, 120);
                 }
-                if pdist2 < 9.0 && m.rand.next_float() < 0.02 {
+            }
+            Kind::Blaze => {
+                nether::blaze(m, w, player, balls, out);
+                if m.target_player {
                     m.look_at = Some(player.eye());
+                    if m.no_path() || m.ticks % 20 == 0 {
+                        m.path_to(w, player.feet[0], player.feet[1], player.feet[2], 1.0);
+                    }
+                } else {
+                    wander(m, w, 1.0, 120);
                 }
-                wander(m, w, 0.6, 120);
             }
+            Kind::Enderman => extra::enderman(m, w, player, day, out),
+            Kind::Wolf | Kind::Ocelot => extra::tameable(m, w, player, others, strikes, out),
+            Kind::Horse => extra::horse(m, w, player, out),
+            Kind::IronGolem => extra::golem(m, w, player, others, strikes, out),
+            _ => animal(m, w, player, out),
         }
-        Kind::Slime | Kind::MagmaCube => extra::slime(m, player, out),
-        Kind::PigZombie => {
-            if m.target_player {
-                chase(m, w, player, out);
-            } else {
-                wander(m, w, 1.0, 120);
+        // look at the player now and then (EntityAIWatchClosest)
+        if m.look_at.is_none() && pdist2 < 64.0 && m.task != Task::Panic {
+            if m.rand.next_float() < 0.02 {
+                m.task_ticks = 40 + m.rand.next_int_n(40);
             }
-        }
-        Kind::Blaze => {
-            nether::blaze(m, w, player, balls, out);
-            if m.target_player {
+            if m.task_ticks > 0 && matches!(m.task, Task::Idle) {
                 m.look_at = Some(player.eye());
-                if m.no_path() || m.ticks % 20 == 0 {
-                    m.path_to(w, player.feet[0], player.feet[1], player.feet[2], 1.0);
-                }
-            } else {
-                wander(m, w, 1.0, 120);
+                m.task_ticks -= 1;
             }
         }
-        Kind::Enderman => extra::enderman(m, w, player, day, out),
-        Kind::Wolf | Kind::Ocelot => extra::tameable(m, w, player, others, strikes, out),
-        Kind::Horse => extra::horse(m, w, player, out),
-        Kind::IronGolem => extra::golem(m, w, player, others, strikes, out),
-        _ => animal(m, w, player, out),
-    }
-    // look at the player now and then (EntityAIWatchClosest)
-    if m.look_at.is_none() && pdist2 < 64.0 && m.task != Task::Panic {
-        if m.rand.next_float() < 0.02 {
-            m.task_ticks = 40 + m.rand.next_int_n(40);
+        if !matches!(m.kind, Kind::Slime | Kind::MagmaCube) {
+            m.follow_path();
+            m.move_helper();
         }
-        if m.task_ticks > 0 && matches!(m.task, Task::Idle) {
-            m.look_at = Some(player.eye());
-            m.task_ticks -= 1;
-        }
+        m.look_helper();
     }
-    if !matches!(m.kind, Kind::Slime | Kind::MagmaCube) {
-        m.follow_path();
-        m.move_helper();
-    }
-    m.look_helper();
     if !m.kind.old_ai() {
         m.body_helper();
     } else {
@@ -3497,38 +3590,13 @@ fn ranged(
     }
 }
 
-/// `EntityAICreeperSwell` + `EntityCreeper.onUpdate`
-fn creeper(
+/// `EntityCreeper.onUpdate`: the fuse follows `getCreeperState()`, which
+/// `EntityAICreeperSwell` sets.
+fn creeper_fuse(
     m: &mut Mob,
-    w: &mut ServerWorld,
-    player: &PlayerInfo,
     out: &mut Outcome,
     explosions: &mut Vec<crate::world::explosion::Request>,
 ) {
-    let d2 = m.dist2(player.feet);
-    // EntityAICreeperSwell.shouldExecute: already swelling, or the target
-    // is within three blocks. It shares mutex bit 1 with the movement
-    // tasks, so the creeper stands still while it runs.
-    let executing = m.fuse_dir > 0 || (m.target_player && d2 < 9.0);
-    if executing {
-        m.path.clear();
-        // updateTask
-        m.fuse_dir = if !m.target_player || d2 > 49.0 || !m.can_see(w, player.eye()) {
-            -1
-        } else {
-            1
-        };
-        if m.target_player {
-            m.look_at = Some(player.eye());
-        }
-    } else if m.target_player {
-        m.look_at = Some(player.eye());
-        if m.no_path() || m.ticks % 10 == 0 {
-            m.path_to(w, player.feet[0], player.feet[1], player.feet[2], 1.0);
-        }
-    } else {
-        wander(m, w, 0.8, 120);
-    }
     // EntityCreeper.onUpdate
     if m.ignited {
         m.fuse_dir = 1;
@@ -3617,6 +3685,13 @@ fn tick_arrows(
                             _ => from,
                         };
                         let ok = m.damage(h.damage as f32, src);
+                        if ok {
+                            match a.shooter {
+                                Shooter::Player => m.set_revenge(Some(ai::Target::Player)),
+                                Shooter::Mob(id) => m.set_revenge(Some(ai::Target::Mob(id))),
+                                _ => {}
+                            }
+                        }
                         result = Some(ok);
                     }
                 }

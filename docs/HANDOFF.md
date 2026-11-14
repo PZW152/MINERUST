@@ -148,6 +148,17 @@ java -cp "out;$CP" XxxHarness tools/xxx_1710.txt
   收到該區塊的快照時，若動作已被處理就以快照為準並丟掉預測，否則把預測重新蓋到新快照上（避免舊快照讓方塊閃回去）；
   一個伺服器 tick 套用完後，已處理但沒有收到快照的預測代表被伺服器否決，還原成原值。
   `MINERUST_DEBUG_LATENCY=1` 會印出每個預測的結果，`MINERUST_PREDICT_BOGUS=1` 故意多預測兩個伺服器不會放的方塊來測還原。
+- **生物 AI**（`src/entity/mob/ai.rs`，是 `mob.rs` 的子模組）：
+  - `Tasks` = `EntityAITasks`（每 3 tick 全面重評、`canUse` 的優先序與 mutex、`executingTaskEntries` 依啟動順序）；每隻生物有
+    `tasks` 與 `target_tasks` 兩份。`Ai` 列舉的每個變體就是一個 `EntityAIBase` 類別連同它的欄位，
+    `should_execute` / `continue_executing` / `start_executing` / `reset_task` / `update_task` 與原版五個方法一一對應，亂數呼叫順序照原版。
+  - `ai::update` = `EntityLiving.updateAITasks`：targetTasks → tasks → `nav_update`（`PathNavigate.onUpdateNavigation`，含直線捷徑
+    `isDirectPathBetweenPoints`、卡住 100 tick 放棄、`removeSunnyPath`）→ `move_helper` → `look_update`（`EntityLookHelper`）。
+  - `ai::old_update` = `EntityCreature.updateEntityActionState` + `EntityLiving.updateEntityActionState`（舊式 AI）。
+  - 目標以 `ai::Target`（玩家或生物編號）表示：`attack_target`（`getAttackTarget`）、`revenge`（`getAITarget`，100 tick 後遺忘）。
+    生物之間不能在同一 tick 互相改狀態，所以攻擊別的生物走 `Strike`，`HurtByTarget` 的呼叫同伴走 `Outcome.calls`，迴圈結束後套用。
+  - `build()` 是各生物建構子裡的 `addTask` 清單；新增生物時照原版建構子抄優先序。`uses_tasks` / `uses_old` 決定走哪一條路，
+    其餘生物仍走 `tick_mob` 裡舊的 `match`。
 - 客戶端只有伺服器送來的快照；容器點擊在客戶端用同一份 `container.rs` 預測，伺服器的 `clicks` 計數讓客戶端丟掉過時的快照。
 - 生物在客戶端有自己的副本：伺服器端 `Mob::track()` 模擬 `EntityTrackerEntry`（1/32 座標、4/32 門檻、S19 頭部），
   客戶端以三步內插（`setPositionAndRotation2`）、`updateDistance` 與肢體擺動自行計算。
@@ -253,12 +264,19 @@ MINERUST_BENCH=10 minerust --seed 12345 --no-save --size 1920 1080 --distance 16
      關閉平滑光照時這些方塊還不會跟著變。
    - 半透明分段目前不做深度排序（1.7.10 也不排序，保持一致）。
 
-1. **生物 AI 不是原版的任務系統**（使用者 2026-11-13：「生物特性有問題」）。`entity/mob.rs` 的各種生物行為多半是手寫的近似
-   （例如苦力怕原本自己判斷距離膨脹），不是 `EntityAITasks` + 各個 `EntityAIBase` 的移植。這違反準則 1。
-   應該做的是：移植 `EntityAITasks`（優先序、mutex、每 3 tick 重新評估）與常用任務（`EntityAISwimming`、`AttackOnCollide`、
-   `Wander`、`WatchClosest`、`LookIdle`、`NearestAttackableTarget`、`HurtByTarget`、`Panic`、`Tempt`、`Mate`、`FollowParent`……），
-   再逐一把生物改掛任務。苦力怕已先照 `EntityAICreeperSwell` 與 `EntityCreeper.onUpdate` / `interact` 改寫（含打火石點燃）。
-   高壓苦力怕（閃電）仍未做。
+1. **生物 AI：第一階段已完成，第二階段待做**（使用者 2026-11-14：「完成 AI 先」）。架構見第 4 節「生物 AI」。
+   已改用原版任務系統的生物：殭屍、骷髏（含凋零骷髏）、苦力怕、女巫、豬、牛、哞菇、羊、雞、村民（部分任務）；
+   已改用原版舊式 AI（`EntityCreature.updateEntityActionState`）的：蜘蛛、洞穴蜘蛛、蠹魚、殭屍豬人。
+   **第二階段（還在舊的手寫處理函式上）**：
+   - 狼、豹貓、鐵魔像、馬（`mob/extra.rs` 的 `tameable` / `golem` / `horse`）：原版是任務式，需要
+     `EntityAISit`、`LeapAtTarget`（已讀過原始碼）、`FollowOwner`、`Beg`、`OwnerHurtByTarget`、`OwnerHurtTarget`、`TargetNonTamed`、
+     `OcelotSit`、`OcelotAttack`、`DefendVillage`、`LookAtVillager`、`MoveTowardsTarget`、`RunAroundLikeCrazy`。
+   - 沒掛上的任務：`EntityAIMate`（需要先做繁殖：餵食、`inLove`、生小孩）、`ControlledByPlayer`（騎豬）、殭屍的 `BreakDoor`、
+     `MoveTowardsRestriction`、`MoveThroughVillage`（需要村莊資料 `VillageCollection`）、村民的交易／開門／回屋／繁殖／跟隨魔像／玩耍。
+   - 自帶 `updateEntityActionState` 的：終界使者、烈焰使者、史萊姆／岩漿怪、惡魂、蝙蝠、魷魚（`extra.rs`、`nether.rs` 的函式沒有對過原始碼）。
+   - 蠹魚鑽進石頭與召喚同伴（`EntitySilverfish.updateEntityActionState` 的覆寫）。
+   - `EntityAITarget` 的 `nearbyOnly`（`canEasilyReach`）與家的範圍（`isWithinHomeDistance`）沒有做，目前沒有生物用到。
+   - 高壓苦力怕（閃電）、殭屍的增援（`summonReinforcements`）、玩家隱形時的偵測距離已做但護甲件數只算有沒有穿。
 1a. **附魔效果**：時運與絲綢之觸已經由 `drops.rs` 生效（玩家挖掘）。其餘尚未作用（鋒利／不死剋星／節肢剋星、擊退、燃燒、掠奪、
    效率、耐久、保護系列、水下呼吸、親水性、荊棘、力量／衝擊／火焰／無限、海之眷顧、魚餌）。
    掉落的另外幾條路徑還沒改走 `drops.rs`：`harvestBlock` 的覆寫（剪刀剪樹葉／草／藤蔓、冰、雪片仍用舊的 `item::drops`）、
@@ -396,4 +414,13 @@ MINERUST_BENCH=10 minerust --seed 12345 --no-save --size 1920 1080 --distance 16
   - 截圖模式的 `--open use:` 可用 `MINERUST_HIT=x,y,z`、`MINERUST_FACE=0..5` 指定命中點與面。
   **驗證**：`cargo test --release` 86 項通過；截圖確認火把的選取框貼合其範圍。梯子、南瓜、藤蔓、絆線鉤的放置方向只照原始碼移植，
   沒有個別測試。**還沒補放置規則的**：柵欄門、床、頭顱、可可、終界門框的朝向、鐵軌之外需要 `canPlaceBlockOnSide` 的檢查（火把、按鈕已有）。
+- `本次（2026-11-14，生物 AI 第一階段）`：新增 `mob/ai.rs`（約 1,500 行）。移植了 `EntityAITasks`、`PathNavigate` 的導航更新、
+  `EntityLookHelper`、`EntityAITarget` 與 17 個任務類別（Swimming、Panic、Tempt、Wander、WatchClosest／WatchClosest2、LookIdle、
+  AttackOnCollide、ArrowAttack、CreeperSwell、AvoidEntity、FleeSun、RestrictSun、EatGrass、FollowParent、HurtByTarget、
+  NearestAttackableTarget），以及舊式 AI。順帶修正的原版行為：殭屍豬人的怒氣不會隨時間消退（1.7.10 沒有遞減）、攻擊時加速 0.45；
+  `AttackOnCollide` 的 `attackTick <= 20` 讓殭屍每 tick 都出手（由玩家的無敵時間限制實際受傷頻率，這是 1.7.10 的原樣）；
+  動物被打後逃跑改由 `getAITarget` 驅動（100 tick）；骷髏白天著火會找遮蔽、導航避開陽光；羊吃草長毛、小羊加速成長；
+  潛行讓敵對生物的偵測距離變 0.8 倍。
+  **驗證**：`cargo test --release` 90 項通過，新增四個行為測試（殭屍追擊並命中、牛被小麥吸引與被打逃跑、骷髏射箭、殭屍豬人被打才還手）。
+  伺服器 tick 沒有變慢（機器上仍有別的遊戲在跑，數字僅供參考：約 6 ms）。**沒有實機觀察過**各生物的實際走位與轉頭是否自然。
   **查到的既有錯誤，待修**：武器附魔（鋒利系列、擊退、燃燒、掠奪）、保護系列、水下呼吸、荊棘、弓的附魔、附魔光澤都還沒接。
