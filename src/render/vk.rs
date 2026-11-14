@@ -185,6 +185,10 @@ fn fs_ui(i: UiOut) -> @location(0) vec4<f32> {
     if (i.sel > 2.5) {
         t = l;
     }
+    if (i.sel > 3.5) {
+        // the item glint, wrapped inside its atlas tile (pc.color)
+        t = rect_sample(pc.color, i.uv);
+    }
     let c = t * i.color;
     if (c.a < 0.004) {
         discard;
@@ -377,6 +381,10 @@ pub struct Frame<'a> {
     pub clouds: Option<CloudDraw>,
     /// GUI triangles (see `vs_ui`), in GUI pixels.
     pub ui: &'a [Vertex],
+    /// Vertex ranges of `ui` drawn with the additive glint pipeline, and
+    /// the atlas tile of `textures/misc/enchanted_item_glint.png`.
+    pub ui_glint: &'a [(u32, u32)],
+    pub glint_rect: [f32; 4],
     /// Camera-relative quads drawn with the terrain shader (dropped items).
     pub dynamic: &'a [Vertex],
     /// Block-breaking overlay quads (camera-relative).
@@ -519,6 +527,7 @@ pub struct Renderer {
     pipe_translucent: vk::Pipeline,
     pipe_line: vk::Pipeline,
     pipe_ui: vk::Pipeline,
+    pipe_gui_glint: vk::Pipeline,
     pipe_sky_alpha: vk::Pipeline,
     pipe_sky_add: vk::Pipeline,
     pipe_cloud_depth: vk::Pipeline,
@@ -921,7 +930,11 @@ impl Renderer {
             let module = device
                 .create_shader_module(&vk::ShaderModuleCreateInfo::default().code(&spv), None)
                 .map_err(|e| e.to_string())?;
-            let mk = |vs: &CStr, fs: &CStr, kind: u32| -> vk::Pipeline {
+            let mk = |vs: &CStr, fs: &CStr, kind_in: u32| -> vk::Pipeline {
+                // kind 13: the GUI pipeline (9) with RenderItem.renderGlint's
+                // additive blend
+                let glint = kind_in == 13;
+                let kind = if glint { 9 } else { kind_in };
                 // kind: 0 sky, 1 opaque, 2 translucent, 3 line, 4 ui
                 let stages = [
                     vk::PipelineShaderStageCreateInfo::default()
@@ -1091,6 +1104,17 @@ impl Renderer {
                         .dst_alpha_blend_factor(vk::BlendFactor::ZERO)
                         .alpha_blend_op(vk::BlendOp::ADD);
                 }
+                if glint {
+                    // glBlendFunc(GL_DST_ALPHA, GL_ONE) over an opaque target
+                    att = att
+                        .blend_enable(true)
+                        .src_color_blend_factor(vk::BlendFactor::ONE)
+                        .dst_color_blend_factor(vk::BlendFactor::ONE)
+                        .color_blend_op(vk::BlendOp::ADD)
+                        .src_alpha_blend_factor(vk::BlendFactor::ZERO)
+                        .dst_alpha_blend_factor(vk::BlendFactor::ONE)
+                        .alpha_blend_op(vk::BlendOp::ADD);
+                }
                 let atts = [att];
                 let cb = vk::PipelineColorBlendStateCreateInfo::default().attachments(&atts);
                 let dyn_states = [
@@ -1126,6 +1150,7 @@ impl Renderer {
             let pipe_cloud_depth = mk(c"vs_color", c"fs_color_fog", 7);
             let pipe_cloud_color = mk(c"vs_color", c"fs_color_fog", 8);
             let pipe_gui = mk(c"vs_ui", c"fs_ui", 9);
+            let pipe_gui_glint = mk(c"vs_ui", c"fs_ui", 13);
             let pipe_crack = mk(c"vs_terrain", c"fs_crack", 10);
             let pipe_hand = mk(c"vs_terrain", c"fs_terrain", 11);
             let pipe_portal = mk(c"vs_portal", c"fs_portal", 12);
@@ -1188,6 +1213,7 @@ impl Renderer {
                 pipe_translucent,
                 pipe_line,
                 pipe_ui,
+                pipe_gui_glint,
                 pipe_sky_alpha,
                 pipe_sky_add,
                 pipe_cloud_depth,
@@ -2942,7 +2968,35 @@ impl Renderer {
                     [1.0; 4],
                 );
                 dev.cmd_bind_vertex_buffers(cmd, 0, &[self.frames[fi].ui_buf], &[0]);
-                dev.cmd_draw(cmd, ui_count as u32, 1, 0, 0);
+                // the glint ranges go through the additive pipeline, in order
+                let scale = [
+                    2.0 * frame.gui_scale / self.extent.width as f32,
+                    2.0 * frame.gui_scale / self.extent.height as f32,
+                    0.0,
+                    0.0,
+                ];
+                let mut at = 0usize;
+                for &(a, b) in frame.ui_glint {
+                    let (a, b) = ((a as usize).min(ui_count), (b as usize).min(ui_count));
+                    if a > at {
+                        dev.cmd_draw(cmd, (a - at) as u32, 1, at as u32, 0);
+                    }
+                    if b > a {
+                        dev.cmd_bind_pipeline(
+                            cmd,
+                            vk::PipelineBindPoint::GRAPHICS,
+                            self.pipe_gui_glint,
+                        );
+                        push(scale, frame.glint_rect);
+                        dev.cmd_draw(cmd, (b - a) as u32, 1, a as u32, 0);
+                        dev.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, self.pipe_gui);
+                        push(scale, [1.0; 4]);
+                    }
+                    at = b.max(at);
+                }
+                if ui_count > at {
+                    dev.cmd_draw(cmd, (ui_count - at) as u32, 1, at as u32, 0);
+                }
             }
             dev.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, self.pipe_ui);
             push([0.0, 0.0, 0.0, 1.0], [1.0, 1.0, 1.0, 1.0]);
@@ -3174,6 +3228,7 @@ impl Drop for Renderer {
                 self.pipe_translucent,
                 self.pipe_line,
                 self.pipe_ui,
+                self.pipe_gui_glint,
                 self.pipe_sky_alpha,
                 self.pipe_sky_add,
                 self.pipe_cloud_depth,

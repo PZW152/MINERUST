@@ -482,6 +482,13 @@ impl Atlas {
                 }
             }
         }
+        // RenderItem.RES_ITEM_GLINT
+        let t = whole(
+            &mut b,
+            jar,
+            "assets/minecraft/textures/misc/enchanted_item_glint.png",
+        )?;
+        names.insert("item_glint", t);
         let grass_overlay = {
             let p = block_tex(jar, "grass_side_overlay", 16)?;
             b.add(p, 16)

@@ -13,6 +13,10 @@ const PLAIN: u8 = 2;
 
 pub struct Ui<'a> {
     pub v: Vec<Vertex>,
+    /// Vertex ranges of `v` drawn with the additive glint pipeline.
+    pub glint: Vec<(u32, u32)>,
+    /// `Minecraft.getSystemTime()` for the glint's scroll.
+    pub time_ms: u64,
     atlas: &'a Atlas,
     /// Scaled GUI size (`ScaledResolution`).
     pub w: f32,
@@ -32,6 +36,10 @@ impl<'a> Ui<'a> {
     pub fn new(atlas: &'a Atlas, w: f32, h: f32) -> Ui<'a> {
         Ui {
             v: Vec::new(),
+            glint: Vec::new(),
+            time_ms: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_millis() as u64),
             atlas,
             w,
             h,
@@ -270,7 +278,9 @@ impl<'a> Ui<'a> {
             }
         }
         // RenderItem.renderItemIntoGUI: one quad per render pass
-        for (t, c) in self.atlas.stack_passes(s) {
+        let passes = self.atlas.stack_passes(s);
+        let masks: Vec<[f32; 4]> = passes.iter().map(|p| p.0).collect();
+        for (t, c) in passes {
             let col = [
                 (c[0] * 255.0) as u8,
                 (c[1] * 255.0) as u8,
@@ -284,6 +294,68 @@ impl<'a> Ui<'a> {
                 BLOCKS,
             );
         }
+        if s.has_effect() {
+            self.glint(x, y, &masks);
+        }
+    }
+
+    /// `RenderItem.renderGlint` over an item drawn at `(x, y)`: two passes
+    /// of the scrolling glint texture over a 20x20 square, added where the
+    /// item's passes left depth (`glDepthFunc(GL_EQUAL)`), i.e. their
+    /// pixels that passed the alpha test. Drawn as one quad per such GUI
+    /// pixel with the passes' exact texture coordinates.
+    pub fn glint(&mut self, x: f32, y: f32, masks: &[[f32; 4]]) {
+        let size = crate::render::atlas::ATLAS_SIZE as f32;
+        let img = &self.atlas.mips[0];
+        let mut on = [[false; 16]; 16];
+        for r in masks {
+            let (px0, py0) = (r[0] * size, r[1] * size);
+            let (pw, ph) = ((r[2] - r[0]) * size, (r[3] - r[1]) * size);
+            for (j, row) in on.iter_mut().enumerate() {
+                for (i, cell) in row.iter_mut().enumerate() {
+                    let tx = (px0 + (i as f32 + 0.5) * pw / 16.0) as usize;
+                    let ty = (py0 + (j as f32 + 0.5) * ph / 16.0) as usize;
+                    let k = (ty * size as usize + tx) * 4 + 3;
+                    // glAlphaFunc(GL_GREATER, 0.1)
+                    if img.get(k).is_some_and(|&a| a as f32 > 0.1 * 255.0) {
+                        *cell = true;
+                    }
+                }
+            }
+        }
+        let start = self.v.len() as u32;
+        // glColor4f(0.5, 0.25, 0.8, 1)
+        let color = [127u8, 63, 204, 255];
+        let (x0, y0) = (x - 2.0, y - 2.0);
+        for pass in 0..2u64 {
+            let period = 3000 + pass * 1873;
+            let s = (self.time_ms % period) as f32 / period as f32 * 256.0;
+            let k = if pass == 1 { -1.0 } else { 4.0 };
+            let uv = |px: f32, py: f32| {
+                let (dx, dy) = (px - x0, py - y0);
+                [(s + dx + dy * k) * 0.00390625, dy * 0.00390625]
+            };
+            for (j, row) in on.iter().enumerate() {
+                for (i, &cell) in row.iter().enumerate() {
+                    if !cell {
+                        continue;
+                    }
+                    let (a, b) = (x + i as f32, y + j as f32);
+                    self.quad(
+                        [[a, b], [a, b + 1.0], [a + 1.0, b + 1.0], [a + 1.0, b]],
+                        [
+                            uv(a, b),
+                            uv(a, b + 1.0),
+                            uv(a + 1.0, b + 1.0),
+                            uv(a + 1.0, b),
+                        ],
+                        color,
+                        4,
+                    );
+                }
+            }
+        }
+        self.glint.push((start, self.v.len() as u32));
     }
 
     /// `widgets.png` region.

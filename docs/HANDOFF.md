@@ -533,3 +533,9 @@ MINERUST_BENCH=10 minerust --seed 12345 --no-save --size 1920 1080 --distance 16
     改成朝上丟向五格外的牆。
   **驗證**：`cargo test --release` 100 項通過（新增 `spawn_equipment_matches_the_game`）；截圖確認殭屍豬人的金劍與骷髏的弓。
   基準：上一個提交 957–984 fps／伺服器 5.6–5.7 ms，本次 980–1,042 fps／5.8–6.0 ms，在雜訊範圍內。
+- `本次（2026-11-14，物品光澤）`：附魔裝備、藥水、附魔書、成書、經驗瓶、附魔金蘋果、地獄之星在物品欄裡以前都沒有光澤。
+  新增 `Stack::has_effect`（各 `Item.hasEffect` 覆寫）與 `Ui::glint`：原版用 `glDepthFunc(GL_EQUAL)` 把光澤限制在圖示畫過的像素，
+  這裡由 CPU 讀圖集第 0 層，把通過透明度測試（> 0.1）的每個 GUI 像素畫成一個小四邊形，兩層的貼圖座標照 `renderGlint` 的
+  `getSystemTime` 捲動公式逐角計算；新的 Vulkan 管線 `pipe_gui_glint`（kind 13，相加混合），`Frame.ui_glint` 記錄要用它畫的頂點範圍，
+  照順序穿插繪製，所以之後畫的背景與工具提示仍會蓋住光澤。截圖確認。`cargo test --release` 100 項通過。
+  **留下**：世界中的光澤（手持、掉落物、盔甲模型的 `shouldRenderPass` 回傳 15 那一層）、方塊物品圖示的光澤。

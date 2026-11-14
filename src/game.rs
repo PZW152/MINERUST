@@ -5262,9 +5262,11 @@ impl Game {
         }
         if hud_hidden {
             ui.v.clear();
+            ui.glint.clear();
         }
         if self.loading < 2 {
             ui.v.clear();
+            ui.glint.clear();
             screens::dirt_background(&mut ui);
             let (w, h) = (ui.w, ui.h);
             if self.loading == 0 {
@@ -5432,6 +5434,7 @@ impl Game {
             Screen::Sign => self.draw_sign_editor(&mut ui, m),
             Screen::Playing => {}
         }
+        let ui_glint = std::mem::take(&mut ui.glint);
         let ui_verts = ui.v;
         // RenderGlobal.drawSelectionBox: getSelectedBoundingBoxFromPool
         let outline = if self.screen == Screen::Playing {
@@ -5497,6 +5500,8 @@ impl Game {
             hand: &hand,
             weather: &weather,
             ui: &ui_verts,
+            ui_glint: &ui_glint,
+            glint_rect: self.atlas.named("item_glint"),
             globals: &g,
             cam: eye,
             outline,
@@ -5565,6 +5570,8 @@ pub fn draw_ui_only(
         sunrise: None,
         clouds: None,
         ui,
+        ui_glint: &[],
+        glint_rect: [0.0; 4],
         dynamic: &[],
         crack: &[],
         hand: &[],

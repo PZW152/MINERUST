@@ -124,6 +124,18 @@ impl Stack {
             .collect()
     }
 
+    /// `ItemStack.hasEffect`: the glint. Enchanted stacks, enchanted and
+    /// written books, bottles o' enchanting, nether stars, the enchanted
+    /// golden apple and potions with effects.
+    pub fn has_effect(&self) -> bool {
+        match self.id {
+            403 | 387 | 384 | 399 => true,
+            322 => self.meta > 0,
+            373 => !crate::potion::effects_of(self.meta, false).is_empty(),
+            _ => self.is_enchanted(),
+        }
+    }
+
     /// `isItemEnchanted`: an `ench` list is present.
     pub fn is_enchanted(&self) -> bool {
         self.nbt()
