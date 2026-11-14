@@ -812,10 +812,23 @@ impl ServerWorld {
         cz: i32,
         lists: Option<(Vec<super::anvil::Nbt>, Vec<super::anvil::Nbt>)>,
     ) -> std::io::Result<()> {
+        let now = self.total_time;
+        match self.anvil_chunk_root(dir, cx, cz, lists) {
+            Some(root) => super::anvil::write_region_chunk(dir, cx, cz, &root, (now / 20) as u32),
+            None => Ok(()),
+        }
+    }
+
+    /// A loaded chunk as the NBT its region file holds.
+    pub fn anvil_chunk_root(
+        &self,
+        dir: &std::path::Path,
+        cx: i32,
+        cz: i32,
+        lists: Option<(Vec<super::anvil::Nbt>, Vec<super::anvil::Nbt>)>,
+    ) -> Option<super::anvil::Nbt> {
         use super::anvil::{self, Nbt};
-        let Some(c) = self.chunks.get(&(cx, cz)) else {
-            return Ok(());
-        };
+        let c = self.chunks.get(&(cx, cz))?;
         let mut a = c.to_anvil();
         match lists {
             Some((tiles, entities)) => {
@@ -847,8 +860,7 @@ impl ServerWorld {
                 ])
             })
             .collect();
-        let root = anvil::chunk_to_nbt(&a, now);
-        anvil::write_region_chunk(dir, cx, cz, &root, (now / 20) as u32)
+        Some(anvil::chunk_to_nbt(&a, now))
     }
 
     /// Writes every loaded chunk to disk without unloading it.

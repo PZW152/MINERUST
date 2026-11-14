@@ -1351,6 +1351,12 @@ impl ApplicationHandler for App {
                                         );
                                         sim::TICK_WORST.store(0, Relaxed);
                                     }
+                                    if let Some(n) = std::env::var("MINERUST_BENCH_TNT")
+                                        .ok()
+                                        .and_then(|v| v.parse::<i32>().ok())
+                                    {
+                                        g.bench_command(sim::Command::BenchTnt(n));
+                                    }
                                     println!(
                                         "Bench: at start: {} chunk snapshots, {} mesh uploads, {} events",
                                         g.counts[0], g.counts[1], g.counts[2]

@@ -36,6 +36,9 @@ mod vehicles;
 pub enum Command {
     /// The player's chunk; loading is centred on it.
     Center(i32, i32),
+    /// `MINERUST_BENCH_TNT=n`: an n-cube of TNT eight blocks east of the
+    /// player, one of them primed.
+    BenchTnt(i32),
     Break([i32; 3]),
     Place {
         pos: [i32; 3],
@@ -886,6 +889,23 @@ impl Sim {
     fn apply(&mut self, cmd: &Command) {
         match *cmd {
             Command::Center(x, z) => self.centre = (x, z),
+            Command::BenchTnt(n) => {
+                let f = self.play.player.0;
+                let (x, y, z) = (
+                    f[0].floor() as i32 + 8,
+                    f[1].floor() as i32,
+                    f[2].floor() as i32,
+                );
+                for dx in 0..n {
+                    for dy in 0..n {
+                        for dz in 0..n {
+                            self.world
+                                .set_block(x + dx, y + dy, z + dz, crate::block::TNT, 0, 3);
+                        }
+                    }
+                }
+                self.world.prime_tnt(x, y + n - 1, z, 20);
+            }
             Command::ViewDistance(v) => {
                 self.view = v;
                 self.offsets = spiral(v + 2);
@@ -1796,17 +1816,58 @@ impl Sim {
             ));
         }
         let dim = world.provider.dim;
+        let began = std::time::Instant::now();
+        // the chunks' NBT first (it reads the game state), then the
+        // compression on every core, then each region file opened once
+        let mut roots: Vec<(i32, i32, anvil::Nbt)> = Vec::new();
         for (cx, cz) in keys {
             let lists = Self::chunk_lists(play, mobs, cx, cz, dim);
             if world.chunks.contains_key(&(cx, cz)) {
-                world.write_anvil_chunk(&dir, cx, cz, Some(lists))?;
+                if let Some(root) = world.anvil_chunk_root(&dir, cx, cz, Some(lists)) {
+                    roots.push((cx, cz, root));
+                }
             } else if let Some(mut root) = anvil::read_region_chunk(&dir, cx, cz) {
+                // an unloaded chunk: its lists as the game holds them now
+                // (empty when everything that was in it has left)
                 if let Some(level) = root.get_mut("Level") {
                     level.set("TileEntities", anvil::Nbt::List(10, lists.0));
                     level.set("Entities", anvil::Nbt::List(10, lists.1));
                 }
-                anvil::write_region_chunk(&dir, cx, cz, &root, (world.total_time / 20) as u32)?;
+                roots.push((cx, cz, root));
             }
+        }
+        let n = roots.len();
+        let threads = std::thread::available_parallelism()
+            .map_or(4, |v| v.get())
+            .clamp(1, 16);
+        let per = n.div_ceil(threads).max(1);
+        let packed: Vec<std::io::Result<Vec<(i32, i32, Vec<u8>)>>> = std::thread::scope(|sc| {
+            let hs: Vec<_> = roots
+                .chunks(per)
+                .map(|part| {
+                    sc.spawn(move || {
+                        part.iter()
+                            .map(|(cx, cz, root)| {
+                                anvil::compress_chunk(root).map(|d| (*cx, *cz, d))
+                            })
+                            .collect::<std::io::Result<Vec<_>>>()
+                    })
+                })
+                .collect();
+            hs.into_iter()
+                .map(|h| h.join().expect("chunk compression panicked"))
+                .collect()
+        });
+        let mut all = Vec::with_capacity(n);
+        for part in packed {
+            all.extend(part?);
+        }
+        anvil::write_region_batch(&dir, &all, (world.total_time / 20) as u32, true)?;
+        if n > 64 {
+            println!(
+                "Saved {n} chunks of dimension {dim} in {:.2} s",
+                began.elapsed().as_secs_f64()
+            );
         }
         Ok(())
     }
@@ -4665,6 +4726,48 @@ mod tests {
             .and_then(|m| m.equipment[3])
             .map_or(i32::MAX, |s| s.meta);
         assert!(worn >= 8, "the chestplate pays 1 or 3 a punch: {worn}");
+    }
+
+    /// Timing of a 6x6x6 block of TNT going off (run with `--ignored
+    /// --nocapture`): the worst and total server tick.
+    #[test]
+    #[ignore]
+    fn tnt_cube_timing() {
+        let (mut sim, x, y, z) = redstone_sim();
+        arena(&mut sim, x, y, z);
+        for dx in 0..6 {
+            for dy in 1..7 {
+                for dz in 0..6 {
+                    sim.world
+                        .set_block(x + dx, y + dy, z + dz, block::TNT, 0, 3);
+                }
+            }
+        }
+        sim.world.prime_tnt(x, y + 6, z, 20);
+        let mut worst = 0.0f64;
+        let mut total = 0.0f64;
+        let mut ev = Vec::new();
+        let mut peak = 0;
+        for i in 0..200 {
+            let t = std::time::Instant::now();
+            sim.step(&[], &mut ev);
+            let d = t.elapsed().as_secs_f64() * 1000.0;
+            total += d;
+            if d > 50.0 {
+                println!(
+                    "tick {i}: {d:.1} ms, {} tnt, {} events",
+                    sim.mobs.tnt.len(),
+                    ev.len()
+                );
+            }
+            worst = worst.max(d);
+            peak = peak.max(sim.mobs.tnt.len());
+            ev.clear();
+        }
+        println!(
+            "worst {worst:.1} ms, total {total:.1} ms, peak tnt {peak}, items {}",
+            sim.play.items.len()
+        );
     }
 
     /// ItemFood, ItemPotion and ItemBow through setItemInUse.

@@ -138,6 +138,8 @@
 - [ ] 影像設定尚未生效：畫質「流暢」（不透明樹葉、平面雲、平面掉落物、無暈影）、粒子數量、各向異性過濾、
       3D 立體、進階 OpenGL、FBO；平滑光照關閉時非 `rb` 路徑的方塊（樓梯、柵欄、液體等）
 
+- [x] 暈影（`GuiIngame.renderVignette`）；粒子每個圖層各自 4000 上限（`EffectRenderer.fxLayers`）
+- [ ] 存檔只寫有變動或有實體的區塊（`Chunk.needsSaving`），目前讀進來過的區塊每次都重寫
 - [ ] 實體陰影與著火（`Render.doRenderShadowAndFire`）
 - [ ] 騎乘時玩家模型的坐姿（`ModelBiped.isRiding`，第三人稱與物品欄）
 - [ ] 物品欄裡的玩家模型（`GuiInventory.func_147046_a`）

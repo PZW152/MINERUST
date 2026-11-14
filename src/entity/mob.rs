@@ -2272,7 +2272,8 @@ impl Mobs {
     }
 
     pub fn prime_tnt(&mut self, pos: [f64; 3], fuse: i32) {
-        let f = (self.rand.next_double() * std::f64::consts::PI * 2.0) as f32;
+        // (float)(Math.random() * (float) Math.PI * 2.0)
+        let f = (math::math_random() * std::f32::consts::PI as f64 * 2.0) as f32;
         let motion = [
             (-(f.sin()) * 0.02) as f64,
             0.2f32 as f64,

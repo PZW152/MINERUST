@@ -15,6 +15,9 @@ pub struct Ui<'a> {
     pub v: Vec<Vertex>,
     /// Vertex ranges of `v` drawn with the additive glint pipeline.
     pub glint: Vec<(u32, u32)>,
+    /// How many vertices at the start of `v` are the vignette, drawn with
+    /// `glBlendFunc(GL_ZERO, GL_ONE_MINUS_SRC_COLOR)`.
+    pub vignette: u32,
     /// `Minecraft.getSystemTime()` for the glint's scroll.
     pub time_ms: u64,
     atlas: &'a Atlas,
@@ -37,6 +40,7 @@ impl<'a> Ui<'a> {
         Ui {
             v: Vec::new(),
             glint: Vec::new(),
+            vignette: 0,
             time_ms: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map_or(0, |d| d.as_millis() as u64),

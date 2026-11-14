@@ -297,6 +297,8 @@ pub struct Game {
     /// `EntityPlayerSP.timeInPortal` (and last tick's value).
     portal_time: f32,
     prev_portal_time: f32,
+    /// `GuiIngame.prevVignetteBrightness`
+    vignette: f32,
     in_portal: bool,
     ticks: u64,
     noise: BiomeNoise,
@@ -632,6 +634,7 @@ impl Game {
             dim: 0,
             portal_time: 0.0,
             prev_portal_time: 0.0,
+            vignette: 1.0,
             in_portal: false,
             ticks: 0,
             noise: BiomeNoise::new(),
@@ -820,11 +823,51 @@ impl Game {
             && self.renderer.mesh_count() >= side * side
     }
 
+    /// A command from the benchmark harness.
+    pub fn bench_command(&mut self, c: Command) {
+        let _ = self.sim.commands.send(c);
+    }
+
     /// The partial tick of what the server simulates and the client only
     /// draws (dropped items, arrows, primed TNT, falling blocks, pistons):
     /// how far the newest server tick's `prev` to `pos` step has played.
     /// The server's ticks are not in phase with the client's, so the
     /// client's own partial tick would make these jump back and forth.
+    /// `Entity.getBrightness` for the player: `World.getLightBrightness`
+    /// two thirds of the way up its box.
+    fn player_brightness(&self) -> f32 {
+        let p = self.player.pos;
+        let x = math::floor_double(p[0]);
+        let z = math::floor_double(p[2]);
+        let y = math::floor_double(
+            self.player.bb.min[1] + (self.player.bb.max[1] - self.player.bb.min[1]) * 0.66,
+        );
+        if !self.world.chunks.contains_key(&(x >> 4, z >> 4)) {
+            return 0.0;
+        }
+        let sub =
+            sim::skylight_subtracted_weather(self.world_time, self.rain(1.0), self.weather.thunder);
+        // getBlockLightValue_do(x, y, z, true)
+        let at = |x: i32, y: i32, z: i32| -> i32 {
+            if y < 0 {
+                return 0;
+            }
+            let y = y.min(255);
+            (self.world.light(true, x, y, z) - sub).max(self.world.light(false, x, y, z))
+        };
+        let id = self.world.peek_block(x, y, z);
+        let l = if (0..256).contains(&y) && block::info(id).use_neighbor_brightness {
+            at(x, y + 1, z)
+                .max(at(x + 1, y, z))
+                .max(at(x - 1, y, z))
+                .max(at(x, y, z + 1))
+                .max(at(x, y, z - 1))
+        } else {
+            at(x, y, z)
+        };
+        self.light_table[l.clamp(0, 15) as usize]
+    }
+
     fn server_partial(&self) -> f32 {
         (self.server_tick_at.elapsed().as_secs_f32() / 0.05).clamp(0.0, 1.0)
     }
@@ -5128,6 +5171,19 @@ impl Game {
         );
         // updateCameraAndRender: no GuiIngame with hideGUI and no screen
         let hud_hidden = self.hide_gui && self.screen == Screen::Playing;
+        // GuiIngame.renderGameOverlay begins with renderVignette (fancy
+        // graphics only): the screen's edges darken as the player's own
+        // spot does, easing in by a hundredth a frame
+        if !hud_hidden && self.loading == 2 && self.settings().fancy_graphics {
+            let mut b = 1.0 - self.player_brightness();
+            b = b.clamp(0.0, 1.0);
+            self.vignette = (self.vignette as f64 + (b - self.vignette) as f64 * 0.01) as f32;
+            if let Some(t) = self.atlas.mob_tex("../misc/vignette") {
+                let c = (self.vignette * 255.0) as u32 & 0xFF;
+                ui.atlas_rect(0.0, 0.0, ui.w, ui.h, t.rect, c << 16 | c << 8 | c, 1.0);
+                ui.vignette = ui.v.len() as u32;
+            }
+        }
         if self.loading < 2 {
             // the integrated server's spawn area first, then the chunks
             // around the player drawn
@@ -5435,6 +5491,7 @@ impl Game {
             Screen::Playing => {}
         }
         let ui_glint = std::mem::take(&mut ui.glint);
+        let ui_vignette = ui.vignette;
         let ui_verts = ui.v;
         // RenderGlobal.drawSelectionBox: getSelectedBoundingBoxFromPool
         let outline = if self.screen == Screen::Playing {
@@ -5501,6 +5558,7 @@ impl Game {
             weather: &weather,
             ui: &ui_verts,
             ui_glint: &ui_glint,
+            ui_vignette,
             glint_rect: self.atlas.named("item_glint"),
             globals: &g,
             cam: eye,
@@ -5571,6 +5629,7 @@ pub fn draw_ui_only(
         clouds: None,
         ui,
         ui_glint: &[],
+        ui_vignette: 0,
         glint_rect: [0.0; 4],
         dynamic: &[],
         crack: &[],

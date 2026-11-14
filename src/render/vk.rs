@@ -384,6 +384,8 @@ pub struct Frame<'a> {
     /// Vertex ranges of `ui` drawn with the additive glint pipeline, and
     /// the atlas tile of `textures/misc/enchanted_item_glint.png`.
     pub ui_glint: &'a [(u32, u32)],
+    /// Leading vertices of `ui` that are `GuiIngame.renderVignette`.
+    pub ui_vignette: u32,
     pub glint_rect: [f32; 4],
     /// Camera-relative quads drawn with the terrain shader (dropped items).
     pub dynamic: &'a [Vertex],
@@ -528,6 +530,7 @@ pub struct Renderer {
     pipe_line: vk::Pipeline,
     pipe_ui: vk::Pipeline,
     pipe_gui_glint: vk::Pipeline,
+    pipe_gui_vignette: vk::Pipeline,
     pipe_sky_alpha: vk::Pipeline,
     pipe_sky_add: vk::Pipeline,
     pipe_cloud_depth: vk::Pipeline,
@@ -934,7 +937,9 @@ impl Renderer {
                 // kind 13: the GUI pipeline (9) with RenderItem.renderGlint's
                 // additive blend
                 let glint = kind_in == 13;
-                let kind = if glint { 9 } else { kind_in };
+                // kind 14: the GUI pipeline with renderVignette's blend
+                let vignette = kind_in == 14;
+                let kind = if glint || vignette { 9 } else { kind_in };
                 // kind: 0 sky, 1 opaque, 2 translucent, 3 line, 4 ui
                 let stages = [
                     vk::PipelineShaderStageCreateInfo::default()
@@ -1104,6 +1109,18 @@ impl Renderer {
                         .dst_alpha_blend_factor(vk::BlendFactor::ZERO)
                         .alpha_blend_op(vk::BlendOp::ADD);
                 }
+                if vignette {
+                    // glBlendFunc(GL_ZERO, GL_ONE_MINUS_SRC_COLOR): what is
+                    // there, darkened by the texture
+                    att = att
+                        .blend_enable(true)
+                        .src_color_blend_factor(vk::BlendFactor::ZERO)
+                        .dst_color_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_COLOR)
+                        .color_blend_op(vk::BlendOp::ADD)
+                        .src_alpha_blend_factor(vk::BlendFactor::ZERO)
+                        .dst_alpha_blend_factor(vk::BlendFactor::ONE)
+                        .alpha_blend_op(vk::BlendOp::ADD);
+                }
                 if glint {
                     // glBlendFunc(GL_DST_ALPHA, GL_ONE) over an opaque target
                     att = att
@@ -1151,6 +1168,7 @@ impl Renderer {
             let pipe_cloud_color = mk(c"vs_color", c"fs_color_fog", 8);
             let pipe_gui = mk(c"vs_ui", c"fs_ui", 9);
             let pipe_gui_glint = mk(c"vs_ui", c"fs_ui", 13);
+            let pipe_gui_vignette = mk(c"vs_ui", c"fs_ui", 14);
             let pipe_crack = mk(c"vs_terrain", c"fs_crack", 10);
             let pipe_hand = mk(c"vs_terrain", c"fs_terrain", 11);
             let pipe_portal = mk(c"vs_portal", c"fs_portal", 12);
@@ -1214,6 +1232,7 @@ impl Renderer {
                 pipe_line,
                 pipe_ui,
                 pipe_gui_glint,
+                pipe_gui_vignette,
                 pipe_sky_alpha,
                 pipe_sky_add,
                 pipe_cloud_depth,
@@ -2976,6 +2995,19 @@ impl Renderer {
                     0.0,
                 ];
                 let mut at = 0usize;
+                let vg = (frame.ui_vignette as usize).min(ui_count);
+                if vg > 0 {
+                    dev.cmd_bind_pipeline(
+                        cmd,
+                        vk::PipelineBindPoint::GRAPHICS,
+                        self.pipe_gui_vignette,
+                    );
+                    push(scale, [1.0; 4]);
+                    dev.cmd_draw(cmd, vg as u32, 1, 0, 0);
+                    dev.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, self.pipe_gui);
+                    push(scale, [1.0; 4]);
+                    at = vg;
+                }
                 for &(a, b) in frame.ui_glint {
                     let (a, b) = ((a as usize).min(ui_count), (b as usize).min(ui_count));
                     if a > at {
@@ -3229,6 +3261,7 @@ impl Drop for Renderer {
                 self.pipe_line,
                 self.pipe_ui,
                 self.pipe_gui_glint,
+                self.pipe_gui_vignette,
                 self.pipe_sky_alpha,
                 self.pipe_sky_add,
                 self.pipe_cloud_depth,

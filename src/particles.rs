@@ -63,8 +63,24 @@ enum Kind {
     Aura,
 }
 
+impl Particle {
+    /// `EntityFX.getFXLayer`: 0 `particles.png`, 1 the block atlas,
+    /// 3 the ones that bind their own texture (`EntityLargeExplodeFX`).
+    fn layer(&self) -> usize {
+        match self.sprite {
+            Sprite::Index(_) => 0,
+            Sprite::Block { .. } => 1,
+            Sprite::Explosion => 2,
+        }
+    }
+}
+
 pub struct Particles {
-    list: Vec<Particle>,
+    /// `EffectRenderer.fxLayers`: one list per layer, oldest first, at
+    /// most 4000 each; ticked and drawn layer by layer.
+    list: [std::collections::VecDeque<Particle>; 3],
+    /// The layer of the particle added last.
+    last: usize,
     r: JavaRandom,
     /// `EntityHugeExplodeFX` emitters: position and remaining ticks.
     huge: Vec<([f64; 3], i32)>,
@@ -73,7 +89,8 @@ pub struct Particles {
 impl Default for Particles {
     fn default() -> Self {
         Particles {
-            list: Vec::new(),
+            list: Default::default(),
+            last: 0,
             r: JavaRandom::new(0x5041525449),
             huge: Vec::new(),
         }
@@ -129,14 +146,17 @@ impl Particles {
     }
 
     fn last_mut(&mut self) -> Option<&mut Particle> {
-        self.list.last_mut()
+        self.list[self.last].back_mut()
     }
 
+    /// `EffectRenderer.addEffect`: a full layer loses its oldest particle.
     fn add(&mut self, p: Particle) {
-        if self.list.len() >= 4000 {
-            self.list.remove(0);
+        let l = p.layer();
+        if self.list[l].len() >= 4000 {
+            self.list[l].pop_front();
         }
-        self.list.push(p);
+        self.list[l].push_back(p);
+        self.last = l;
     }
 
     fn digging(&mut self, pos: [f64; 3], m: [f64; 3], tex: [f32; 4], tint: [f32; 3]) -> Particle {
@@ -473,7 +493,7 @@ impl Particles {
 
     /// `EntityFX.multiplyVelocity` on the newest particle.
     pub fn scale_last_motion(&mut self, f: f32) {
-        if let Some(p) = self.list.last_mut() {
+        if let Some(p) = self.last_mut() {
             p.motion[0] *= f as f64;
             p.motion[1] = (p.motion[1] - 0.1f32 as f64) * f as f64 + 0.1f32 as f64;
             p.motion[2] *= f as f64;
@@ -542,109 +562,111 @@ impl Particles {
         }
         huge.retain(|h| h.1 > 0);
         self.huge = huge;
-        let mut list = std::mem::take(&mut self.list);
-        list.retain_mut(|p| {
-            p.prev = p.pos;
-            p.age += 1;
-            if p.age >= p.max_age {
-                return false;
-            }
-            if p.kind == Kind::Portal {
-                // EntityPortalFX.onUpdate
-                let f = p.age as f64 / p.max_age as f64;
-                let f1 = 1.0 - (-f + f * f * 2.0);
-                for a in 0..3 {
-                    p.pos[a] = p.origin[a] + p.motion[a] * f1;
-                }
-                p.pos[1] += 1.0 - f;
-                return true;
-            }
-            if p.kind == Kind::Bubble {
-                // EntityBubbleFX.onUpdate (the age was counted above)
-                p.motion[1] += 0.002;
-                move_particle(p, w);
-                for v in &mut p.motion {
-                    *v *= 0.85f32 as f64;
-                }
-                let b = w.peek_block(
-                    math::floor_double(p.pos[0]),
-                    math::floor_double(p.pos[1]),
-                    math::floor_double(p.pos[2]),
-                );
-                return block::material(b) == block::Material::Water;
-            }
-            match p.kind {
-                Kind::Reddust => {
-                    p.sprite = Sprite::Index(7 - p.age * 8 / p.max_age);
-                }
-                Kind::Spell(base) => {
-                    p.sprite = Sprite::Index(base + (7 - p.age * 8 / p.max_age));
-                    p.motion[1] += 0.004;
-                }
-                Kind::Smoke => {
-                    p.sprite = Sprite::Index(7 - p.age * 8 / p.max_age);
-                    p.motion[1] += 0.004;
-                }
-                Kind::Explode => {
-                    p.sprite = Sprite::Index(7 - p.age * 8 / p.max_age);
-                    p.motion[1] += 0.004;
-                }
-                Kind::Lava => {
-                    p.motion[1] -= 0.03;
-                }
-                Kind::Crit => {
-                    p.color[1] *= 0.96;
-                    p.color[2] *= 0.9;
-                    p.motion[1] -= 0.02;
-                }
-                Kind::Drip | Kind::Note | Kind::Heart | Kind::Aura => {}
-                _ => {
-                    p.motion[1] -= 0.04 * p.gravity as f64;
-                }
-            }
-            if p.kind == Kind::Drip {
-                p.motion[1] -= p.gravity as f64;
-            }
-            if p.kind != Kind::Large {
-                move_particle(p, w);
-            }
-            let damp = match p.kind {
-                Kind::Smoke | Kind::Explode | Kind::Reddust | Kind::Spell(_) => 0.96,
-                Kind::Flame => 0.96,
-                Kind::Lava => 0.999,
-                Kind::Crit => 0.7,
-                Kind::Note => 0.66,
-                Kind::Heart => 0.86,
-                Kind::Aura => 0.99,
-                Kind::Rain | Kind::Drip => 0.98,
-                _ => 0.98,
-            };
-            for v in &mut p.motion {
-                *v *= damp;
-            }
-            if p.on_ground {
-                p.motion[0] *= 0.7;
-                p.motion[2] *= 0.7;
-                if p.kind == Kind::Rain {
+        let mut lists = std::mem::take(&mut self.list);
+        for list in lists.iter_mut() {
+            list.retain_mut(|p| {
+                p.prev = p.pos;
+                p.age += 1;
+                if p.age >= p.max_age {
                     return false;
                 }
-            }
-            if matches!(
-                p.kind,
-                Kind::Smoke
-                    | Kind::Explode
-                    | Kind::Note
-                    | Kind::Heart
-                    | Kind::Reddust
-                    | Kind::Spell(_)
-            ) && p.pos[1] == p.prev[1]
-            {
-                p.motion[0] *= 1.1;
-                p.motion[2] *= 1.1;
-            }
-            true
-        });
-        self.list = list;
+                if p.kind == Kind::Portal {
+                    // EntityPortalFX.onUpdate
+                    let f = p.age as f64 / p.max_age as f64;
+                    let f1 = 1.0 - (-f + f * f * 2.0);
+                    for a in 0..3 {
+                        p.pos[a] = p.origin[a] + p.motion[a] * f1;
+                    }
+                    p.pos[1] += 1.0 - f;
+                    return true;
+                }
+                if p.kind == Kind::Bubble {
+                    // EntityBubbleFX.onUpdate (the age was counted above)
+                    p.motion[1] += 0.002;
+                    move_particle(p, w);
+                    for v in &mut p.motion {
+                        *v *= 0.85f32 as f64;
+                    }
+                    let b = w.peek_block(
+                        math::floor_double(p.pos[0]),
+                        math::floor_double(p.pos[1]),
+                        math::floor_double(p.pos[2]),
+                    );
+                    return block::material(b) == block::Material::Water;
+                }
+                match p.kind {
+                    Kind::Reddust => {
+                        p.sprite = Sprite::Index(7 - p.age * 8 / p.max_age);
+                    }
+                    Kind::Spell(base) => {
+                        p.sprite = Sprite::Index(base + (7 - p.age * 8 / p.max_age));
+                        p.motion[1] += 0.004;
+                    }
+                    Kind::Smoke => {
+                        p.sprite = Sprite::Index(7 - p.age * 8 / p.max_age);
+                        p.motion[1] += 0.004;
+                    }
+                    Kind::Explode => {
+                        p.sprite = Sprite::Index(7 - p.age * 8 / p.max_age);
+                        p.motion[1] += 0.004;
+                    }
+                    Kind::Lava => {
+                        p.motion[1] -= 0.03;
+                    }
+                    Kind::Crit => {
+                        p.color[1] *= 0.96;
+                        p.color[2] *= 0.9;
+                        p.motion[1] -= 0.02;
+                    }
+                    Kind::Drip | Kind::Note | Kind::Heart | Kind::Aura => {}
+                    _ => {
+                        p.motion[1] -= 0.04 * p.gravity as f64;
+                    }
+                }
+                if p.kind == Kind::Drip {
+                    p.motion[1] -= p.gravity as f64;
+                }
+                if p.kind != Kind::Large {
+                    move_particle(p, w);
+                }
+                let damp = match p.kind {
+                    Kind::Smoke | Kind::Explode | Kind::Reddust | Kind::Spell(_) => 0.96,
+                    Kind::Flame => 0.96,
+                    Kind::Lava => 0.999,
+                    Kind::Crit => 0.7,
+                    Kind::Note => 0.66,
+                    Kind::Heart => 0.86,
+                    Kind::Aura => 0.99,
+                    Kind::Rain | Kind::Drip => 0.98,
+                    _ => 0.98,
+                };
+                for v in &mut p.motion {
+                    *v *= damp;
+                }
+                if p.on_ground {
+                    p.motion[0] *= 0.7;
+                    p.motion[2] *= 0.7;
+                    if p.kind == Kind::Rain {
+                        return false;
+                    }
+                }
+                if matches!(
+                    p.kind,
+                    Kind::Smoke
+                        | Kind::Explode
+                        | Kind::Note
+                        | Kind::Heart
+                        | Kind::Reddust
+                        | Kind::Spell(_)
+                ) && p.pos[1] == p.prev[1]
+                {
+                    p.motion[0] *= 1.1;
+                    p.motion[2] *= 1.1;
+                }
+                true
+            });
+        }
+        self.list = lists;
     }
 
     /// Camera-facing quads (`EntityFX.renderParticle`), camera-relative.
@@ -668,7 +690,7 @@ impl Particles {
         let ryz = -rz * ps;
         let rxy = rx * ps;
         let rxz = pc;
-        for p in &self.list {
+        for p in self.list.iter().flatten() {
             let t = partial as f64;
             let pos = [
                 p.prev[0] + (p.pos[0] - p.prev[0]) * t,
@@ -905,7 +927,7 @@ impl Particles {
     }
 
     pub fn count(&self) -> usize {
-        self.list.len()
+        self.list.iter().map(|l| l.len()).sum()
     }
 }
 

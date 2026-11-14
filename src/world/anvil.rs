@@ -312,82 +312,124 @@ pub fn read_region_chunk(dir: &Path, cx: i32, cz: i32) -> Option<Nbt> {
 
 /// `RegionFile.write`: stores a chunk (zlib), reusing or appending sectors.
 pub fn write_region_chunk(dir: &Path, cx: i32, cz: i32, root: &Nbt, time: u32) -> io::Result<()> {
-    let path = region_path(dir, cx, cz);
-    if let Some(p) = path.parent() {
-        fs::create_dir_all(p)?;
-    }
-    let mut f = fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(&path)?;
-    let mut header = vec![0u8; 8192];
-    let size = f.metadata()?.len();
-    if size >= 8192 {
-        f.seek(SeekFrom::Start(0))?;
-        f.read_exact(&mut header)?;
-    } else {
-        f.seek(SeekFrom::Start(0))?;
-        f.write_all(&header)?;
-    }
+    let data = compress_chunk(root)?;
+    write_region_batch(dir, &[(cx, cz, data)], time, false)
+}
+
+/// A chunk's NBT as the region file holds it (zlib, compression type 2).
+pub fn compress_chunk(root: &Nbt) -> io::Result<Vec<u8>> {
     let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
     z.write_all(&write_nbt(root))?;
-    let data = z.finish()?;
-    let need = (data.len() + 5).div_ceil(4096) as u32;
-    if need >= 256 {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "chunk too large for a region",
-        ));
+    z.finish()
+}
+
+/// Writes compressed chunks into their region files: each file is opened
+/// once, its header read and written once. `sync` flushes each file to
+/// the disk at the end (a whole-world save); `RegionFile` itself never
+/// does, so single chunk writes do not either.
+pub fn write_region_batch(
+    dir: &Path,
+    chunks: &[(i32, i32, Vec<u8>)],
+    time: u32,
+    sync: bool,
+) -> io::Result<()> {
+    let mut by_region: BTreeMap<PathBuf, Vec<usize>> = BTreeMap::new();
+    for (k, c) in chunks.iter().enumerate() {
+        by_region
+            .entry(region_path(dir, c.0, c.1))
+            .or_default()
+            .push(k);
     }
-    let i = ((cx & 31) + (cz & 31) * 32) as usize;
-    // sectors in use by the other chunks
-    let total = (f.metadata()?.len().div_ceil(4096)).max(2) as u32;
-    let mut used = vec![false; total as usize + need as usize + 2];
-    used[0] = true;
-    used[1] = true;
-    for k in 0..1024 {
-        if k == i {
-            continue;
+    for (path, list) in by_region {
+        if let Some(p) = path.parent() {
+            fs::create_dir_all(p)?;
         }
-        let o = u32::from_be_bytes([0, header[k * 4], header[k * 4 + 1], header[k * 4 + 2]]);
-        let c = header[k * 4 + 3] as u32;
-        for s in o..o + c {
-            if (s as usize) < used.len() {
-                used[s as usize] = true;
+        let mut f = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&path)?;
+        let mut header = vec![0u8; 8192];
+        let size = f.metadata()?.len();
+        f.seek(SeekFrom::Start(0))?;
+        if size >= 8192 {
+            f.read_exact(&mut header)?;
+        } else {
+            f.write_all(&header)?;
+        }
+        // sectors in use, kept up to date as chunks are placed
+        let mut used = vec![false; (size.div_ceil(4096)).max(2) as usize];
+        used[0] = true;
+        used[1] = true;
+        let span = |header: &[u8], k: usize| {
+            let o = u32::from_be_bytes([0, header[k * 4], header[k * 4 + 1], header[k * 4 + 2]]);
+            (o as usize, header[k * 4 + 3] as usize)
+        };
+        for k in 0..1024 {
+            let (o, c) = span(&header, k);
+            for s in o..o + c {
+                if s >= used.len() {
+                    used.resize(s + 1, false);
+                }
+                used[s] = true;
             }
         }
-    }
-    let old = u32::from_be_bytes([0, header[i * 4], header[i * 4 + 1], header[i * 4 + 2]]);
-    let old_n = header[i * 4 + 3] as u32;
-    let free = |at: u32, used: &[bool]| {
-        (at..at + need).all(|s| !used.get(s as usize).copied().unwrap_or(false))
-    };
-    let at = if old >= 2 && need <= old_n && free(old, &used) {
-        old
-    } else {
-        let mut s = 2;
-        while !free(s, &used) {
-            s += 1;
+        for k in list {
+            let (cx, cz, data) = &chunks[k];
+            let need = (data.len() + 5).div_ceil(4096);
+            if need >= 256 {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "chunk too large for a region",
+                ));
+            }
+            let i = ((cx & 31) + (cz & 31) * 32) as usize;
+            // its own old sectors are free for it
+            let (old, old_n) = span(&header, i);
+            for s in old..old + old_n {
+                if s >= 2 && s < used.len() {
+                    used[s] = false;
+                }
+            }
+            let free = |at: usize, used: &[bool]| {
+                (at..at + need).all(|s| !used.get(s).copied().unwrap_or(false))
+            };
+            let at = if old >= 2 && need <= old_n {
+                old
+            } else {
+                let mut s = 2;
+                while !free(s, &used) {
+                    s += 1;
+                }
+                s
+            };
+            if used.len() < at + need {
+                used.resize(at + need, false);
+            }
+            for u in &mut used[at..at + need] {
+                *u = true;
+            }
+            let mut sector = Vec::with_capacity(need * 4096);
+            sector.extend_from_slice(&((data.len() + 1) as u32).to_be_bytes());
+            sector.push(2);
+            sector.extend_from_slice(data);
+            sector.resize(need * 4096, 0);
+            f.seek(SeekFrom::Start(at as u64 * 4096))?;
+            f.write_all(&sector)?;
+            header[i * 4] = (at >> 16) as u8;
+            header[i * 4 + 1] = (at >> 8) as u8;
+            header[i * 4 + 2] = at as u8;
+            header[i * 4 + 3] = need as u8;
+            header[4096 + i * 4..4096 + i * 4 + 4].copy_from_slice(&time.to_be_bytes());
         }
-        s
-    };
-    let mut sector = Vec::with_capacity(need as usize * 4096);
-    sector.extend_from_slice(&((data.len() + 1) as u32).to_be_bytes());
-    sector.push(2);
-    sector.extend_from_slice(&data);
-    sector.resize(need as usize * 4096, 0);
-    f.seek(SeekFrom::Start(at as u64 * 4096))?;
-    f.write_all(&sector)?;
-    header[i * 4] = (at >> 16) as u8;
-    header[i * 4 + 1] = (at >> 8) as u8;
-    header[i * 4 + 2] = at as u8;
-    header[i * 4 + 3] = need as u8;
-    header[4096 + i * 4..4096 + i * 4 + 4].copy_from_slice(&time.to_be_bytes());
-    f.seek(SeekFrom::Start(0))?;
-    f.write_all(&header)?;
-    f.sync_all()
+        f.seek(SeekFrom::Start(0))?;
+        f.write_all(&header)?;
+        if sync {
+            f.sync_all()?;
+        }
+    }
+    Ok(())
 }
 
 pub fn region_has(dir: &Path, cx: i32, cz: i32) -> bool {

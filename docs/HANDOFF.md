@@ -240,6 +240,8 @@ MINERUST_BENCH=10 minerust --seed 12345 --no-save --size 1920 1080 --distance 16
 世界載完後關閉垂直同步與幀率上限、鏡頭緩慢旋轉，量 10 秒，印出：載入秒數、平均／中位數／99%／99.9%／最大幀時間、
 每幀在「區塊泵送／tick／組幀／渲染」各花多少、伺服器 tick 平均與最差、區塊快照與分段上傳的總數。
 `MINERUST_BENCH_VSYNC=1` 保留垂直同步，`MINERUST_BENCH_STILL=1` 鏡頭不轉。
+`MINERUST_BENCH_TNT=6` 在量測開始時於玩家東邊八格放一個 6×6×6 的 TNT 並點燃其中一顆（216 顆連爆），看最大幀時間；
+`cargo test --release tnt_cube_timing -- --ignored --nocapture` 量同一件事的伺服器端 tick 時間。
 
 基準（RTX 5070 Laptop、1920×1080、種子 12345）：
 
@@ -609,3 +611,30 @@ MINERUST_BENCH=10 minerust --seed 12345 --no-save --size 1920 1080 --distance 16
   **留下**：生物的裝備耗損到壞掉時，原版會留下一個數量 0 的物品堆（仍算護甲、仍畫出來、死亡時不掉落），這裡直接清空欄位；
   `EntityLivingBase.attackEntityFrom` 的 `limbSwingAmount = 1.5` 與 `attackedAtYaw`（受傷時的鏡頭傾斜）仍未做；
   經驗球被鐵砧砸到（`EntityXPOrb.attackEntityFrom`）沒接。上一段提到的世界亂數借出問題仍未處理。
+- `本次（2026-11-15，使用者試玩回報的五個問題）`：
+  - **多顆 TNT 連爆會卡**：伺服器沒問題（216 顆連爆最差一個 tick 27 ms）。卡的是客戶端的粒子：`Particles::add` 在 4000 顆上限時用
+    `Vec::remove(0)`（每顆粒子 176 位元組，一次搬 700 KB），爆炸每個受影響的格子加兩顆粒子，幾十萬次加總出現一幀 5.1 秒。
+    改成 `EffectRenderer.fxLayers` 的結構：每個圖層一個 `VecDeque`、各自 4000 上限（以前是全部加起來 4000，也與原版不同），
+    tick 與繪製照圖層順序。同一測試最大幀時間 5,109 ms → 13–62 ms。
+  - **點燃的 TNT 穿模**：物理與繪製都對過原版（中心在方塊中心、0.98 的碰撞箱、落地後中心在地面上 0.49、`RenderTNTPrimed` 以實體位置為
+    方塊中心畫整個方塊，所以本來就會陷進地面 0.01）。數值逐 tick 印出來與原版算式一致。**沒有找到位置錯誤**；判斷使用者看到的是上面那種
+    卡頓期間舊的方塊網格還在、實體已經移動的畫面。順手把 `prime_tnt` 的隨機方向改成 `Math.random()`（以前用 `Mobs.rand`）。
+    若修完卡頓仍看得到，需要使用者指出是哪一種情況（哪種方塊上、怎麼點燃）。
+  - **畫面比原版亮**：實測陽光下頂面、北面、午夜、`updateLightmap` 的每一步都與原版算式逐位相符（截圖取像素平均值比對，
+    誤差 1/255 內），交換鏈與貼圖都是 UNORM。差別在**原版的暈影完全沒做**：`GuiIngame.renderVignette`（精緻畫質才有，
+    `glBlendFunc(GL_ZERO, GL_ONE_MINUS_SRC_COLOR)` 疊 `textures/misc/vignette.png`，強度是 `1 - 玩家所在位置的亮度`，
+    每幀靠近 1%）。新增 `pipe_gui_vignette`（kind 14）、`Frame.ui_vignette`（UI 頂點開頭的幾個頂點用它畫）、
+    `Game::player_brightness`（`Entity.getBrightness`）。F1 隱藏介面時不畫，與原版相同。
+  - **拉桿／按鈕放不上 TNT**：這是 1.7.10 的原版行為，沒有改。`Material.tnt` 是 `setTranslucent()`，`isOpaque()` 為 false，
+    所以 `Block.isNormalCube()` 與 `World.doesBlockHaveSolidTopSurface` 對 TNT 都是 false，`BlockLever` / `BlockButton` /
+    紅石線 / 火把的 `canPlaceBlockOnSide` 全部不接受（TNT 到 1.9 才能放）。
+  - **關閉遊戲時存檔很慢甚至像卡死**：`anvil::write_region_chunk` 每寫一個區塊就開檔、讀 8 KB 檔頭、壓縮、寫回、`sync_all()`，
+    全在伺服器執行緒上；視距 16 剛建立的世界有 844 個區塊，退出要等約 10 秒，每 900 tick 的自動存檔也會讓伺服器停同樣久。
+    現在 `save_anvil_world` 先組出所有區塊的 NBT，用 `std::thread::scope` 在所有核心上壓縮，再由 `write_region_batch`
+    每個區域檔只開一次、檔頭只讀寫一次、最後才 `sync_all` 一次。單一區塊的寫入（區塊卸載時）不再同步，原版的 `RegionFile`
+    本來就不會。844 個區塊 10 秒 → 0.20 秒；超過 64 個區塊時會印出 `Saved N chunks of dimension D in X s`。
+  **驗證**：`cargo test --release` 106 項通過（Anvil 讀寫與世界往返的測試走新的批次路徑）；存檔後重新開啟世界正常；
+  暈影以白天與夜晚截圖確認。基準（視距 16）：本次 1,114–1,124 fps，同時段對照版 1,051–1,100 fps。
+  **沒有驗證的**：暈影的強度沒有與原版截圖逐像素比對；自動存檔時伺服器的停頓只由「同一段程式快了五十倍」推論，沒有單獨量。
+  **留下**：存檔仍在伺服器執行緒上做（現在很短）；`touched`（這次工作階段讀進來過的所有區塊）每次存檔都會重寫，
+  玩得越久存得越多，應改成只寫有變動或有實體的區塊（原版 `Chunk.needsSaving`）。
