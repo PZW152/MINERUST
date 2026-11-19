@@ -1694,7 +1694,7 @@ fn nearest_target(cls: Cls, check_sight: bool) -> Ai {
 
 /// The constructor of the mob's class: its `tasks` and `targetTasks`.
 /// Tasks that need systems not ported yet are left out and listed in
-/// docs/HANDOFF.md (breeding, doors, villages, trading, riding).
+/// docs/PARITY_TODO.md (doors, villages, trading, riding).
 fn build(m: &mut Mob) {
     let (t, tt) = (&mut m.tasks, &mut m.target_tasks);
     let player = Cls::Player;

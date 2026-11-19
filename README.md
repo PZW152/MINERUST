@@ -19,10 +19,10 @@ cargo run --release -- --seed 1
 | 參數 | 說明 |
 | --- | --- |
 | `--seed <數字或文字>` | 世界種子，規則同原版（文字取 `String.hashCode()`） |
-| `--jar <路徑>` | 原版客戶端 jar；也可用環境變數 `MC1710_JAR`。預設找 `%APPDATA%\.minecraft\versions\1.7.10\1.7.10.jar` |
+| `--jar <路徑>` | 原版客戶端 jar；也可用環境變數 `MC1710_JAR`。不指定時依序找 exe 旁、工作目錄、專案的 `game\`、`%APPDATA%` 下常見啟動器的 `versions\1.7.10\1.7.10.jar`，都找不到就跳出檔案選擇視窗 |
 | `--world <資料夾>` | 存檔位置，預設 `saves/world`（指定種子時為 `saves/seed_<種子>`）。資料夾內有 `level.dat` 時視為原版 1.7.10 存檔，直接讀寫區域檔 |
 | `--dim <-1\|0\|1>` | 起始維度：地獄、主世界、終界 |
-| `--summon "Id:選項,..."` | 在玩家前方生成生物（距離由 `MINERUST_SUMMON_DIST` 指定） |
+| `--summon "Id:選項,..."` | 在玩家前方生成生物或掉落物，例如 `Zombie:baby`、`Zombie:villager`、`Item:264:3`（距離由 `MINERUST_SUMMON_DIST` 指定） |
 | `--export-anvil <來源> <目的>` | 把本專案的存檔轉成原版可開啟的 Anvil 世界 |
 | `--no-save` | 不存檔 |
 | `--distance <2..16>` | 視距（區塊），預設 12 |
@@ -89,18 +89,21 @@ cargo run --release -- --seed 1
 - 天氣：World.updateWeather 的降雨／雷雨週期（存檔保存），天空、霧、雲、太陽月亮與光照圖隨雨變暗，雨雪條紋（renderRainSnow，依群系溫度），寒冷群系積雪，雨聲；--weather rain|thunder|clear
 - 粒子：方塊碎屑、煙、火焰、岩漿、滴水、雨滴濺起、爆炸、暴擊、疾跑揚塵、傳送門
 - GUI：標題畫面與全部設定選單、語言、字型、HUD、背包、工作台、熔爐、釀造台、箱子、發射器、創造模式物品欄、聊天與指令、告示牌編輯、載入畫面、暫停與死亡畫面、F3、F5 第三人稱
+- 物品與容器：`Container.slotClick` 全模式、317 條配方、物品 NBT、盔甲、食物、弓與箭、投擲物、藥水與噴濺藥水、釀造台、
+  附魔台與全部附魔效果、鐵砧、告示牌、經驗球
+- 生物的細節：盔甲與武器（`onSpawnWithEgg`）、撿拾物品、藥水效果、繁殖與幼體、小殭屍、殭屍村民（感染與治療）、
+  原版的移動（腳步聲、水流、摔落、溺水、窒息、著火）、互相推擠、身體跟著頭轉（`EntityBodyHelper`）
+- 農業與其他：耕地、種植、作物與樹苗成長、骨粉、床與睡覺、蛋糕、柵欄門、圓石牆；船、礦車（一般、箱子、動力、TNT）、活塞（`TileEntityPiston`）
 
 ## 尚未實作
 
-完整清單與優先順序見 [docs/HANDOFF.md](docs/HANDOFF.md) 第 7 節與 [docs/PARITY_TODO.md](docs/PARITY_TODO.md)。
-主要缺口：生物裝備與生物藥水效果、信標、漏斗、比較器、統計與成就、村民交易、騎馬、釣魚、多人連線。
-（2026-11-14 補上：農業整套（耕地、種植、作物成長、骨粉、樹苗長成樹）、床與睡覺、蛋糕、柵欄門、圓石牆、南瓜／西瓜梗、
-生物的盔甲與武器（骷髏拿弓、殭屍豬人拿金劍、隨機盔甲與附魔，與原版一致）。）
+還沒做完的部分與優先順序只記在 [docs/PARITY_TODO.md](docs/PARITY_TODO.md)。主要缺口：`RenderBlocks` 其餘渲染型態的逐行移植、
+部分影像設定、馬與村民的 AI、騎馬、釣魚、信標、漏斗、比較器、村民交易、統計與成就、多人連線。
 
 ## 接手開發
 
-接手的開發者或 AI 請先讀 [docs/HANDOFF.md](docs/HANDOFF.md)：目標、硬性準則、參考原始碼的取得方式、
-架構、驗證與截圖方法、進度與開發日誌都在裡面，每次推送都會更新。
+接手的開發者或 AI 請先讀 [docs/HANDOFF.md](docs/HANDOFF.md)（目標、硬性準則、參考原始碼的取得方式、架構、驗證方法、注意事項），
+再看 [docs/PARITY_TODO.md](docs/PARITY_TODO.md)（待辦）與 [docs/CHANGELOG.md](docs/CHANGELOG.md)（每次推送的紀錄）。
 
 ## 驗證
 
@@ -147,8 +150,8 @@ minerust --compare-pop rust.bin java.bin <cx> <cz> <半徑>
 - Anvil：`tools/AnvilHarness.java` 以原版 `AnvilChunkLoader` 讀本專案寫出的區域檔、本專案讀原版寫出的區域檔，
   方塊、中繼值、天空光、方塊光、高度圖雙向一致。
 
-效能（`MINERUST_BENCH=10`，RTX 5070 Laptop、1920×1080、不限幀）：視距 12 約 1,575 fps、視距 16 約 1,311 fps，
-視距 16 的世界 7 秒載完，伺服器 tick 平均 5 ms。量測方法與歷次數字見 [docs/HANDOFF.md](docs/HANDOFF.md) 第 5.3 節。
+效能（`MINERUST_BENCH=10`，RTX 5070 Laptop、1920×1080、不限幀、視距 16）：2026-11-20 約 900–1,000 fps，
+伺服器 tick 平均約 8 ms（預算 50 ms）。量測方法見 [docs/HANDOFF.md](docs/HANDOFF.md) 第 5.3 節。
 預設與原版相同：垂直同步開、最大幀率 120，可在影像設定調整。
 
 沒有驗證的部分：鍵盤滑鼠操作是否順手、長時間執行的記憶體用量、Vulkan validation layer（本機未安裝）。

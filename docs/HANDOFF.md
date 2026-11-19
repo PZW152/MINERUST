@@ -1,12 +1,15 @@
 # MINERUST 接手手冊（給下一位開發者／AI）
 
-這份文件每次推送都會一起更新。接手前請從頭讀完；它記錄專案目標、硬性準則、架構、
-驗證方法、開發流程、目前進度、尚未完成的工作與已知問題。
+接手前請從頭讀完。這份文件只寫**不常變的東西**：目標、硬性準則、參考資料、架構、驗證方法、注意事項。
+會隨每次推送變動的內容各有一個固定的家，不要寫進這裡：
 
-- 進度與缺口的細目清單：[PARITY_TODO.md](PARITY_TODO.md)
-- 原版 bug 的處理紀錄：[BUG_AUDIT.md](BUG_AUDIT.md)
-- 使用方式與已驗證項目：[../README.md](../README.md)
-- 開發日誌（每次推送追加一段）：本文件最後一節
+| 文件 | 內容 | 什麼時候更新 |
+| --- | --- | --- |
+| [PARITY_TODO.md](PARITY_TODO.md) | 唯一的「還沒做完」清單與優先順序 | 每次推送（做完的刪掉、新發現的加上） |
+| [CHANGELOG.md](CHANGELOG.md) | 每次推送一行：提交編號與標題 | 每次推送 |
+| [BUG_AUDIT.md](BUG_AUDIT.md) | 原版 bug 票的處理狀態 | 修了原版 bug、或實作了票所在的系統時 |
+| [../README.md](../README.md) | 使用方式、已移植系統的概況、比對結果 | 大項完成或使用方式改變時 |
+| 本文件 | 目標、準則、架構、流程、注意事項 | 這些本身改變時 |
 
 ---
 
@@ -34,11 +37,13 @@
    其餘系統隨後補齊。
 7. **提交規則**：作者 `PZW152`，信箱 `200456337+PZW152@users.noreply.github.com`；提交訊息結尾加
    `Co-Authored-By:`（寫實際使用的模型，例如 `Claude Fable 5.2 <noreply@anthropic.com>`）；提交前跑 `cargo fmt` 與 `cargo test --release`；
-   每次提交後推送；**每次推送同時更新本文件、PARITY_TODO.md、必要時 README**。
+   每次提交後推送；**每次推送同時更新 CHANGELOG.md 與 PARITY_TODO.md**，其他文件照上表在需要時更新。
+   同一件事只寫在一個地方，其他地方用連結指過去；寫之前先看該文件裡有沒有已經過期、彼此矛盾的句子。
 8. **一口氣做完，不要停下來問使用者**；回報用繁體中文。
 9. 下載或解壓的外部檔案視為不受信任資料；不要在其目錄內執行任何程式。
 10. **效能是需求的一部分**（使用者 2026-11-13：「性能甚至比原版還要垃圾」）。動到渲染、網格化、區塊傳送、
-    伺服器 tick 的改動，提交前跑第 5.3 節的基準測試，數字不能比日誌裡上一次記錄的差；變差就先查原因。
+    伺服器 tick 的改動，提交前跑第 5.3 節的基準測試，與上一個提交**同一時間**輪流量；變差就先查原因，
+    確定是原版本來就要做的工作才接受，並把數字寫進提交訊息。
 
 ## 3. 參考資料
 
@@ -159,6 +164,15 @@ java -cp "out;$CP" XxxHarness tools/xxx_1710.txt
     生物之間不能在同一 tick 互相改狀態，所以攻擊別的生物走 `Strike`，`HurtByTarget` 的呼叫同伴走 `Outcome.calls`，迴圈結束後套用。
   - `build()` 是各生物建構子裡的 `addTask` 清單；新增生物時照原版建構子抄優先序。`uses_tasks` / `uses_old` 決定走哪一條路，
     其餘生物仍走 `tick_mob` 裡舊的 `match`。
+- **生物的實體基底**：`Mob::move_entity` 借用 `base::Ent::move_entity`（物品、礦車、船共用的 `Entity.moveEntity` 逐行移植），
+  再套生物的覆寫（步高、`canTriggerWalking`、`playStepSound`、`setInWeb`、各職業的 `fall`）；`Ent` 的 `living` 打開
+  `EntityLivingBase.updateFallState`（落地塵土 `Fx::Dust`、`Fx::Landed`），`own_steps` 讓生物播自己的腳步聲。
+  `Mob::entity_update` 是 `Entity.onEntityUpdate` + `EntityLivingBase.onEntityUpdate`（水、燃燒、熔岩、虛空、窒息、空氣）。
+  移動中不能改世界，所以踩壞農田、點亮紅石礦石、鍋釜滅火先記成 `WorldOp`，由 `drain_moves` 在 `tick_mob` 裡執行。
+  生物之間與生物和玩家的推擠是 `Mobs::push_apart`（`collideWithNearbyEntities`）。
+  **不要再為生物或玩家另寫一份簡化的移動或碰撞**：先找 `base.rs` 有沒有現成的逐行移植。
+- **伺服器端的玩家**位置來自客戶端（`Command::Player`），不跑 `moveEntity`；`ServerPlayer::moved` 之後由
+  `block_contacts` 補上 `moveEntity` 尾段（火、仙人掌、鍋釜）、`base::landing` 補上落地（踩農田、塵土）。
 - **近戰與附魔**：客戶端只送 `Command::Attack { id, crit, sprint }`（`crit` 是客戶端的墜落狀態），
   伺服器的 `Sim::attack_mob` 是 `attackTargetEntityWithCurrentItem` 的移植：攻擊力屬性加上手持武器的修飾值（`item::weapon_damage`）、
   `enchant::modifier_living`、擊退、燃燒、命中後的爆擊粒子事件（`Event::CritFx` → 客戶端的 `EntityCrit2FX` 發射器，`magicCrit` 是附魔爆擊）、
@@ -166,7 +180,8 @@ java -cp "out;$CP" XxxHarness tools/xxx_1710.txt
   原版客戶端對生物的 `attackEntityFrom` 一律回傳 false，所以客戶端**不**減速、不自己出爆擊粒子；船與礦車例外（客戶端回傳 true）。
   玩家身上的盔甲在一個 tick 內由 `ServerPlayer.armor_items` 持有（`Sim::armor_in` / `armor_out` 與物品欄同步），
   受傷時當場耗損（耐久附魔用玩家自己的 `e.rand`），保護附魔的隨機部分用 `EnchantmentHelper` 自己的靜態亂數（`enchant::enchantment_rand`）。
-  `Item.itemRand` 是 `util::math::item_rand`。生物受傷分 `damage`（無視護甲）、`hurt(.., blockable)`、`drown`（不呼叫 `setBeenAttacked`）。
+  `Item.itemRand` 是 `util::math::item_rand`。沒有攻擊者的傷害一律走 `Mob::hurt_src(量, 可被護甲擋, 火焰, 溺水)`：
+  它照 `attackEntityFrom` 在新的一擊時播受傷音效，火焰傷害在抗火藥水下無效，溺水不呼叫 `setBeenAttacked`。
 - **隨機 tick 與成長**（`src/world/growth.rs`）：`ticks::ticks_randomly` 決定哪些方塊在隨機 tick 呼叫 `updateTick`；
   作物、莖、樹苗、地獄疣、可可、耕地等在 `ServerWorld::growth_tick`。隨機 tick 期間世界亂數被「借出」（`std::mem::replace`），
   所以這裡的函式一律用傳進來的 `r`，掉落用 `drop_block_with(r, ..)`，不能呼叫會用 `self.rand` 的 `drop_block_with_chance`。
@@ -179,7 +194,8 @@ java -cp "out;$CP" XxxHarness tools/xxx_1710.txt
   （`onBlockClicked`：吃蛋糕、彈音符盒、打熄火）。
 - 客戶端只有伺服器送來的快照；容器點擊在客戶端用同一份 `container.rs` 預測，伺服器的 `clicks` 計數讓客戶端丟掉過時的快照。
 - 生物在客戶端有自己的副本：伺服器端 `Mob::track()` 模擬 `EntityTrackerEntry`（1/32 座標、4/32 門檻、S19 頭部），
-  客戶端以三步內插（`setPositionAndRotation2`）、`updateDistance` 與肢體擺動自行計算。
+  客戶端以三步內插（`setPositionAndRotation2`）與肢體擺動自行計算；身體朝向在 `game::update_body`：
+  任務 AI 的職業（`isAIEnabled`）用 `EntityBodyHelper` 讓身體跟著頭，其餘用 `EntityLivingBase.updateDistance`。
 - GUI 圖集 `UI_SIZE` 2048；方塊／實體圖集 `ATLAS_SIZE` 2048；UI 管線沒有深度測試，GUI 中的 3D 模型要先排序
   （`model::gui_quads` + `sort_quads`）。
 
@@ -197,6 +213,8 @@ MC1710_JAR="C:/…/1.7.10.jar" cargo test --release      # 需要 jar 的測試�
 minerust --seed 12345 --no-save --size 854 480 --screenshot out.png 6
 ```
 
+最後的數字是載入完成後等幾**秒**才截圖。截圖與基準都從**目前工作目錄**讀 `options.txt`，要比較不同設定時從不同的暫存資料夾執行。
+
 可搭配的除錯參數與環境變數：
 
 | 用途 | 方法 |
@@ -208,7 +226,8 @@ minerust --seed 12345 --no-save --size 854 480 --screenshot out.png 6
 | 聊天 | `--open chat`；`MINERUST_CHAT="/give Player stone;..."` 開局送出 |
 | 視窗點擊腳本 | `MINERUST_CLICKS="slot:button:mode,..."` |
 | 固定滑鼠位置 | `MINERUST_MOUSE="x,y"`（GUI 座標） |
-| 給物品、效果、召喚 | `--give id:meta:count,...`、`--effect id:秒:等級`、`--summon Cow,Zombie` |
+| 給物品、效果、召喚 | `--give id:meta:count,...`、`--effect id:秒:等級`、`--summon Cow,Zombie:baby,Zombie:villager,Item:id:數量`（距離 `MINERUST_SUMMON_DIST`） |
+| 放方塊 | `--setblock "x y z id [meta];..."`（絕對座標） |
 | 告示牌文字 | `MINERUST_SIGN="a|b|c|d"`，`MINERUST_SIGN_DONE=1` 直接關閉編輯器 |
 | 不等區塊載完就截圖 | `MINERUST_NOWAIT=1` |
 | 自動建立新世界 | `MINERUST_AUTOCREATE=<名稱>` |
@@ -254,94 +273,22 @@ MINERUST_BENCH=10 minerust --seed 12345 --no-save --size 1920 1080 --distance 16
 
 **注意**：2026-11-14 起這台機器同一個 `bed27ea` 之後的版本只量得到 900–1,000 fps（上一個提交 `c6294d6` 重編後實測 960 fps、
 伺服器 5.6 ms），與表中 1,311 fps 的差距是機器狀態（GPU 功耗只有 8 W，疑似電池模式），不是程式退步。
-比較時請**同一時間**重編上一個提交一起量（`git worktree add ../base HEAD` + `CARGO_TARGET_DIR=target/base`）。
+比較時請**同一時間**重編上一個提交一起量（`git worktree add ../base HEAD` + `CARGO_TARGET_DIR=target/base`），
+兩個版本輪流各跑兩次。
 
-## 6. 進度（截至本次推送）
+最近一次（2026-11-20，`c57b73a`）：視距 16 約 900–1,000 fps；伺服器 tick 平均約 8 ms。這個種子在量測時有約 640 隻生物，
+生物改走原版移動、推擠之後每 tick 多了約 1.3 ms（原版本來就要做的水流、窒息、空氣、推擠）。
 
-已完成且有驗證的大項見 README 的「已移植」與 PARITY_TODO 的勾選項。近期完成：
+## 6. 進度與待辦
 
-- 標題畫面（全景圖）、選項、影像、音效、按鍵、語言、聊天設定、建立／選擇世界、暫停選單、載入畫面
-- 背包、工作台、熔爐、釀造台、箱子、礦車箱子、發射器：`Container.slotClick` 全模式、配方 317 條
-- 創造模式物品欄（分頁、搜尋、捲動、垃圾桶）
-- 聊天與 18 個指令、F5 第三人稱、F1、按鍵設定
-- 盔甲（穿戴、模型、圖示）、手持物品、玩家模型
-- 箱子模型與開蓋、告示牌（放置、編輯、文字、存檔）
-- 附魔資料與 `EnchantmentHelper`（與原版 385 筆比對一致）
-- 附魔台：方塊、`ContainerEnchantment`（書架計數、三個等級、附魔與扣等級、關閉時掉出）、`GuiEnchantment`
-  （書本模型在自己的透視視窗中、銀河字母字型與換行、三種按鈕狀態）、浮空書本的動畫與繪製
-- 鐵砧：方塊（`renderBlockAnvil` 四個方塊與 uvRotate、損壞頂面、朝向、碰撞箱、掉落、下落與落下實體的繪製、
-  物品圖示的 3D 模型）、`ContainerRepair`（`updateRepairOutput` 與原版 25 組比對一致、`canTakeStack`、
-  扣等級、12% 損壞與音效、關閉時掉出）、`GuiRepair`（名稱欄、費用文字與三重陰影、紅叉）、`MC|ItemName`
-- 農業與床（2026-11-14，使用者：「優先把試玩時會明顯發現未完成的東西先做完」）：以前作物、樹苗、地獄疣、可可
-  完全不會長（隨機 tick 清單裡沒有它們），種子也種不下去、鋤頭不能耕地、沒有骨粉，床／蛋糕／柵欄門／圓石牆／莖根本不存在。
-  現在全部照原版類別移植，見第 4 節「隨機 tick 與成長」與「床」。
-- 附魔效果（2026-11-14）：近戰改由伺服器計算（見第 4 節「近戰與附魔」），保護系列、水下呼吸、親水性、效率、荊棘、耐久、
-  弓的四種附魔都已生效；生物死亡掉落逐類別移植並加上掠奪
-- 方塊物品的 3D 模型：`render/item_block.rs` 移植 `renderBlockAsItem`（`renderItemIn3d` 接受的 render type 0/10/11/13/16/26/27/31/35/39，
-  含 `setBlockBoundsForItemRender` 的尺寸），物品欄以 `enableGUIStandardItemLighting` 打光，掉落物與手持物品共用同一份模型
+- 已完成的系統：[../README.md](../README.md) 的「已移植」。
+- 還沒做完的與優先順序：[PARITY_TODO.md](PARITY_TODO.md)。
+- 每次推送做了什麼：[CHANGELOG.md](CHANGELOG.md)。
 
-## 7. 尚未完成（依優先順序）
-
-0a. **`mesher.rs` 的 `shaped()` 裡手寫近似的方塊外觀**改為 `RenderBlocks` 對應函式的逐行移植（已完成：標準方塊、原木、石英、活塞、
-   釀造台、鐵砧、紅石線、拉桿）。待做：火把（`renderTorchAtAngle`）、中繼器與比較器、按鈕、壓力板、絆線鉤與絆線、柵欄門、活板門、
-   門、梯子、鐵軌、柵欄、玻璃板、樓梯、液體、作物、莖、藤蔓、睡蓮、可可、火、床、煉藥鍋、終界門框、龍蛋、花盆、牆。
-0. **影像設定還沒生效的項目**（選單裡能調，但畫面不變，這是與原版的行為差異）：
-   - 畫質「流暢」尚缺：樹葉的物品圖示用不透明貼圖、水面的平滑著色（`EntityRenderer` 1055 行）。其餘已生效（2026-11-19）。
-   - 各向異性過濾（原版開啟時圖集每格加 8 像素邊框並改線性取樣）、3D 立體（anaglyph）、進階 OpenGL（遮蔽查詢）、FBO 開關。
-   - 平滑光照的「最小／最大」已接上 `rb.rs`，但 `mesher.rs` 裡尚未改走 `rb` 的舊繪製路徑（樓梯、柵欄、液體等）自帶 AO，
-     關閉平滑光照時這些方塊還不會跟著變。
-   - 半透明分段目前不做深度排序（1.7.10 也不排序，保持一致）。
-
-1. **生物 AI：第一階段已完成，第二階段待做**（使用者 2026-11-14：「完成 AI 先」）。架構見第 4 節「生物 AI」。
-   已改用原版任務系統的生物：殭屍、骷髏（含凋零骷髏）、苦力怕、女巫、豬、牛、哞菇、羊、雞、村民（部分任務）、
-   狼、豹貓、鐵魔像（`ai.rs` 的 `Pet` 列舉：Sit、FollowOwner、Beg、Leap、OwnerHurtByTarget、OwnerHurtTarget、TargetNonTamed、
-   帶「被玩家動作嚇跑」的 Tempt、AvoidPlayer、OcelotSit、OcelotAttack、MoveTowardsTarget、LookAtVillager、魔像的目標搜尋含 `canEasilyReach`）；
-   已改用原版舊式 AI（`EntityCreature.updateEntityActionState`）的：蜘蛛、洞穴蜘蛛、蠹魚、殭屍豬人。
-   **第二階段（還在舊的手寫處理函式上）**：
-   - 馬（`mob/extra.rs` 的 `horse` 仍借用舊的 `animal()`）：需要 `RunAroundLikeCrazy`、`Panic`、`Mate`、`FollowParent`、`Wander` 等。
-   - 狼／豹貓／魔像沒掛上的：魔像的 `DefendVillage`、`MoveThroughVillage`、`MoveTowardsRestriction`（都要村莊資料）、
-     魔像碰到怪物時 1/20 機率轉為目標（`collideWithEntity`）、拿花（`setHoldingRose` 只有計時沒有畫）、狼的乞食歪頭與甩水動畫、
-     狼被非玩家打時傷害減半、豹貓 `OcelotSit` 對床與「箱子有人在用」的判斷。
-   - 坐下：`sit_order` 是玩家的指令（`EntityAISit.isSitting`），`sitting` 是實際狀態，由任務在下一次評估時設定。
-   - 沒掛上的任務：`ControlledByPlayer`（騎豬）、殭屍的 `BreakDoor`、
-     `MoveTowardsRestriction`、`MoveThroughVillage`（需要村莊資料 `VillageCollection`）、村民的交易／開門／回屋／繁殖／跟隨魔像／玩耍。
-   - 自帶 `updateEntityActionState` 的：終界使者、烈焰使者、惡魂、蝙蝠、魷魚（`extra.rs`、`nether.rs` 的函式還沒有逐行對過原始碼）。
-     史萊姆／岩漿怪已對過 `EntitySlime.onUpdate` / `updateEntityActionState`：大致相符，修了兩處（`prevSquishFactor` 在新值之後才設、
-     找玩家改用 `getClosestVulnerablePlayerToEntity`）。
-   - 蠹魚鑽進石頭與召喚同伴（`EntitySilverfish.updateEntityActionState` 的覆寫）。
-   - `EntityAITarget` 的 `nearbyOnly`（`canEasilyReach`）與家的範圍（`isWithinHomeDistance`）沒有做，目前沒有生物用到。
-   - 高壓苦力怕（閃電）、殭屍的增援（`summonReinforcements`）、玩家隱形時的偵測距離已做但護甲件數只算有沒有穿。
-1a. **附魔效果**：除了釣竿的兩種（釣魚未實作）都已生效，見第 6 節。還沒做的：節肢剋星的緩速（`Mobs::add_effect` 目前是空的，
-   因為**生物沒有藥水效果系統**，這也讓飛濺藥水的持續效果、凋零骷髏的凋零對生物無效）、破損物品的碎片粒子（客戶端挖掘時才有，
-   伺服器只播 `random.break`，而且音高的世界亂數延到 tick 尾才抽）、附魔光澤。
-   **生物裝備**已做（2026-11-14）：`Mob.equipment` / `drop_chances` / `can_pick_up_loot`，骷髏、殭屍、殭屍豬人的
-   `onSpawnWithEgg`（與原版 1,200 組比對一致，`spawn_equipment_matches_the_game`），區域難度 `ServerWorld::local_difficulty`
-   （區塊 `inhabited` 照 `PlayerManager` 每 8000 tick 或離開視野時累加）、裝備掉落、護甲值、武器傷害與附魔、骷髏的弓附魔、
-   `RenderBiped` 的盔甲層與手持物品。撿起地上物品、小殭屍、殭屍村民已做。**還沒做**：雞騎士／
-   蜘蛛騎士（亂數照抽但不生成）、殭屍增援（`summonReinforcements`）與破門、領頭殭屍的增援機率、蜘蛛在困難模式的藥水效果、
-   豹貓生成時的幼貓、馬的 `onSpawnWithEgg` 逐行核對、`InhabitedTime` 還沒寫進存檔（重新載入從 0 開始）。
-   掉落還沒改走 `drops.rs` 的只剩 `harvestBlock` 的覆寫（剪刀剪樹葉／草／藤蔓、冰、雪片仍用舊的 `item::drops`，
-   `play.rs` 約 737、752 行）。失去支撐、水沖、樹葉腐爛、甘蔗／仙人掌／雙層植物都已改走 `drops.rs`（2026-11-14 稽核）。
-   `item::has_subtypes` 是近似（`max_damage == 0`），應改為原版 `getHasSubtypes` 的表。
-1b. （已完成基本形）客戶端預測放置／破壞方塊，見第 4 節「客戶端預測」。尚未預測的：有朝向或需要依附的方塊（原木、活塞、熔爐、
-   火把、樓梯、半磚、門……，要把 `play.rs` 裡決定中繼值的邏輯抽成兩端共用）、沙與礫石、TNT、雙層植物的另一半。
-   預測時的光照只是暫時估計（六個鄰居最大值減一），伺服器快照到了才是真的。
-   附魔台的書架粒子（`EntityEnchantmentTableParticleFX`）也還沒做。
-2. （已完成）方塊物品的 3D 模型，見第 6 節。
-3. 其他缺方塊的 GUI：信標、漏斗、投擲器、馬的物品欄、村民交易、書與羽毛筆。
-4. 統計與成就（`StatList`、`AchievementList`、`GuiStats`、`GuiAchievements`），資源包畫面、使用統計畫面。
-5. 物品 NBT 已有（見第 4 節），還缺用到它的東西：煙火、書與羽毛筆、地圖資料，以及三個特殊配方（煙火、書本複製、地圖擴大）；附魔光澤。
-6. 缺少的方塊（見 PARITY_TODO B 節）、比較器、漏斗、投擲器、觸發鐵軌等。
-7. 告示牌上的非 ASCII 文字（原版用 unicode 字頁，目前只畫 ASCII）。
-8. 指令：summon、enchant、gamerule、playsound、spreadplayers、testfor 等與 Tab 補完。
-9. 生物裝備、名牌、陰影、受傷傾斜、多人連線。
-10. 已知的光照差異：3 個巨型叢林區樹冠、1 座沙漠神殿內部天空光（原因未查出）。
-
-## 8. 已知注意事項
+## 7. 已知注意事項
 
 - 本機沒有 Vulkan validation layer；`--validate` 無法在此機驗證。
 - 舊格式存檔（`level.txt`）不會出現在原版的世界選單，這是原版行為。
-- 平坦、巨型群系、放大化等世界類型尚未改變生成；獎勵箱、極限模式尚未生效。
 - 聊天打字與創造搜尋用 `text_input()` 走 `Game::text_key`，按鍵事件需要字元時記得接上。
 - Bash heredoc 內含撇號會壞；修補腳本請寫成檔案再執行。
 - **世界亂數的「借出」是結構性問題（未解決）。** 全專案有 31 處 `std::mem::replace(&mut w.rand, JavaRandom::new(0))`：
@@ -352,436 +299,10 @@ MINERUST_BENCH=10 minerust --seed 12345 --no-save --size 1920 1080 --distance 16
   （`drop_block_with(r, ..)`、`destroy_block_with(r, ..)`、`fizz(.., r)`），不要在可能已借出的路徑上呼叫會自己借的函式。
   徹底的解法是把 `on_neighbor_change` / `on_block_added` 也改成接收 `r`，或讓 tick 函式直接用 `self.rand`、只在呼叫
   世界生成器（樹、巨型蘑菇）時借出；這是一次大範圍的機械式改寫，還沒做。
-
-## 9. 開發日誌
-
-每次推送在這裡追加一段：日期、提交、做了什麼、怎麼驗證、留下什麼。
-
-### 2026-11-13
-- `b51da64` Container / 配方 / 盔甲欄 / 工具提示：`slotClick` 移植並以客戶端預測共用；317 條配方逐條取自原版；554 個物品英文名稱與原版一致。
-- `9991930` 修標題全景圖旋轉 90°（最後一個 quad 取的是第 6 次模糊後的材質）、生物身體不轉向與抽搐（補 `updateDistance`、`EntityTrackerEntry` 與客戶端內插）、草葉碎屑顏色（`getIcon(0)` + `colorMultiplier`）。
-- `ce8477f` 創造模式物品欄、箱子模型。
-- `19c00c4` 聊天與指令、F5、按鍵設定。
-- `d89b492` 盔甲與手持物品繪製、穿戴盔甲、南瓜視野。
-- `0f958b9` 聊天設定、載入畫面、發射器介面。
-- `893a6c1` 告示牌全套。
-- `5de6c71` 附魔資料與 `EnchantmentHelper`（`tools/EnchantHarness.java` 385 筆一致）、附魔台方塊、這份接手手冊。
-- `cc422c5` 附魔台全套（容器、介面、浮空書本）；測試 `enchanting_table_enchants_and_costs_levels`。
-- `3239bf6` 物品 NBT（`item_tag.rs`），附魔改存在 NBT 裡（Anvil 存檔以前會遺失附魔，現在不會）；自訂名稱、染色、Lore 的工具提示；皮甲染色顏色用在圖示與盔甲模型；`RecipesArmorDyes`（與原版 9 組一致）；`tools/classpath.sh`（舊的 `Sapling Data` 函式庫已刪除）。
-- 本次：鐵砧全套。方塊與繪製（世界、落下實體用 `MovingDraw::Anvil` 取世界光照、物品圖示）、`repair.rs`（與原版 25 組一致）、容器的 `canTakeStack` 檢查補進 `slotClick` 各模式、`GuiRepair`、`Command::RenameItem`；`lang::shared()`；測試 `anvil_repairs_renames_and_costs_levels`；截圖確認介面、圖示、損壞頂面。
-- 本次：方塊物品 3D 模型（樓梯、柵欄、仙人掌、活塞、壓力板、按鈕、地板門、地毯、雪片、半磚、附魔台、終界門框、龍蛋、鐵砧），取代舊的簡化正方體與平面貼圖；GUI 打光改為原版光源方向；截圖確認創造模式三個分頁與手持樓梯。
-- 本次：修正雙擊 exe 打不開（舊的 jar 路徑已刪除，現在也會找 `%APPDATA%\Sapling` 等啟動器目錄與 exe 旁），啟動錯誤改以對話框顯示；聲音與語言檔因此也找得到了。
-- 本次：使用者雙擊 exe 仍找不到 jar（其環境與本機測試不同，推測 `APPDATA` 不可靠）。改用 Known Folder API、加上 `minerust_jar.txt` 與檔案選擇視窗；以清空所有環境變數、工作目錄設為 `C:\Windows` 的方式啟動 release 與 debug 驗證。
-- 本次：查出真正原因——Sapling 資料夾只存在於 Claude 套件的虛擬化 AppData 裡。jar 與 assets 複製到 `game\`，exe 會往上找到它；啟動時印出 `Jar:` 路徑。
-- 本次（附魔效果，進行中）：`Math.random()` 改用獨立產生器（`util::math::math_random`），`ItemEntity::new` 不再消耗世界的 rand（原版就是如此，掉落物的亂數順序因此能與原版一致）。新增 `tools/DropHarness.java` → `tools/drops_1710.txt`：以只記錄生成物的假 World 執行原版 `dropBlockAsItemWithChance`（每個方塊 × meta × 時運 0–3 × 4 個種子，含經驗球與最後一個 `rand.nextInt` 以確認亂數順序），另有 `canSilkHarvest` 與 `createStackedBlock`。
-  **下一步**：寫 `src/drops.rs`（`quantityDroppedWithBonus`／`getItemDropped`／`damageDropped`／各方塊的 `dropBlockAsItemWithChance` 覆寫、`harvestBlock` 的絲綢之觸與剪刀），以這份資料寫測試直到全部一致，取代 `item::drops`；再接時運、效率、親水性、耐久（`EnchantmentDurability.negateDamage`）。
-- `本次（效能整體修繕，2026-11-13）`：使用者回報效能比原版差。加了基準模式（第 5.3 節）實測：RTX 5070 上不限幀只有約 100 fps，
-  每幀 4 ms 花在區塊泵送、3.3 ms 在渲染。**根因**：伺服端只要有任何方塊或光照變動（隨機 tick、草蔓延、甘蔗長高……）就把整個
-  16×256×16 區塊柱連同鄰居標髒並送出快照，客戶端收到後把 3×3 共九柱全部重新網格化——閒置世界 10 秒內 4,771 份快照、
-  22,000 次整柱上傳，每次上傳各自 `vkAllocateMemory`，頂點還放在主機可見記憶體；載入時每柱平均重建 19 次。
-  **修正**：(1) 髒標記改為 16³ 分段遮罩（原版 `markBlockForUpdate` 的 ±1 格範圍），(2) 網格器按分段輸出、只複製需要的高度範圍，
-  (3) 渲染器改為分段 + 顯存池 + 暫存緩衝上傳、每分段獨立視錐剔除、同一緩衝內用 `vertexOffset` 繪製，
-  (4) 九柱都 `ready` 才第一次網格化，(5) 方塊實體只重掃變動分段。結果見第 5.3 節的表（視距 16：97 → 1,311 fps，載入 24 → 7 秒）。
-  **同時接上原本完全沒作用的影像設定**：垂直同步（`FIFO`／`IMMEDIATE`）、最大幀率（`FrameSync`，預設 120、沒有世界時 30）、
-  平滑光照等級（改動後重建全部分段）、雲的開關與視距 < 4 不畫雲、視角晃動開關、Mipmap 層級、全螢幕（F11 與設定）。
-  **驗證**：`cargo test --release` 82 項通過；改動前後同位置截圖逐像素比對（1280×720，差異 17 像素，為粒子時序）；
-  載入後以 `/setblock` 放置跨分段、跨區塊邊界的方塊柱與水，確認增量重建正確；F3 顯示 121 fps（上限 120）。
-  **留下**：第 7 節第 0 項的影像設定缺口；`Arc<ChunkData>` 在送出快照後的下一次寫入會整塊複製（262 KB），目前伺服器 tick 5 ms 尚可，
-  之後可改成分段 `Arc`；區塊生成後的裝飾仍是單執行緒（原版的全序要求）。
-- `本次（使用者回報的手感問題，2026-11-13 晚）`：使用者列出「實體抽搐、掉落物上下跳與穿模、生物移動卡頓、放方塊有音效但過很久才出現、
-  貼圖用錯、有些東西反而更快」。逐項查證：
-  - **掉落物／箭／TNT 等抽搐**：它們的 `prev`、`pos` 來自伺服器 tick，卻用客戶端 tick 的 `partial` 插值，兩個時鐘相位不同就會鋸齒狀前後跳；
-    掉落物的浮動用 `age + partial` 也一樣。改用 `server_partial()`，並讓一個伺服器 tick 的事件整批套用（見第 4 節「兩個時鐘」）。
-  - **掉落物穿模**：繪製時多減了 0.125（`posY` 已含 `yOffset`，`RenderItem.doRender` 是 `posY + 浮動`），方塊物品因此沉進地面。已移除。
-  - **生物移動卡頓**：加上 tick 相位鎖定（同上）。
-  - **放方塊延遲**：上一輪之前網格器被整柱重建塞爆（需求約 4,300 柱／秒、產能約 2,200），玩家所在區塊排不到。
-    現在實測「右鍵 → 新網格完成」25–42 ms（`MINERUST_DEBUG_LATENCY=1` 搭配 `--open use:x,y,z` 會印出）。
-  - **貼圖用錯**：新增 `tools/IconHarness.java` 匯出原版全部方塊貼圖並逐項比對，查到並修正：木板六種全畫成橡木（連帶五種木樓梯）、
-    石英方塊的雕紋與柱狀變體、乾草捆橫放的朝向、平滑雙層半磚的砂岩款，以及一批中繼值越界時的回退貼圖（樹苗、砂岩、石磚、花、小麥、
-    胡蘿蔔／馬鈴薯、蠹魚石）。尚未移植的方塊（測試會跳過）：26, 36, 63, 68, 92, 95, 104, 105, 107, 125, 126, 130, 137–139, 144,
-    146–151, 154, 156–158, 160。
-  - **「反而更快」**：沒有找到確定的單一原因。查過挖掘延遲（`blockHitDelay`）、右鍵延遲、排程 tick，都與原版一致。推測是先前伺服器
-    執行緒被網格工作搶走 CPU，落後後連續補 tick（與原版 `MinecraftServer.run` 相同的追趕機制）造成世界忽快忽慢；上一輪修正後
-    伺服器 tick 平均 5 ms，不再落後。**這一項沒有被證實**，需要使用者指出具體是哪個東西變快。
-  **驗證**：`cargo test --release` 83 項通過；截圖確認六種木板、石英變體、乾草捆、木樓梯貼圖；基準 1,331 fps（視距 16，未退步）。
-  抽搐與卡頓的修正只有編譯與邏輯推導，**沒有錄影逐幀驗證**。
-- `本次（第二批回報 + 掉落表，2026-11-14）`：
-  - **方塊掉落表**：`src/drops.rs` 完成，與原版 4 萬多筆參考資料全部一致（測試 `drops_match_the_game`），接到玩家挖掘（含時運、絲綢之觸）、
-    爆炸、活塞。礦石經驗、蠹魚石放出蠹魚也走同一條路。
-  - **點燃的 TNT**：閃爍照 `RenderTNTPrimed` 改成純白（原版 `renderBlockAsItem` 自己把顏色設成 alpha 1，所以那個 0.8 的透明度其實沒作用，
-    每隔 5 tick 整塊變白），舊寫法是往白色內插 80% 且保留貼圖。「陷進下面的方塊」查不到位置錯誤（實體中心、0.98 的碰撞箱都對），
-    判斷是上一輪修掉的插值抖動；截圖確認現在坐在方塊上。
-  - **紅石線**：`mesher.rs` 的 `wire` 原本只有平面部分、連接規則是近似。已照 `renderBlockRedstoneWire` 與
-    `BlockRedstoneWire.isPowerProviderOrWire` 重寫：中繼器只連前後、比較器／陷阱箱／陽光感測器等會連、往上連要求旁邊是實心方塊、
-    孤立的線是中央小點而不是整個十字、爬上方塊側面的線段。
-  - **放方塊「有音效但放不下來」**：客戶端沒有做原版 `ItemBlock.onItemUse` 的檢查就播音效並送出指令；方塊與玩家（或生物）重疊、
-    或右鍵的是箱子等可互動方塊時，伺服器拒絕，按住右鍵要到下一次重複才成功。現在 `Game::placement` 先檢查
-    （`canPlaceEntityOnSide`：可取代、不與玩家和生物的碰撞箱相交），不通過就不播音效、不送出，與原版一致；伺服器端改用方塊真正的碰撞箱。
-    真正的「立即出現」還需要客戶端預測（第 7 節 1b）。
-  - **苦力怕**：打火石右鍵點燃（`fire.ignite`、耗損 1、之後固定膨脹到爆炸），膨脹邏輯照 `EntityAICreeperSwell`
-    （3 格內開始、超過 7 格或看不見才消退、膨脹時不移動）。測試 `flint_and_steel_ignites_a_creeper`。
-  **驗證**：`cargo test --release` 85 項通過；截圖確認紅石線（十字、直線、爬牆、被火把點亮）與 TNT 的白色閃爍；基準 1,355 fps。
-  放置檢查與苦力怕的實際手感沒有實機操作驗證。
-- `本次（2026-11-14，工作台與拉桿）`：
-  - **工作台、熔爐、箱子等伺服器開啟的介面完全不能用**：畫面有彈出，但滑鼠沒有釋放，視角還跟著滑鼠轉。原因是只有按鍵開的畫面
-    （背包、暫停）會回傳 `Request::Release`，伺服器經 `Event::Inventory` 開的視窗和死亡畫面沒有人去放開滑鼠。
-    以前只用 `--open use:` 截圖驗證過介面，從來沒用真的滑鼠操作過。修正：`main.rs` 每幀比對 `Game::wants_grab()` 的變化，
-    變了就抓取或釋放（`Minecraft.displayGuiScreen` 的 `setIngameNotInFocus` / `setIngameFocus`），釋放時游標移到視窗中央。
-    `MINERUST_DEBUG_GRAB=1` 會讓截圖模式一開始就抓取並印出 `Mouse: grabbed/released`，用它確認過開工作台會釋放。
-  - **拉桿**：原本底座尺寸不對、把手是一個隨開關平移的方塊。改為 `rb.rs` 的 `render_block_lever`（`renderBlockLever` 的逐行移植：
-    八種朝向、把手繞軸傾斜 ±40°、`lever` 貼圖的指定區域）。
-  - **教訓**：`mesher.rs` 的 `shaped()` 裡還有不少同類的手寫近似（中繼器的火把、按鈕、壓力板、絆線鉤、柵欄門、活板門、梯子、鐵軌等
-    是用碰撞箱或自訂方塊拼的），都該改成 `rb.rs` 裡對應 `RenderBlocks` 函式的逐行移植。使用者每回報一個就是一個，沒回報的多半也有問題。
-    另外凡是 GUI，都必須用真的滑鼠鍵盤流程驗證一次，不能只截圖。
-  **驗證**：`cargo test --release` 85 項通過；截圖確認拉桿四種擺法與開關狀態。
-- `本次（2026-11-14，預測與戰鬥數值）`：
-  - 客戶端預測放置／破壞（見第 4 節）。實測點擊到網格重建 16 ms，不再受伺服器 tick 影響；三條路徑（確認、被快照覆蓋、被否決還原）
-    都用 `MINERUST_PREDICT_BOGUS` 驗證過。
-  - 玩家護甲終於生效：`ServerPlayer.living.armor` 每 tick 取自 `inv.armor_value()`，受傷時照 `InventoryPlayer.damageArmor` 耗損護甲
-    （傷害 ÷ 4、至少 1，超過耐久就損毀）；舉劍格擋減傷 `(1 + 傷害) × 0.5`；玩家爆擊改為 1.7.10 的 ×1.5（原本是舊版的隨機加成）。
-  - 檢查了 `shaped()` 裡的方塊外觀總覽圖（火把、中繼器、按鈕、壓力板、鐵軌、梯子、柵欄、玻璃板、煉藥鍋、釀造台、藤蔓、絆線鉤）：
-    火把是照 `renderTorchAtAngle` 寫的，其餘目視沒有明顯錯誤，但都還不是逐行移植。柵欄門、圓石牆確認是尚未移植的方塊。
-  **驗證**：`cargo test --release` 85 項通過。基準這次只有 820 fps、伺服器 tick 8.7 ms，各階段一致慢約 1.7 倍，
-  當時機器上有另一個遊戲在跑，**不能當作比較基準**，下次請在乾淨的環境重跑確認沒有退步。
-- `本次（2026-11-14，補方塊）`：新增染色玻璃（95，半透明階段繪製、同色相鄰面剔除）、木半磚與雙層木半磚（125／126）、石英樓梯（156）。
-  貼圖已納入 `block_textures_match_the_game`，掉落走 `drops.rs`。截圖確認外觀。
-  **新增一個方塊要改的地方**（照這次的順序）：`block.rs` 的常數、`build()` 的表、`texture_name`、需要時 `collision_box` / `is_stairs` /
-  `stair_model` / `use_neighbor_brightness`；`item.rs` 的 `hardness`；`entity/mob.rs` 的 `explosion_resistance`；
-  `play.rs` 放置時的中繼值；`world/server.rs` 的頂面是否實心。物品與創造分頁資料已由 `item_data.rs` 涵蓋。
-  **留下**：半磚的 `ItemSlab.onItemUse`（點上半部放上半磚、兩塊合成雙層）與樓梯倒放都需要點擊位置 `hitX/Y/Z`，
-  但 `Command::Use` 沒有帶，石半磚也有同樣的缺口；染色玻璃片（160）要移植 `renderBlockStainedGlassPane`（與一般玻璃片不同的立體模型）；
-  其餘未移植方塊：26, 36, 92, 104, 105, 107, 130, 137–139, 144, 146–151, 154, 157, 158, 160。
-- `本次（2026-11-14，放置方向與選取）`：
-  - **查到放置邏輯的大缺口**：`play.rs` 的 `use_block` 只處理了少數方塊的中繼值，樓梯一律朝同一個方向、梯子／南瓜／乾草捆／藤蔓／
-    絆線鉤／石英柱沒有照點擊面或玩家朝向設定，半磚不能放上半也不能合併成雙層。已照各自的 `onBlockPlaced` / `onBlockPlacedBy` 補上：
-    樓梯（朝向 + 倒放）、半磚（上下半 + `ItemSlab.onItemUse` 的兩種合併）、活板門上半、梯子、南瓜與南瓜燈、藤蔓、絆線鉤、
-    石英柱、乾草捆。測試 `stairs_face_the_player_and_slabs_join`。
-  - `Command::Use` 多了 `hit`（原版 `C08PacketPlayerBlockPlacement` 的 `hitX/Y/Z`，方塊內座標）。
-  - **客戶端選取方塊**原本是整格的 DDA，選取框永遠是整個方塊、火把和花旁邊的空氣也會被點到。改為
-    `raytrace::ray_trace_blocks`（`World.rayTraceBlocks` 的移植，逐方塊用自己的範圍做 `collisionRayTrace`），
-    觸及距離照 `getBlockReachDistance`（創造 5、生存 4.5），選取框畫 `shapes::selection` 的範圍（`Frame.outline` 改為最小／最大角）。
-    與生物比較遠近改用實際命中點的距離。
-  - 截圖模式的 `--open use:` 可用 `MINERUST_HIT=x,y,z`、`MINERUST_FACE=0..5` 指定命中點與面。
-  **驗證**：`cargo test --release` 86 項通過；截圖確認火把的選取框貼合其範圍。梯子、南瓜、藤蔓、絆線鉤的放置方向只照原始碼移植，
-  沒有個別測試。**還沒補放置規則的**：柵欄門、床、頭顱、可可、終界門框的朝向、鐵軌之外需要 `canPlaceBlockOnSide` 的檢查（火把、按鈕已有）。
-- `本次（2026-11-14，生物 AI 第一階段）`：新增 `mob/ai.rs`（約 1,500 行）。移植了 `EntityAITasks`、`PathNavigate` 的導航更新、
-  `EntityLookHelper`、`EntityAITarget` 與 17 個任務類別（Swimming、Panic、Tempt、Wander、WatchClosest／WatchClosest2、LookIdle、
-  AttackOnCollide、ArrowAttack、CreeperSwell、AvoidEntity、FleeSun、RestrictSun、EatGrass、FollowParent、HurtByTarget、
-  NearestAttackableTarget），以及舊式 AI。順帶修正的原版行為：殭屍豬人的怒氣不會隨時間消退（1.7.10 沒有遞減）、攻擊時加速 0.45；
-  `AttackOnCollide` 的 `attackTick <= 20` 讓殭屍每 tick 都出手（由玩家的無敵時間限制實際受傷頻率，這是 1.7.10 的原樣）；
-  動物被打後逃跑改由 `getAITarget` 驅動（100 tick）；骷髏白天著火會找遮蔽、導航避開陽光；羊吃草長毛、小羊加速成長；
-  潛行讓敵對生物的偵測距離變 0.8 倍。
-  **驗證**：`cargo test --release` 90 項通過，新增四個行為測試（殭屍追擊並命中、牛被小麥吸引與被打逃跑、骷髏射箭、殭屍豬人被打才還手）。
-  伺服器 tick 沒有變慢（機器上仍有別的遊戲在跑，數字僅供參考：約 6 ms）。**沒有實機觀察過**各生物的實際走位與轉頭是否自然。
-- `本次（2026-11-14，生物 AI 第二階段）`：狼、豹貓、鐵魔像改掛原版任務（`ai.rs` 的 `Pet`），刪掉 `extra.rs` 的 `tameable`、`golem`、
-  `follow_owner`、`attack_other`。玩家的「最後攻擊者／最後攻擊對象」加了時間戳並在 100 tick 後遺忘（`getRevengeTimer`、`getLastAttackerTime`），
-  狼靠它決定要不要幫主人。測試 `wolves_and_golems_pick_their_targets`（馴服的狼去追主人打過的殭屍、魔像找上殭屍並打死牠），
-  馴服測試改為檢查 `sit_order` 後等任務讓牠坐下。`cargo test --release` 91 項通過。
-- `本次（2026-11-14，繁殖）`：`EntityAnimal.interact`（各自的食物讓成年動物進入 600 tick 的求愛狀態）、`EntityAIMate`（找 8 格內同類、
-  靠近、60 tick 後生下小孩；父母 6000 tick 內不能再繁殖；愛心粒子與 1–7 點經驗）、小羊顏色照父母兩種染料的合成結果或隨機取一方、
-  小狼／小貓繼承馴服狀態。幼體：碰撞箱減半（`setScaleForAge`），模型照 `ModelQuadruped` / `ModelChicken` 的 `isChild`
-  （頭不縮小、身體縮一半）繪製，24000 tick 後長大；`Age`、`InLove` 寫進存檔。`--summon Cow:baby` 可直接生幼體。
-  同一 tick 內兩隻都想生的情況用 `Outcome.births` 互相看見，確保只生一隻。
-  測試 `fed_cows_have_a_calf`；截圖確認小牛、小豬、小羊、小雞的模型。`cargo test --release` 92 項通過。
-  **留下**：狼、豹貓、馬的幼體模型（`model2.rs`）還沒有 `isChild` 的畫法；餵幼體加速成長是 1.8 才有的，不需要做。
-- `本次（2026-11-14）`：史萊姆對照原始碼修正兩處；夜間 30 秒壓力測試（敵對生物自然生成）沒有當機，伺服器 tick 平均 4.5 ms
-  （機器上仍有別的遊戲在跑）。
-  **查到的既有錯誤，待修**：武器附魔（鋒利系列、擊退、燃燒、掠奪）、保護系列、水下呼吸、荊棘、弓的附魔、附魔光澤都還沒接。
-- `本次（2026-11-14，附魔效果與生物掉落）`：使用者要求「接力完善整個項目」，照第 7 節的順序做附魔效果。
-  - 近戰搬到伺服器（第 4 節「近戰與附魔」）：鋒利／不死剋星／節肢剋星、擊退、燃燒（目標未著火時先點 1 秒，沒打中就熄滅）、
-    爆擊只在命中時、失明時不爆擊、武器耗損（劍 1、工具 2、鋤頭 0）、`EntityCrit2FX`（三個 tick、每次最多 16 顆）與 `magicCrit`。
-    順帶修掉：客戶端以前會在打生物時自己減速 0.6 並出爆擊粒子（原版只有打船和礦車才會）；疲勞值以前不論打中與否都加。
-  - 玩家受傷：`applyArmorCalculations` 先算護甲值再當場耗損盔甲（以前延到 tick 尾）、保護系列（含摔落、火焰、爆炸、彈射物）、
-    火焰保護縮短著火時間（`Ent.fire_protection`）、水下呼吸、荊棘（殭屍等 `EntityMob` 近戰與骷髏的箭會觸發，史萊姆、狼、魔像不會）。
-    爆炸保護減少擊退的那行在 1.7.10 是 `floor` 一個小於 1 的數，永遠是 0，所以只有傷害減免。
-  - 挖掘：`getCurrentPlayerStrVsBlock` 完整移植（效率、急迫、挖掘疲勞、親水性）；以前急迫與挖掘疲勞也沒有作用。
-  - 耐久：`attemptDamageItem` 用在工具挖掘（含剪刀的五種方塊）、打火石、剪羊毛、點燃苦力怕、弓、武器、盔甲；壞掉時播 `random.break`。
-  - 弓：力量、衝擊、火焰、無限（無限或創造不需要箭，箭不能撿）；弓聲的音高改用 `Item.itemRand`，不再消耗世界亂數。
-  - 生物：受傷時天生護甲（殭屍、殭屍豬人 2 點），擊退方向的小亂數改用 `Math.random()`、`setBeenAttacked` 與擊退抗性各抽一次 `nextDouble`
-    （以前用生物自己的亂數，亂數順序與原版不同）；溺水類傷害（終界使者、烈焰使者碰水、魷魚上岸）不呼叫 `setBeenAttacked`。
-  - 生物死亡掉落改為逐類別的 `dropFewItems(recentlyHit, looting)` 與 `rand.nextInt(200) - looting < 5` 的稀有掉落（所有生物都會抽這一次），
-    每個 `dropItem` 各自一個掉落物；修正：終界使者掉落手上的方塊（原版不會）、殭屍豬人的金錠機率、蜘蛛眼的短路判斷、
-    雞／牛／豬／惡魂等的掠奪加成、馬依種類（殭屍馬四分之一不掉）。玩家的箭殺死生物以前不算玩家擊殺（沒有經驗與稀有掉落），已修正；
-    馴服的狼殺死的也算。剪羊毛現在要求不是小羊。
-  **驗證**：新增 `tools/EnchantFxHarness.java`（4,178 行參考值）與三個測試：`effects_match_the_game`、`death_loot_matches_the_game`
-  （3,168 組全部一致，含下一個 `nextInt`）、`enchanted_weapons_and_armour`（經伺服器的完整流程：鋒利 V 打殭屍的血量逐位元相等、
-  不死剋星 V、燃燒與擊退、摔落保護 IV 的範圍、力量 V／衝擊 II／火焰／無限的箭）。`cargo test --release` 95 項通過。
-  基準：同時段重編上一個提交 960 fps／伺服器 5.6 ms，本次 936–986 fps／5.7–5.8 ms，沒有退步（見第 5.3 節的注意）。
-  爆擊粒子與附魔爆擊的外觀**只有編譯與邏輯對照**，沒有截圖驗證（截圖模式沒有自動攻擊的參數）。
-  **留下**：見第 7 節 1a（生物裝備、生物藥水效果、`onSpawnWithEgg`、鋤頭、釣魚）。
-- `本次（2026-11-14，農業、床與缺少的常見方塊）`：使用者要求「優先把試玩過程中明顯會發現未完成的東西先做完」。盤點後最明顯的是：
-  作物與樹苗永遠不會長、種子種不下去、鋤頭沒有作用、沒有骨粉、床不存在（第一個晚上就會發現）。
-  - 隨機 tick：作物（`BlockCrops.updateTick` 的生長機率 `getMoisture`）、莖（長滿後在旁邊結出南瓜／西瓜）、樹苗（先標記再長，
-    1/10 大橡樹、2x2 巨型雲杉／叢林木、黑橡木必須 2x2、樣式失敗時放回樹苗）、地獄疣、可可、耕地（附近有水變濕、
-    沒有就變乾、乾了又沒作物就變泥土、下雨會濕）、花草作物失去支撐時**掉落物品**（以前直接消失）、亮紅石礦石變回、
-    雪塊在光下融化、靜止岩漿點燃周圍、傳送門生成殭屍豬人。
-  - 物品：鋤頭（草地／泥土，耗損）、六種種子、骨粉（各 `IGrowable` 的 `canFertilize` / `shouldFertilize` / `fertilize`）、
-    可可豆、蛋糕、床。左鍵蛋糕也會吃（`onBlockClicked`），左鍵也能打熄火。
-  - 新方塊：床、蛋糕、南瓜梗、西瓜梗、柵欄門、圓石牆，各自的繪製（`rb.rs` 的 `render_block_fence_gate`、`render_block_wall`、
-    `render_block_bed`、`mesher.rs` 的 `stem`）、碰撞、選取框、物品 3D 圖示（柵欄門、圓石牆）、硬度與爆炸抗性、尋路（柵欄門開著可走）。
-    貼圖已經過 `block_textures_match_the_game`（床的六面依方向也一致）。
-  - 順帶修正：橡木柵欄與地獄磚柵欄以前會互相連接（原版不會）、柵欄會連到柵欄門、木半磚可燃、火把可放在地獄磚柵欄與圓石牆上。
-  - 兩個舊測試（苦力怕、狼）在新隨機 tick 下失敗：查出是測試沒先把玩家移到平台上，玩家還在地面 y=68，與平台上的生物相距超過
-    128 格，原版的 `despawnEntity` 就把牠們移除了；以前只是剛好沒碰到每 40 tick 一次的檢查。已修正測試。
-  **驗證**：新增 `farming_from_hoe_to_harvest`、`stems_bear_fruit_and_saplings_grow`、`cake_and_fence_gate`、`sleeping_skips_the_night`，
-  `cargo test --release` 99 項通過；截圖確認作物、莖結果、柵欄門開關、圓石牆、蛋糕、床，以及睡覺畫面（躺姿、變暗、離開床鋪按鈕）。
-  基準：同時段交替量上一個提交 944–1,122 fps，本次 867–1,095 fps，伺服器 tick 都約 6 ms，沒有退步。
-  **留下**：睡覺時第三人稱的躺姿模型；隨機 tick 對按鈕／壓力板／紅石火把／流動液體的效果；生物裝備、生物藥水效果、附魔光澤。
-- `本次（2026-11-14，生物裝備）`：接著「試玩會發現」的順序，骷髏手上沒有弓、怪物從不穿盔甲是每個晚上都看得到的缺口。
-  - `onSpawnWithEgg`：所有 `EntityLiving` 先抽跟隨距離的 `nextGaussian`（洞穴蜘蛛例外）；骷髏（地獄五分之四是凋零骷髏拿石劍，
-    其餘 `addRandomArmor` + 弓 + `enchantEquipment`）、殭屍（撿拾旗標、`GroupData` 的兩次世界亂數、破門旗標、隨機盔甲、
-    1%／困難 5% 的鐵劍或鐵鏟、附魔、擊退抗性、跟隨距離、領頭殭屍的血量）、殭屍豬人（金劍）、萬聖節南瓜頭。
-    結果與原版 1,200 組（3 種 × 5 個區域難度 × 普通／困難 × 40 個種子）逐項一致，含兩個亂數的下一個值。
-  - 區域難度 `getLocalDifficulty`：月相加區塊的 `inhabitedTime`；`inhabitedTime` 由玩家視野內的區塊累加（`PlayerManager` 的批次規則）。
-  - 戰鬥：生物護甲值改為裝備 + 天生；骷髏的箭吃弓的力量／衝擊／火焰；`EntityMob.attackEntityAsMob` 用攻擊力屬性 + 手持武器、
-    鋒利系列、擊退、燃燒（`Hit::Melee.fire`）；有拿東西才揮手；死亡時 `dropEquipment`（8.5%，掠奪每級 +1%，耐久隨機）。
-  - 繪製：殭屍、殭屍豬人、骷髏的盔甲層（`ModelZombie(1.0 / 0.5)` 的手臂姿勢）與 `RenderBiped.renderEquippedItems` 的手持物品
-    （骷髏的全 3D 物品多移 0.09375）。存檔：區域檔的 `Equipment`、`DropChances`、`CanPickUpLoot`，自有格式加兩個欄位。
-  - 舊測試 `pearls_and_splash_potions` 失敗：測試從離地 0.12 格平丟珍珠，原版的亂數散布往下就會立刻撞到平台，換了亂數序列就中了；
-    改成朝上丟向五格外的牆。
-  **驗證**：`cargo test --release` 100 項通過（新增 `spawn_equipment_matches_the_game`）；截圖確認殭屍豬人的金劍與骷髏的弓。
-  基準：上一個提交 957–984 fps／伺服器 5.6–5.7 ms，本次 980–1,042 fps／5.8–6.0 ms，在雜訊範圍內。
-- `本次（2026-11-14，物品光澤）`：附魔裝備、藥水、附魔書、成書、經驗瓶、附魔金蘋果、地獄之星在物品欄裡以前都沒有光澤。
-  新增 `Stack::has_effect`（各 `Item.hasEffect` 覆寫）與 `Ui::glint`：原版用 `glDepthFunc(GL_EQUAL)` 把光澤限制在圖示畫過的像素，
-  這裡由 CPU 讀圖集第 0 層，把通過透明度測試（> 0.1）的每個 GUI 像素畫成一個小四邊形，兩層的貼圖座標照 `renderGlint` 的
-  `getSystemTime` 捲動公式逐角計算；新的 Vulkan 管線 `pipe_gui_glint`（kind 13，相加混合），`Frame.ui_glint` 記錄要用它畫的頂點範圍，
-  照順序穿插繪製，所以之後畫的背景與工具提示仍會蓋住光澤。截圖確認。`cargo test --release` 100 項通過。
-  **留下**：世界中的光澤（手持、掉落物、盔甲模型的 `shouldRenderPass` 回傳 15 那一層）、方塊物品圖示的光澤。
-- `本次（2026-11-14，稽核上一輪 Opus 5.5 的四個提交 + 修正）`：使用者要求檢查上一輪較低階模型的成果。逐行對照了
-  `growth.rs`（作物、莖、樹苗、地獄疣、可可、耕地、靜止岩漿、傳送門、骨粉全部分支）、`ticks.rs`、`sim_bed.rs`、
-  `play.rs` 的鋤頭／種子／床／骨粉、生物的 `dropEquipment` / `getTotalArmorValue` / `attackEntityAsMob`、`Ui::glint` 的貼圖座標。
-  有 Java 對照測試的部分（掉落表、附魔、生怪裝備）沒有發現錯誤；**錯都出在沒有對照測試、靠讀原始碼移植的邊角**：
-  - `BlockCrops` / `BlockStem` / `BlockSapling.updateTick`：`super.updateTick`（失去支撐就掉落）之後原版**不會 return**，
-    仍然對著已經變成空氣的那一格判斷光照並抽成長的 `nextInt`。上一輪寫成提前返回，亂數順序因此少抽一次。
-  - 隨機 tick 清單缺了一半：原版 `setTickRandomly(true)` 的還有所有液體（`BlockLiquid`）、雙層植物、火把、紅石火把、
-    兩種按鈕、壓力板、偵測鐵軌、絆線、絆線鉤。現在都會被隨機 tick 呼叫各自的 `updateTick`（按下的按鈕會被提早放開等，
-    這是原版行為）。PARITY_TODO 的這一項已關閉。
-  - 掉落：甘蔗失去水或被隨機 tick 檢查到（`func_150170_e`）、仙人掌旁邊放方塊（`func_147480_a(…, true)`，含 2001 破壞特效）、
-    雙層植物下半失去土壤、樹葉腐爛（`removeLeaves` 的樹苗／蘋果機率）以前都是直接變空氣不掉東西。火把、告示牌、門、
-    紅石線／中繼器／拉桿／壓力板／活板門、鐵軌、絆線與絆線鉤失去支撐時改走 `dropBlockAsItem`（以前固定生在方塊正中央、
-    不抽位置亂數）。
-  - **水沖掉方塊不掉落**（`BlockDynamicLiquid.func_149813_h`）：火把、紅石、作物、花被水沖走以前直接消失，現在掉落。
-    同一個函式裡岩漿流進任何一格都會 `random.fizz`；岩漿遇水（`func_149805_n`，不論有沒有變成黑曜石／圓石）與
-    往下流到水變石頭也有，以前完全沒有聲音。
-  - 木按鈕：以前註解寫明「不追蹤箭，所以直接放開」，是準則 1 禁止的簡化。現在 `button_arrows` 是 `func_150046_n`
-    的移植（箭射中會按下，箭還插著就每 30 tick 續按），`Occupant` 多了 `arrow` 旗標。
-  - 紅石火把燒毀的音高用了 `self.rand`（那時已被借出，抽到的是假亂數），改用 `r`。由此查出上面第 8 節的結構性問題。
-  - 冰在地獄融化直接消失（`provider.isHellWorld`）。
-  - 床：重生點往上找空位改用真正的碰撞箱（以前用 `info.solid` 近似，半磚、柵欄會判錯，還多了 y < 256 的上限）；
-    「附近有怪物」不再排除瀕死的怪物（原版 `getEntitiesWithinAABB` 不管血量）。
-  - 生物近戰：`EntityMob.attackEntityAsMob` 擊退附魔命中後攻擊者自己 `motionX/Z *= 0.6` 沒做；
-    `EntityZombie.attackEntityAsMob` 的「著火的空手殭屍點燃玩家」（`rand.nextFloat() < 難度 * 0.3`，只在空手且著火時才抽）
-    補上；`getTotalArmorValue` 要算全部五格裝備（含手上）。
-  **驗證**：`cargo test --release` 105 項通過，新增五個測試（`plants_that_lose_their_place_drop_themselves`、
-  `a_dropped_crop_still_draws_its_growth_roll`、`random_ticks_release_buttons`、`decaying_leaves_roll_their_drops`、
-  `water_washes_torches_out_and_lava_hisses`）。基準：同時段交替各量三次，上一提交 628–634 fps／伺服器 5.7–5.9 ms，
-  本次 623–643 fps／5.7–5.9 ms，沒有退步（機器上使用者正在玩另一份 minerust，絕對值偏低）。
-  **沒有驗證的**：木按鈕與箭、殭屍點燃玩家、擊退後的減速只有編譯與原始碼對照，沒有測試也沒有實機操作；
-  岩漿的嘶嘶聲沒有實際聽過（截圖模式關閉聲音）。
-  **稽核沒涵蓋的**：`sim.rs` 的 `attack_mob`（玩家近戰）、`server_player.rs` 的受傷流程、`rb.rs` 新增的柵欄門／牆／床繪製、
-  `mob.rs` 其餘約 900 行改動。這些有的有對照測試（附魔數值），繪製只有截圖；下一位請接著對。
-  `cargo clippy` 有 8 個預設為 deny 的 `approx_constant`（`0.70710677`、`3.1415927` 寫成字面值），不影響 `cargo build`，未處理。
-- `本次（2026-11-14，相依套件）`：GitHub Dependabot 回報 `zip` 2.6.1 有三個漏洞（AES HMAC 繞過、符號連結目標無上限、雙標頭解析差異），
-  升到 9.x（鎖定 9.5.1，`default-features = false` + `deflate`，`cargo tree -i cc` 確認沒有 C 相依）。本專案只按名稱讀自己的 jar，
-  實際風險低，但沒有理由留著。105 項測試通過，截圖確認 jar 的材質、字型照常載入。
-- `本次（2026-11-15，稽核第二輪：玩家近戰、玩家受傷、方塊繪製、生物其餘部分）`：接續上一段「稽核沒涵蓋的」。
-  - **繪製沒有問題**：`render_block_bed`、`render_block_fence_gate`、`render_block_wall` 逐行對過 `RenderBlocks`
-    （頂面 UV 的四種方向、翻轉面、每一組 `setRenderBounds`、`uvRotateTop`），全部相符。
-  - **玩家近戰 `Sim::attack_mob`**：流程與 `attackTargetEntityWithCurrentItem` 相符，只有一處過時：註解寫「生物不穿盔甲，
-    所以 `applyThornEnchantments` 沒事做」，但下一個提交就讓生物穿盔甲了（`enchantEquipment` 會給荊棘）。
-    新增 `Mob::thorns_hits`（五格裝備上的每個荊棘各用生物自己的亂數擲一次、第一件有荊棘的裝備付 3 或 1 點耐久）與
-    `Source::thorns`，打穿荊棘盔甲的殭屍現在會被反傷。
-  - **玩家受傷 `ServerPlayer::attack_inner`**（更早幾輪寫的，這次才對）：
-    - `EntityPlayerMP.field_147101_bU`：進入世界與重生後 60 tick 內除了虛空以外不受傷，以前沒有。
-    - 睡覺時受到攻擊會醒來（`wakeUpPlayer(true, true, false)`），以前會繼續睡。
-    - `DamageSource.anvil` / `fallingBlock`：頭盔承受 `amount * 4 + rand * amount * 2` 點耐久、傷害變四分之三。
-    - `setBeenAttacked` 的 `rand.nextDouble()` 沒抽；擊退方向重抽與「沒有攻擊者」時的 `attackedAtYaw` 用的是 `Math.random()`，
-      以前用玩家自己的亂數；死亡音效只在不是無敵時間內的那一下才播（以前一律播，多抽一次音高）。
-  - **鐵砧砸不到任何東西**：`EntityFallingBlock.fall` 算出的傷害（`FallingBlock.hurt`）從來沒有人讀。現在 `Play.falling_hits`
-    交給 `Sim`，對箱內的玩家、生物（同樣有頭盔規則，`Mob::hurt_by_falling`）與掉落物（`EntityItem.attackEntityFrom`）生效。
-  - **骷髏與女巫每射一次就多抽一個 `nextInt`**：為了替箭／藥水取編號而從生物自己的亂數抽（原版的實體編號是靜態計數器）。
-    改為 `Mob::projectile_id`（由生物編號與年齡導出，不動亂數）。四處：`ai.rs` 兩處、`mob.rs` 舊式路徑兩處。
-  **驗證**：`cargo test --release` 106 項通過，新增 `spawn_protection_anvils_and_mob_thorns`（60 tick 無敵、九格高的鐵砧砸中
-  戴鐵頭盔的玩家後血量下降且頭盔耗損、穿荊棘 III 胸甲的牛被打八拳後玩家受傷且胸甲耗損）；`server_player` 的單元測試改用
-  已過無敵時間的玩家。基準：本次 1,085／1,086 fps、伺服器 5.6–5.7 ms；`7083356` 的編譯 1,021–1,063 fps、5.9 ms，沒有退步。
-  **沒有驗證的**：睡覺被打醒、`setBeenAttacked` 等亂數順序的修正只有原始碼對照；沒有 Java 對照測試可以證明整段
-  `attackEntityFrom` 的亂數順序逐次相同。
-  **留下**：生物的裝備耗損到壞掉時，原版會留下一個數量 0 的物品堆（仍算護甲、仍畫出來、死亡時不掉落），這裡直接清空欄位；
-  `EntityLivingBase.attackEntityFrom` 的 `limbSwingAmount = 1.5` 與 `attackedAtYaw`（受傷時的鏡頭傾斜）仍未做；
-  經驗球被鐵砧砸到（`EntityXPOrb.attackEntityFrom`）沒接。上一段提到的世界亂數借出問題仍未處理。
-- `本次（2026-11-15，使用者試玩回報的五個問題）`：
-  - **多顆 TNT 連爆會卡**：伺服器沒問題（216 顆連爆最差一個 tick 27 ms）。卡的是客戶端的粒子：`Particles::add` 在 4000 顆上限時用
-    `Vec::remove(0)`（每顆粒子 176 位元組，一次搬 700 KB），爆炸每個受影響的格子加兩顆粒子，幾十萬次加總出現一幀 5.1 秒。
-    改成 `EffectRenderer.fxLayers` 的結構：每個圖層一個 `VecDeque`、各自 4000 上限（以前是全部加起來 4000，也與原版不同），
-    tick 與繪製照圖層順序。同一測試最大幀時間 5,109 ms → 13–62 ms。
-  - **點燃的 TNT 穿模**：物理與繪製都對過原版（中心在方塊中心、0.98 的碰撞箱、落地後中心在地面上 0.49、`RenderTNTPrimed` 以實體位置為
-    方塊中心畫整個方塊，所以本來就會陷進地面 0.01）。數值逐 tick 印出來與原版算式一致。**沒有找到位置錯誤**；判斷使用者看到的是上面那種
-    卡頓期間舊的方塊網格還在、實體已經移動的畫面。順手把 `prime_tnt` 的隨機方向改成 `Math.random()`（以前用 `Mobs.rand`）。
-    若修完卡頓仍看得到，需要使用者指出是哪一種情況（哪種方塊上、怎麼點燃）。
-  - **畫面比原版亮**：實測陽光下頂面、北面、午夜、`updateLightmap` 的每一步都與原版算式逐位相符（截圖取像素平均值比對，
-    誤差 1/255 內），交換鏈與貼圖都是 UNORM。差別在**原版的暈影完全沒做**：`GuiIngame.renderVignette`（精緻畫質才有，
-    `glBlendFunc(GL_ZERO, GL_ONE_MINUS_SRC_COLOR)` 疊 `textures/misc/vignette.png`，強度是 `1 - 玩家所在位置的亮度`，
-    每幀靠近 1%）。新增 `pipe_gui_vignette`（kind 14）、`Frame.ui_vignette`（UI 頂點開頭的幾個頂點用它畫）、
-    `Game::player_brightness`（`Entity.getBrightness`）。F1 隱藏介面時不畫，與原版相同。
-  - **拉桿／按鈕放不上 TNT**：這是 1.7.10 的原版行為，沒有改。`Material.tnt` 是 `setTranslucent()`，`isOpaque()` 為 false，
-    所以 `Block.isNormalCube()` 與 `World.doesBlockHaveSolidTopSurface` 對 TNT 都是 false，`BlockLever` / `BlockButton` /
-    紅石線 / 火把的 `canPlaceBlockOnSide` 全部不接受（TNT 到 1.9 才能放）。
-  - **關閉遊戲時存檔很慢甚至像卡死**：`anvil::write_region_chunk` 每寫一個區塊就開檔、讀 8 KB 檔頭、壓縮、寫回、`sync_all()`，
-    全在伺服器執行緒上；視距 16 剛建立的世界有 844 個區塊，退出要等約 10 秒，每 900 tick 的自動存檔也會讓伺服器停同樣久。
-    現在 `save_anvil_world` 先組出所有區塊的 NBT，用 `std::thread::scope` 在所有核心上壓縮，再由 `write_region_batch`
-    每個區域檔只開一次、檔頭只讀寫一次、最後才 `sync_all` 一次。單一區塊的寫入（區塊卸載時）不再同步，原版的 `RegionFile`
-    本來就不會。844 個區塊 10 秒 → 0.20 秒；超過 64 個區塊時會印出 `Saved N chunks of dimension D in X s`。
-  **驗證**：`cargo test --release` 106 項通過（Anvil 讀寫與世界往返的測試走新的批次路徑）；存檔後重新開啟世界正常；
-  暈影以白天與夜晚截圖確認。基準（視距 16）：本次 1,114–1,124 fps，同時段對照版 1,051–1,100 fps。
-  **沒有驗證的**：暈影的強度沒有與原版截圖逐像素比對；自動存檔時伺服器的停頓只由「同一段程式快了五十倍」推論，沒有單獨量。
-  **留下**：存檔仍在伺服器執行緒上做（現在很短）；`touched`（這次工作階段讀進來過的所有區塊）每次存檔都會重寫，
-  玩得越久存得越多，應改成只寫有變動或有實體的區塊（原版 `Chunk.needsSaving`）。
-- `本次（2026-11-19，光照黑斑）`：使用者截圖：森林裡露天的草地與方塊側面一片片偏暗（遠處有火在燒樹）。
-  - **查證**：寫了 `sky_light_errors`（在一個方框內以 `computeLightValue` 的規則從頭傳播天空光，邊界取世界現值，列出不一致的格子）。
-    以使用者的種子在截圖位置生成：**還沒有任何變動就有 1,098 格錯誤**（93% 偏暗、六成在地表 4 格內、集中在區塊邊界）；
-    點燃樹冠燒 1,200 tick 後仍有 463 格。這是 1.7.10 原版的行為（`--compare-pop` 與原版逐格一致的就是這些值）：
-    裝飾寫到載入範圍邊緣時 `updateLightByType` 因 `checkChunksExist(17)` 不成立而放棄；執行期高度圖改變時
-    `updateSkylightNeighborHeight` 只修新舊高度之間的範圍。
-  - **修正**（`compat::fixed()`，`--vanilla-parity` 不受影響；`--dump-pop` 不經過這條路，比對工具照舊）：新檔 `world/relight.rs`。
-    `fix_light`：區塊與八鄰居都在、且 `Sim::ready`（不會再被裝飾寫入）時，整塊從頭算一次天空光與方塊光（高度圖為天空來源、
-    不透明度至少 1、會發光的不透明方塊視為 1、四個鄰居的現值為流入），只算到 3×3 內最高有方塊的區段；寫回時只建立真的需要的區段；
-    邊界有變的格子對鄰居呼叫一般的 `update_light`；客戶端只重建變動的分段與實際讀到變動格子的鄰居分段。
-    這在快照送出前完成，所以客戶端第一次網格化時光照就是對的。`relight_block`（高度圖改變）會把該區塊與 15 格內的鄰居排進
-    `relight_due`，10 tick 後重算（每 tick 最多 4 個，每個約 1 ms）；尚未重算過的區塊不排隊（避免生成時的大量寫入）。
-    `light_fixed` 不寫入存檔：讀回的區塊（含原版存檔）也會重算一次，順便修好舊存檔的黑斑。
-  **驗證**：新測試 `burnt_canopy_light`（使用者的種子、截圖位置、點燃 502 處樹冠燒 1,200 tick），生成後與燒完後的錯誤都是 0；
-  `cargo test --release` 107 項通過。基準（視距 16，與上一提交交替各量兩次）：載入 7.35 對 7.34 秒、伺服器 tick 6.3–6.6 對
-  5.7–6.4 ms、925–943 對 938–977 fps，差距是外圈區塊在量測期間就緒時的一次性重算，在雜訊邊緣。
-  **沒有驗證的**：截圖模式重現不了那場火，所以沒有與使用者畫面相同的前後對照圖，只有數值測試；方塊光（火把）只靠同一套演算法，
-  沒有單獨的測試。中間試過「任何影響光照的方塊變動都排隊」，會讓洞穴流水不停觸發重算、伺服器 tick 多 4 ms，已改成只看高度圖。
-- `本次（2026-11-19，粒子設定與畫質「流暢」生效）`：使用者要求「不要停，繼續完善」。依第 7 節第 0 項，兩個選單裡能調但沒作用的選項：
-  - **粒子**：`Particles.gated` / `spawned` 實作 `RenderGlobal.doSpawnParticle` 的閘門：減少時三分之一機率當作最少、最少時不生成、
-    與攝影機距離超過 16 格不生成（**這條距離限制原版不論設定都有，以前完全沒做**）；`hugeexplosion`、`largeexplode` 例外。
-    只有原版經 `World.spawnParticle` 產生的粒子走閘門：`named_particle`、方塊的 `randomDisplayTick`、爆炸的煙與 `explode`、
-    TNT 的煙、藥水破裂、骨粉、音符、傳送門、疾跑的塵土、爆擊；方塊碎屑（`addBlockDestroyEffects` / `addBlockHitEffects`）
-    與雨滴（`addRainParticles` 直接 `addEffect`）不走，雨滴改為依設定減半或歸零。測試 `particle_setting_and_distance`。
-  - **畫質「流暢」**：`rb::FANCY_GRAPHICS` 從常數改為執行期旗標（`rb::fancy()` / `set_fancy`，`apply_video_settings`
-    變更時整個重建網格，等同 `loadRenderers`）。樹葉用 `leaves_*_opaque` 貼圖（圖集新增六張）、`block::opaque_cube`
-    讓樹葉算不透明（相鄰面剔除，`mesher.rs` 四處與 `rb.rs` 的 `is_opaque` 改用它）、同種樹葉之間不畫面；`fancyGrass` 關閉
-    草方塊側面的覆蓋層；暈影只在精緻時畫；雨雪範圍 10 → 5 格、雨滴的雨量減半；平面雲 `Game::build_clouds_flat`
-    （`renderClouds`：每格 8 方塊、±256 格、沒有 0.33 的 z 偏移）。
-  **驗證**：`cargo test --release` 108 項通過；以兩個遊戲目錄的 `options.txt` 截圖比對精緻／流暢（樹葉、暈影、草方塊側面、平面雲）。
-  基準 1,016 對 1,050 fps、伺服器 6.6 對 6.1 ms（同時段各一次，雜訊範圍）。
-  **注意**：截圖模式讀的是**工作目錄**的 `options.txt`（`main.rs` 的 `game_dir = current_dir()`），要比對設定請用不同的工作目錄。
-- `本次（2026-11-19，生物的藥水效果）`：第 7 節 1a 的「生物沒有藥水效果系統」。
-  - `Mob.potions` 是一份 `Living`（與玩家共用 `Effects`、屬性修飾、`updatePotionEffects`），生命值仍在 `Mob.health`。
-    屬性以職業的基礎值建立（最大生命、移動速度、攻擊力），移動改讀 `Mob::speed_attr()`（`mob.rs` 的舊式移動與 `ai.rs`
-    的 `moveForward`），近戰改讀 `Mob::attack_attr(base)`（力量／虛弱，凋零骷髏的 4 由呼叫端當作基礎值傳入）。
-  - `Mob::perform_effect`：回復、中毒（剩 1 點就停）、凋零、瞬間治療／傷害（不死生物相反）；不死生物不吃回復與中毒
-    （`Living.undead` 取自 `Kind::creature()`）。受傷時套用抗性（`applyPotionDamageCalculations` 的抗性部分）。
-  - 接上的來源：`Mobs::add_effect`（以前是空函式：節肢剋星的緩速）、噴濺藥水的持續效果（`(int)(k * duration + 0.5)`，大於 20 才加），
-    瞬間藥水對不死生物的判斷改用同一個 `undead`。
-  - 客戶端：`MobView.potion`（dataWatcher 7、8）讓客戶端照 `updatePotionEffects` 在生物身上冒 `mobSpell` 粒子。
-  - 存檔：區域檔的 `ActiveEffects`。
-  - **順帶修正（上一輪的錯誤）**：殭屍與骷髏戴著任何頭盔仍會在陽光下著火。原版是頭上有東西就不點火，可耗損的頭盔改為每次
-    `rand.nextInt(2)` 點耐久、用完就碎（`random.break`）；凋零骷髏對火免疫，所以只耗頭盔不點火。
-  **驗證**：新測試 `mobs_keep_potion_effects`（中毒停在 1 點、緩速 II 讓速度屬性變 0.7 倍、不死生物不回血、存檔讀回仍有效果、
-  節肢剋星 V 讓蜘蛛緩速），`cargo test --release` 109 項通過。基準 1,021 對 1,007 fps、伺服器 6.4 對 5.9 ms（雜訊範圍）。
-  **還沒做的**：隱形藥水讓生物不被畫出、生物盔甲上的保護附魔（`applyArmorCalculations` 之後的 `getEnchantmentModifierDamage`）、
-  吸收、生命提升對生物的效果、凋零骷髏與洞穴蜘蛛打其他生物時的效果、蜘蛛在困難模式生成時的藥水效果。
-- `本次（2026-11-19，掉落物的兩種畫法）`：`entities::item_entity` 的平面物品照 `RenderItem.renderDroppedItem` 重寫。
-  精緻：外層縮放 0.5、繞 Y 旋轉、`(-0.5, -0.25, -(層距 × 層數 / 2))`，層數依數量 1／2／3／4（門檻 2、16、32），每層前移
-  `1/16 + 0.021875` 畫 `renderItemIn2D`（以前層數門檻與層距都是自己編的）。流暢：份數照 `doRender`（1–5，門檻 1、5、20、40；
-  以前少了 40 以上的第 5 份，方塊物品也一樣），每份 `random`（每個渲染 pass 重設 187）抖動 ±0.3，轉向 `180 - playerViewY`，
-  一張 1×1 的平面。`--summon Item:<id>:<數量>` 可在前方三格生成掉落物（截圖用）。截圖確認兩種模式。
-- `本次（2026-11-19，生物撿拾物品、小殭屍、生物音效）`：
-  - **撿拾物品**（`Sim::mobs_pick_up_loot`，`EntityLiving.onLivingUpdate` 的 looting 段）：`can_pick_up_loot` 的生物在每個 tick
-    撿起碰撞箱左右各擴 1 格內的掉落物，放進 `getArmorPosition` 給的欄位（南瓜與頭顱 4、盔甲 4–1、其他一律 0 手上）。
-    取代規則照原版：劍勝過非劍、劍比攻擊力、盔甲勝過非盔甲、盔甲比護甲值，相同時比耗損與是否有 NBT；原本的裝備以
-    `rand.nextFloat() - 0.1 < 掉落機率` 掉出；撿起後該欄掉落機率 2、生物變成不會消失。客戶端 `Event::MobCollect` 讓物品飛向生物
-    （`EntityPickupFX`）。`mobGriefing` 遊戲規則還不存在，視為開啟。
-  - **小殭屍**（`Mob.baby`、`set_baby`）：生成時 `GroupData.isChild` 的 5% 現在真的生成小殭屍與小殭屍豬人；尺寸一半、
-    `Baby speed boost`（+50%，op 1，原版 UUID）、不會被太陽點燃、經驗 `(int)(5 × 2.5)`、`IsBaby` 存檔、`ModelBiped` 的 `isChild`
-    畫法（頭 0.75 下移 16 像素、其餘含帽子 0.5 下移 24 像素），盔甲層與手持物品照 `RenderBiped` 的小孩位移。
-    殭屍村民（`isVillager` 的 5%）與雞騎士仍只抽亂數不生成。`--summon Zombie:baby` 可生成。
-  - **生物受傷與死亡的音效**以前音量與音高都固定 1.0，沒有抽亂數：改為 `getSoundVolume`（終界龍 5、惡魂 10、史萊姆 0.4 × 大小、
-    蝙蝠 0.1、牛／哞菇／豹貓／魷魚／狼 0.4、馬 0.8）與 `getSoundPitch`（生物自己的亂數，小孩 +0.5，蝙蝠 × 0.95）。
-    死亡時先播音效再掉落，與 `attackEntityFrom` 的順序相同（以前反過來，亂數順序不同）。
-  - **經驗**：`EntityLiving.getExperiencePoints` 的裝備加成（每件掉落機率不超過 1 的裝備 +1–3）。
-  **驗證**：新測試 `zombies_pick_up_loot`（撿石劍、不撿較差的木劍、換鑽石劍並掉出石劍、變成不消失）、`baby_zombies`
-  （尺寸、速度、音高、存檔）；`cargo test --release` 111 項通過；截圖確認小殭屍模型。伺服器 tick 與上一次推送的版本相同
-  （6.7–7.0 對 6.5–7.2 ms）。
-- `本次（2026-11-19，殭屍村民）`：
-  - **生成**：`EntityZombie$GroupData.isVillager` 的 5% 現在真的生成殭屍村民（殭屍豬人照 `EntityPigZombie` 之後設回 false）。
-    `IsVillager`、`ConversionTime` 存檔與讀檔。`--summon Zombie:villager`（可加 `:baby`）。
-  - **感染**（`onKillEntity`）：殭屍（含繼承的殭屍豬人）打死村民時，普通難度以殭屍自己的 `rand.nextBoolean()` 一半機率、困難必定，
-    村民立刻移除（不播死亡動畫、不掉落，死亡音效照播），原地生成 `onSpawnWithEgg` 後的殭屍村民，村民是小孩就是小殭屍村民，
-    `playAuxSFX(1016)`（`mob.zombie.infect`，音量 2）。
-  - **治療**（`interact` / `startConversion`）：對有虛弱效果的殭屍村民用金蘋果（meta 0；創造模式不消耗）開始轉化 3600–6000 tick，
-    移除虛弱、給同長度的力量（等級 `min(難度 − 1, 0)`）、實體狀態 16 的 `mob.zombie.remedy`。轉化中不會消失（`canDespawn`）。
-    `getConversionTimeBoost`：每 tick 1% 機率掃描周圍 8×8×8 的鐵柵欄與床（最多 14 個，各 30% 加 1）。
-    時間到：`convertToVillager`，`onSpawnWithEgg` 的職業、小孩 `growingAge −24000`、10 秒反胃、`playAuxSFX(1017)`（`mob.zombie.unfect`）。
-    `setLookingForHome` 是村莊 AI 的旗標，村莊系統還沒有，略過。
-  - **繪製**：`ModelZombieVillager`（村民的 8×10×8 頭與鼻子，64×64 的 `zombie_villager.png`），盔甲模型的頭盔是 8×6×8、
-    高兩格（原版的形狀），轉化中 `RenderZombie.rotateCorpse` 的抖動（`cos(ticksExisted × 3.25) × π/4`）。
-  - 1016、1017 與實體狀態 16 的音高在原版用客戶端的亂數，這裡用 `Mobs.rand`（只拿來給實體種子，不影響原版亂數序列）。
-  **驗證**：新測試 `zombie_villagers`（困難難度下村民被殺後變成殭屍村民、沒有虛弱時金蘋果無效、有虛弱時開始轉化並換成力量、
-  存檔保留、時間到換成有反胃效果的村民）；`cargo test --release` 112 項通過；截圖確認模型。伺服器 tick 兩輪交替比較
-  6.6／6.9 對 6.4／7.1 ms（雜訊範圍）。
-- `本次（2026-11-19，燃燒傷害與著火的貼圖）`：使用者回報「好像沒有燃燒傷害、著火的實體身上沒有火」。
-  - **原因一**：伺服器端的玩家位置來自客戶端（`Command::Player`），`ServerPlayer::moved` 只做掉落與消耗，沒有跑
-    `Entity.moveEntity` 結尾的 `doBlockCollisions` 與火焰檢查。所以走進火方塊不會受傷也不會著火，仙人掌也不會刺傷玩家。
-    新增 `ServerPlayer::block_contacts`（在 `processPlayer` 的位置更新之後呼叫）：仙人掌、鍋釜滅火、`isFlammableWithin` 的
-    `inFire` 傷害、`fire` 從 `-fireResistance` 數到 0 才 `setFire(8)`、潮濕時嘶一聲熄滅。玩家的 `fireResistance` 原本沒設成 20
-    （`EntityPlayer` 建構子），已補上。
-  - **原因二**：生物的 `move_entity` 同樣沒有這一段，生物踩進火、碰到仙人掌都沒事，也不會被靈魂沙減速。新增
-    `Mob::block_contacts`（仙人掌、靈魂沙、火、潮濕熄滅，`fireResistance` 1）。燒傷、熔岩、火方塊與仙人掌的傷害改走
-    `hurt_sounding`：照 `attackEntityFrom` 在新的一擊時播受傷音效（以前完全安靜，所以看起來像沒傷害），火焰傷害在抗火藥水下無效。
-    生物的 `setFire` 加上裝備上的火焰保護（`EnchantmentProtection.func_92093_a`）。
-  - **原因三**：`Render.renderEntityOnFire` 根本沒有移植。新增 `entities::on_fire`（`fire_layer_0/1` 交替、寬 `width × 1.4`、
-    每層上移 0.45、縮 0.9、往後 0.03，面向 `playerViewY`），畫在著火的生物、著火的箭、第三人稱的自己身上；著火的實體照
-    `RenderManager.renderEntityStatic` 用全亮光照（15728880，以前只把方塊光設 15）。第一人稱補上
-    `ItemRenderer.renderFireInFirstPerson`（兩片 `fire_layer_1`，平移 ±0.24、下移 0.3、轉 ±10 度，0.9 透明度，以手的 70 度投影算到螢幕）。
-    這層覆蓋目前畫在暗角之上（原版在暗角之下），差別很小。
-  - 測試 `wolves_and_golems_pick_their_targets` 的殭屍會被打出場地掉進下面的熔岩，燒傷有了受傷音效後亂數順序改變，
-    殭屍在鐵魔像選目標前就死了；場地加了圍牆（測試本身的問題，不是行為錯誤）。
-  **驗證**：新測試 `fire_and_cactus_hurt`（玩家站在火裡受傷並著火超過 100 tick、殭屍著火並發出受傷聲、牛被仙人掌刺傷）；
-  `cargo test --release` 113 項通過；截圖確認第一人稱的火與生物身上的火。基準 831／804 對 842／842 fps、伺服器 6.5／6.4 對
-  6.2／6.4 ms（雜訊範圍）。
-- `本次（2026-11-20，生物改走原版 Entity.moveEntity 與 onEntityUpdate）`：使用者說「很多地方的行為看起來和原版很不一樣」。
-  根本原因：生物有一份自己手寫的簡化移動（`Mob::move_entity`），跳過了 `Entity.moveEntity` 後半與 `onEntityUpdate` 的大部分，
-  所以生物走路沒有腳步聲、下水沒有水花聲、不會被水流推動、掉落沒有聲音也不會揚起塵土、不會踩壞農田、不會溺水、
-  卡在方塊裡不會窒息、掉出世界不會死、蜘蛛網判定是猜的；閒置叫聲用的是自創的機率，比原版少很多且音量固定 1。
-  - `Mob::move_entity` 改成借用 `base::Ent::move_entity`（物品、礦車、船已經在用的那份逐行移植），套上生物的覆寫：
-    步高 0.5（馬 1.0）、`canTriggerWalking`（蝙蝠、魷魚、蠹蟲不觸發）、各職業的 `playStepSound`（殭屍、骷髏、蜘蛛、蠹蟲、雞、牛、豬、
-    羊、狼各自的腳步聲 0.15；鐵魔像 `mob.irongolem.walk`；馬的 wood／soft；其餘照方塊的腳步聲與頂上的雪片）、`setInWeb`（蜘蛛不受影響）、
-    各職業的 `fall`（雞、蝙蝠、惡魂、烈焰使者、岩漿怪、魔像、豹貓沒有；馬自己的那套，含原版用 `prevRotationYaw` 當高度的錯誤；
-    苦力怕的引信往前跳）。`EntityLivingBase.fall` 照原版：跳躍提升、`game.hostile／neutral.hurt.fall.big／small`、不擋護甲的傷害、
-    落地方塊的腳步聲。生物自己的 `block_contacts`（上一次加的）併入共用的流程。
-  - `Ent` 新增 `living`（`EntityLivingBase.updateFallState`：不在水裡時先 `handleWaterMovement`，落地時回報 `Fx::Landed` 與
-    `Fx::Dust`）與 `own_steps`。`base::landing` 照原版：腳下方塊、空氣時看下面的柵欄／牆／柵欄門、超過 3 格掉落才有 2006 塵土。
-  - `Mob::entity_update`：`Entity.onEntityUpdate` 與 `EntityLivingBase.onEntityUpdate` 的順序（水、燃燒、熔岩與掉落距離減半、
-    Y < −64 每 tick 4 點、方塊內窒息、空氣（水下呼吸藥水、頭盔的水下呼吸附魔）、溺水的 8 個氣泡與 2 點傷害、潮濕熄火），
-    魷魚照 `EntityWaterMob` 反過來在陸上耗空氣（取代以前「每 20 tick 三分之一機率扣 2」的自創規則）。
-    烈焰使者與終界使者碰水改用有受傷聲的 `attackEntityFrom(drown, 1)`。
-  - 閒置叫聲改成 `EntityLiving.livingSoundTime`（1000 中抽一次小於計數就叫，然後回到 −80；魷魚 −120），音量音高用 `getSoundVolume`／`getSoundPitch`。
-  - 世界的變更等到能改世界時再做（`WorldOp`）：農田被踩（`world.rand.nextFloat() < fall − 0.5`，mobGriefing 視為開啟）、紅石礦石亮起、鍋釜滅火、落地塵土。
-  - **玩家也修了**：伺服器端玩家落地的踩農田以前讀的是已經歸零的掉落距離，永遠不會踩壞，而且只有受傷時才檢查；改成每次落地照
-    `updateFallState` 回報。落地塵土 `playAuxSFX(2006)`（`EntityBlockDustFX`，150 × min(0.2 + n/15, 2.5) 顆）新增 `Particles::fall_dust`。
-  **驗證**：新測試 `mobs_fall_step_and_drown`（殭屍從 10 格掉到農田：敵對掉落聲、傷害、農田變泥土、塵土、自己的腳步聲；
-  牛被關在水裡 250 tick 仍滿血、之後溺水）；`cargo test --release` 114 項通過。基準：伺服器 6.6／6.7 對 6.2／6.4 ms
-  （每 tick 多了原版本來就有的水流、窒息、空氣檢查），fps 不變。
-  **還沒做**：生物的 `getEyeHeight` 覆寫（狼 0.8 等）、生物之間互推與被船／礦車擋住以外的實體碰撞、`mobGriefing` 遊戲規則。
-- `本次（2026-11-20，生物頭部轉 180 度）`：使用者看到生物的頭轉到背後。原因在客戶端：原版的 `EntityLiving.updateDistance`
-  對 `isAIEnabled` 的職業（殭屍、骷髏、苦力怕、女巫、鐵魔像、豬、牛、哞菇、羊、雞、狼、豹貓、村民、馬）在客戶端也跑
-  `EntityBodyHelper.updateRenderAngles`：身體跟著伺服器送來的頭轉（站著時 10 tick 後逐漸收緊到對齊），走動時頭被限制在身體 ±75 度。
-  這裡的客戶端一律用 `EntityLivingBase.updateDistance`（身體朝移動方向、限制在 `rotationYaw` ±75 度），而看玩家的
-  `EntityLookHelper` 只轉頭不轉 `rotationYaw`，所以站著看背後的玩家時身體不動、頭轉到最多 180 度。
-  - `game::update_body`：任務 AI 的職業照 `EntityBodyHelper`（`MobView.body_head`、`body_ticks` 保存 `prevRenderYawHead`、`rotationTickCounter`），其餘照 `updateDistance`。
-  - 伺服器端舊式的 `look_helper`（馬用的）只在沒有目標時才把頭限制在身體 ±75 度；原版 `onUpdateLook` 是兩種情況之後都限制（有路徑時）。
-  **驗證**：新測試 `client_body_follows_the_head`（伺服器把牛頭轉 150 度，客戶端身體跟上，頭與身體差距始終不超過 75 度，最後對齊；
-  蜘蛛仍用舊的公式）；`cargo test --release` 115 項通過。
-- `本次（2026-11-20，生物互相推擠）`：以前只有「生物被玩家推開」一個方向，而且公式不同（除以距離而不是距離的平方根）。
-  - `Mobs::push_apart`：每隻生物照 `EntityLivingBase.collideWithNearbyEntities`（碰撞箱左右各擴 0.2）對碰到的實體做
-    `applyEntityCollision`（`abs_max`、開根號、`min(1/d, 1)`、0.05，兩邊各加一半方向相反的速度），玩家照
-    `EntityPlayer.onLivingUpdate` 也推一次。蝙蝠不推也不被推，終界龍與終界水晶不參與。
-  - 鐵魔像碰到怪物時有 1/20 機率把牠當成攻擊目標（`EntityIronGolem.collideWithEntity`）。
-  - 玩家被生物推：`addVelocity` 走既有的 `push_add`（`Event::Velocity` 的 add），與爆炸推力相同的路徑。
-  - 找附近實體用 8 格的格子（原版用區塊），推擠本身 641 隻生物約 0.2 ms。
-  **驗證**：新測試 `mobs_push_each_other_and_the_player`；`cargo test --release` 116 項通過。基準伺服器 8.0–8.2 對 7.2–7.3 ms：
-  多出的時間大多是成群生成、疊在一起的生物被推開後真的在移動（原版也會這樣），推擠計算本身 0.2 ms。
+- **使用者說某處「和原版不一樣」時**，先查原版原始碼確認原版確實不是這樣（例：1.7.10 拉桿本來就放不上 TNT）；
+  再找有沒有繞過共用移植的手寫平行版本（2026-11-19/20 的燃燒傷害、腳步聲、頭轉 180 度都是這個原因）。
+  稽核舊程式時，grep 原版的 `dropBlockAsItem`、`playSoundEffect`、`super.` 呼叫，確認每一個都有移植。
+- 不要從實體自己的 `rand` 抽編號或其他簿記用的亂數，會打亂原版的亂數序列（用 `Mob::projectile_id`、`Mobs.rand`）。
+- 傷害新建 `ServerPlayer` 的單元測試要先把 `respawn_invulnerable` 歸零（加入與重生後 60 tick 無敵）。
+- `target/release/minerust.exe` 可能正在被使用者執行而被鎖住：建置用另一個 `CARGO_TARGET_DIR`（例如 `target/alt`），
+  驗證完再複製過去。注意 `cargo test` 不會重建執行檔，複製前要 `cargo build --release`。

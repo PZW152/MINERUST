@@ -1,0 +1,107 @@
+# 變更紀錄
+
+每次推送在最上面的日期下加一行：`提交編號` 與提交訊息的標題。細節寫在提交訊息、程式註解與
+[PARITY_TODO.md](PARITY_TODO.md)（還沒做完的部分），不寫在這裡。提交前還不知道自己的編號，先只寫標題，
+下一次推送時補上。
+
+2026-11-20 以前的長篇開發日誌（每次的驗證方式、量測數字、找到的原因）保存在 git 歷史裡：
+`git show c57b73a:docs/HANDOFF.md` 的第 9 節。
+
+## 2026-11-20
+
+- Reorganise the docs: PARITY_TODO is the only to-do list, the dev log moves to CHANGELOG, stale and contradictory lines fixed
+- `c57b73a` Mobs push each other and the player (collideWithNearbyEntities)
+- `2a9a022` Client body follows the head for task-AI mobs (EntityBodyHelper); head clamp in the old look helper
+- `7ddace6` Mobs move through Entity.moveEntity and onEntityUpdate: steps, splashes, falls, drowning
+
+## 2026-11-19
+
+- `a78ceb6` Fire damage from fire blocks and cactus on the server; burning entity overlay
+- `9cf1260` Zombie villagers: spawn, infection, golden-apple cure, model
+- `5dc208a` Mobs pick up loot; baby zombies; mob sound volume and pitch
+- `95d5173` Draw dropped items as RenderItem.renderDroppedItem does
+- `c894638` Give mobs potion effects; helmets keep the undead from burning
+- `a00e95e` Make the particles and graphics options take effect
+- `e332011` Relight chunks from scratch once they are final; fix dark patches
+
+## 2026-11-15
+
+- `ddd8fd8` Fix TNT blast hitches and slow exit saves; add the vignette
+- `a004173` Audit player melee and damage intake; anvils hurt; mob Thorns
+
+## 2026-11-14
+
+- `064b640` Upgrade zip to 9 for the three advisories against 2.x
+- `7fd9193` Audit the random ticks, drops, liquids and mob melee against the original
+- `7083356` Enchantment glint on items in the GUI
+- `0ef98e8` Mob equipment: armour, weapons and bows from onSpawnWithEgg
+- `7a1bc19` Farming, beds, cake, fence gates, walls and stems
+- `8cc7329` Enchantment effects, server-side melee and per-class mob loot
+- `c6294d6` Slimes: prevSquishFactor after the new factor; vulnerable-player search
+- `7806964` Breeding: love mode, EntityAIMate and the young
+- `d586cc3` Hang wolves, ocelots and iron golems on their original tasks
+- `fa88c36` Port the mob AI: EntityAITasks, PathNavigate and the old creature AI
+- `d72a429` HANDOFF: correct the test count
+- `5b707d4` Place stairs, slabs and other blocks as the original does; pick by shape
+- `50d671b` Add stained glass, wooden slabs and quartz stairs
+- `495f9a1` Predict block digs and placements on the client; armour, blocking, crits
+- `23aa018` Release the mouse for screens the server opens; port the lever renderer
+
+## 2026-11-13
+
+- `5e33448` Port block drops; redstone wire, primed TNT, creeper ignition, placement check
+- `439ad22` Interpolate server entities on the server clock; fix block textures
+- `bed27ea` Render chunks per 16-cube section; pack them in a vertex arena
+- `e87f170` Separate Math.random; reference block drops from the original
+- `d35534f` Load the jar from <repo>/game; search MSIX LocalCache roots
+- `bde39ff` Find the jar without relying on environment variables
+- `4455023` HANDOFF: fix mangled paths
+- `a5571af` Find the game jar without arguments; show startup errors in a dialog
+- `a65e3cb` Block items in 3D: renderBlockAsItem
+- `1a3b948` Anvil: block, ContainerRepair, GuiRepair
+- `3239bf6` Give item stacks their NBT tag; armour dyeing
+- `cc422c5` Add the enchanting table: ContainerEnchantment, GuiEnchantment and the book
+- `5de6c71` Port EnchantmentHelper, add the enchanting table block and a handoff guide
+- `893a6c1` Add signs: blocks, ItemSign, TileEntitySign, renderer and GuiEditSign
+- `0f958b9` Add the chat settings and loading screens; dispensers open
+- `d89b492` Draw armour and held items on the player; armour can be worn
+- `19c00c4` Add chat and commands, F5 third person, key bindings in game
+- `ce8477f` Add GuiContainerCreative and the chest tile entity renderer
+- `9991930` Fix the title panorama, mob facing and jitter, debris tints; add the inventory player
+- `b51da64` Port Container.slotClick, crafting recipes, armour slots and item tooltips
+- `d5cca42` Add the title screen and the option menus
+- `064e332` Port EntityXPOrb and the experience sources
+
+## 2026-11-12
+
+- `658e0bf` Port Explosion
+- `8757c1e` Port EntityMinecart and its subclasses
+- `ca37da9` Port EntityBoat, riding and EntityTrackerEntry
+- `94ee298` Port EntityThrowable: snowballs, eggs, ender pearls and splash potions
+- `2da10dc` Add the brewing stand
+- `cd13ab3` Draw potions in two passes and the active effects beside the inventory
+- `1f2abbb` Port item use, ItemFood, the bow, EntityArrow and GuiIngame.renderIcons
+- `08396b6` Move the player's survival state to the server (EntityPlayerMP)
+- `0bffc5a` Port Potion, PotionEffect, PotionHelper and the EntityLivingBase core
+- `50a56bc` Port RenderEndPortal, BlockPortal shape and EntityFallingBlock
+- `9e5981d` Port TileEntityPiston, RenderBlocks standard blocks, Entity base and EntityItem
+- `7c4c82d` Update README and bug audit for redstone, mobs, Nether, End and Anvil
+- `2820f3a` Anvil: open, save and export vanilla 1.7.10 worlds
+- `9c4193f` Nether and End mobs: ghasts, zombie pigmen, blazes, magma cubes, wither skeletons, the ender dragon
+- `7221603` Nether and End: generation, fortresses, fire, portals and dimension travel
+- `ab05323` Add slimes, endermen, squid, bats, wolves, ocelots, horses and iron golems
+- `f34d912` Redstone: power, wire, torches, repeaters, levers, buttons, plates, lamps, pistons, TNT, notes, dispensers, doors
+- `f1cb5ae` Add particles (block debris, smoke, flame, lava, drips, rain splashes, explosions, crits, running dust) and the underwater overlay
+- `a21f79e` Fix MC-1538 (sound clipping) and MC-12918 (structure chest facing); update bug audit for structures, mobs, sound and GUI
+- `a889629` Add weather: rain and thunder cycle, darker sky, fog, clouds and lightmap, rain and snow rendering, snow accumulation, rain sound
+- `848bd34` Add sound: pure Rust output and Vorbis decoding, sounds.json events, block, step, mob, bow, explosion and music sounds
+- `cd434ba` Add mobs: animals, monsters, villagers and witches with vanilla models, pathfinding, AI, combat, drops, experience, world-gen and natural spawning, arrows and creeper explosions
+- `bbf1d40` Add structure generation: villages, mineshafts, strongholds, desert and jungle temples, witch huts
+- `5be2c2f` Add survival gameplay: mining with break times and crack overlay, drops and pickup, inventory and crafting, furnaces and chests, health, hunger, air, fall and lava damage, death and respawn, torches, first-person hand, HUD and menus
+
+## 2026-11-11
+
+- `c8a82fe` Add GUI rendering: font, hotbar with block icons, F3 overlay, slot selection
+- `86278a9` Add random block ticks: grass and mycelium spread, leaf decay, melting, cactus, reeds, mushrooms, vines, natural freezing
+- `4e3ded2` Add fancy clouds, stars, sunrise glow, animated water and lava, water currents
+- `80a98ac` Minecraft 1.7.10 rewritten in Rust on Vulkan

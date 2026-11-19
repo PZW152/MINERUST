@@ -1,168 +1,114 @@
 # 與原版 1.7.10 的差距清單
 
-原則：照 `src-java/net/minecraft/` 的原始類別逐函式移植，不做任何「近似」或「簡化」。
-做完一項就從這裡刪掉並寫進 README；這份清單只列還沒做到 100% 的部分。
+這是專案**唯一**的「還沒做完」清單。README 只寫概況，HANDOFF 只寫怎麼做，進度一律記在這裡。
 
-## A. 先前被當成「刻意差異」的簡化（優先）
+規則：
 
-- [x] 活塞：`BlockPistonMoving` + `TileEntityPiston`（兩 tick 的移動、推動實體、`TileEntityRendererPiston` 動畫）、
-      `World.addBlockEvent` 佇列
-- [ ] 終界傳送門：`TileEntityEndPortalRenderer`（16 層星空視差）
-- [x] `Potion` / `PotionEffect` / `PotionHelper` 與玩家身上的效果（凋零、中毒、抗性、速度、跳躍、生命提升、吸收……）
-- [x] 藥水物品（飲用）、釀造台（方塊、`TileEntityBrewingStand`、介面、存檔）、牛奶、金蘋果
-- [x] `EntityThrowable`：雪球、蛋（孵小雞）、終界珍珠、噴濺藥水（`playAuxSFX(2002)`、`EntitySpellParticleFX`），女巫照原版選藥水並投擲
-- [ ] 生物身上的持續藥水效果、玻璃瓶裝水、幼年生物的大小與模型
-- [x] 容器點擊：`Container.slotClick` 七種模式（拖曳分配、雙擊收集、數字鍵交換、Q 丟出、創造複製）、`mergeItemStack`、
-      各容器的 `transferStackInSlot`、`SlotCrafting` / `SlotFurnace` / 盔甲欄 / 釀造欄；客戶端以同一套程式預測
-- [x] 合成：`CraftingManager` 的 317 條配方（原版順序、鏡像、萬用中繼值）、工具修復、地圖複製
-- [x] 盔甲欄（存檔 Slot 100–103）、精確的 `addItemStackToInventory`、關閉介面時合成格與游標物品被丟出
-- [x] 物品名稱（全部語言）、稀有度顏色、`getTooltip`（攻擊傷害、附魔、藥水效果、唱片）、多行 `drawHoveringText`
-- [x] 背包畫面的玩家模型（`GuiInventory.func_147046_a`，隨滑鼠轉向）
-- [x] 生物：`EntityTrackerEntry`（1/32 位置、4/32 門檻、`S19` 頭部）與客戶端三步內插、`updateDistance` 身體朝向、
-      客戶端肢體擺動
-- [ ] 方塊破壞時容器內容物的散落方式
-- [x] 物品 NBT（附魔、名稱、RepairCost、染色、Lore）與皮甲染色配方
-- [ ] 特殊配方：煙火、書本複製、地圖擴大
-- [x] 創造模式物品欄（12 個分頁、搜尋、捲動、背包分頁與垃圾桶、`C10PacketCreativeInventoryAction`）
-- [x] 聊天（`GuiNewChat` / `GuiChat`）與指令：help、give、time、gamemode、tp、weather、toggledownfall、kill、
-      effect、xp、seed、difficulty、clear、setblock、spawnpoint、setworldspawn、say、me
-- [x] F5 第三人稱（前後兩種）、F1 隱藏介面、遊戲中的按鍵全部改讀按鍵設定
-- [x] 玩家模型（第三人稱與背包）上的盔甲層、手持物品，`ModelBiped.setRotationAngles` 完整移植；右鍵穿上盔甲；南瓜頭的視野遮罩
-- [x] 箱子：`TileEntityChestRenderer`（單／大箱子、開蓋動畫與音效、聖誕節材質），箱子物品圖示
-- [x] 聊天設定畫面、載入畫面（`LoadingScreenRenderer` / `GuiDownloadTerrain`）、發射器介面
-- [x] 附魔台：`ContainerEnchantment`、`GuiEnchantment`（書本、銀河字母）、`TileEntityEnchantmentTableRenderer`；
-      `EnchantmentHelper.buildEnchantmentList` 與附魔台等級和原版逐筆一致
-- [x] 附魔效果：鋒利／不死剋星／節肢剋星、擊退、燃燒、掠奪、保護四系列與摔落保護、水下呼吸、親水性、荊棘、效率、
-      耐久（工具、武器、盔甲、弓、剪刀、打火石）、力量／衝擊／火焰／無限（`tools/EnchantFxHarness.java` 比對）
-- [ ] 附魔效果尚缺：海之眷顧與魚餌（釣魚未實作）、節肢剋星的緩速（生物還沒有藥水效果系統）、附魔台書架粒子
-- [x] 生物死亡掉落：每種生物的 `dropFewItems`（含掠奪）與 `dropRareDrop` 擲骰，與原版 3,168 組一致；
-      終界使者不再掉落手上的方塊（1.7.10 本來就不掉）
-- [x] 生物受傷：天生護甲（殭屍、殭屍豬人 2 點）、`setBeenAttacked` 與擊退抗性的亂數、擊退方向改用 `Math.random()`
-- [x] 生物裝備（`EntityLiving.equipment`、`addRandomArmor`、`enchantEquipment`、手持弓劍、掉落裝備、盔甲與手持物品的繪製），
-      骷髏／殭屍／殭屍豬人的 `onSpawnWithEgg`，區域難度與區塊居住時間（與原版 1,200 組一致）
-- [x] 生物撿拾物品（`canPickUpLoot`）、小殭屍與小殭屍豬人、生物受傷與死亡音效的音量音高、裝備的額外經驗
-- [x] 殭屍村民（生成、感染村民、金蘋果治療與轉化、模型、存檔）
-- [ ] 雞騎士、蜘蛛騎士、殭屍增援與破門、`InhabitedTime` 存檔，以及
-      `onSpawnWithEgg` 的其餘部分（殭屍擊退抗性加成、跟隨距離的 `nextGaussian`、蜘蛛騎士、小殭屍）
-- [x] 生物的藥水效果（`activePotionsMap`：飛濺藥水的持續效果、節肢剋星緩速、速度／攻擊力屬性、抗性、粒子、存檔）
-- [ ] 生物的藥水效果尚缺：隱形的繪製、生物盔甲的保護附魔、吸收與生命提升、生物之間的凋零／中毒
-- [x] 物品欄裡的附魔光澤（`RenderItem.renderGlint`：`hasEffect` 全部判斷、兩層捲動、只在圖示不透明處相加）
-- [ ] 世界中的附魔光澤（手持、第一人稱、掉落物、盔甲模型）、方塊物品的光澤；手持箱子與掉落箱子的模型
-- [x] 農業：鋤頭耕地、種子／胡蘿蔔／馬鈴薯／南瓜與西瓜種子／地獄疣的種植（`ItemSeeds`、`ItemSeedFood`）、骨粉
-      （`IGrowable` 全部：作物、莖、樹苗、可可、草地長草與花、高草變雙層、雙層植物、蘑菇變巨型蘑菇）與綠色粒子、
-      可可豆種在叢林原木上
-- [ ] 指令：summon、enchant、gamerule、playsound、spreadplayers、testfor 等，Tab 自動補完
-- [ ] 統計與成就（`StatList` / `AchievementList`）與其畫面；資源包、使用統計（Snooper）、直播畫面
-- [x] 船：`EntityBoat` 兩端物理（客戶端預測、`isBoatEmpty`）、`ItemBoat`、`interactFirst` / `mountEntity` /
-      `dismountEntity`、`updateRiderPosition`、撞毀成木材與木棍、摔落、`EntityTrackerEntry` 封包（`S0E` / `S14` / `S18` /
-      `S12` / `S1C` / `S1B`）、`getBoundingBox` 讓所有實體與船相撞、`RenderBoat`、「按 LSHIFT 下來」提示
-- [x] 方塊上右鍵沒有被方塊或 `onItemUse` 接手時改走 `onItemRightClick`（`Minecraft.func_147121_ag`）
-- [x] 礦車：`EntityMinecart` 兩端（伺服端 `moveOnRail` / `moveOffRail` / `applyDrag`、客戶端 `turnProgress` 內插）、
-      一般／箱子／動力（煤、推力）／TNT（引信、撞擊與摔落爆炸、`setEntityState(10)`）礦車、`ItemMinecart`、
-      礦車互撞與推動生物（空礦車載走生物）、偵測鐵軌、`RenderMinecart`（沿鐵軌的傾斜與 `getPosOffset`、顯示方塊）、
-      礦井的箱子礦車、存檔
-- [ ] 礦車：漏斗礦車的吸取（等漏斗方塊）、指令方塊與生怪磚礦車、觸發鐵軌（157）、`MovingSoundMinecart` / `...Riding` 的連續音效、騎乘中的生物存檔（`Riding`）
-- [ ] 騎乘：馬（跳躍、鞍、馬鎧、箱子、馬的物品欄）、豬＋鞍＋胡蘿蔔釣竿
-- [ ] 傳送門建造時的中繼值與原版一致
-- [ ] 實體（生物、掉落物、箭、礦車）穿越傳送門 `Entity.travelToDimension`
-- [ ] 落沙／礫石／鐵砧／龍蛋的 `EntityFallingBlock`
-- [ ] 雙層植物上半燒掉時的掉落行為放到 `--vanilla-parity` 開關後
-- [x] 掉落物：`EntityItem` 逐行重寫（`pushOutOfBlocks`、水流、岩漿燃燒、合併、撿拾音效與飛向玩家的動畫）
-- [x] `EntityArrow` 逐行移植（`World.rayTraceBlocks`、`collisionRayTrace` 含樓梯八格、`calculateIntercept`、撿回、燃燒箭點燃 TNT）
-- [x] `Explosion` 逐行移植：世界亂數的射線、`exploder` 的抗性鉤子（點燃的 TNT 礦車保住鐵軌）、Java 8
-      `HashSet<ChunkPosition>` 的迭代順序、`getBlockDensity`、所有實體（玩家眼高 0.12、創造模式也會被推、掉落物、
-      船、礦車、箭、投擲物、落沙）、`doExplosionB(false)` 的掉落機率與連鎖 TNT、客戶端 `doExplosionB(true)` 的粒子；
-      終界水晶的爆炸改回不起火
-- [x] 方塊掉落表：`src/drops.rs`，與原版 4 萬多筆參考資料一致；時運與絲綢之觸生效
-- [x] 掉落改走 `drops.rs`：失去支撐（火把、告示牌、門、紅石元件、鐵軌、絆線、甘蔗、仙人掌、雙層植物）、水沖、樹葉腐爛；
-      岩漿流動與遇水的 `random.fizz`
-- [ ] 掉落的其餘路徑改走 `drops.rs`：`harvestBlock` 覆寫（剪刀、冰、雪片）
-- [ ] 世界亂數借出期間的間接使用（見 HANDOFF 第 8 節），會讓亂數順序與原版分岔
-- [x] 玩家：重生後 60 tick 無敵、睡覺被打醒、鐵砧／落下方塊的頭盔規則；鐵砧砸傷玩家、生物與掉落物；生物盔甲上的荊棘
-- [ ] 生物裝備耗損到壞掉時保留數量 0 的物品堆（原版行為）；經驗球被鐵砧砸到；受傷時的鏡頭傾斜（`attackedAtYaw`）
-- [x] 生物 AI 第一階段：`EntityAITasks` 任務系統與舊式 AI（殭屍、骷髏、苦力怕、女巫、豬、牛、哞菇、羊、雞、村民、蜘蛛、洞穴蜘蛛、蠹魚、殭屍豬人）
-- [x] 生物 AI 第二階段：狼、豹貓、鐵魔像的任務
-- [x] 繁殖（`EntityAIMate`、求愛、幼體大小與模型、存檔）
-- [ ] 生物 AI 剩餘：馬；村民的交易／門／村莊；終界使者、烈焰使者、史萊姆、惡魂、蝙蝠、魷魚、蠹魚鑽石頭對照原始碼
-- [x] 客戶端預測破壞方塊與放置普通方塊；[ ] 有朝向或需依附的方塊的預測
-- [x] 玩家護甲值與護甲耗損、舉劍格擋減傷、爆擊 ×1.5
-- [x] 紅石線照 `renderBlockRedstoneWire` 重寫（連接規則、爬牆段）；點燃的 TNT 白色閃爍；苦力怕打火石點燃
-- [ ] 苦力怕：閃電劈中變成高壓苦力怕（爆炸半徑 6）、`mobGriefing` 規則
-- [x] GUI 漸層改為真正的頂點漸層（`drawGradientRect`）
+- 只列還沒做到與原版一致的部分。做完就刪掉那一行（做了什麼記在 [CHANGELOG.md](CHANGELOG.md) 與提交訊息）。
+- 不准把缺口寫成「可接受的差異」。照 `src-java/net/minecraft/` 的原始類別逐函式移植，不做近似或簡化。
+- 標「需確認」的是整理時沒有逐項核對過的舊項目：先查程式碼，做過了就刪掉，沒做就去掉「需確認」。
 
-## B. 缺少的方塊
+## 1. 下一步（依優先順序）
 
-染色玻璃片、終界箱、指令方塊、信標、頭顱、陷阱箱、測重壓力板、比較器、陽光感測器、漏斗、觸發鐵軌、投擲器
+1. **方塊外觀改為 `RenderBlocks` 逐行移植**（第 5 節）。目前還在 `mesher.rs` 的 `shaped()` 裡手寫近似的渲染型態很多，
+   這是畫面與原版不同的主要來源。
+2. **影像設定還沒生效的項目**（第 5 節）。選單能調但畫面不變，算行為差異。
+3. **生物 AI 第二階段**（第 2 節）：馬、村民、終界使者等還在手寫的處理函式上。
+4. **生物的其餘行為**（第 2 節）：雞騎士、增援、破門、遊戲規則 `mobGriefing` 等。
+5. **缺少的方塊、物品、實體與介面**（第 3、4 節）。
 
-- [x] 床（`renderBlockBed`、放置、睡覺、跳過夜晚、重生點、地獄與終界爆炸、`GuiSleepMP` 與「離開床鋪」、
-      變暗的畫面、躺下的視角）；蛋糕（右鍵與左鍵各吃一片）；南瓜梗／西瓜梗（`renderBlockStem`、成長與結果）；
-      柵欄門（`renderBlockFenceGate`、開關、紅石、夾在圓石牆間降低）；圓石牆（`renderBlockWall`、連接、1.5 格碰撞）
-- [ ] 睡覺時玩家模型躺在床上的畫法（第三人稱）、床的物品 3D 圖示（原版是平面，已一致）
+## 2. 生物
 
-- [x] `Command::Use` 帶上點擊位置（`hitX/Y/Z`）：半磚上下半與合併（`ItemSlab`）、樓梯朝向與倒放、活板門上下、梯子、南瓜、藤蔓、絆線鉤、石英柱、乾草捆
-- [x] 客戶端以 `World.rayTraceBlocks` 選取方塊，選取框為方塊實際範圍
+AI：
+- [ ] 馬：還借用舊的 `animal()`。需要 `EntityAIRunAroundLikeCrazy`、`Panic`、`Mate`、`FollowParent`、`Wander`、`WatchClosest`、`LookIdle`
+- [ ] 村民：交易、開門、回屋、繁殖、跟隨鐵魔像、`setLookingForHome`（都需要村莊資料 `VillageCollection`）
+- [ ] 鐵魔像：`DefendVillage`、`MoveThroughVillage`、`MoveTowardsRestriction`（需要村莊資料）；拿花（`setHoldingRose` 只有計時，沒有畫）
+- [ ] 狼的乞食歪頭與甩水動畫、被非玩家打時傷害減半；豹貓 `OcelotSit` 對床與「箱子有人在用」的判斷
+- [ ] 騎豬（`EntityAIControlledByPlayer`）
+- [ ] 終界使者、烈焰使者、惡魂、蝙蝠、魷魚的 `updateEntityActionState`（`extra.rs`、`nether.rs`）逐行對照原始碼
+- [ ] 蠹魚鑽進石頭與召喚同伴（`EntitySilverfish.updateEntityActionState`）
+- [ ] `EntityAITarget` 的 `nearbyOnly`（`canEasilyReach`）與家的範圍（`isWithinHomeDistance`）
 
-另外：可可豆（目前不繪製）、箱子模型與開蓋動畫（`TileEntityChestRenderer`，目前是方塊）
+生成與狀態：
+- [ ] 雞騎士、蜘蛛騎士（亂數照抽但不生成）
+- [ ] 殭屍增援（`summonReinforcements`、領頭殭屍的增援機率）與破門（`EntityAIBreakDoor`）
+- [ ] `onSpawnWithEgg` 的其餘部分：殭屍的擊退抗性加成、跟隨距離的 `nextGaussian`、蜘蛛在困難模式的藥水效果、
+      豹貓生成時的幼貓、馬的逐行核對
+- [ ] 區塊的 `InhabitedTime` 寫進存檔（目前寫 0，重新載入從 0 開始）
+- [ ] 高壓苦力怕（閃電劈中，爆炸半徑 6）
+- [ ] 遊戲規則 `mobGriefing`（目前一律視為開啟）與其他遊戲規則
 
-## C. 物品行為
+數值與外觀：
+- [ ] 藥水效果尚缺：隱形時不畫出生物、生物盔甲上的保護附魔（`applyArmorCalculations` 之後的 `getEnchantmentModifierDamage`）、
+      吸收與生命提升、凋零骷髏與洞穴蜘蛛打其他生物時的效果
+- [ ] `getEyeHeight` 的各職業覆寫（狼 `height × 0.8` 等）
+- [ ] 狼、豹貓、馬的幼體模型（`isChild` 的畫法）
+- [ ] 受傷時的 `limbSwingAmount = 1.5`；受傷鏡頭傾斜的方向（`attackedAtYaw`，目前只有傾斜沒有方向）
+- [ ] 生物裝備耗損到壞掉時保留數量 0 的物品堆（原版行為）
+- [ ] 實體依區塊分組（`Chunk.entityLists`），影響 `getEntitiesWithinAABB` 的順序與推擠的順序
+- [ ] 實體（生物、掉落物、箭、礦車）穿越傳送門（`Entity.travelToDimension`），目前只有玩家會傳送
+- [ ] 實體陰影（`Render.renderShadow`）、名牌（`renderLivingLabel`）
 
-盔甲（穿戴、護甲值、耐久、渲染）、食物（全部）、藥水／噴濺藥水／玻璃瓶、桶（水、岩漿、牛奶）、骨粉、鋤頭、剪刀、
-釣竿、終界珍珠、終界之眼、火焰彈、煙火、地圖、指南針、時鐘、鞍、拴繩、
-命名牌、生怪蛋、書與筆／完成的書、唱片與唱片機、畫、物品展示框、床、告示牌、蛋糕、門、紅石中繼器／比較器物品
+## 3. 方塊與世界
 
-## D. 實體
+缺少的方塊：
+- [ ] 染色玻璃片、終界箱、指令方塊、信標、頭顱、陷阱箱、測重壓力板、比較器、陽光感測器、漏斗、觸發鐵軌、投擲器、唱片機（需確認）
+- [ ] 可可豆的繪製（目前會長，但不畫）
+- [ ] 睡覺時玩家模型躺在床上的畫法（第三人稱）
 
-畫、物品展示框、拴繩結、終界珍珠、終界之眼、
-浮標、煙火、經驗球、噴濺藥水、凋零怪與凋零頭、閃電、雪人、巨人、殭屍村民、小殭屍、雞騎士、蜘蛛騎士、
-生物穿戴裝備與撿拾物品、村民交易與繁殖、動物繁殖與幼年
+放置與掉落：
+- [ ] 客戶端預測：有朝向或需依附的方塊（原木、火把、樓梯、半磚、門……，要把 `play.rs` 決定中繼值的邏輯抽成兩端共用）、
+      沙與礫石、TNT、雙層植物的另一半
+- [ ] 放置規則：頭顱、可可、終界門框的朝向，以及其餘需要 `canPlaceBlockOnSide` 檢查的方塊（需確認）
+- [ ] 掉落的其餘路徑改走 `drops.rs`：`harvestBlock` 的覆寫（剪刀剪樹葉／草／藤蔓、冰、雪片，`play.rs` 約 737、752 行）
+- [ ] `item::has_subtypes` 改用原版 `getHasSubtypes` 的表（目前用 `max_damage == 0` 近似）
+- [ ] 方塊破壞時容器內容物的散落方式（需確認）
+- [ ] 雙層植物上半燒掉時的掉落行為放到 `--vanilla-parity` 開關後（BUG_AUDIT MC-29512）
+- [ ] 方塊屬性表（硬度、爆炸抗性）由 `Block.registerBlocks` 生成
 
-## E. 系統
-
-- [x] 玩家生存狀態移到伺服端（`EntityPlayerMP`）：`FoodStats`、傷害流程（難度縮放、護甲、抗性、吸收、擊退）、`CombatTracker` 死亡訊息（`en_US.lang`）
-- [x] 物品使用（`setItemInUse`：吃、喝藥水、牛奶、拉弓、劍格擋的動畫），全部 `ItemFood` 數值與效果
-- [x] 劍格擋的減傷（`isBlocking`）
-- [x] 經驗球 `EntityXPOrb`：兩端的 `onUpdate`（飛向最近玩家，伺服端以腳下＋0.12、客戶端以眼睛＋0.12 為目標）、
-      `getXPSplit`、`xpCooldown` 撿拾、`S11` 生成與追蹤（160 格、每 20 tick）、`RenderXPOrb`、撿拾動畫與音效、存檔；
-      來源：生物死亡第 20 tick（幼體不給，動物用世界亂數）、終界龍、礦石（`dropXpOnBlockBreak`）、熔爐取出
-      （`SlotFurnace.onCrafting`，含完整的 `FurnaceRecipes` 與經驗表）、經驗瓶 `EntityExpBottle`
-- [ ] 經驗來源：繁殖、釣魚、村民交易；生物裝備的額外經驗
-- [ ] 難度設定與 `level.dat` 的 `Difficulty`、遊戲規則
-
-附魔（附魔台、所有附魔效果）、釀造、信標、成就與統計、指令與聊天、遊戲模式（創造、冒險、
-極限）、難度、世界建立選單、選項選單、資源包、語言、地圖資料、終界詩與製作人員名單、多人與區域網路（協定 5）
-
-## F. 渲染
-
-- [x] 伺服器模擬的實體以伺服器 tick 時間插值（掉落物、箭、TNT、落沙、活塞），掉落物高度照 `RenderItem.doRender`
-- [x] 方塊貼圖與原版 `Block.getIcon` 全表比對（`tools/icons_1710.txt`）
-- [ ] 掉落物改為客戶端自行模擬（原版客戶端也跑 `EntityItem.onUpdate`，伺服器每 20 tick 校正一次）
-- [x] 渲染區塊以 16³ 為單位（`WorldRenderer`），方塊變動只重建 `markBlockForUpdate` 範圍內的分段
-- [x] 影像設定生效：垂直同步、最大幀率（`Display.sync`）、平滑光照等級、雲開關、視角晃動、Mipmap 層級、全螢幕（F11）
-- [x] 粒子設定（`doSpawnParticle` 的閘門與 16 格限制）；畫質「流暢」：不透明樹葉、草方塊側面、平面雲、暈影、雨的範圍與雨滴
-- [ ] 影像設定尚未生效：流暢時的樹葉物品圖示、各向異性過濾、3D 立體、進階 OpenGL、FBO；
-      平滑光照關閉時非 `rb` 路徑的方塊（樓梯、柵欄、液體等）
-
-- [x] 光照黑斑修正（`world/relight.rs`，`--vanilla-parity` 保留原版的黑斑）
-- [x] 暈影（`GuiIngame.renderVignette`）；粒子每個圖層各自 4000 上限（`EffectRenderer.fxLayers`）
+世界：
+- [ ] 世界亂數借出期間的間接使用會讓亂數順序與原版分岔（見 HANDOFF 第 7 節）
+- [ ] 傳送門建造時的中繼值與原版一致（目前把軸向存在中繼值裡）
+- [ ] 平坦、巨型群系、放大化等世界類型的生成；獎勵箱；極限模式
+- [ ] 難度存進 `level.dat` 的 `Difficulty`
 - [ ] 存檔只寫有變動或有實體的區塊（`Chunk.needsSaving`），目前讀進來過的區塊每次都重寫
-- [ ] 實體陰影與著火（`Render.doRenderShadowAndFire`）
-- [ ] 騎乘時玩家模型的坐姿（`ModelBiped.isRiding`，第三人稱與物品欄）
-- [ ] 物品欄裡的玩家模型（`GuiInventory.func_147046_a`）
+- [ ] 已知的光照差異：3 個叢林區巨樹樹冠附近的天空光、1 座沙漠神殿塔內的天空光（原因未查出，只在 `--vanilla-parity` 看得到）
+
+## 4. 物品、實體、介面、系統
+
+物品：
+- [ ] 釣竿與釣魚（連帶海之眷顧、魚餌、釣魚經驗）
+- [ ] 玻璃瓶裝水（`ItemGlassBottle.onItemRightClick`，需確認）
+- [ ] 生怪蛋、終界之眼（丟出）、火焰彈、煙火、地圖、指南針與時鐘、鞍、拴繩、命名牌、書與羽毛筆、唱片、畫、物品展示框（需確認哪些已有）
+- [ ] 特殊配方：煙火、書本複製、地圖擴大（配方資料裡有，結果需確認）
 - [ ] 物品名稱與說明一律由 `en_US.lang` 取得（藥水前綴與後綴、附魔書等）
 
-- [x] `RenderBlocks.renderStandardBlock`（含兩種平滑光照與六個 `renderFace*`）逐行移植；方塊、原木、石英柱、活塞底座與活塞頭已改走這條路
-- [x] 紅石線、拉桿改為 `RenderBlocks` 逐行移植
-- [ ] 其餘 `RenderBlocks` 渲染型態（火把、中繼器、按鈕、壓力板、樓梯、柵欄、門、液體、植物……）改成逐行移植
-- [x] 伺服器開啟的介面（工作台、熔爐、箱子、死亡畫面）會釋放滑鼠
-- [ ] 粒子系統（`EffectRenderer` 與所有 `EntityFX`）逐類移植
-- [ ] `Entity` 基底：生物與玩家改用 `entity/base.rs`（水流推動、方塊碰撞反應、火）
-- [ ] 實體依區塊分組（`Chunk.entityLists`），影響 `getEntitiesWithinAABB` 的順序
-- [ ] 方塊屬性表（硬度、爆炸抗性）由 `Block.registerBlocks` 生成
-- [x] 隨機 tick：作物、莖、樹苗（含 2x2 巨型雲杉／叢林木／黑橡木、1/10 大橡樹）、地獄疣、可可、耕地乾濕、
-      花草失去支撐時掉落、亮紅石礦石變回、雪塊融化、靜止岩漿點火、傳送門生成殭屍豬人（`src/world/growth.rs`）
-- [x] 隨機 tick：液體、雙層植物、火把、紅石火把、按鈕、壓力板、偵測鐵軌、絆線與絆線鉤（原版 `setTickRandomly(true)` 的全部）；
-      木按鈕與箭（`func_150046_n`）
+實體：
+- [ ] 畫、物品展示框、拴繩結、終界之眼、浮標、煙火、凋零怪與凋零頭、閃電實體、雪人、巨人
+- [ ] 騎乘：馬（跳躍、鞍、馬鎧、箱子、物品欄）、豬＋鞍＋胡蘿蔔釣竿；騎乘時玩家模型的坐姿（`ModelBiped.isRiding`）
+- [ ] 礦車：漏斗礦車的吸取、指令方塊與生怪磚礦車、觸發鐵軌、`MovingSoundMinecart` 的連續音效、騎乘中生物的存檔（`Riding`）
+- [ ] 掉落物改為客戶端自行模擬（原版客戶端也跑 `EntityItem.onUpdate`，伺服器每 20 tick 校正）
+- [ ] 經驗來源：繁殖、釣魚、村民交易
 
-方塊破壞粒子以外的全部粒子類型核對、`RenderGlobal` 的雲層 fancy 模式、半透明在區塊內排序、物品附魔光澤、
-生物裝備渲染、名牌、影子、`EntityRenderer` 的視角晃動與受傷傾斜、第三人稱視角、
-GUI：信標、漏斗、投擲器（等方塊）、馬、村民交易、書、成就與統計、資源包、使用統計
+介面：
+- [ ] 信標、漏斗、投擲器、馬的物品欄、村民交易、書與羽毛筆
+- [ ] 統計與成就（`StatList`、`AchievementList`、`GuiStats`、`GuiAchievements`）
+- [ ] 資源包、使用統計（Snooper）、直播畫面
+- [ ] 告示牌上的非 ASCII 文字（原版用 unicode 字頁）
+- [ ] 指令：summon、enchant、gamerule、playsound、spreadplayers、testfor 等，Tab 自動補完
+
+系統：
+- [ ] 多人與區域網路（協定 5）
+- [ ] 附魔台的書架粒子（`EntityEnchantmentTableParticleFX`）
+- [ ] 破損物品的碎片粒子（客戶端）
+
+## 5. 渲染
+
+- [ ] `RenderBlocks` 其餘渲染型態改為逐行移植（已完成：標準方塊、原木、石英柱、活塞、釀造台、鐵砧、紅石線、拉桿）。
+      待做：火把（`renderTorchAtAngle`）、中繼器與比較器、按鈕、壓力板、絆線鉤與絆線、門、梯子、鐵軌、柵欄、玻璃板、樓梯、
+      液體、作物、莖、藤蔓、睡蓮、可可、火、床、煉藥鍋、終界門框、龍蛋、花盆等
+- [ ] 影像設定尚未生效：畫質「流暢」時樹葉的物品圖示與水面平滑著色（`EntityRenderer` 1055 行）、各向異性過濾、
+      3D 立體（anaglyph）、進階 OpenGL（遮蔽查詢）、FBO；平滑光照關閉時，`mesher.rs` 裡還沒改走 `rb` 的方塊（樓梯、柵欄、液體等）不會跟著變
+- [ ] 世界中的附魔光澤（手持、第一人稱、掉落物、盔甲模型）、方塊物品的光澤；手持箱子與掉落箱子的模型
+- [ ] 粒子系統（`EffectRenderer` 與所有 `EntityFX`）逐類核對
+- [ ] 第一人稱著火畫面目前畫在暈影之上（原版在暈影之下）
