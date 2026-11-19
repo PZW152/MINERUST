@@ -2705,6 +2705,23 @@ impl Sim {
             let mut parts = item.split(':');
             let name = parts.next().unwrap_or("");
             let off = (i as f64 - (n - 1.0) / 2.0) * 2.2;
+            if name == "Item" {
+                // Item:<id>:<count>: a dropped stack three blocks ahead
+                let id = parts.next().and_then(|v| v.parse().ok()).unwrap_or(1u16);
+                let count = parts.next().and_then(|v| v.parse().ok()).unwrap_or(1u32);
+                let p = [
+                    feet[0] + fwd[0] * 3.0 + side[0] * off,
+                    feet[1] + 0.5,
+                    feet[2] + fwd[1] * 3.0 + side[1] * off,
+                ];
+                let mut st = crate::item::Stack::new(id, 0, 1);
+                st.count = count;
+                let eid = self.play.next_item;
+                self.play.next_item += 1;
+                self.play
+                    .spawn(crate::entity::item::ItemEntity::new(eid, st, p));
+                continue;
+            }
             if let Some(kind) = crate::entity::minecart::CartKind::from_entity_id(name) {
                 // on the rail under the summoning spot
                 let dist = 3.0;

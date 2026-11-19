@@ -552,7 +552,7 @@ impl Play {
         }
     }
 
-    fn spawn(&mut self, e: ItemEntity) {
+    pub(crate) fn spawn(&mut self, e: ItemEntity) {
         self.items.push(e);
     }
 

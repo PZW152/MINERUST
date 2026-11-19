@@ -457,7 +457,10 @@ pub fn item_entity(
     let l = light_bytes(light.0, light.1);
     let bob = ((age / 10.0 + hover).sin() * 0.1 + 0.1) as f32;
     let spin = ((age / 20.0 + hover) * (180.0 / std::f32::consts::PI)) as f32;
-    let copies = if s.count > 20 {
+    // RenderItem.doRender
+    let copies = if s.count > 40 {
+        5
+    } else if s.count > 20 {
         4
     } else if s.count > 5 {
         3
@@ -501,20 +504,67 @@ pub fn item_entity(
             } else {
                 atlas.stack_passes(&s)
             };
-            // Fancy graphics: 3D sprites that spin like blocks.
+            // renderDroppedItem, each render pass with the random reseeded
+            let fancy = crate::render::mesher::rb::fancy();
+            let outer = mul(
+                &translate(pos[0], pos[1] + bob, pos[2]),
+                &scale(0.5, 0.5, 0.5),
+            );
             for (t, tint) in passes {
-                for i in 0..copies {
-                    let mut m = mul(&translate(pos[0], pos[1] + bob, pos[2]), &rot_y(spin));
-                    m = mul(&m, &scale(0.5, 0.5, 0.5));
-                    if i > 0 {
-                        let off = 0.0625 * 1.5 * i as f32 * 0.5;
-                        m = mul(&m, &translate(0.0, 0.0, off));
+                let mut r = JavaRandom::new(187);
+                if fancy {
+                    // a stack of extruded sprites spinning with the item
+                    let layers = if s.count < 2 {
+                        1
+                    } else if s.count < 16 {
+                        2
+                    } else if s.count < 32 {
+                        3
+                    } else {
+                        4
+                    };
+                    let step = 0.0625f32 + 0.021875;
+                    let mut m = mul(&outer, &rot_y(spin));
+                    m = mul(&m, &translate(-0.5, -0.25, -(step * layers as f32 / 2.0)));
+                    for _ in 0..layers {
+                        m = mul(&m, &translate(0.0, 0.0, step));
+                        extruded(out, t, &m, l, tint, 0.0625);
                     }
-                    m = mul(&m, &translate(-0.5, -0.25, 0.0));
-                    extruded(out, t, &m, l, tint, 0.0625);
+                } else {
+                    // fast graphics: flat sprites turned to the camera
+                    for i in 0..copies {
+                        let mut m = outer;
+                        if i > 0 {
+                            let dx = (r.next_float() * 2.0 - 1.0) * 0.3;
+                            let dy = (r.next_float() * 2.0 - 1.0) * 0.3;
+                            let dz = (r.next_float() * 2.0 - 1.0) * 0.3;
+                            m = mul(&m, &translate(dx, dy, dz));
+                        }
+                        m = mul(&m, &rot_y(180.0 - view_yaw));
+                        let c = [
+                            (tint[0] * 255.0) as u8,
+                            (tint[1] * 255.0) as u8,
+                            (tint[2] * 255.0) as u8,
+                            255,
+                        ];
+                        let (u0, v0, u1, v1) = (t[0], t[1], t[2], t[3]);
+                        for (p, uv) in [
+                            ([-0.5f32, -0.25, 0.0], [u0, v1]),
+                            ([0.5, -0.25, 0.0], [u1, v1]),
+                            ([0.5, 0.75, 0.0], [u1, v0]),
+                            ([-0.5, 0.75, 0.0], [u0, v0]),
+                        ] {
+                            let o = transform(&m, [p[0], p[1], p[2], 1.0]);
+                            out.push(Vertex {
+                                pos: [o[0], o[1], o[2]],
+                                uv,
+                                color: c,
+                                light: l,
+                            });
+                        }
+                    }
                 }
             }
-            let _ = view_yaw;
         }
     }
 }
