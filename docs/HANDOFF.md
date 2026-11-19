@@ -767,3 +767,12 @@ MINERUST_BENCH=10 minerust --seed 12345 --no-save --size 1920 1080 --distance 16
   牛被關在水裡 250 tick 仍滿血、之後溺水）；`cargo test --release` 114 項通過。基準：伺服器 6.6／6.7 對 6.2／6.4 ms
   （每 tick 多了原版本來就有的水流、窒息、空氣檢查），fps 不變。
   **還沒做**：生物的 `getEyeHeight` 覆寫（狼 0.8 等）、生物之間互推與被船／礦車擋住以外的實體碰撞、`mobGriefing` 遊戲規則。
+- `本次（2026-11-20，生物頭部轉 180 度）`：使用者看到生物的頭轉到背後。原因在客戶端：原版的 `EntityLiving.updateDistance`
+  對 `isAIEnabled` 的職業（殭屍、骷髏、苦力怕、女巫、鐵魔像、豬、牛、哞菇、羊、雞、狼、豹貓、村民、馬）在客戶端也跑
+  `EntityBodyHelper.updateRenderAngles`：身體跟著伺服器送來的頭轉（站著時 10 tick 後逐漸收緊到對齊），走動時頭被限制在身體 ±75 度。
+  這裡的客戶端一律用 `EntityLivingBase.updateDistance`（身體朝移動方向、限制在 `rotationYaw` ±75 度），而看玩家的
+  `EntityLookHelper` 只轉頭不轉 `rotationYaw`，所以站著看背後的玩家時身體不動、頭轉到最多 180 度。
+  - `game::update_body`：任務 AI 的職業照 `EntityBodyHelper`（`MobView.body_head`、`body_ticks` 保存 `prevRenderYawHead`、`rotationTickCounter`），其餘照 `updateDistance`。
+  - 伺服器端舊式的 `look_helper`（馬用的）只在沒有目標時才把頭限制在身體 ±75 度；原版 `onUpdateLook` 是兩種情況之後都限制（有路徑時）。
+  **驗證**：新測試 `client_body_follows_the_head`（伺服器把牛頭轉 150 度，客戶端身體跟上，頭與身體差距始終不超過 75 度，最後對齊；
+  蜘蛛仍用舊的公式）；`cargo test --release` 115 項通過。

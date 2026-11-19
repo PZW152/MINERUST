@@ -307,6 +307,10 @@ pub struct MobView {
     pub prev_body_yaw: f32,
     pub head_yaw: f32,
     pub prev_head_yaw: f32,
+    /// The client's `EntityBodyHelper` (`prevRenderYawHead`,
+    /// `rotationTickCounter`) for the classes with task AI.
+    pub body_head: f32,
+    pub body_ticks: i32,
     pub pitch: f32,
     pub prev_pitch: f32,
     pub limb_swing: f32,
@@ -3273,6 +3277,8 @@ impl Sim {
                 prev_body_yaw: m.prev_body_yaw,
                 head_yaw: m.head_yaw,
                 prev_head_yaw: m.prev_head_yaw,
+                body_head: m.head_yaw,
+                body_ticks: 0,
                 pitch: m.pitch,
                 prev_pitch: m.prev_pitch,
                 limb_swing: m.limb_swing,
@@ -6417,6 +6423,52 @@ mod tests {
         assert!(get(zom).fire > 100, "the zombie burns: {}", get(zom).fire);
         assert!(heard, "the zombie cried out");
         assert!(get(cow).health < 10.0, "the cactus pricked the cow");
+    }
+
+    /// The client turns a task-AI mob's body after its head
+    /// (`EntityBodyHelper`): a standing cow whose head the server turned
+    /// 150 degrees from its facing ends up with its body within 75 degrees
+    /// of the head, then lined up with it, instead of the head twisting
+    /// round on a body that stays put. A spider (old AI) keeps
+    /// `updateDistance`'s body near its facing.
+    #[test]
+    fn client_body_follows_the_head() {
+        use crate::entity::mob::Kind;
+        let (mut sim, x, y, z) = redstone_sim();
+        arena(&mut sim, x, y, z);
+        let feet = [x as f64 + 0.5, (y + 1) as f64, z as f64 + 0.5];
+        let mut r = JavaRandom::new(5);
+        let cow = sim.mobs.spawn(Kind::Cow, [x as f64 + 4.5, (y + 1) as f64, z as f64 + 4.5], 0.0, &mut r);
+        let mut view = None;
+        for _ in 0..3 {
+            let mut ev = Vec::new();
+            sim.step(&[Command::Player(feet, [0.0, 0.0], true)], &mut ev);
+            for e in ev {
+                if let Event::Mobs(v, _) = e {
+                    view = v.into_iter().find(|m| m.id == cow).or(view);
+                }
+            }
+        }
+        let mut m = view.expect("the cow is seen");
+        m.yaw = 0.0;
+        m.body_yaw = 0.0;
+        m.head_yaw = 150.0;
+        m.body_head = 0.0;
+        m.body_ticks = 0;
+        let mut worst: f32 = 0.0;
+        for _ in 0..40 {
+            crate::game::update_body(&mut m, 0.0, 0.0);
+            worst = worst.max((m.head_yaw - m.body_yaw).abs());
+        }
+        assert!(worst <= 75.0 + 1e-3, "head never more than 75 from the body: {worst}");
+        assert!((m.head_yaw - m.body_yaw).abs() < 1e-3, "lined up after standing still");
+        let mut s = m.clone();
+        s.kind = Kind::Spider;
+        s.body_yaw = 0.0;
+        for _ in 0..40 {
+            crate::game::update_body(&mut s, 0.0, 0.0);
+        }
+        assert!(s.body_yaw.abs() <= 75.0, "the old AI keeps its body near its facing");
     }
 
     /// Mobs move through `Entity.moveEntity`: a zombie falling ten blocks

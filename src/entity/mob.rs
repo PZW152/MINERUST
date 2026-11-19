@@ -1881,14 +1881,15 @@ impl Mob {
             self.head_yaw = approach(self.head_yaw, yaw, 10.0);
         } else {
             self.head_yaw = approach(self.head_yaw, self.body_yaw, 10.0);
-            let d = wrap(self.head_yaw - self.body_yaw);
-            if !self.no_path() {
-                if d < -75.0 {
-                    self.head_yaw = self.body_yaw - 75.0;
-                }
-                if d > 75.0 {
-                    self.head_yaw = self.body_yaw + 75.0;
-                }
+        }
+        // after either branch, while a path is followed
+        let d = wrap(self.head_yaw - self.body_yaw);
+        if !self.no_path() {
+            if d < -75.0 {
+                self.head_yaw = self.body_yaw - 75.0;
+            }
+            if d > 75.0 {
+                self.head_yaw = self.body_yaw + 75.0;
             }
         }
     }

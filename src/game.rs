@@ -3370,6 +3370,8 @@ impl Game {
                     v.prev_body_yaw = o.prev_body_yaw;
                     v.head_yaw = o.head_yaw;
                     v.prev_head_yaw = o.prev_head_yaw;
+                    v.body_head = o.body_head;
+                    v.body_ticks = o.body_ticks;
                     v.pitch = o.pitch;
                     v.prev_pitch = o.prev_pitch;
                     v.limb_swing = o.limb_swing;
@@ -3385,6 +3387,8 @@ impl Game {
                     v.prev_body_yaw = v.net_yaw;
                     v.head_yaw = v.net_head;
                     v.prev_head_yaw = v.net_head;
+                    v.body_head = v.net_head;
+                    v.body_ticks = 0;
                     v.pitch = v.net_pitch;
                     v.prev_pitch = v.net_pitch;
                     v.limb_swing = 0.0;
@@ -3479,21 +3483,7 @@ impl Game {
             let f = ((dx * dx + dz * dz).sqrt() as f32 * 4.0).min(1.0);
             m.limb_amount += (f - m.limb_amount) * 0.4;
             m.limb_swing += m.limb_amount;
-            // updateDistance
-            let d2 = (dx * dx + dz * dz) as f32;
-            let mut target = m.body_yaw;
-            if d2 > 0.0025000002 {
-                target = (dz.atan2(dx) as f32) * 180.0 / std::f32::consts::PI - 90.0;
-            }
-            if m.swing > 0.0 {
-                target = m.yaw;
-            }
-            m.body_yaw += wrap(target - m.body_yaw) * 0.3;
-            let b = wrap(m.yaw - m.body_yaw).clamp(-75.0, 75.0);
-            m.body_yaw = m.yaw - b;
-            if b * b > 2500.0 {
-                m.body_yaw += b * 0.2;
-            }
+            update_body(m, dx, dz);
             while m.body_yaw - m.prev_body_yaw < -180.0 {
                 m.prev_body_yaw -= 360.0;
             }
@@ -6082,4 +6072,84 @@ impl Game {
 /// `BlockStem.getRenderColor`
 fn stem_color(meta: i32) -> u32 {
     ((meta * 32) << 16 | (255 - meta * 8) << 8 | meta * 4) as u32
+}
+
+/// `EntityLiving.isAIEnabled`: the classes on the task AI, whose body the
+/// client turns with `EntityBodyHelper` (the rest use
+/// `EntityLivingBase.updateDistance`).
+fn ai_enabled(k: crate::entity::mob::Kind) -> bool {
+    use crate::entity::mob::Kind;
+    matches!(
+        k,
+        Kind::Zombie
+            | Kind::Skeleton
+            | Kind::Creeper
+            | Kind::Witch
+            | Kind::IronGolem
+            | Kind::Pig
+            | Kind::Cow
+            | Kind::Mooshroom
+            | Kind::Sheep
+            | Kind::Chicken
+            | Kind::Wolf
+            | Kind::Ocelot
+            | Kind::Villager
+            | Kind::Horse
+    )
+}
+
+/// `updateDistance` on the client for one mob that moved `dx`, `dz` this
+/// tick: `EntityBodyHelper` for the task-AI classes, else
+/// `EntityLivingBase.updateDistance`.
+pub(crate) fn update_body(m: &mut crate::sim::MobView, dx: f64, dz: f64) {
+    let wrap = |a: f32| {
+        let mut a = a % 360.0;
+        if a >= 180.0 {
+            a -= 360.0;
+        }
+        if a < -180.0 {
+            a += 360.0;
+        }
+        a
+    };
+    if ai_enabled(m.kind) {
+        // EntityLiving.updateDistance with isAIEnabled:
+        // EntityBodyHelper.updateRenderAngles, so the body turns to
+        // follow the head the server sends (S19PacketEntityHeadLook)
+        let bound = |a: f32, b: f32, lim: f32| a - wrap(a - b).clamp(-lim, lim);
+        if dx * dx + dz * dz > 2.5000003e-7 {
+            m.body_yaw = m.yaw;
+            m.head_yaw = bound(m.body_yaw, m.head_yaw, 75.0);
+            m.body_head = m.head_yaw;
+            m.body_ticks = 0;
+        } else {
+            let mut lim = 75.0f32;
+            if (m.head_yaw - m.body_head).abs() > 15.0 {
+                m.body_ticks = 0;
+                m.body_head = m.head_yaw;
+            } else {
+                m.body_ticks += 1;
+                if m.body_ticks > 10 {
+                    lim = (1.0 - (m.body_ticks - 10) as f32 / 10.0).max(0.0) * 75.0;
+                }
+            }
+            m.body_yaw = bound(m.head_yaw, m.body_yaw, lim);
+        }
+    } else {
+        // EntityLivingBase.updateDistance
+        let d2 = (dx * dx + dz * dz) as f32;
+        let mut target = m.body_yaw;
+        if d2 > 0.0025000002 {
+            target = (dz.atan2(dx) as f32) * 180.0 / std::f32::consts::PI - 90.0;
+        }
+        if m.swing > 0.0 {
+            target = m.yaw;
+        }
+        m.body_yaw += wrap(target - m.body_yaw) * 0.3;
+        let b = wrap(m.yaw - m.body_yaw).clamp(-75.0, 75.0);
+        m.body_yaw = m.yaw - b;
+        if b * b > 2500.0 {
+            m.body_yaw += b * 0.2;
+        }
+    }
 }
