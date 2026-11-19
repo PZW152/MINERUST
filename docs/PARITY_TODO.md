@@ -40,7 +40,8 @@
 - [x] 生物受傷：天生護甲（殭屍、殭屍豬人 2 點）、`setBeenAttacked` 與擊退抗性的亂數、擊退方向改用 `Math.random()`
 - [x] 生物裝備（`EntityLiving.equipment`、`addRandomArmor`、`enchantEquipment`、手持弓劍、掉落裝備、盔甲與手持物品的繪製），
       骷髏／殭屍／殭屍豬人的 `onSpawnWithEgg`，區域難度與區塊居住時間（與原版 1,200 組一致）
-- [ ] 生物撿拾物品（`canPickUpLoot`）、小殭屍、殭屍村民、雞騎士、蜘蛛騎士、殭屍增援與破門、`InhabitedTime` 存檔，以及
+- [x] 生物撿拾物品（`canPickUpLoot`）、小殭屍與小殭屍豬人、生物受傷與死亡音效的音量音高、裝備的額外經驗
+- [ ] 殭屍村民、雞騎士、蜘蛛騎士、殭屍增援與破門、`InhabitedTime` 存檔，以及
       `onSpawnWithEgg` 的其餘部分（殭屍擊退抗性加成、跟隨距離的 `nextGaussian`、蜘蛛騎士、小殭屍）
 - [x] 生物的藥水效果（`activePotionsMap`：飛濺藥水的持續效果、節肢剋星緩速、速度／攻擊力屬性、抗性、粒子、存檔）
 - [ ] 生物的藥水效果尚缺：隱形的繪製、生物盔甲的保護附魔、吸收與生命提升、生物之間的凋零／中毒

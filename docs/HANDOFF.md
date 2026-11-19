@@ -689,3 +689,20 @@ MINERUST_BENCH=10 minerust --seed 12345 --no-save --size 1920 1080 --distance 16
   `1/16 + 0.021875` 畫 `renderItemIn2D`（以前層數門檻與層距都是自己編的）。流暢：份數照 `doRender`（1–5，門檻 1、5、20、40；
   以前少了 40 以上的第 5 份，方塊物品也一樣），每份 `random`（每個渲染 pass 重設 187）抖動 ±0.3，轉向 `180 - playerViewY`，
   一張 1×1 的平面。`--summon Item:<id>:<數量>` 可在前方三格生成掉落物（截圖用）。截圖確認兩種模式。
+- `本次（2026-11-19，生物撿拾物品、小殭屍、生物音效）`：
+  - **撿拾物品**（`Sim::mobs_pick_up_loot`，`EntityLiving.onLivingUpdate` 的 looting 段）：`can_pick_up_loot` 的生物在每個 tick
+    撿起碰撞箱左右各擴 1 格內的掉落物，放進 `getArmorPosition` 給的欄位（南瓜與頭顱 4、盔甲 4–1、其他一律 0 手上）。
+    取代規則照原版：劍勝過非劍、劍比攻擊力、盔甲勝過非盔甲、盔甲比護甲值，相同時比耗損與是否有 NBT；原本的裝備以
+    `rand.nextFloat() - 0.1 < 掉落機率` 掉出；撿起後該欄掉落機率 2、生物變成不會消失。客戶端 `Event::MobCollect` 讓物品飛向生物
+    （`EntityPickupFX`）。`mobGriefing` 遊戲規則還不存在，視為開啟。
+  - **小殭屍**（`Mob.baby`、`set_baby`）：生成時 `GroupData.isChild` 的 5% 現在真的生成小殭屍與小殭屍豬人；尺寸一半、
+    `Baby speed boost`（+50%，op 1，原版 UUID）、不會被太陽點燃、經驗 `(int)(5 × 2.5)`、`IsBaby` 存檔、`ModelBiped` 的 `isChild`
+    畫法（頭 0.75 下移 16 像素、其餘含帽子 0.5 下移 24 像素），盔甲層與手持物品照 `RenderBiped` 的小孩位移。
+    殭屍村民（`isVillager` 的 5%）與雞騎士仍只抽亂數不生成。`--summon Zombie:baby` 可生成。
+  - **生物受傷與死亡的音效**以前音量與音高都固定 1.0，沒有抽亂數：改為 `getSoundVolume`（終界龍 5、惡魂 10、史萊姆 0.4 × 大小、
+    蝙蝠 0.1、牛／哞菇／豹貓／魷魚／狼 0.4、馬 0.8）與 `getSoundPitch`（生物自己的亂數，小孩 +0.5，蝙蝠 × 0.95）。
+    死亡時先播音效再掉落，與 `attackEntityFrom` 的順序相同（以前反過來，亂數順序不同）。
+  - **經驗**：`EntityLiving.getExperiencePoints` 的裝備加成（每件掉落機率不超過 1 的裝備 +1–3）。
+  **驗證**：新測試 `zombies_pick_up_loot`（撿石劍、不撿較差的木劍、換鑽石劍並掉出石劍、變成不消失）、`baby_zombies`
+  （尺寸、速度、音高、存檔）；`cargo test --release` 111 項通過；截圖確認小殭屍模型。伺服器 tick 與上一次推送的版本相同
+  （6.7–7.0 對 6.5–7.2 ms）。

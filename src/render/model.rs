@@ -261,6 +261,22 @@ fn quad_angles(v: &mut [Part], a: &Anim) {
 }
 
 /// `ModelBiped` with the zombie arm pose when `zombie_arms`.
+/// `ModelBiped.render` with `isChild`: the head (part 0) at 0.75 and 16
+/// pixels down, everything else (the hat included) at half size, 24 down.
+fn biped_child_matrix(mat: &Mat4, part: usize) -> Mat4 {
+    if part == 0 {
+        mul(
+            &mul(mat, &super::entities::scale(0.75, 0.75, 0.75)),
+            &translate(0.0, 16.0 * 0.0625, 0.0),
+        )
+    } else {
+        mul(
+            &mul(mat, &super::entities::scale(0.5, 0.5, 0.5)),
+            &translate(0.0, 24.0 * 0.0625, 0.0),
+        )
+    }
+}
+
 fn biped(a: &Anim, thin: bool, zombie_arms: bool) -> Vec<Part> {
     biped_gap(a, thin, zombie_arms, 0.0)
 }
@@ -1050,8 +1066,11 @@ pub fn mob(
             Kind::Chicken => (5.0, 2.0),
             _ => (8.0, 4.0),
         };
+        let biped_child = child && matches!(m.kind, Kind::Zombie | Kind::PigZombie);
         for (i, p) in parts(m, &a, age, layer, partial).iter().enumerate() {
-            if child && heads > 0 {
+            if biped_child {
+                render(&mut d, &biped_child_matrix(&mat, i), p);
+            } else if child && heads > 0 {
                 let pm = if i < heads {
                     mul(&mat, &translate(0.0, cy * 0.0625, cz * 0.0625))
                 } else {
@@ -1093,9 +1112,14 @@ pub fn mob(
                     pass == 2 || pass == 3,
                     pass == 0,
                 ];
-                for (p, on) in v.iter().zip(show) {
+                for (i, (p, on)) in v.iter().zip(show).enumerate() {
                     if on {
-                        render(&mut d, &mat, p);
+                        let pm = if m.flags & 16 != 0 {
+                            biped_child_matrix(&mat, i)
+                        } else {
+                            mat
+                        };
+                        render(&mut d, &pm, p);
                     }
                 }
             }
@@ -1103,7 +1127,15 @@ pub fn mob(
         if let Some(s) = m.equipment[0] {
             let thin = m.kind == Kind::Skeleton && m.variant != 1;
             let arm = &biped(&a, thin, true)[2];
-            let am = part_matrix(&mat, arm);
+            // RenderBiped.renderEquippedItems with isChild
+            let base = if m.flags & 16 != 0 {
+                let mut b = mul(&mat, &translate(0.0, 0.625, 0.0));
+                b = mul(&b, &rot_x(20.0));
+                mul(&b, &super::entities::scale(0.5, 0.5, 0.5))
+            } else {
+                mat
+            };
+            let am = part_matrix(&base, arm);
             let hm = biped_held_matrix(&am, &s, m.kind == Kind::Skeleton);
             let mut items = Vec::new();
             item(&mut items, s, &hm, light);

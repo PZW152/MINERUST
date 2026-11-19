@@ -394,6 +394,8 @@ pub struct Mob {
     pub drop_chances: [f32; 5],
     /// `canPickUpLoot`
     pub can_pick_up_loot: bool,
+    /// `EntityZombie.isChild` (dataWatcher 12): a baby zombie or pigman.
+    pub baby: bool,
     /// The zombie's "Random spawn bonus" to knockback resistance.
     pub kb_resist: f64,
     pub persistent: bool,
@@ -740,6 +742,7 @@ impl Mob {
             equipment: [None; 5],
             drop_chances: [0.085; 5],
             can_pick_up_loot: false,
+            baby: false,
             kb_resist: 0.0,
             persistent: false,
             variant: 0,
@@ -852,6 +855,11 @@ impl Mob {
             }
             // EntitySkeleton.setSkeletonType(1)
             Kind::Skeleton if self.variant == 1 => (0.72, 2.34),
+            // EntityZombie.setChildSize: half the size
+            k @ (Kind::Zombie | Kind::PigZombie) if self.baby => {
+                let (w, h) = k.size();
+                (w * 0.5, h * 0.5)
+            }
             // EntityAgeable.setScaleForAge: the young are half the size
             k if self.growing_age < 0 && k.animal() => {
                 let (w, h) = k.size();
@@ -918,11 +926,12 @@ impl Mob {
                 // random (not carried through a pack yet)
                 let child = world_rand.next_float() < 0.05;
                 let villager = world_rand.next_float() < 0.05;
+                // zombie villagers are not made yet (HANDOFF section 7)
                 let _ = villager;
                 if child {
+                    self.set_baby(true);
                     // the chicken-jockey rolls (an existing chicken nearby,
-                    // else a new one); baby zombies, zombie villagers and
-                    // jockeys are not made yet (HANDOFF section 7)
+                    // else a new one); jockeys are not made yet
                     if world_rand.next_float() >= 0.05 {
                         let _ = world_rand.next_float() < 0.05;
                     }
@@ -1742,6 +1751,56 @@ impl Mob {
         }
     }
 
+    /// `EntityZombie.setChild`: the baby speed boost (+50% of the base,
+    /// operation 1) and half the size.
+    pub fn set_baby(&mut self, on: bool) {
+        const BOOST: u128 = 0xB9766B59_9566_4402_BC1F_2EE2A276D836;
+        let a = &mut self.potions.attrs.movement_speed;
+        a.remove(BOOST);
+        if on {
+            a.apply(super::living::Modifier {
+                uuid: BOOST,
+                amount: 0.5,
+                op: 1,
+            });
+        }
+        self.baby = on;
+        let p = self.pos;
+        self.set_position(p[0], p[1], p[2]);
+    }
+
+    /// `EntityLivingBase.isChild`
+    pub fn is_child(&self) -> bool {
+        self.baby || self.growing_age < 0
+    }
+
+    /// `getSoundVolume()` and `getSoundPitch()` for the hurt and death
+    /// sounds, the pitch from this mob's random.
+    pub fn sound_volume_pitch(&mut self) -> (f32, f32) {
+        let v = match self.kind {
+            Kind::EnderDragon => 5.0,
+            Kind::Ghast => 10.0,
+            Kind::Slime | Kind::MagmaCube => 0.4 * self.variant as f32,
+            Kind::Bat => 0.1,
+            Kind::Cow | Kind::Mooshroom | Kind::Ocelot | Kind::Squid | Kind::Wolf => 0.4,
+            Kind::Horse => 0.8,
+            _ => 1.0,
+        };
+        let base = if self.is_child() { 1.5 } else { 1.0 };
+        let mut p = (self.rand.next_float() - self.rand.next_float()) * 0.2 + base;
+        if self.kind == Kind::Bat {
+            p *= 0.95;
+        }
+        (v, p)
+    }
+
+    /// The roll in `EntityLiving.onLivingUpdate` for whether the piece a
+    /// picked-up item replaces is dropped: `rand.nextFloat() - 0.1` under
+    /// the slot's drop chance.
+    pub fn replaced_drops(&mut self, slot: usize) -> bool {
+        self.rand.next_float() - 0.1 < self.drop_chances[slot]
+    }
+
     /// The movementSpeed attribute with the potions' modifiers.
     pub fn speed_attr(&self) -> f32 {
         self.potions.attrs.movement_speed.value() as f32
@@ -2155,7 +2214,16 @@ impl Mob {
         if self.kind.animal() {
             1 + world_rand.next_int_n(3)
         } else if self.kind.hostile() {
-            5
+            // EntityZombie: a child's experienceValue times 2.5
+            let mut v = if self.baby { (5.0f32 * 2.5) as i32 } else { 5 };
+            // EntityLiving.getExperiencePoints: 1-3 more for each piece of
+            // equipment that is not a sure drop
+            for i in 0..5 {
+                if self.equipment[i].is_some() && self.drop_chances[i] <= 1.0 {
+                    v += 1 + self.rand.next_int_n(3);
+                }
+            }
+            v
         } else {
             0
         }
@@ -2655,7 +2723,10 @@ impl Mobs {
                                     if f.small && !t.kind.fireproof() {
                                         t.fire = 100;
                                     }
-                                    out.sounds.push((mob_sound(t, false), t.pos, 1.0, 1.0));
+                                    {
+                                        let (v, pi) = t.sound_volume_pitch();
+                                        out.sounds.push((mob_sound(t, false), t.pos, v, pi));
+                                    }
                                 }
                             }
                         }
@@ -2704,7 +2775,10 @@ impl Mobs {
                 }
                 t.set_revenge(Some(ai::Target::Mob(st.from)));
                 t.motion[1] += st.lift;
-                out.sounds.push((mob_sound(t, false), t.pos, 1.0, 1.0));
+                {
+                    let (v, pi) = t.sound_volume_pitch();
+                    out.sounds.push((mob_sound(t, false), t.pos, v, pi));
+                }
                 // EntityAIHurtByTarget
                 if matches!(t.kind, Kind::Wolf | Kind::IronGolem | Kind::Ocelot) || t.kind.hostile()
                 {
@@ -2758,12 +2832,14 @@ impl Mobs {
             if m.health <= 0.0 && m.death_time == 0 {
                 let by_player = m.recently_hit > 0;
                 let looting = m.looting;
-                for s in m.drops(by_player, looting) {
-                    out.drops.push(([m.pos[0], m.pos[1] + 0.0, m.pos[2]], s));
-                }
+                // attackEntityFrom: the death sound, then onDeath's drops
                 let s = mob_sound(m, true);
                 if !s.is_empty() {
-                    out.sounds.push((s, m.pos, 1.0, 1.0));
+                    let (v, pi) = m.sound_volume_pitch();
+                    out.sounds.push((s, m.pos, v, pi));
+                }
+                for s in m.drops(by_player, looting) {
+                    out.drops.push(([m.pos[0], m.pos[1] + 0.0, m.pos[2]], s));
                 }
                 // EntitySlime.setDead: split into smaller slimes
                 if m.kind == Kind::Slime && m.variant > 1 {
@@ -2914,7 +2990,8 @@ impl Mobs {
             }
             let s = mob_sound(m, false);
             if !s.is_empty() {
-                out.sounds.push((s, m.pos, 1.0, 1.0));
+                let (v, pi) = m.sound_volume_pitch();
+                out.sounds.push((s, m.pos, v, pi));
             }
             if matches!(m.kind, Kind::Wolf | Kind::IronGolem) && !m.tamed && !m.player_made {
                 m.target_player = true;
@@ -3279,6 +3356,10 @@ impl Mobs {
         }
         // EntityLiving.writeEntityToNBT: CanPickUpLoot, Equipment, DropChances
         v.push(("CanPickUpLoot", Nbt::Byte(m.can_pick_up_loot as i8)));
+        if matches!(m.kind, Kind::Zombie | Kind::PigZombie) {
+            v.push(("IsBaby", Nbt::Byte(m.baby as i8)));
+            v.push(("IsVillager", Nbt::Byte(0)));
+        }
         v.push((
             "Equipment",
             Nbt::List(
@@ -3373,6 +3454,9 @@ impl Mobs {
         }
         m.persistent = t.int("PersistenceRequired").unwrap_or(0) != 0;
         m.can_pick_up_loot = t.int("CanPickUpLoot").unwrap_or(0) != 0;
+        if t.int("IsBaby").unwrap_or(0) != 0 {
+            m.set_baby(true);
+        }
         for (k, e) in t.list("Equipment").iter().take(5).enumerate() {
             m.equipment[k] = crate::world::anvil::item_from_nbt(e);
         }
@@ -3711,7 +3795,7 @@ fn tick_mob(
     }
     // EntityZombie / EntitySkeleton.onLivingUpdate: undead burn in
     // daylight unless something is on their head, which wears instead
-    if day && (m.kind == Kind::Zombie || m.kind == Kind::Skeleton) {
+    if day && (m.kind == Kind::Zombie && !m.baby || m.kind == Kind::Skeleton) {
         let (x, y, z) = m.feet_block();
         let f = brightness(w, x, y, z);
         if f > 0.5 && m.rand.next_float() * 30.0 < (f - 0.4) * 2.0 && w.can_see_sky(x, y, z) {

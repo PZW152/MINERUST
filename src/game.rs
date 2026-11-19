@@ -359,7 +359,9 @@ pub struct Game {
     /// `itemInUse` / `itemInUseCount` as the client sees them.
     using: Option<(crate::item::Stack, i32)>,
     /// `EntityPickupFX`: collected items flying to the player, with age.
-    pickups: Vec<(ItemView, i32)>,
+    /// `EntityPickupFX`: the item, its age, and the mob collecting it
+    /// (`None`: the player).
+    pickups: Vec<(ItemView, i32, Option<u32>)>,
     /// `EntityPickupFX` of experience orbs.
     orb_pickups: Vec<(crate::entity::xp_orb::XpOrb, i32)>,
     /// Throwables: position, previous position, item, damage.
@@ -1328,10 +1330,15 @@ impl Game {
                     self.moving_mesh.retain(|k, _| live.contains(&k.0));
                 }
                 Event::CollectOrb(id) => self.collect_orb(id),
+                Event::MobCollect(v) => {
+                    for (it, mob) in v {
+                        self.pickups.push((it, 0, Some(mob)));
+                    }
+                }
                 Event::Collect(v) => {
                     // NetHandlerPlayClient.handleCollectItem
                     for it in v {
-                        self.pickups.push((it, 0));
+                        self.pickups.push((it, 0, None));
                     }
                 }
                 Event::Push(v) => {
@@ -5130,16 +5137,28 @@ impl Game {
         // TileEntityRendererPiston
         self.render_moving(&mut dynamic, eye, sp);
         // EntityPickupFX.renderParticle
-        for (it, age) in &self.pickups {
+        for (it, age, mob) in &self.pickups {
             let mut f = (*age as f32 + partial) / 3.0;
             f *= f;
             let t = partial as f64;
             let d = it.pos;
-            let pl = [
+            let mut pl = [
                 self.player.prev_pos[0] + (self.player.pos[0] - self.player.prev_pos[0]) * t,
                 self.player.prev_pos[1] + (self.player.pos[1] - self.player.prev_pos[1]) * t - 0.5,
                 self.player.prev_pos[2] + (self.player.pos[2] - self.player.prev_pos[2]) * t,
             ];
+            if let Some(id) = mob {
+                match self.mobs.iter().find(|m| m.id == *id) {
+                    Some(m) => {
+                        pl = [
+                            m.prev[0] + (m.pos[0] - m.prev[0]) * t,
+                            m.prev[1] + (m.pos[1] - m.prev[1]) * t - 0.5,
+                            m.prev[2] + (m.pos[2] - m.prev[2]) * t,
+                        ]
+                    }
+                    None => pl = d,
+                }
+            }
             let p = [
                 d[0] + (pl[0] - d[0]) * f as f64,
                 d[1] + (pl[1] - d[1]) * f as f64,

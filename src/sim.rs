@@ -183,6 +183,9 @@ pub enum Event {
     Sounds(Vec<(&'static str, [f64; 3], f32, f32)>),
     /// `S0DPacketCollectItem` for an experience orb the player took.
     CollectOrb(u32),
+    /// `S0DPacketCollectItem` for items a mob picked up: the item and the
+    /// mob it flies to.
+    MobCollect(Vec<(crate::play::ItemView, u32)>),
     /// `S27PacketExplosion`s
     Explosions(Vec<crate::world::explosion::View>),
     Weather(Weather),
@@ -1577,6 +1580,9 @@ impl Sim {
             if !play.collected.is_empty() {
                 events.push(Event::Collect(std::mem::take(&mut play.collected)));
             }
+            if !play.mob_collected.is_empty() {
+                events.push(Event::MobCollect(std::mem::take(&mut play.mob_collected)));
+            }
         }
         let moving: Vec<([i32; 3], crate::world::redstone::MovingView)> = self
             .world
@@ -2837,6 +2843,15 @@ impl Sim {
                             m.sitting = true;
                             m.sit_order = true;
                         }
+                        "baby"
+                            if matches!(
+                                m.kind,
+                                crate::entity::mob::Kind::Zombie
+                                    | crate::entity::mob::Kind::PigZombie
+                            ) =>
+                        {
+                            m.set_baby(true)
+                        }
                         "baby" => {
                             m.growing_age = -24000;
                             let p = m.pos;
@@ -3123,6 +3138,7 @@ impl Sim {
             self.mobs.blast_targets = t;
         }
         self.mobs.tick(&mut self.world, &info, &mut out);
+        self.mobs_pick_up_loot(play);
         self.mobs.blast_targets.clear();
         self.apply_blasts(play, std::mem::take(&mut out.blasts));
         // the explosions' drops spawn now, as spawnEntityInWorld does
@@ -3270,7 +3286,7 @@ impl Sim {
                     | (m.sitting as u32) << 1
                     | (m.angry as u32) << 2
                     | (m.hanging as u32) << 3
-                    | ((m.growing_age < 0) as u32) << 4,
+                    | (m.is_child() as u32) << 4,
                 carried: [m.carried, m.carried_meta],
                 attack_timer: m.attack_timer,
                 equipment: m.equipment,
@@ -3678,6 +3694,129 @@ impl Sim {
             });
         }
         a.value() as f32
+    }
+
+    /// The looting part of `EntityLiving.onLivingUpdate`: a mob that can
+    /// pick up loot takes an item within a block sideways of its box into
+    /// the slot `getArmorPosition` gives, when the slot is empty or the item
+    /// is better (a sword over anything but a sword, a sharper sword,
+    /// armour over non-armour, more protection; on a tie the more worn or
+    /// the enchanted one), dropping what it had by its drop chance - 0.1.
+    fn mobs_pick_up_loot(&mut self, play: &mut Play) {
+        use crate::entity::player::Aabb;
+        use crate::item::{tool, ToolKind};
+        // getArmorPosition
+        let slot_of = |id: u16| -> usize {
+            if id == crate::block::PUMPKIN as u16 || id == 397 {
+                return 4;
+            }
+            match crate::container::armor_type(id) {
+                Some(t) => 4 - t,
+                None => 0,
+            }
+        };
+        let sword = |id: u16| tool(id).is_some_and(|t| t.kind == ToolKind::Sword);
+        let mut drops: Vec<([f64; 3], crate::item::Stack)> = Vec::new();
+        for mi in 0..self.mobs.list.len() {
+            let (bb, ok) = {
+                let m = &self.mobs.list[mi];
+                (
+                    m.bb,
+                    m.can_pick_up_loot && m.health > 0.0 && m.death_time == 0,
+                )
+            };
+            if !ok {
+                continue;
+            }
+            let reach = Aabb {
+                min: [bb.min[0] - 1.0, bb.min[1], bb.min[2] - 1.0],
+                max: [bb.max[0] + 1.0, bb.max[1], bb.max[2] + 1.0],
+            };
+            for ii in 0..play.items.len() {
+                let e = &play.items[ii];
+                if e.e.dead || !e.bb().intersects(&reach) {
+                    continue;
+                }
+                let st = e.stack;
+                let slot = slot_of(st.id);
+                let m = &mut self.mobs.list[mi];
+                let better = match m.equipment[slot] {
+                    None => true,
+                    Some(c) => {
+                        let tie = || {
+                            st.meta > c.meta
+                                || st.tag != crate::item_tag::Tag::NONE
+                                    && c.tag == crate::item_tag::Tag::NONE
+                        };
+                        if slot == 0 {
+                            if sword(st.id) && !sword(c.id) {
+                                true
+                            } else if sword(st.id) && sword(c.id) {
+                                let (a, b) = (
+                                    crate::item::weapon_damage(st.id).unwrap_or(0.0),
+                                    crate::item::weapon_damage(c.id).unwrap_or(0.0),
+                                );
+                                if a == b {
+                                    tie()
+                                } else {
+                                    a > b
+                                }
+                            } else {
+                                false
+                            }
+                        } else {
+                            let pa = crate::inventory::armor_points(st.id);
+                            let pb = crate::inventory::armor_points(c.id);
+                            match (pa, pb) {
+                                (Some(_), None) => true,
+                                (Some(a), Some(b)) => {
+                                    if a == b {
+                                        tie()
+                                    } else {
+                                        a > b
+                                    }
+                                }
+                                _ => false,
+                            }
+                        }
+                    }
+                };
+                if !better {
+                    continue;
+                }
+                if let Some(c) = m.equipment[slot] {
+                    if m.replaced_drops(slot) {
+                        drops.push((m.pos, c));
+                    }
+                }
+                m.equipment[slot] = Some(st);
+                m.drop_chances[slot] = 2.0;
+                m.persistent = true;
+                let id = m.id;
+                let e = &mut play.items[ii];
+                play.mob_collected.push((
+                    crate::play::ItemView {
+                        id: e.id,
+                        stack: st,
+                        pos: e.e.pos,
+                        prev: e.e.prev,
+                        age: e.age,
+                        hover: e.hover,
+                    },
+                    id,
+                ));
+                e.e.dead = true;
+            }
+        }
+        // Entity.entityDropItem(stack, 0): at the feet, 10 ticks before it
+        // can be picked up
+        for (p, st) in drops {
+            let id = play.next_item;
+            play.next_item += 1;
+            let mut e = crate::entity::item::ItemEntity::new(id, st, p);
+            e.pickup_delay = 10;
+            play.spawn(e);
+        }
     }
 
     /// `EntityPlayer.attackTargetEntityWithCurrentItem` against a mob.
@@ -6114,6 +6253,93 @@ mod tests {
 
     /// `EntityAnimal.interact` and `EntityAIMate`: two fed cows come
     /// together and have one calf; the parents cannot breed for a while.
+    /// `EntityLiving.onLivingUpdate`'s looting: a zombie that can pick up
+    /// loot takes a sword, then a sharper one (dropping the first, whose
+    /// drop chance became 2), and a helmet into slot 4; one that cannot
+    /// leaves them.
+    #[test]
+    fn zombies_pick_up_loot() {
+        use crate::entity::mob::Kind;
+        use crate::item::Stack;
+        let (mut sim, x, y, z) = redstone_sim();
+        arena(&mut sim, x, y, z);
+        let feet = [x as f64 + 0.5, (y + 1) as f64, z as f64 + 0.5];
+        let mut r = JavaRandom::new(5);
+        let at = [x as f64 + 8.5, (y + 1) as f64, z as f64 + 8.5];
+        let zid = sim.mobs.spawn(Kind::Zombie, at, 0.0, &mut r);
+        if let Some(m) = sim.mobs.list.iter_mut().find(|m| m.id == zid) {
+            m.can_pick_up_loot = true;
+            m.equipment[4] = Some(Stack::new(310, 0, 1));
+            m.potions.add_effect(crate::potion::Effect::new(
+                crate::potion::MOVE_SLOWDOWN,
+                9999,
+                9,
+            ));
+        }
+        let drop = |sim: &mut Sim, id: u16| {
+            let eid = sim.play.next_item;
+            sim.play.next_item += 1;
+            let mut e = crate::entity::item::ItemEntity::new(eid, Stack::new(id, 0, 1), at);
+            e.e.motion = [0.0; 3];
+            sim.play.spawn(e);
+        };
+        let run = |sim: &mut Sim| {
+            for _ in 0..10 {
+                sim.step(&[Command::Player(feet, [0.0, 0.0], true)], &mut Vec::new());
+            }
+        };
+        let held = |sim: &Sim| {
+            sim.mobs
+                .list
+                .iter()
+                .find(|m| m.id == zid)
+                .and_then(|m| m.equipment[0])
+                .map(|s| s.id)
+        };
+        drop(&mut sim, 272); // stone sword
+        run(&mut sim);
+        assert_eq!(held(&sim), Some(272));
+        drop(&mut sim, 268); // wooden: worse, stays on the ground
+        run(&mut sim);
+        assert_eq!(held(&sim), Some(272));
+        drop(&mut sim, 276); // diamond: better
+        run(&mut sim);
+        assert_eq!(held(&sim), Some(276));
+        let ground: Vec<u16> = sim
+            .play
+            .items
+            .iter()
+            .filter(|e| !e.e.dead)
+            .map(|e| e.stack.id)
+            .collect();
+        assert!(
+            ground.contains(&268) && ground.contains(&272),
+            "left and dropped: {ground:?}"
+        );
+        let m = sim.mobs.list.iter().find(|m| m.id == zid).unwrap();
+        assert!(m.persistent);
+        assert_eq!(m.drop_chances[0], 2.0);
+    }
+
+    /// `EntityZombie.setChild`: half the size, the 50% speed boost, no
+    /// burning in the sun, higher voices, 12 experience, saved as IsBaby.
+    #[test]
+    fn baby_zombies() {
+        use crate::entity::mob::{Kind, Mob, Mobs};
+        let mut m = Mob::new(1, Kind::Zombie, [0.5, 70.0, 0.5], 0.0, 9);
+        let speed = m.speed_attr();
+        m.set_baby(true);
+        assert_eq!(m.dims(), (0.3, 0.9));
+        assert!((m.speed_attr() - speed * 1.5).abs() < 1e-6);
+        let (_, pitch) = m.sound_volume_pitch();
+        assert!((1.3..=1.7).contains(&pitch), "pitch {pitch}");
+        let tag = Mobs::to_nbt(&m);
+        let mut back = Mobs::default();
+        back.from_nbt(&tag).unwrap();
+        assert!(back.list[0].baby);
+        assert_eq!(back.list[0].dims(), (0.3, 0.9));
+    }
+
     /// Mobs keep potion effects (`activePotionsMap`): poison ticks them
     /// down to 1 health, slowness lowers the movementSpeed attribute,
     /// regeneration does not work on the undead, Bane of Arthropods slows

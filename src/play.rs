@@ -221,6 +221,8 @@ pub struct Play {
     pub fx: Vec<crate::entity::base::Fx>,
     /// Items picked up this tick (`S0DPacketCollectItem`).
     pub collected: Vec<ItemView>,
+    /// Items mobs picked up this tick, with the mob (`onItemPickup`).
+    pub mob_collected: Vec<(ItemView, u32)>,
     /// The player is alive (`getHealth() > 0`).
     pub alive: bool,
     /// `rotationPitch` of the player.
@@ -484,6 +486,7 @@ impl Play {
             vehicles: Vec::new(),
             orbs: Vec::new(),
             falling_hits: Vec::new(),
+            mob_collected: Vec::new(),
             next_item: 1,
             pitch: 0.0,
             fx: Vec::new(),
