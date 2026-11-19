@@ -776,3 +776,12 @@ MINERUST_BENCH=10 minerust --seed 12345 --no-save --size 1920 1080 --distance 16
   - 伺服器端舊式的 `look_helper`（馬用的）只在沒有目標時才把頭限制在身體 ±75 度；原版 `onUpdateLook` 是兩種情況之後都限制（有路徑時）。
   **驗證**：新測試 `client_body_follows_the_head`（伺服器把牛頭轉 150 度，客戶端身體跟上，頭與身體差距始終不超過 75 度，最後對齊；
   蜘蛛仍用舊的公式）；`cargo test --release` 115 項通過。
+- `本次（2026-11-20，生物互相推擠）`：以前只有「生物被玩家推開」一個方向，而且公式不同（除以距離而不是距離的平方根）。
+  - `Mobs::push_apart`：每隻生物照 `EntityLivingBase.collideWithNearbyEntities`（碰撞箱左右各擴 0.2）對碰到的實體做
+    `applyEntityCollision`（`abs_max`、開根號、`min(1/d, 1)`、0.05，兩邊各加一半方向相反的速度），玩家照
+    `EntityPlayer.onLivingUpdate` 也推一次。蝙蝠不推也不被推，終界龍與終界水晶不參與。
+  - 鐵魔像碰到怪物時有 1/20 機率把牠當成攻擊目標（`EntityIronGolem.collideWithEntity`）。
+  - 玩家被生物推：`addVelocity` 走既有的 `push_add`（`Event::Velocity` 的 add），與爆炸推力相同的路徑。
+  - 找附近實體用 8 格的格子（原版用區塊），推擠本身 641 隻生物約 0.2 ms。
+  **驗證**：新測試 `mobs_push_each_other_and_the_player`；`cargo test --release` 116 項通過。基準伺服器 8.0–8.2 對 7.2–7.3 ms：
+  多出的時間大多是成群生成、疊在一起的生物被推開後真的在移動（原版也會這樣），推擠計算本身 0.2 ms。

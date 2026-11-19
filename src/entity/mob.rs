@@ -2747,6 +2747,8 @@ pub struct Outcome {
     pub blasts: Vec<crate::world::explosion::Blast>,
     /// Particles for the client (portal, slime, heart, smoke).
     pub particles: Vec<Puff>,
+    /// `addVelocity` on the player from mobs pushing against it.
+    pub player_push: [f64; 3],
     /// `playAuxSFX(2006)`: landing dust (block, `ceil(fall - 3)`).
     pub dust: Vec<([i32; 3], i32)>,
     /// The mob that last hurt the player this tick.
@@ -3088,6 +3090,7 @@ impl Mobs {
             m.track();
         }
         self.convert_zombies(w, out);
+        self.push_apart(player, out);
         ai::answer_calls(&mut self.list, &out.calls);
         out.calls.clear();
         // EntityAIMate.spawnBaby: the other parent, then the young one
@@ -3670,6 +3673,96 @@ impl Mobs {
                 None
             }
             _ => None,
+        }
+    }
+
+    /// `EntityLivingBase.collideWithNearbyEntities` for every mob, and the
+    /// player's own: each pushes what its box, widened 0.2 sideways,
+    /// touches (`applyEntityCollision`, both ways). Bats push nothing and
+    /// are not pushed; an iron golem bumping a monster takes it as its
+    /// target one time in 20 (`EntityIronGolem.collideWithEntity`).
+    fn push_apart(&mut self, player: &PlayerInfo, out: &mut Outcome) {
+        let n = self.list.len();
+        let takes_part = |m: &Mob| {
+            !m.dead && !matches!(m.kind, Kind::Bat | Kind::EnderDragon | Kind::EnderCrystal)
+        };
+        let pb = player.bb();
+        let reach = |b: &Aabb| Aabb {
+            min: [b.min[0] - 0.2f32 as f64, b.min[1], b.min[2] - 0.2f32 as f64],
+            max: [b.max[0] + 0.2f32 as f64, b.max[1], b.max[2] + 0.2f32 as f64],
+        };
+        // getEntitiesWithinAABBExcludingEntity looks in the nearby chunks:
+        // a grid of 8-block cells (wider than any mob's reach) does the same
+        let cell = |p: [f64; 3]| ((p[0] / 8.0).floor() as i32, (p[2] / 8.0).floor() as i32);
+        let mut grid: std::collections::HashMap<(i32, i32), Vec<usize>> =
+            std::collections::HashMap::new();
+        for (k, m) in self.list.iter().enumerate() {
+            if takes_part(m) {
+                grid.entry(cell(m.pos)).or_default().push(k);
+            }
+        }
+        let mut near: Vec<usize> = Vec::new();
+        for i in 0..n {
+            if !takes_part(&self.list[i]) {
+                continue;
+            }
+            let r = reach(&self.list[i].bb);
+            let (cx, cz) = cell(self.list[i].pos);
+            near.clear();
+            for gx in cx - 1..=cx + 1 {
+                for gz in cz - 1..=cz + 1 {
+                    if let Some(v) = grid.get(&(gx, gz)) {
+                        near.extend_from_slice(v);
+                    }
+                }
+            }
+            near.sort_unstable();
+            for &j in &near {
+                if j == i || !self.list[j].bb.intersects(&r) {
+                    continue;
+                }
+                if self.list[i].kind == Kind::IronGolem
+                    && self.list[j].kind.hostile()
+                    && self.list[i].rand.next_int_n(20) == 0
+                {
+                    let id = self.list[j].id;
+                    self.list[i].attack_target = Some(ai::Target::Mob(id));
+                }
+                // other.applyEntityCollision(this)
+                let (a, b) = (self.list[i].pos, self.list[j].pos);
+                if let Some((x, z)) = collision_push(a[0] - b[0], a[2] - b[2]) {
+                    self.list[j].motion[0] -= x;
+                    self.list[j].motion[2] -= z;
+                    self.list[i].motion[0] += x;
+                    self.list[i].motion[2] += z;
+                }
+            }
+            // the player is pushed too, and pushed back
+            if player.alive && pb.intersects(&r) {
+                let a = self.list[i].pos;
+                if let Some((x, z)) = collision_push(a[0] - player.feet[0], a[2] - player.feet[2]) {
+                    out.player_push[0] -= x;
+                    out.player_push[2] -= z;
+                    self.list[i].motion[0] += x;
+                    self.list[i].motion[2] += z;
+                }
+            }
+        }
+        // EntityPlayer.onLivingUpdate -> collideWithNearbyEntities
+        if player.alive {
+            let r = reach(&pb);
+            for m in self.list.iter_mut() {
+                if !takes_part(m) || !m.bb.intersects(&r) {
+                    continue;
+                }
+                let d = [player.feet[0] - m.pos[0], player.feet[2] - m.pos[2]];
+                if let Some((x, z)) = collision_push(d[0], d[1]) {
+                    m.motion[0] -= x;
+                    m.motion[2] -= z;
+                    out.player_push[0] += x;
+                    out.player_push[2] += z;
+                }
+            }
         }
     }
 
@@ -4691,17 +4784,25 @@ fn tick_mob(
     if matches!(m.kind, Kind::Slime | Kind::MagmaCube) {
         extra::slime_landed(m, was_on_ground, out);
     }
-    // push out of the player (Entity.applyEntityCollision, mobs side only)
-    let pb = player.bb();
-    if m.bb.intersects(&pb) {
-        let (dx, dz) = (m.pos[0] - player.feet[0], m.pos[2] - player.feet[2]);
-        let d = dx.abs().max(dz.abs());
-        if d >= 0.01 {
-            let k = 0.05 / d.sqrt().max(1.0);
-            m.motion[0] += dx / d * k;
-            m.motion[2] += dz / d * k;
-        }
+}
+
+/// `Entity.applyEntityCollision` on `this` from an entity `dx`, `dz` away
+/// (`other - this`): the velocity `other` gets; `this` gets the opposite.
+/// None when they are less than 0.01 apart on both axes.
+fn collision_push(dx: f64, dz: f64) -> Option<(f64, f64)> {
+    // MathHelper.abs_max
+    let mut d: f64 = if dx.abs() > dz.abs() { dx.abs() } else { dz.abs() };
+    if d < 0.01f32 as f64 {
+        return None;
     }
+    d = math::sqrt_double(d) as f64;
+    let (mut x, mut z) = (dx / d, dz / d);
+    let k = (1.0 / d).min(1.0);
+    x *= k;
+    z *= k;
+    x *= 0.05f32 as f64;
+    z *= 0.05f32 as f64;
+    Some((x, z))
 }
 
 /// `EntityAIWander` (one chance in `chance` per tick).

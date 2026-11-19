@@ -3226,6 +3226,13 @@ impl Sim {
         let mut rnd = std::mem::replace(&mut self.world.rand, JavaRandom::new(0));
         for o in outs {
             dust.extend(o.dust);
+            // the mobs' applyEntityCollision on the player (addVelocity)
+            if o.player_push != [0.0; 3] {
+                for a in 0..3 {
+                    self.splayer.e.motion[a] += o.player_push[a];
+                    self.push_add[a] += o.player_push[a];
+                }
+            }
             if o.attacker.is_some() {
                 self.last_attacker = o.attacker;
                 self.last_attacker_time = self.world.total_time as i32;
@@ -6423,6 +6430,36 @@ mod tests {
         assert!(get(zom).fire > 100, "the zombie burns: {}", get(zom).fire);
         assert!(heard, "the zombie cried out");
         assert!(get(cow).health < 10.0, "the cactus pricked the cow");
+    }
+
+    /// `collideWithNearbyEntities`: two cows put in the same place push
+    /// each other apart, and a cow standing in the player pushes the player
+    /// (`addVelocity`, sent on as a velocity to add).
+    #[test]
+    fn mobs_push_each_other_and_the_player() {
+        use crate::entity::mob::Kind;
+        let (mut sim, x, y, z) = redstone_sim();
+        arena(&mut sim, x, y, z);
+        let feet = [x as f64 + 0.5, (y + 1) as f64, z as f64 + 0.5];
+        let mut r = JavaRandom::new(5);
+        let a = sim.mobs.spawn(Kind::Cow, [x as f64 + 6.5, (y + 1) as f64, z as f64 + 6.5], 0.0, &mut r);
+        let b = sim.mobs.spawn(Kind::Cow, [x as f64 + 6.6, (y + 1) as f64, z as f64 + 6.5], 0.0, &mut r);
+        let c = sim.mobs.spawn(Kind::Cow, [feet[0] + 0.3, feet[1], feet[2]], 0.0, &mut r);
+        let _ = c;
+        let mut pushed = false;
+        for _ in 0..10 {
+            let mut ev = Vec::new();
+            sim.step(&[Command::Player(feet, [0.0, 0.0], true)], &mut ev);
+            for e in &ev {
+                if let Event::Velocity { add, .. } = e {
+                    pushed |= add[0] < 0.0;
+                }
+            }
+        }
+        let pos = |id: u32| sim.mobs.list.iter().find(|m| m.id == id).unwrap().pos;
+        let gap = (pos(b)[0] - pos(a)[0]).abs();
+        assert!(gap > 0.3, "the cows moved apart: {gap}");
+        assert!(pushed, "the cow pushed the player away (-x)");
     }
 
     /// The client turns a task-AI mob's body after its head
