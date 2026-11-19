@@ -6224,7 +6224,8 @@ mod tests {
                     .set_block(x + dx, y + 5, z + dz, block::STONE, 0, 3);
                 if dx == -2 || dx == 13 || dz == -2 || dz == 13 {
                     for dy in 1..5 {
-                        sim.world.set_block(x + dx, y + dy, z + dz, block::STONE, 0, 3);
+                        sim.world
+                            .set_block(x + dx, y + dy, z + dz, block::STONE, 0, 3);
                     }
                 }
             }
@@ -6395,7 +6396,12 @@ mod tests {
         let mut r = JavaRandom::new(5);
         let zat = [x as f64 + 4.5, (y + 1) as f64, z as f64 + 4.5];
         let zom = sim.mobs.spawn(Kind::Zombie, zat, 0.0, &mut r);
-        let cow = sim.mobs.spawn(Kind::Cow, [x as f64 + 8.5, (y + 1) as f64, z as f64 + 8.5], 0.0, &mut r);
+        let cow = sim.mobs.spawn(
+            Kind::Cow,
+            [x as f64 + 8.5, (y + 1) as f64, z as f64 + 8.5],
+            0.0,
+            &mut r,
+        );
         for m in sim.mobs.list.iter_mut() {
             m.equipment[4] = Some(crate::item::Stack::new(310, 0, 1));
             m.persistent = true;
@@ -6409,7 +6415,8 @@ mod tests {
                 sim.world.set_block(x, y + 1, z, block::FIRE, 0, 3);
                 sim.world.set_block(x + 4, y + 1, z + 4, block::FIRE, 0, 3);
             }
-            sim.world.set_block(x + 9, y + 1, z + 8, block::CACTUS, 0, 3);
+            sim.world
+                .set_block(x + 9, y + 1, z + 8, block::CACTUS, 0, 3);
             for m in sim.mobs.list.iter_mut() {
                 if m.id == zom {
                     m.set_position(zat[0], zat[1], zat[2]);
@@ -6421,10 +6428,16 @@ mod tests {
             }
             let mut ev = Vec::new();
             sim.step(&[calm.clone(), here.clone()], &mut ev);
-            heard |= ev.iter().any(|e| matches!(e, Event::Sounds(v) if v.iter().any(|s| s.0 == "mob.zombie.hurt")));
+            heard |= ev.iter().any(
+                |e| matches!(e, Event::Sounds(v) if v.iter().any(|s| s.0 == "mob.zombie.hurt")),
+            );
         }
         assert!(sim.splayer.living.health < 20.0, "fire hurt the player");
-        assert!(sim.splayer.e.fire > 100, "the player caught fire: {}", sim.splayer.e.fire);
+        assert!(
+            sim.splayer.e.fire > 100,
+            "the player caught fire: {}",
+            sim.splayer.e.fire
+        );
         let get = |id: u32| sim.mobs.list.iter().find(|m| m.id == id).unwrap();
         assert!(get(zom).health < 20.0);
         assert!(get(zom).fire > 100, "the zombie burns: {}", get(zom).fire);
@@ -6442,9 +6455,21 @@ mod tests {
         arena(&mut sim, x, y, z);
         let feet = [x as f64 + 0.5, (y + 1) as f64, z as f64 + 0.5];
         let mut r = JavaRandom::new(5);
-        let a = sim.mobs.spawn(Kind::Cow, [x as f64 + 6.5, (y + 1) as f64, z as f64 + 6.5], 0.0, &mut r);
-        let b = sim.mobs.spawn(Kind::Cow, [x as f64 + 6.6, (y + 1) as f64, z as f64 + 6.5], 0.0, &mut r);
-        let c = sim.mobs.spawn(Kind::Cow, [feet[0] + 0.3, feet[1], feet[2]], 0.0, &mut r);
+        let a = sim.mobs.spawn(
+            Kind::Cow,
+            [x as f64 + 6.5, (y + 1) as f64, z as f64 + 6.5],
+            0.0,
+            &mut r,
+        );
+        let b = sim.mobs.spawn(
+            Kind::Cow,
+            [x as f64 + 6.6, (y + 1) as f64, z as f64 + 6.5],
+            0.0,
+            &mut r,
+        );
+        let c = sim
+            .mobs
+            .spawn(Kind::Cow, [feet[0] + 0.3, feet[1], feet[2]], 0.0, &mut r);
         let _ = c;
         let mut pushed = false;
         for _ in 0..10 {
@@ -6475,7 +6500,12 @@ mod tests {
         arena(&mut sim, x, y, z);
         let feet = [x as f64 + 0.5, (y + 1) as f64, z as f64 + 0.5];
         let mut r = JavaRandom::new(5);
-        let cow = sim.mobs.spawn(Kind::Cow, [x as f64 + 4.5, (y + 1) as f64, z as f64 + 4.5], 0.0, &mut r);
+        let cow = sim.mobs.spawn(
+            Kind::Cow,
+            [x as f64 + 4.5, (y + 1) as f64, z as f64 + 4.5],
+            0.0,
+            &mut r,
+        );
         let mut view = None;
         for _ in 0..3 {
             let mut ev = Vec::new();
@@ -6497,15 +6527,24 @@ mod tests {
             crate::game::update_body(&mut m, 0.0, 0.0);
             worst = worst.max((m.head_yaw - m.body_yaw).abs());
         }
-        assert!(worst <= 75.0 + 1e-3, "head never more than 75 from the body: {worst}");
-        assert!((m.head_yaw - m.body_yaw).abs() < 1e-3, "lined up after standing still");
+        assert!(
+            worst <= 75.0 + 1e-3,
+            "head never more than 75 from the body: {worst}"
+        );
+        assert!(
+            (m.head_yaw - m.body_yaw).abs() < 1e-3,
+            "lined up after standing still"
+        );
         let mut s = m.clone();
         s.kind = Kind::Spider;
         s.body_yaw = 0.0;
         for _ in 0..40 {
             crate::game::update_body(&mut s, 0.0, 0.0);
         }
-        assert!(s.body_yaw.abs() <= 75.0, "the old AI keeps its body near its facing");
+        assert!(
+            s.body_yaw.abs() <= 75.0,
+            "the old AI keeps its body near its facing"
+        );
     }
 
     /// Mobs move through `Entity.moveEntity`: a zombie falling ten blocks
@@ -6521,7 +6560,8 @@ mod tests {
         for dx in -2..14 {
             for dz in -2..14 {
                 for dy in 5..16 {
-                    sim.world.set_block(x + dx, y + dy, z + dz, block::AIR, 0, 3);
+                    sim.world
+                        .set_block(x + dx, y + dy, z + dz, block::AIR, 0, 3);
                 }
             }
         }
@@ -6538,8 +6578,18 @@ mod tests {
         }
         let feet = [x as f64 + 0.5, (y + 1) as f64, z as f64 + 0.5];
         let mut r = JavaRandom::new(5);
-        let zom = sim.mobs.spawn(Kind::Zombie, [x as f64 + 4.5, (y + 11) as f64, z as f64 + 4.5], 0.0, &mut r);
-        let cow = sim.mobs.spawn(Kind::Cow, [x as f64 + 9.5, (y + 1) as f64, z as f64 + 9.5], 0.0, &mut r);
+        let zom = sim.mobs.spawn(
+            Kind::Zombie,
+            [x as f64 + 4.5, (y + 11) as f64, z as f64 + 4.5],
+            0.0,
+            &mut r,
+        );
+        let cow = sim.mobs.spawn(
+            Kind::Cow,
+            [x as f64 + 9.5, (y + 1) as f64, z as f64 + 9.5],
+            0.0,
+            &mut r,
+        );
         for m in sim.mobs.list.iter_mut() {
             m.equipment[4] = Some(crate::item::Stack::new(310, 0, 1));
             m.persistent = true;
@@ -6549,14 +6599,19 @@ mod tests {
         let mut landed_hp = None;
         for i in 0..420 {
             let mut ev = Vec::new();
-            sim.step(&[calm.clone(), Command::Player(feet, [0.0, 0.0], true)], &mut ev);
+            sim.step(
+                &[calm.clone(), Command::Player(feet, [0.0, 0.0], true)],
+                &mut ev,
+            );
             for e in &ev {
                 match e {
                     Event::Sounds(v) => {
                         fall_sound |= v.iter().any(|s| s.0 == "game.hostile.hurt.fall.big");
                         step |= v.iter().any(|s| s.0 == "mob.zombie.step");
                     }
-                    Event::FallDust(v) => dust |= v.iter().any(|d| d.0 == [x + 4, y, z + 4] && d.1 >= 6),
+                    Event::FallDust(v) => {
+                        dust |= v.iter().any(|d| d.0 == [x + 4, y, z + 4] && d.1 >= 6)
+                    }
                     _ => {}
                 }
             }
@@ -6572,10 +6627,19 @@ mod tests {
         assert!(hp <= 20.0 - 6.0 && hp > 0.0, "fall damage: {hp}");
         assert!(fall_sound, "the hostile fall sound");
         assert!(dust, "landing dust on the farmland");
-        assert_eq!(sim.world.block(x + 4, y, z + 4), block::DIRT, "the farmland was trampled");
+        assert_eq!(
+            sim.world.block(x + 4, y, z + 4),
+            block::DIRT,
+            "the farmland was trampled"
+        );
         assert!(step, "the zombie's own footsteps");
         // 15 seconds of air, then 2 a second: gone by now, or nearly
-        let hp = sim.mobs.list.iter().find(|m| m.id == cow).map_or(0.0, |m| m.health);
+        let hp = sim
+            .mobs
+            .list
+            .iter()
+            .find(|m| m.id == cow)
+            .map_or(0.0, |m| m.health);
         assert!(hp < 10.0, "the cow drowned: {hp}");
     }
 
@@ -6585,8 +6649,8 @@ mod tests {
     /// it runs out a nauseous villager takes its place.
     #[test]
     fn zombie_villagers() {
-        use crate::entity::mob::{Kind, Mobs};
         use crate::entity::living::Difficulty;
+        use crate::entity::mob::{Kind, Mobs};
         use crate::potion;
         let (mut sim, x, y, z) = redstone_sim();
         arena(&mut sim, x, y, z);
@@ -6607,14 +6671,20 @@ mod tests {
         let calm = Command::PlayerState { attackable: false };
         let mut risen = None;
         for _ in 0..200 {
-            sim.step(&[calm.clone(), Command::Player(feet, [0.0, 0.0], true)], &mut Vec::new());
+            sim.step(
+                &[calm.clone(), Command::Player(feet, [0.0, 0.0], true)],
+                &mut Vec::new(),
+            );
             if let Some(m) = sim.mobs.list.iter().find(|m| m.zombie_villager) {
                 risen = Some(m.id);
                 break;
             }
         }
         let risen = risen.expect("the villager rose as a zombie villager");
-        assert!(!sim.mobs.list.iter().any(|m| m.id == vil), "the villager is gone at once");
+        assert!(
+            !sim.mobs.list.iter().any(|m| m.id == vil),
+            "the villager is gone at once"
+        );
         assert!(sim.mobs.list.iter().any(|m| m.id == zom));
         // the cure needs weakness
         let mut out = crate::entity::mob::Outcome::default();
@@ -6641,7 +6711,10 @@ mod tests {
             }
         }
         for _ in 0..3 {
-            sim.step(&[calm.clone(), Command::Player(feet, [0.0, 0.0], true)], &mut Vec::new());
+            sim.step(
+                &[calm.clone(), Command::Player(feet, [0.0, 0.0], true)],
+                &mut Vec::new(),
+            );
         }
         assert!(!sim.mobs.list.iter().any(|m| m.id == risen));
         let v = sim

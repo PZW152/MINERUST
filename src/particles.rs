@@ -588,7 +588,11 @@ impl Particles {
             d = 2.5;
         }
         let count = (150.0 * d) as i32;
-        let c = [pos[0] as f64 + 0.5, pos[1] as f64 + 1.0, pos[2] as f64 + 0.5];
+        let c = [
+            pos[0] as f64 + 0.5,
+            pos[1] as f64 + 1.0,
+            pos[2] as f64 + 0.5,
+        ];
         for _ in 0..count {
             // MathHelper.randomFloatClamp
             let a = self.r.next_float() * (std::f32::consts::PI * 2.0);

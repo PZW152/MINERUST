@@ -1413,7 +1413,8 @@ impl Mob {
                     );
                     if block::material(b) != Material::Air {
                         let st = block::step_sound(b);
-                        self.move_sounds.push((st.step, st.volume * 0.5, st.pitch * 0.75));
+                        self.move_sounds
+                            .push((st.step, st.volume * 0.5, st.pitch * 0.75));
                     }
                 }
                 return;
@@ -1454,7 +1455,8 @@ impl Mob {
             );
             if block::material(b) != Material::Air {
                 let st = block::step_sound(b);
-                self.move_sounds.push((st.step, st.volume * 0.5, st.pitch * 0.75));
+                self.move_sounds
+                    .push((st.step, st.volume * 0.5, st.pitch * 0.75));
             }
         }
         if self.kind == Kind::Creeper {
@@ -1536,8 +1538,16 @@ impl Mob {
         let lava = {
             let b = &self.bb;
             let bb = Aabb {
-                min: [b.min[0] + 0.1f32 as f64, b.min[1] + 0.4f32 as f64, b.min[2] + 0.1f32 as f64],
-                max: [b.max[0] - 0.1f32 as f64, b.max[1] - 0.4f32 as f64, b.max[2] - 0.1f32 as f64],
+                min: [
+                    b.min[0] + 0.1f32 as f64,
+                    b.min[1] + 0.4f32 as f64,
+                    b.min[2] + 0.1f32 as f64,
+                ],
+                max: [
+                    b.max[0] - 0.1f32 as f64,
+                    b.max[1] - 0.4f32 as f64,
+                    b.max[2] - 0.1f32 as f64,
+                ],
             };
             super::base::material_in_bb(w, &bb, Material::Lava)
         };
@@ -3802,7 +3812,13 @@ impl Mobs {
 
     /// `EntityZombie.startConversion`: the countdown, weakness off, strength
     /// for its length, and entity state 16 (the remedy sound).
-    fn start_conversion(m: &mut Mob, time: i32, difficulty: i32, sounds: &mut Vec<(&'static str, [f64; 3], f32, f32)>, r: &mut JavaRandom) {
+    fn start_conversion(
+        m: &mut Mob,
+        time: i32,
+        difficulty: i32,
+        sounds: &mut Vec<(&'static str, [f64; 3], f32, f32)>,
+        r: &mut JavaRandom,
+    ) {
         m.conversion = time;
         m.potions.remove_effect(crate::potion::WEAKNESS);
         m.potions.add_effect(crate::potion::Effect::new(
@@ -4791,7 +4807,11 @@ fn tick_mob(
 /// None when they are less than 0.01 apart on both axes.
 fn collision_push(dx: f64, dz: f64) -> Option<(f64, f64)> {
     // MathHelper.abs_max
-    let mut d: f64 = if dx.abs() > dz.abs() { dx.abs() } else { dz.abs() };
+    let mut d: f64 = if dx.abs() > dz.abs() {
+        dx.abs()
+    } else {
+        dz.abs()
+    };
     if d < 0.01f32 as f64 {
         return None;
     }

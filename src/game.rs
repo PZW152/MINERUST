@@ -5009,7 +5009,16 @@ impl Game {
                 let light = if a.burning { [240, 240, 0, 0] } else { light };
                 crate::render::model::arrow(&mut dynamic, at, rel, a.yaw, a.pitch, light);
                 if a.burning {
-                    entities::on_fire(&mut dynamic, &self.atlas, rel, 0.5, 0.5, 0.0, self.view_yaw(), light);
+                    entities::on_fire(
+                        &mut dynamic,
+                        &self.atlas,
+                        rel,
+                        0.5,
+                        0.5,
+                        0.0,
+                        self.view_yaw(),
+                        light,
+                    );
                 }
             }
         }
@@ -5433,7 +5442,11 @@ impl Game {
         // hand, without view bobbing): two tilted squares of fire_layer_1
         // half a block ahead, at 0.9 alpha, seen through the hand's
         // 70-degree projection
-        if self.third_person == 0 && self.sleeping.is_none() && self.stats.fire > 0 && !self.stats.dead {
+        if self.third_person == 0
+            && self.sleeping.is_none()
+            && self.stats.fire > 0
+            && !self.stats.dead
+        {
             let t = self.atlas.named("fire_layer_1");
             let aspect = ui.w / ui.h;
             let tan = (35.0f32).to_radians().tan();
@@ -5456,7 +5469,12 @@ impl Game {
                 };
                 let (x0, x1, y0, y1, z) = (-0.5f32, 0.5f32, -0.5f32, 0.5f32, -0.5f32);
                 ui.atlas_quad(
-                    [place(x0, y1, z), place(x0, y0, z), place(x1, y0, z), place(x1, y1, z)],
+                    [
+                        place(x0, y1, z),
+                        place(x0, y0, z),
+                        place(x1, y0, z),
+                        place(x1, y1, z),
+                    ],
                     [[t[2], t[1]], [t[2], t[3]], [t[0], t[3]], [t[0], t[1]]],
                     0xFFFFFF,
                     0.9,

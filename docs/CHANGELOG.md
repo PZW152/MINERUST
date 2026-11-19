@@ -9,7 +9,8 @@
 
 ## 2026-11-20
 
-- Reorganise the docs: PARITY_TODO is the only to-do list, the dev log moves to CHANGELOG, stale and contradictory lines fixed
+- Run cargo fmt over the last commits
+- `5922f5b` Reorganise the docs: PARITY_TODO is the only to-do list, the dev log moves to CHANGELOG, stale and contradictory lines fixed
 - `c57b73a` Mobs push each other and the player (collideWithNearbyEntities)
 - `2a9a022` Client body follows the head for task-AI mobs (EntityBodyHelper); head clamp in the old look helper
 - `7ddace6` Mobs move through Entity.moveEntity and onEntityUpdate: steps, splashes, falls, drowning

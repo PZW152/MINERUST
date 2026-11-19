@@ -315,7 +315,8 @@ impl ServerPlayer {
                             self.attack(w, Source::named(SourceKind::Cactus), 1.0, diff);
                         }
                         block::CAULDRON => {
-                            let _ = super::collide::collided(w, &mut self.e, x, y, z, block::CAULDRON);
+                            let _ =
+                                super::collide::collided(w, &mut self.e, x, y, z, block::CAULDRON);
                         }
                         _ => {}
                     }
