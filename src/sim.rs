@@ -320,6 +320,8 @@ pub struct MobView {
     pub prev_wing: f32,
     pub eat_timer: i32,
     pub fire: bool,
+    /// dataWatcher 7 and 8: potion particle colour and ambience
+    pub potion: (i32, bool),
     pub bb: [f64; 6],
     /// Slime squish (previous, current).
     pub squish: [f32; 2],
@@ -3244,6 +3246,7 @@ impl Sim {
                 prev_wing: m.prev_wing,
                 eat_timer: m.eat_timer,
                 fire: m.fire > 0,
+                potion: (m.potions.potion_color, m.potions.potion_ambient),
                 squish: [m.prev_squish, m.squish],
                 sq: [m.prev_sq, m.sq],
                 flags: m.tamed as u32
@@ -6094,6 +6097,83 @@ mod tests {
 
     /// `EntityAnimal.interact` and `EntityAIMate`: two fed cows come
     /// together and have one calf; the parents cannot breed for a while.
+    /// Mobs keep potion effects (`activePotionsMap`): poison ticks them
+    /// down to 1 health, slowness lowers the movementSpeed attribute,
+    /// regeneration does not work on the undead, Bane of Arthropods slows
+    /// a spider, and the effects survive a save.
+    #[test]
+    fn mobs_keep_potion_effects() {
+        use crate::entity::mob::Kind;
+        use crate::potion;
+        let (mut sim, x, y, z) = redstone_sim();
+        arena(&mut sim, x, y, z);
+        let feet = [x as f64 + 0.5, (y + 1) as f64, z as f64 + 0.5];
+        let mut r = JavaRandom::new(5);
+        let at = |dx: f64, dz: f64| [x as f64 + dx, (y + 1) as f64, z as f64 + dz];
+        let cow = sim.mobs.spawn(Kind::Cow, at(4.5, 4.5), 0.0, &mut r);
+        let zombie = sim.mobs.spawn(Kind::Zombie, at(8.5, 8.5), 0.0, &mut r);
+        sim.mobs.add_effect(cow, potion::POISON, 400, 0);
+        sim.mobs.add_effect(cow, potion::MOVE_SLOWDOWN, 400, 1);
+        sim.mobs.add_effect(zombie, potion::REGENERATION, 400, 0);
+        let get = |sim: &Sim, id: u32| sim.mobs.list.iter().find(|m| m.id == id).unwrap().clone();
+        let base = Kind::Cow.speed();
+        let slow = get(&sim, cow).speed_attr();
+        assert!(
+            (slow - base * 0.7).abs() < 1e-4,
+            "slowness II: {slow} of {base}"
+        );
+        if let Some(m) = sim.mobs.list.iter_mut().find(|m| m.id == zombie) {
+            m.health = 10.0;
+            // a helmet keeps it from burning in the sun
+            m.equipment[4] = Some(crate::item::Stack::new(310, 0, 1));
+        }
+        for i in 0..300 {
+            sim.step(&[Command::Player(feet, [0.0, 0.0], true)], &mut Vec::new());
+            for id in [cow, zombie] {
+                if !sim.mobs.list.iter().any(|m| m.id == id) {
+                    panic!("mob {id} (cow {cow}) gone at tick {i}");
+                }
+            }
+        }
+        let c = get(&sim, cow);
+        assert_eq!(c.health, 1.0, "poison stops at one health");
+        assert!(c.potions.active(potion::POISON));
+        assert_eq!(
+            get(&sim, zombie).health,
+            10.0,
+            "no regeneration for the undead"
+        );
+        // the save keeps them
+        let tag = crate::entity::mob::Mobs::to_nbt(&c);
+        let mut back = crate::entity::mob::Mobs::default();
+        back.from_nbt(&tag).unwrap();
+        assert!(back.list[0].potions.active(potion::MOVE_SLOWDOWN));
+        // Bane of Arthropods slows a spider (applyArthropodEnchantments)
+        let spider = sim.mobs.spawn(Kind::Spider, at(2.5, 0.5), 0.0, &mut r);
+        let sel = sim.play.inv.selected;
+        sim.play.inv.main[sel] = Some(
+            crate::item::Stack::new(276, 0, 1)
+                .with_enchantments(&[(crate::enchant::BANE_OF_ARTHROPODS, 5)]),
+        );
+        sim.play.mode = GameMode::Survival;
+        sim.step(
+            &[
+                Command::Player(feet, [-90.0, 0.0], false),
+                Command::Attack {
+                    id: spider,
+                    crit: false,
+                    sprint: false,
+                },
+            ],
+            &mut Vec::new(),
+        );
+        let s = sim.mobs.list.iter().find(|m| m.id == spider);
+        assert!(
+            s.map_or(true, |m| m.potions.active(potion::MOVE_SLOWDOWN)),
+            "Bane of Arthropods V slows"
+        );
+    }
+
     #[test]
     fn fed_cows_have_a_calf() {
         use crate::entity::mob::Kind;

@@ -1408,7 +1408,7 @@ fn attack_as_mob(m: &mut Mob, t: Target, v: &View, cx: &mut Cx) {
     } else {
         m.kind.attack_damage()
     };
-    let mut amount = base
+    let mut amount = m.attack_attr(base)
         + held
             .and_then(|s| crate::item::weapon_damage(s.id))
             .unwrap_or(0.0);
@@ -3110,7 +3110,7 @@ pub(super) fn old_update(m: &mut Mob, cx: &mut Cx) {
             let turn = wrap(target - m.yaw).clamp(-30.0, 30.0);
             // moveForward is the movementSpeed attribute itself (and the
             // pigman's attacking speed boost of 0.45 with a target)
-            let mut speed = m.kind.speed();
+            let mut speed = m.speed_attr();
             if m.kind == Kind::PigZombie && m.attack_target.is_some() {
                 speed += 0.45;
             }

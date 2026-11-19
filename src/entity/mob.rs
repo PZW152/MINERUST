@@ -376,6 +376,9 @@ pub struct Mob {
     path_speed: f64,
     move_to: Option<[f64; 3]>,
     move_speed: f64,
+    /// `EntityLivingBase.activePotionsMap` with the attributes the effects
+    /// modify (movement speed, attack damage); health stays in `health`.
+    pub potions: super::living::Living,
     look_at: Option<[f64; 3]>,
     body_counter: i32,
     prev_head_for_body: f32,
@@ -718,6 +721,15 @@ impl Mob {
             path_speed: 0.0,
             move_to: None,
             move_speed: 0.0,
+            potions: {
+                let mut l = super::living::Living::new(super::living::Attributes::new(
+                    kind.max_health() as f64,
+                    kind.speed() as f64,
+                    kind.attack_damage() as f64,
+                ));
+                l.undead = kind.creature() == crate::enchant::Creature::Undead;
+                l
+            },
             look_at: None,
             body_counter: 0,
             prev_head_for_body: yaw,
@@ -1453,7 +1465,7 @@ impl Mob {
                 self.yaw = approach(self.yaw, target, 30.0);
                 // EntityLivingBase.getAIMoveSpeed: 0.1 for the old AI, which
                 // walks with moveForward = movementSpeed.
-                let f = (self.move_speed * self.kind.speed() as f64) as f32;
+                let f = (self.move_speed * self.speed_attr() as f64) as f32;
                 self.ai_speed = if self.kind.old_ai() { 0.1 } else { f };
                 self.move_forward = f;
                 if dy > 0.0 && dx * dx + dz * dz < 1.0 {
@@ -1675,9 +1687,15 @@ impl Mob {
     /// (`Potion.affectEntity`, undead swapped).
     pub fn splash(&mut self, effects: &[crate::potion::Effect], k: f64, from: Option<[f64; 3]>) {
         use crate::potion::{HARM, HEAL};
-        let undead = matches!(self.kind, Kind::Zombie | Kind::Skeleton | Kind::PigZombie);
+        let undead = self.potions.undead;
         for e in effects {
             if !e.potion().instant {
+                // the lasting ones for (int)(k * duration + 0.5), when > 20
+                let d = (k * e.duration as f64 + 0.5) as i32;
+                if d > 20 {
+                    self.potions
+                        .add_effect(crate::potion::Effect::new(e.id, d, e.amplifier));
+                }
                 continue;
             }
             let hurts = (e.id == HARM && !undead) || (e.id == HEAL && undead);
@@ -1692,6 +1710,48 @@ impl Mob {
                 }
             }
         }
+    }
+
+    /// `Potion.performEffect` on a mob.
+    fn perform_effect(&mut self, id: i32, amp: i32) {
+        use crate::potion::*;
+        let undead = self.potions.undead;
+        match id {
+            REGENERATION => {
+                if self.health < self.max_health() {
+                    self.health = (self.health + 1.0).min(self.max_health());
+                }
+            }
+            // DamageSource.magic / wither: past the armour
+            POISON => {
+                if self.health > 1.0 {
+                    self.damage(1.0, None);
+                }
+            }
+            WITHER => {
+                self.damage(1.0, None);
+            }
+            HEAL | HARM => {
+                if (id == HARM) != undead {
+                    self.damage((6 << amp) as f32, None);
+                } else if self.health > 0.0 {
+                    self.health = (self.health + (4 << amp).max(0) as f32).min(self.max_health());
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// The movementSpeed attribute with the potions' modifiers.
+    pub fn speed_attr(&self) -> f32 {
+        self.potions.attrs.movement_speed.value() as f32
+    }
+
+    /// The attackDamage attribute from `base` (the class's value) with the
+    /// potions' modifiers (Strength, Weakness).
+    pub fn attack_attr(&mut self, base: f32) -> f32 {
+        self.potions.attrs.attack_damage.base = base as f64;
+        self.potions.attrs.attack_damage.value() as f32
     }
 
     /// `attackEntityFrom` with a source that bypasses armour.
@@ -1731,13 +1791,13 @@ impl Mob {
             if amount <= self.last_damage {
                 return false;
             }
-            applied = self.armor_calc(amount - self.last_damage, blockable);
+            applied = self.resistance(self.armor_calc(amount - self.last_damage, blockable));
             self.last_damage = amount;
             fresh = false;
         } else {
             self.last_damage = amount;
             self.hurt_resistant = 20;
-            applied = self.armor_calc(amount, blockable);
+            applied = self.resistance(self.armor_calc(amount, blockable));
             self.hurt_time = 10;
             fresh = true;
         }
@@ -1811,6 +1871,17 @@ impl Mob {
         let k = 25 - self.total_armor();
         let f = a * k as f32;
         f / 25.0
+    }
+
+    /// The Resistance part of `applyPotionDamageCalculations`.
+    fn resistance(&self, a: f32) -> f32 {
+        match self.potions.amplifier(crate::potion::RESISTANCE) {
+            Some(amp) => {
+                let k = 25 - (amp + 1) * 5;
+                a * k as f32 / 25.0
+            }
+            None => a,
+        }
     }
 
     /// `EntityLivingBase.onDeath`'s loot: `dropFewItems(recentlyHit > 0,
@@ -2864,10 +2935,12 @@ impl Mobs {
         }
     }
 
-    /// `addPotionEffect` on a mob. Mobs do not keep potion effects yet
-    /// (see HANDOFF); the call is where Bane of Arthropods' slowness lands.
+    /// `addPotionEffect` on a mob.
     pub fn add_effect(&mut self, id: u32, potion: i32, duration: i32, amplifier: i32) {
-        let _ = (id, potion, duration, amplifier);
+        if let Some(m) = self.list.iter_mut().find(|m| m.id == id) {
+            m.potions
+                .add_effect(crate::potion::Effect::new(potion, duration, amplifier));
+        }
     }
 
     /// Mob under the crosshair: nearest hit along the look ray within `reach`.
@@ -3223,6 +3296,14 @@ impl Mobs {
             "DropChances",
             Nbt::List(5, m.drop_chances.iter().map(|&c| Nbt::Float(c)).collect()),
         ));
+        // EntityLivingBase.writeEntityToNBT: only when there are any
+        let fx = m.potions.effects.values();
+        if !fx.is_empty() {
+            v.push((
+                "ActiveEffects",
+                Nbt::List(10, fx.iter().map(|e| e.to_nbt()).collect()),
+            ));
+        }
         compound(v)
     }
 
@@ -3298,6 +3379,11 @@ impl Mobs {
         for (k, c) in t.list("DropChances").iter().take(5).enumerate() {
             if let Nbt::Float(c) = c {
                 m.drop_chances[k] = *c;
+            }
+        }
+        for e in t.list("ActiveEffects") {
+            if let Some(e) = crate::potion::Effect::from_nbt(e) {
+                m.potions.add_effect(e);
             }
         }
         self.list.push(m);
@@ -3569,6 +3655,15 @@ fn tick_mob(
     if m.hurt_resistant > 0 {
         m.hurt_resistant -= 1;
     }
+    // EntityLivingBase.updatePotionEffects
+    if m.health > 0.0 {
+        let mut pending: Vec<(i32, i32)> = Vec::new();
+        m.potions
+            .update_effects(|_, id, amp| pending.push((id, amp)));
+        for (id, amp) in pending {
+            m.perform_effect(id, amp);
+        }
+    }
     if m.recently_hit > 0 {
         m.recently_hit -= 1;
     }
@@ -3614,12 +3709,33 @@ fn tick_mob(
         }
         m.fire -= 1;
     }
-    // undead burn in daylight
-    if day && (m.kind == Kind::Zombie || m.kind == Kind::Skeleton && m.variant != 1) {
+    // EntityZombie / EntitySkeleton.onLivingUpdate: undead burn in
+    // daylight unless something is on their head, which wears instead
+    if day && (m.kind == Kind::Zombie || m.kind == Kind::Skeleton) {
         let (x, y, z) = m.feet_block();
         let f = brightness(w, x, y, z);
         if f > 0.5 && m.rand.next_float() * 30.0 < (f - 0.4) * 2.0 && w.can_see_sky(x, y, z) {
-            m.fire = m.fire.max(160);
+            match m.equipment[4] {
+                Some(mut h) => {
+                    let max = crate::item::max_damage(h.id);
+                    if max > 0 {
+                        h.meta += m.rand.next_int_n(2);
+                        if h.meta >= max {
+                            // renderBrokenItemStack
+                            let p = 0.8 + w.rand.next_float() * 0.4;
+                            out.sounds.push(("random.break", m.pos, 0.8, p));
+                            m.equipment[4] = None;
+                        } else {
+                            m.equipment[4] = Some(h);
+                        }
+                    }
+                }
+                // setFire(8); a wither skeleton is immune to fire
+                None if !(m.kind == Kind::Skeleton && m.variant == 1) => {
+                    m.fire = m.fire.max(160);
+                }
+                None => {}
+            }
         }
     }
     // chickens
@@ -4056,7 +4172,8 @@ fn chase(m: &mut Mob, w: &mut ServerWorld, player: &PlayerInfo, out: &mut Outcom
         } else {
             0
         };
-        let mut amount = m.kind.attack_damage();
+        let base = m.kind.attack_damage();
+        let mut amount = m.attack_attr(base);
         if m.kind == Kind::Skeleton && m.variant == 1 {
             // stone sword, and the wither effect for 10 seconds
             amount = 2.0 + 5.0;

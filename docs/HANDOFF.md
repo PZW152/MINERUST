@@ -669,3 +669,19 @@ MINERUST_BENCH=10 minerust --seed 12345 --no-save --size 1920 1080 --distance 16
   **驗證**：`cargo test --release` 108 項通過；以兩個遊戲目錄的 `options.txt` 截圖比對精緻／流暢（樹葉、暈影、草方塊側面、平面雲）。
   基準 1,016 對 1,050 fps、伺服器 6.6 對 6.1 ms（同時段各一次，雜訊範圍）。
   **注意**：截圖模式讀的是**工作目錄**的 `options.txt`（`main.rs` 的 `game_dir = current_dir()`），要比對設定請用不同的工作目錄。
+- `本次（2026-11-19，生物的藥水效果）`：第 7 節 1a 的「生物沒有藥水效果系統」。
+  - `Mob.potions` 是一份 `Living`（與玩家共用 `Effects`、屬性修飾、`updatePotionEffects`），生命值仍在 `Mob.health`。
+    屬性以職業的基礎值建立（最大生命、移動速度、攻擊力），移動改讀 `Mob::speed_attr()`（`mob.rs` 的舊式移動與 `ai.rs`
+    的 `moveForward`），近戰改讀 `Mob::attack_attr(base)`（力量／虛弱，凋零骷髏的 4 由呼叫端當作基礎值傳入）。
+  - `Mob::perform_effect`：回復、中毒（剩 1 點就停）、凋零、瞬間治療／傷害（不死生物相反）；不死生物不吃回復與中毒
+    （`Living.undead` 取自 `Kind::creature()`）。受傷時套用抗性（`applyPotionDamageCalculations` 的抗性部分）。
+  - 接上的來源：`Mobs::add_effect`（以前是空函式：節肢剋星的緩速）、噴濺藥水的持續效果（`(int)(k * duration + 0.5)`，大於 20 才加），
+    瞬間藥水對不死生物的判斷改用同一個 `undead`。
+  - 客戶端：`MobView.potion`（dataWatcher 7、8）讓客戶端照 `updatePotionEffects` 在生物身上冒 `mobSpell` 粒子。
+  - 存檔：區域檔的 `ActiveEffects`。
+  - **順帶修正（上一輪的錯誤）**：殭屍與骷髏戴著任何頭盔仍會在陽光下著火。原版是頭上有東西就不點火，可耗損的頭盔改為每次
+    `rand.nextInt(2)` 點耐久、用完就碎（`random.break`）；凋零骷髏對火免疫，所以只耗頭盔不點火。
+  **驗證**：新測試 `mobs_keep_potion_effects`（中毒停在 1 點、緩速 II 讓速度屬性變 0.7 倍、不死生物不回血、存檔讀回仍有效果、
+  節肢剋星 V 讓蜘蛛緩速），`cargo test --release` 109 項通過。基準 1,021 對 1,007 fps、伺服器 6.4 對 5.9 ms（雜訊範圍）。
+  **還沒做的**：隱形藥水讓生物不被畫出、生物盔甲上的保護附魔（`applyArmorCalculations` 之後的 `getEnchantmentModifierDamage`）、
+  吸收、生命提升對生物的效果、凋零骷髏與洞穴蜘蛛打其他生物時的效果、蜘蛛在困難模式生成時的藥水效果。

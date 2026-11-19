@@ -3355,6 +3355,14 @@ impl Game {
     /// `EntityLivingBase.onUpdate` of the client's mobs: interpolation,
     /// `updateDistance` and the limb swing from the client's own movement.
     fn tick_mobs(&mut self) {
+        let mut potion_fx: Vec<(&'static str, [f64; 3], [f64; 3])> = Vec::new();
+        self.tick_mobs_inner(&mut potion_fx);
+        for (n, p, c) in potion_fx {
+            self.named_particle(n, p, c);
+        }
+    }
+
+    fn tick_mobs_inner(&mut self, potion_fx: &mut Vec<(&'static str, [f64; 3], [f64; 3])>) {
         let wrap = |a: f32| {
             let mut a = a % 360.0;
             if a >= 180.0 {
@@ -3389,6 +3397,38 @@ impl Game {
                 }
             }
             m.head_yaw = m.net_head;
+            // EntityLivingBase.updatePotionEffects on the client: the
+            // particles from dataWatcher 7 and 8
+            let (c, ambient) = m.potion;
+            if c > 0 {
+                let r = &mut self.particle_rand;
+                let mut show = r.next_boolean();
+                if ambient {
+                    show &= r.next_int_n(5) == 0;
+                }
+                if show {
+                    let (w, h) = ((m.bb[3] - m.bb[0]) as f64, (m.bb[4] - m.bb[1]) as f64);
+                    let p = [
+                        m.pos[0] + (r.next_double() - 0.5) * w,
+                        m.pos[1] + r.next_double() * h,
+                        m.pos[2] + (r.next_double() - 0.5) * w,
+                    ];
+                    let rgb = [
+                        (c >> 16 & 255) as f64 / 255.0,
+                        (c >> 8 & 255) as f64 / 255.0,
+                        (c & 255) as f64 / 255.0,
+                    ];
+                    potion_fx.push((
+                        if ambient {
+                            "mobSpellAmbient"
+                        } else {
+                            "mobSpell"
+                        },
+                        p,
+                        rgb,
+                    ));
+                }
+            }
             // EntityLivingBase.moveEntityWithHeading: limbSwingAmount
             let (dx, dz) = (m.pos[0] - m.prev[0], m.pos[2] - m.prev[2]);
             let f = ((dx * dx + dz * dz).sqrt() as f32 * 4.0).min(1.0);
