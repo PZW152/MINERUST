@@ -9,7 +9,8 @@
 
 ## 2026-11-20
 
-- Run cargo fmt over the last commits
+- Renderer moves to Vulkan 1.3: dynamic rendering instead of render pass and framebuffers, synchronization2 barriers and queue_submit2 (screenshots pixel-identical, same fps)
+- `18842ad` Run cargo fmt over the last commits
 - `5922f5b` Reorganise the docs: PARITY_TODO is the only to-do list, the dev log moves to CHANGELOG, stale and contradictory lines fixed
 - `c57b73a` Mobs push each other and the player (collideWithNearbyEntities)
 - `2a9a022` Client body follows the head for task-AI mobs (EntityBodyHelper); head clamp in the old look helper

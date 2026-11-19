@@ -1,6 +1,6 @@
 # MINERUST
 
-Minecraft 1.7.10 的純 Rust 重寫，渲染使用 Vulkan。
+Minecraft 1.7.10 的純 Rust 重寫，渲染使用 Vulkan 1.3（dynamic rendering、synchronization2），需要支援 Vulkan 1.3 的顯示卡驅動。
 
 以 MCP 反編譯的 1.7.10 原始碼為對照逐函式移植，並實際執行原版類別做逐位元組比對。
 沒有任何 C/C++ 相依：Vulkan 走 `ash`，著色器以 WGSL 撰寫、啟動時用 `naga` 編成 SPIR‑V，不需要 Vulkan SDK。

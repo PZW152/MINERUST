@@ -126,7 +126,7 @@ java -cp "out;$CP" XxxHarness tools/xxx_1710.txt
 | `src/item_tag.rs` | 物品的 NBT（`stackTagCompound`）：以內容去重的全域表，`Stack.tag` 只是編號，所以 `Stack` 仍是 `Copy`；比較編號就是 `areItemStackTagsEqual`（與鍵的順序無關）。附魔、自訂名稱、`RepairCost`、染色、Lore 都在這裡；存檔寫進 Anvil 的 `tag` 與自有格式的 `t<hex>` |
 | `src/entity/` | 實體：生物 AI、`EntityTrackerEntry`（`tracker.rs`）、船、礦車、箭、投擲物、經驗球、玩家物理 |
 | `src/world/` | 世界生成、裝飾、結構、光照、紅石、液體、火、Anvil 存檔、爆炸 |
-| `src/render/` | Vulkan（`vk.rs`）、方塊網格化（`mesher.rs`、`rb.rs` 是 `RenderBlocks` 的機械式移植）、模型（`model*.rs`）、箱子、告示牌、圖集 |
+| `src/render/` | Vulkan 1.3（`vk.rs`：dynamic rendering，沒有 render pass 與 framebuffer 物件；屏障一律用 synchronization2 的 `cmd_pipeline_barrier2`，提交用 `queue_submit2`。新技術只改「怎麼畫」，換掉之後必須用截圖逐像素比對，畫面不能有任何變化）、方塊網格化（`mesher.rs`、`rb.rs` 是 `RenderBlocks` 的機械式移植）、模型（`model*.rs`）、箱子、告示牌、圖集 |
 | `src/render/vk.rs` 的區塊部分 | 以 16×16×16 的渲染區塊（原版 `WorldRenderer`）為單位：`GpuColumn.secs[16]`，頂點放在顯存池 `ArenaBlock`（每塊 20 MB、`DEVICE_LOCAL`），經每幀的暫存緩衝 `mesh_stage` 以 `cmd_copy_buffer` 上傳（`flush_uploads`），舊範圍延後 3 幀回收 |
 | `src/gui.rs`、`src/screens.rs` | `FontRenderer` 移植、HUD、按鈕、通用繪圖 |
 | `src/settings.rs`、`src/lang.rs`、`src/assets.rs` | `GameSettings` / `options.txt`、語言檔、啟動器資源索引 |

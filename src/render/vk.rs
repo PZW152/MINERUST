@@ -503,6 +503,8 @@ const STAGE_SIZE: u64 = 1 << 16;
 const FRAMES: usize = 2;
 const DYN_SIZE: u64 = 4096;
 
+const DEPTH_FORMAT: vk::Format = vk::Format::D32_SFLOAT;
+
 pub struct Renderer {
     _entry: ash::Entry,
     instance: ash::Instance,
@@ -517,9 +519,7 @@ pub struct Renderer {
     pub extent: vk::Extent2D,
     images: Vec<vk::Image>,
     views: Vec<vk::ImageView>,
-    framebuffers: Vec<vk::Framebuffer>,
     depth: (vk::Image, vk::DeviceMemory, vk::ImageView),
-    render_pass: vk::RenderPass,
     layout: vk::PipelineLayout,
     set_layout: vk::DescriptorSetLayout,
     desc_pool: vk::DescriptorPool,
@@ -662,7 +662,7 @@ impl Renderer {
             let exts = ash_window::enumerate_required_extensions(dh).map_err(|e| e.to_string())?;
             let app = vk::ApplicationInfo::default()
                 .application_name(c"Minecraft 1.7.10")
-                .api_version(vk::API_VERSION_1_0);
+                .api_version(vk::API_VERSION_1_3);
             // Optional Khronos validation (`--validate`): every message it
             // reports is counted and printed.
             let mut exts: Vec<*const std::ffi::c_char> = exts.to_vec();
@@ -723,6 +723,11 @@ impl Renderer {
                 .map_err(|e| e.to_string())?
             {
                 let props = instance.get_physical_device_properties(pd);
+                // Vulkan 1.3: dynamic rendering and synchronization2 are core
+                // and required by every 1.3 driver.
+                if props.api_version < vk::API_VERSION_1_3 {
+                    continue;
+                }
                 for (i, q) in instance
                     .get_physical_device_queue_family_properties(pd)
                     .iter()
@@ -745,7 +750,9 @@ impl Renderer {
                     }
                 }
             }
-            let (pdev, qf, _) = chosen.ok_or("no Vulkan device can present to this window")?;
+            let (pdev, qf, _) = chosen.ok_or(
+                "no Vulkan 1.3 device can present to this window (update the graphics driver)",
+            )?;
             let props = instance.get_physical_device_properties(pdev);
             let device_name = CStr::from_ptr(props.device_name.as_ptr())
                 .to_string_lossy()
@@ -758,13 +765,17 @@ impl Renderer {
                 .queue_family_index(qf)
                 .queue_priorities(&prio)];
             let dev_exts = [ash::khr::swapchain::NAME.as_ptr()];
+            let mut v13 = vk::PhysicalDeviceVulkan13Features::default()
+                .dynamic_rendering(true)
+                .synchronization2(true);
             let device = instance
                 .create_device(
                     pdev,
                     &vk::DeviceCreateInfo::default()
                         .queue_create_infos(&qci)
                         .enabled_extension_names(&dev_exts)
-                        .enabled_features(&enabled),
+                        .enabled_features(&enabled)
+                        .push_next(&mut v13),
                     None,
                 )
                 .map_err(|e| format!("create_device: {e}"))?;
@@ -790,63 +801,9 @@ impl Renderer {
                 })
                 .unwrap_or(formats[0]);
 
-            // Render pass
-            let atts = [
-                vk::AttachmentDescription::default()
-                    .format(format.format)
-                    .samples(vk::SampleCountFlags::TYPE_1)
-                    .load_op(vk::AttachmentLoadOp::CLEAR)
-                    .store_op(vk::AttachmentStoreOp::STORE)
-                    .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
-                    .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
-                    .initial_layout(vk::ImageLayout::UNDEFINED)
-                    .final_layout(vk::ImageLayout::PRESENT_SRC_KHR),
-                vk::AttachmentDescription::default()
-                    .format(vk::Format::D32_SFLOAT)
-                    .samples(vk::SampleCountFlags::TYPE_1)
-                    .load_op(vk::AttachmentLoadOp::CLEAR)
-                    .store_op(vk::AttachmentStoreOp::DONT_CARE)
-                    .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
-                    .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
-                    .initial_layout(vk::ImageLayout::UNDEFINED)
-                    .final_layout(vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL),
-            ];
-            let color_ref = [vk::AttachmentReference {
-                attachment: 0,
-                layout: vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
-            }];
-            let depth_ref = vk::AttachmentReference {
-                attachment: 1,
-                layout: vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
-            };
-            let subpasses = [vk::SubpassDescription::default()
-                .pipeline_bind_point(vk::PipelineBindPoint::GRAPHICS)
-                .color_attachments(&color_ref)
-                .depth_stencil_attachment(&depth_ref)];
-            let deps = [vk::SubpassDependency::default()
-                .src_subpass(vk::SUBPASS_EXTERNAL)
-                .dst_subpass(0)
-                .src_stage_mask(
-                    vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
-                        | vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS,
-                )
-                .dst_stage_mask(
-                    vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
-                        | vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS,
-                )
-                .dst_access_mask(
-                    vk::AccessFlags::COLOR_ATTACHMENT_WRITE
-                        | vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE,
-                )];
-            let render_pass = device
-                .create_render_pass(
-                    &vk::RenderPassCreateInfo::default()
-                        .attachments(&atts)
-                        .subpasses(&subpasses)
-                        .dependencies(&deps),
-                    None,
-                )
-                .map_err(|e| e.to_string())?;
+            // Vulkan 1.3 dynamic rendering: no render pass or framebuffer objects.
+            // Pipelines only need the attachment formats.
+            let color_formats = [format.format];
 
             // Descriptors
             let bindings = [
@@ -1140,7 +1097,11 @@ impl Renderer {
                     vk::DynamicState::LINE_WIDTH,
                 ];
                 let dy = vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&dyn_states);
+                let mut rendering = vk::PipelineRenderingCreateInfo::default()
+                    .color_attachment_formats(&color_formats)
+                    .depth_attachment_format(DEPTH_FORMAT);
                 let info = vk::GraphicsPipelineCreateInfo::default()
+                    .push_next(&mut rendering)
                     .stages(&stages)
                     .vertex_input_state(&vi)
                     .input_assembly_state(&ia)
@@ -1150,9 +1111,7 @@ impl Renderer {
                     .depth_stencil_state(&ds)
                     .color_blend_state(&cb)
                     .dynamic_state(&dy)
-                    .layout(layout)
-                    .render_pass(render_pass)
-                    .subpass(0);
+                    .layout(layout);
                 device
                     .create_graphics_pipelines(vk::PipelineCache::null(), &[info], None)
                     .expect("pipeline creation failed")[0]
@@ -1215,13 +1174,11 @@ impl Renderer {
                 extent: vk::Extent2D::default(),
                 images: Vec::new(),
                 views: Vec::new(),
-                framebuffers: Vec::new(),
                 depth: (
                     vk::Image::null(),
                     vk::DeviceMemory::null(),
                     vk::ImageView::null(),
                 ),
-                render_pass,
                 layout,
                 set_layout,
                 desc_pool,
@@ -1529,22 +1486,21 @@ impl Renderer {
             };
             let dev = &self.device;
             self.one_shot(|cmd| {
-                let b1 = [vk::ImageMemoryBarrier::default()
+                let b1 = [vk::ImageMemoryBarrier2::default()
                     .old_layout(vk::ImageLayout::UNDEFINED)
                     .new_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
                     .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
                     .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
                     .image(image)
                     .subresource_range(range)
-                    .dst_access_mask(vk::AccessFlags::TRANSFER_WRITE)];
-                dev.cmd_pipeline_barrier(
+                    .dst_access_mask(vk::AccessFlags2::TRANSFER_WRITE)];
+                dev.cmd_pipeline_barrier2(
                     cmd,
-                    vk::PipelineStageFlags::TOP_OF_PIPE,
-                    vk::PipelineStageFlags::TRANSFER,
-                    vk::DependencyFlags::empty(),
-                    &[],
-                    &[],
-                    &b1,
+                    &vk::DependencyInfo::default().image_memory_barriers(&with_stages(
+                        b1,
+                        vk::PipelineStageFlags2::NONE,
+                        vk::PipelineStageFlags2::TRANSFER,
+                    )),
                 );
                 let regions: Vec<vk::BufferImageCopy> = (0..MIP_LEVELS)
                     .map(|l| {
@@ -1570,23 +1526,22 @@ impl Renderer {
                     vk::ImageLayout::TRANSFER_DST_OPTIMAL,
                     &regions,
                 );
-                let b2 = [vk::ImageMemoryBarrier::default()
+                let b2 = [vk::ImageMemoryBarrier2::default()
                     .old_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
                     .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
                     .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
                     .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
                     .image(image)
                     .subresource_range(range)
-                    .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
-                    .dst_access_mask(vk::AccessFlags::SHADER_READ)];
-                dev.cmd_pipeline_barrier(
+                    .src_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
+                    .dst_access_mask(vk::AccessFlags2::SHADER_READ)];
+                dev.cmd_pipeline_barrier2(
                     cmd,
-                    vk::PipelineStageFlags::TRANSFER,
-                    vk::PipelineStageFlags::FRAGMENT_SHADER,
-                    vk::DependencyFlags::empty(),
-                    &[],
-                    &[],
-                    &b2,
+                    &vk::DependencyInfo::default().image_memory_barriers(&with_stages(
+                        b2,
+                        vk::PipelineStageFlags2::TRANSFER,
+                        vk::PipelineStageFlags2::FRAGMENT_SHADER,
+                    )),
                 );
             });
             self.device.destroy_buffer(sb, None);
@@ -1642,23 +1597,22 @@ impl Renderer {
             let image = self.ui_tex.0;
             let dev = &self.device;
             self.one_shot(|cmd| {
-                let b1 = [vk::ImageMemoryBarrier::default()
+                let b1 = [vk::ImageMemoryBarrier2::default()
                     .old_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
                     .new_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
                     .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
                     .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
                     .image(image)
                     .subresource_range(range)
-                    .src_access_mask(vk::AccessFlags::SHADER_READ)
-                    .dst_access_mask(vk::AccessFlags::TRANSFER_WRITE)];
-                dev.cmd_pipeline_barrier(
+                    .src_access_mask(vk::AccessFlags2::SHADER_READ)
+                    .dst_access_mask(vk::AccessFlags2::TRANSFER_WRITE)];
+                dev.cmd_pipeline_barrier2(
                     cmd,
-                    vk::PipelineStageFlags::FRAGMENT_SHADER,
-                    vk::PipelineStageFlags::TRANSFER,
-                    vk::DependencyFlags::empty(),
-                    &[],
-                    &[],
-                    &b1,
+                    &vk::DependencyInfo::default().image_memory_barriers(&with_stages(
+                        b1,
+                        vk::PipelineStageFlags2::FRAGMENT_SHADER,
+                        vk::PipelineStageFlags2::TRANSFER,
+                    )),
                 );
                 let region = [vk::BufferImageCopy::default()
                     .image_subresource(vk::ImageSubresourceLayers {
@@ -1684,23 +1638,22 @@ impl Renderer {
                     vk::ImageLayout::TRANSFER_DST_OPTIMAL,
                     &region,
                 );
-                let b2 = [vk::ImageMemoryBarrier::default()
+                let b2 = [vk::ImageMemoryBarrier2::default()
                     .old_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
                     .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
                     .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
                     .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
                     .image(image)
                     .subresource_range(range)
-                    .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
-                    .dst_access_mask(vk::AccessFlags::SHADER_READ)];
-                dev.cmd_pipeline_barrier(
+                    .src_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
+                    .dst_access_mask(vk::AccessFlags2::SHADER_READ)];
+                dev.cmd_pipeline_barrier2(
                     cmd,
-                    vk::PipelineStageFlags::TRANSFER,
-                    vk::PipelineStageFlags::FRAGMENT_SHADER,
-                    vk::DependencyFlags::empty(),
-                    &[],
-                    &[],
-                    &b2,
+                    &vk::DependencyInfo::default().image_memory_barriers(&with_stages(
+                        b2,
+                        vk::PipelineStageFlags2::TRANSFER,
+                        vk::PipelineStageFlags2::FRAGMENT_SHADER,
+                    )),
                 );
             });
             self.device.destroy_buffer(sb, None);
@@ -1758,22 +1711,21 @@ impl Renderer {
             };
             let dev = &self.device;
             self.one_shot(|cmd| {
-                let b1 = [vk::ImageMemoryBarrier::default()
+                let b1 = [vk::ImageMemoryBarrier2::default()
                     .old_layout(vk::ImageLayout::UNDEFINED)
                     .new_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
                     .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
                     .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
                     .image(image)
                     .subresource_range(range)
-                    .dst_access_mask(vk::AccessFlags::TRANSFER_WRITE)];
-                dev.cmd_pipeline_barrier(
+                    .dst_access_mask(vk::AccessFlags2::TRANSFER_WRITE)];
+                dev.cmd_pipeline_barrier2(
                     cmd,
-                    vk::PipelineStageFlags::TOP_OF_PIPE,
-                    vk::PipelineStageFlags::TRANSFER,
-                    vk::DependencyFlags::empty(),
-                    &[],
-                    &[],
-                    &b1,
+                    &vk::DependencyInfo::default().image_memory_barriers(&with_stages(
+                        b1,
+                        vk::PipelineStageFlags2::NONE,
+                        vk::PipelineStageFlags2::TRANSFER,
+                    )),
                 );
                 let region = [vk::BufferImageCopy::default()
                     .image_subresource(vk::ImageSubresourceLayers {
@@ -1794,23 +1746,22 @@ impl Renderer {
                     vk::ImageLayout::TRANSFER_DST_OPTIMAL,
                     &region,
                 );
-                let b2 = [vk::ImageMemoryBarrier::default()
+                let b2 = [vk::ImageMemoryBarrier2::default()
                     .old_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
                     .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
                     .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
                     .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
                     .image(image)
                     .subresource_range(range)
-                    .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
-                    .dst_access_mask(vk::AccessFlags::SHADER_READ)];
-                dev.cmd_pipeline_barrier(
+                    .src_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
+                    .dst_access_mask(vk::AccessFlags2::SHADER_READ)];
+                dev.cmd_pipeline_barrier2(
                     cmd,
-                    vk::PipelineStageFlags::TRANSFER,
-                    vk::PipelineStageFlags::FRAGMENT_SHADER,
-                    vk::DependencyFlags::empty(),
-                    &[],
-                    &[],
-                    &b2,
+                    &vk::DependencyInfo::default().image_memory_barriers(&with_stages(
+                        b2,
+                        vk::PipelineStageFlags2::TRANSFER,
+                        vk::PipelineStageFlags2::FRAGMENT_SHADER,
+                    )),
                 );
             });
             self.device.destroy_buffer(sb, None);
@@ -1947,13 +1898,9 @@ impl Renderer {
 
     fn destroy_swapchain_views(&mut self) {
         unsafe {
-            for &f in &self.framebuffers {
-                self.device.destroy_framebuffer(f, None);
-            }
             for &v in &self.views {
                 self.device.destroy_image_view(v, None);
             }
-            self.framebuffers.clear();
             self.views.clear();
             if self.depth.0 != vk::Image::null() {
                 self.device.destroy_image_view(self.depth.2, None);
@@ -2036,7 +1983,7 @@ impl Renderer {
             // Depth
             let dinfo = vk::ImageCreateInfo::default()
                 .image_type(vk::ImageType::TYPE_2D)
-                .format(vk::Format::D32_SFLOAT)
+                .format(DEPTH_FORMAT)
                 .extent(vk::Extent3D {
                     width: extent.width,
                     height: extent.height,
@@ -2075,7 +2022,7 @@ impl Renderer {
                     &vk::ImageViewCreateInfo::default()
                         .image(dimg)
                         .view_type(vk::ImageViewType::TYPE_2D)
-                        .format(vk::Format::D32_SFLOAT)
+                        .format(DEPTH_FORMAT)
                         .subresource_range(drange),
                     None,
                 )
@@ -2100,21 +2047,7 @@ impl Renderer {
                         None,
                     )
                     .unwrap();
-                let atts = [v, dview];
-                let fb = self
-                    .device
-                    .create_framebuffer(
-                        &vk::FramebufferCreateInfo::default()
-                            .render_pass(self.render_pass)
-                            .attachments(&atts)
-                            .width(extent.width)
-                            .height(extent.height)
-                            .layers(1),
-                        None,
-                    )
-                    .unwrap();
                 self.views.push(v);
-                self.framebuffers.push(fb);
             }
             self.needs_recreate = false;
         }
@@ -2315,17 +2248,16 @@ impl Renderer {
         }
         if copied {
             self.ensure_indices(max_quads);
-            let mb = [vk::MemoryBarrier::default()
-                .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
-                .dst_access_mask(vk::AccessFlags::VERTEX_ATTRIBUTE_READ)];
-            self.device.cmd_pipeline_barrier(
+            let mb = [vk::MemoryBarrier2::default()
+                .src_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
+                .dst_access_mask(vk::AccessFlags2::VERTEX_ATTRIBUTE_READ)];
+            self.device.cmd_pipeline_barrier2(
                 cmd,
-                vk::PipelineStageFlags::TRANSFER,
-                vk::PipelineStageFlags::VERTEX_INPUT,
-                vk::DependencyFlags::empty(),
-                &mb,
-                &[],
-                &[],
+                &vk::DependencyInfo::default().memory_barriers(&with_stages(
+                    mb,
+                    vk::PipelineStageFlags2::TRANSFER,
+                    vk::PipelineStageFlags2::VERTEX_INPUT,
+                )),
             );
         }
     }
@@ -2674,7 +2606,7 @@ impl Renderer {
                     layer_count: 1,
                 };
                 let barrier = |old, new, sa, da| {
-                    [vk::ImageMemoryBarrier::default()
+                    [vk::ImageMemoryBarrier2::default()
                         .old_layout(old)
                         .new_layout(new)
                         .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
@@ -2684,19 +2616,18 @@ impl Renderer {
                         .src_access_mask(sa)
                         .dst_access_mask(da)]
                 };
-                dev.cmd_pipeline_barrier(
+                dev.cmd_pipeline_barrier2(
                     cmd,
-                    vk::PipelineStageFlags::FRAGMENT_SHADER,
-                    vk::PipelineStageFlags::TRANSFER,
-                    vk::DependencyFlags::empty(),
-                    &[],
-                    &[],
-                    &barrier(
-                        vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-                        vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                        vk::AccessFlags::SHADER_READ,
-                        vk::AccessFlags::TRANSFER_WRITE,
-                    ),
+                    &vk::DependencyInfo::default().image_memory_barriers(&with_stages(
+                        barrier(
+                            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                            vk::AccessFlags2::SHADER_READ,
+                            vk::AccessFlags2::TRANSFER_WRITE,
+                        ),
+                        vk::PipelineStageFlags2::FRAGMENT_SHADER,
+                        vk::PipelineStageFlags2::TRANSFER,
+                    )),
                 );
                 dev.cmd_copy_buffer_to_image(
                     cmd,
@@ -2705,19 +2636,18 @@ impl Renderer {
                     vk::ImageLayout::TRANSFER_DST_OPTIMAL,
                     &regions,
                 );
-                dev.cmd_pipeline_barrier(
+                dev.cmd_pipeline_barrier2(
                     cmd,
-                    vk::PipelineStageFlags::TRANSFER,
-                    vk::PipelineStageFlags::FRAGMENT_SHADER,
-                    vk::DependencyFlags::empty(),
-                    &[],
-                    &[],
-                    &barrier(
-                        vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                        vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-                        vk::AccessFlags::TRANSFER_WRITE,
-                        vk::AccessFlags::SHADER_READ,
-                    ),
+                    &vk::DependencyInfo::default().image_memory_barriers(&with_stages(
+                        barrier(
+                            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                            vk::AccessFlags2::TRANSFER_WRITE,
+                            vk::AccessFlags2::SHADER_READ,
+                        ),
+                        vk::PipelineStageFlags2::TRANSFER,
+                        vk::PipelineStageFlags2::FRAGMENT_SHADER,
+                    )),
                 );
             }
             let fc = frame.globals.fog_color;
@@ -2738,14 +2668,67 @@ impl Renderer {
                 offset: vk::Offset2D { x: 0, y: 0 },
                 extent: self.extent,
             };
-            dev.cmd_begin_render_pass(
+            // Vulkan 1.3 dynamic rendering. The swapchain image and the shared
+            // depth buffer are cleared every frame, so their old contents are
+            // discarded (UNDEFINED); the depth barrier also orders this frame's
+            // depth writes after the previous frame's.
+            let color_range = vk::ImageSubresourceRange {
+                aspect_mask: vk::ImageAspectFlags::COLOR,
+                base_mip_level: 0,
+                level_count: 1,
+                base_array_layer: 0,
+                layer_count: 1,
+            };
+            let depth_tests = vk::PipelineStageFlags2::EARLY_FRAGMENT_TESTS
+                | vk::PipelineStageFlags2::LATE_FRAGMENT_TESTS;
+            dev.cmd_pipeline_barrier2(
                 cmd,
-                &vk::RenderPassBeginInfo::default()
-                    .render_pass(self.render_pass)
-                    .framebuffer(self.framebuffers[image_index as usize])
+                &vk::DependencyInfo::default().image_memory_barriers(&[
+                    vk::ImageMemoryBarrier2::default()
+                        .src_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
+                        .src_access_mask(vk::AccessFlags2::NONE)
+                        .dst_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
+                        .dst_access_mask(vk::AccessFlags2::COLOR_ATTACHMENT_WRITE)
+                        .old_layout(vk::ImageLayout::UNDEFINED)
+                        .new_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+                        .image(self.images[image_index as usize])
+                        .subresource_range(color_range),
+                    vk::ImageMemoryBarrier2::default()
+                        .src_stage_mask(depth_tests)
+                        .src_access_mask(vk::AccessFlags2::DEPTH_STENCIL_ATTACHMENT_WRITE)
+                        .dst_stage_mask(depth_tests)
+                        .dst_access_mask(
+                            vk::AccessFlags2::DEPTH_STENCIL_ATTACHMENT_READ
+                                | vk::AccessFlags2::DEPTH_STENCIL_ATTACHMENT_WRITE,
+                        )
+                        .old_layout(vk::ImageLayout::UNDEFINED)
+                        .new_layout(vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL)
+                        .image(self.depth.0)
+                        .subresource_range(vk::ImageSubresourceRange {
+                            aspect_mask: vk::ImageAspectFlags::DEPTH,
+                            ..color_range
+                        }),
+                ]),
+            );
+            let color_att = [vk::RenderingAttachmentInfo::default()
+                .image_view(self.views[image_index as usize])
+                .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+                .load_op(vk::AttachmentLoadOp::CLEAR)
+                .store_op(vk::AttachmentStoreOp::STORE)
+                .clear_value(clears[0])];
+            let depth_att = vk::RenderingAttachmentInfo::default()
+                .image_view(self.depth.2)
+                .image_layout(vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL)
+                .load_op(vk::AttachmentLoadOp::CLEAR)
+                .store_op(vk::AttachmentStoreOp::DONT_CARE)
+                .clear_value(clears[1]);
+            dev.cmd_begin_rendering(
+                cmd,
+                &vk::RenderingInfo::default()
                     .render_area(area)
-                    .clear_values(&clears),
-                vk::SubpassContents::INLINE,
+                    .layer_count(1)
+                    .color_attachments(&color_att)
+                    .depth_attachment(&depth_att),
             );
             dev.cmd_set_viewport(
                 cmd,
@@ -3036,7 +3019,22 @@ impl Renderer {
             if frame.crosshair {
                 dev.cmd_draw(cmd, cross_count, 1, cross_first, 0);
             }
-            dev.cmd_end_render_pass(cmd);
+            dev.cmd_end_rendering(cmd);
+            // Hand the finished image to the presentation engine.
+            dev.cmd_pipeline_barrier2(
+                cmd,
+                &vk::DependencyInfo::default().image_memory_barriers(&[
+                    vk::ImageMemoryBarrier2::default()
+                        .src_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
+                        .src_access_mask(vk::AccessFlags2::COLOR_ATTACHMENT_WRITE)
+                        .dst_stage_mask(vk::PipelineStageFlags2::NONE)
+                        .dst_access_mask(vk::AccessFlags2::NONE)
+                        .old_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+                        .new_layout(vk::ImageLayout::PRESENT_SRC_KHR)
+                        .image(self.images[image_index as usize])
+                        .subresource_range(color_range),
+                ]),
+            );
 
             // Optional screenshot readback.
             let mut shot: Option<(vk::Buffer, vk::DeviceMemory)> = None;
@@ -3054,7 +3052,7 @@ impl Renderer {
                     layer_count: 1,
                 };
                 let bar = |old, new, sa, da| {
-                    [vk::ImageMemoryBarrier::default()
+                    [vk::ImageMemoryBarrier2::default()
                         .old_layout(old)
                         .new_layout(new)
                         .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
@@ -3064,19 +3062,18 @@ impl Renderer {
                         .src_access_mask(sa)
                         .dst_access_mask(da)]
                 };
-                dev.cmd_pipeline_barrier(
+                dev.cmd_pipeline_barrier2(
                     cmd,
-                    vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
-                    vk::PipelineStageFlags::TRANSFER,
-                    vk::DependencyFlags::empty(),
-                    &[],
-                    &[],
-                    &bar(
-                        vk::ImageLayout::PRESENT_SRC_KHR,
-                        vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
-                        vk::AccessFlags::COLOR_ATTACHMENT_WRITE,
-                        vk::AccessFlags::TRANSFER_READ,
-                    ),
+                    &vk::DependencyInfo::default().image_memory_barriers(&with_stages(
+                        bar(
+                            vk::ImageLayout::PRESENT_SRC_KHR,
+                            vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+                            vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
+                            vk::AccessFlags2::TRANSFER_READ,
+                        ),
+                        vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
+                        vk::PipelineStageFlags2::TRANSFER,
+                    )),
                 );
                 let region = [vk::BufferImageCopy::default()
                     .image_subresource(vk::ImageSubresourceLayers {
@@ -3097,38 +3094,40 @@ impl Renderer {
                     b,
                     &region,
                 );
-                dev.cmd_pipeline_barrier(
+                dev.cmd_pipeline_barrier2(
                     cmd,
-                    vk::PipelineStageFlags::TRANSFER,
-                    vk::PipelineStageFlags::BOTTOM_OF_PIPE,
-                    vk::DependencyFlags::empty(),
-                    &[],
-                    &[],
-                    &bar(
-                        vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
-                        vk::ImageLayout::PRESENT_SRC_KHR,
-                        vk::AccessFlags::TRANSFER_READ,
-                        vk::AccessFlags::empty(),
-                    ),
+                    &vk::DependencyInfo::default().image_memory_barriers(&with_stages(
+                        bar(
+                            vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+                            vk::ImageLayout::PRESENT_SRC_KHR,
+                            vk::AccessFlags2::TRANSFER_READ,
+                            vk::AccessFlags2::empty(),
+                        ),
+                        vk::PipelineStageFlags2::TRANSFER,
+                        vk::PipelineStageFlags2::NONE,
+                    )),
                 );
                 shot = Some((b, mem));
             }
             dev.end_command_buffer(cmd).unwrap();
 
-            let wait = [image_available];
-            let signal = [render_finished];
-            let cmds = [cmd];
-            let wait_stages = [vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT];
-            dev.queue_submit(
+            let wait = [vk::SemaphoreSubmitInfo::default()
+                .semaphore(image_available)
+                .stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)];
+            let signal_info = [vk::SemaphoreSubmitInfo::default()
+                .semaphore(render_finished)
+                .stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)];
+            let cmds = [vk::CommandBufferSubmitInfo::default().command_buffer(cmd)];
+            dev.queue_submit2(
                 self.queue,
-                &[vk::SubmitInfo::default()
-                    .wait_semaphores(&wait)
-                    .wait_dst_stage_mask(&wait_stages)
-                    .command_buffers(&cmds)
-                    .signal_semaphores(&signal)],
+                &[vk::SubmitInfo2::default()
+                    .wait_semaphore_infos(&wait)
+                    .command_buffer_infos(&cmds)
+                    .signal_semaphore_infos(&signal_info)],
                 fence,
             )
             .unwrap();
+            let signal = [render_finished];
 
             if let (Some((b, mem)), Some(path)) = (shot, frame.screenshot.as_ref()) {
                 dev.wait_for_fences(&[fence], true, u64::MAX).unwrap();
@@ -3182,6 +3181,29 @@ impl Renderer {
             true
         }
     }
+}
+
+/// Barriers built by the recording code carry layouts and access masks; this
+/// adds the synchronization2 stage masks shared by one `cmd_pipeline_barrier2`.
+trait StageMasks: Sized {
+    fn stages(self, src: vk::PipelineStageFlags2, dst: vk::PipelineStageFlags2) -> Self;
+}
+impl StageMasks for vk::ImageMemoryBarrier2<'_> {
+    fn stages(self, src: vk::PipelineStageFlags2, dst: vk::PipelineStageFlags2) -> Self {
+        self.src_stage_mask(src).dst_stage_mask(dst)
+    }
+}
+impl StageMasks for vk::MemoryBarrier2<'_> {
+    fn stages(self, src: vk::PipelineStageFlags2, dst: vk::PipelineStageFlags2) -> Self {
+        self.src_stage_mask(src).dst_stage_mask(dst)
+    }
+}
+fn with_stages<T: StageMasks, const N: usize>(
+    barriers: [T; N],
+    src: vk::PipelineStageFlags2,
+    dst: vk::PipelineStageFlags2,
+) -> [T; N] {
+    barriers.map(|b| b.stages(src, dst))
 }
 
 fn find_mem_type(
@@ -3273,7 +3295,6 @@ impl Drop for Renderer {
             self.device
                 .destroy_descriptor_set_layout(self.set_layout, None);
             self.device.destroy_descriptor_pool(self.desc_pool, None);
-            self.device.destroy_render_pass(self.render_pass, None);
             self.device.destroy_command_pool(self.pool, None);
             if self.swapchain != vk::SwapchainKHR::null() {
                 self.swap_loader.destroy_swapchain(self.swapchain, None);
