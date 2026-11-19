@@ -1005,9 +1005,10 @@ impl Renderer {
                             || kind == 11
                             || kind == 12,
                     )
-                    .depth_write_enable(
-                        kind == 1 || kind == 2 || kind == 7 || kind == 11 || kind == 12,
-                    )
+                    // EntityRenderer.renderWorld draws the translucent pass
+                    // (water, ice, stained glass) with glDepthMask(false), so
+                    // translucent faces never hide one another and always blend
+                    .depth_write_enable(kind == 1 || kind == 7 || kind == 11 || kind == 12)
                     .depth_compare_op(vk::CompareOp::LESS_OR_EQUAL);
                 let mut att = vk::PipelineColorBlendAttachmentState::default()
                     .color_write_mask(vk::ColorComponentFlags::RGBA);

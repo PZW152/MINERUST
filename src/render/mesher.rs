@@ -497,10 +497,12 @@ pub fn build(chunks: &[MeshChunk; 9], atlas: &Atlas, noise: &BiomeNoise, mask: u
         // ExtendedBlockStorage that was never created holds only air
         if chunks[4].sections & (1 << sy) != 0 {
             let (y0, y1) = ((sy << 4) as i32, ((sy << 4) + 16).min(r.top) as i32);
-            for lx in 0..16i32 {
+            // WorldRenderer.updateRenderer: y, then z, then x; the order the
+            // translucent faces are drawn (and blended, depth writes off) in
+            for y in y0..y1 {
                 for lz in 0..16i32 {
-                    let (x, z) = (lx + 16, lz + 16);
-                    for y in y0..y1 {
+                    for lx in 0..16i32 {
+                        let (x, z) = (lx + 16, lz + 16);
                         let id = r.blocks[idx(x, y, z)];
                         if id == 0 {
                             continue;
