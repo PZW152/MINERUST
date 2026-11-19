@@ -81,6 +81,13 @@ pub struct Particles {
     list: [std::collections::VecDeque<Particle>; 3],
     /// The layer of the particle added last.
     last: usize,
+    /// While set, every particle added goes through `gate` first: the
+    /// ones the game spawns with `World.spawnParticle`.
+    pub gated: bool,
+    /// `gameSettings.particleSetting` (0 all, 1 decreased, 2 minimal)
+    pub setting: i32,
+    /// `renderViewEntity`'s position, for the 16-block limit
+    pub camera: [f64; 3],
     r: JavaRandom,
     /// `EntityHugeExplodeFX` emitters: position and remaining ticks.
     huge: Vec<([f64; 3], i32)>,
@@ -91,6 +98,9 @@ impl Default for Particles {
         Particles {
             list: Default::default(),
             last: 0,
+            gated: false,
+            setting: 0,
+            camera: [0.0; 3],
             r: JavaRandom::new(0x5041525449),
             huge: Vec::new(),
         }
@@ -145,12 +155,42 @@ impl Particles {
         p
     }
 
+    /// `RenderGlobal.doSpawnParticle` (past the explosions it always
+    /// makes): a decreased setting counts as minimal one time in three,
+    /// minimal makes none, and none farther than 16 blocks from the camera.
+    fn gate(&mut self, pos: [f64; 3]) -> bool {
+        let mut s = self.setting;
+        if s == 1 && self.r.next_int_n(3) == 0 {
+            s = 2;
+        }
+        let d = [
+            self.camera[0] - pos[0],
+            self.camera[1] - pos[1],
+            self.camera[2] - pos[2],
+        ];
+        if d[0] * d[0] + d[1] * d[1] + d[2] * d[2] > 16.0 * 16.0 {
+            return false;
+        }
+        s <= 1
+    }
+
+    /// Runs `f` with every particle it adds going through `gate`.
+    pub fn spawned(&mut self, f: impl FnOnce(&mut Particles)) {
+        let was = self.gated;
+        self.gated = true;
+        f(self);
+        self.gated = was;
+    }
+
     fn last_mut(&mut self) -> Option<&mut Particle> {
         self.list[self.last].back_mut()
     }
 
     /// `EffectRenderer.addEffect`: a full layer loses its oldest particle.
     fn add(&mut self, p: Particle) {
+        if self.gated && !self.gate(p.pos) {
+            return;
+        }
         let l = p.layer();
         if self.list[l].len() >= 4000 {
             self.list[l].pop_front();
@@ -834,7 +874,16 @@ impl Particles {
 
     /// `Block.randomDisplayTick` for the blocks around the player
     /// (`WorldClient.doVoidFogParticles`: 1000 random positions within 16).
+    /// `WorldClient.doVoidFogParticles`: the blocks' `randomDisplayTick`,
+    /// whose particles all go through `World.spawnParticle`.
     pub fn display_ticks(&mut self, w: &dyn BlockView, eye: [f64; 3]) {
+        let was = self.gated;
+        self.gated = true;
+        self.display_ticks_inner(w, eye);
+        self.gated = was;
+    }
+
+    fn display_ticks_inner(&mut self, w: &dyn BlockView, eye: [f64; 3]) {
         let (px, py, pz) = (
             math::floor_double(eye[0]),
             math::floor_double(eye[1]),
@@ -972,5 +1021,36 @@ fn move_particle(p: &mut Particle, w: &dyn BlockView) {
     }
     if oz != dz {
         p.motion[2] = 0.0;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `RenderGlobal.doSpawnParticle`: all, decreased (about two in three),
+    /// minimal (none), and nothing past 16 blocks; particles added
+    /// directly (block debris) are never held back.
+    #[test]
+    fn particle_setting_and_distance() {
+        let mut p = Particles::default();
+        let count = |p: &mut Particles, setting: i32, at: [f64; 3]| {
+            p.list = Default::default();
+            p.setting = setting;
+            for _ in 0..300 {
+                p.spawned(|ps| ps.smoke(at, [0.0; 3], false));
+            }
+            p.count()
+        };
+        let near = [3.0, 0.0, 4.0];
+        assert_eq!(count(&mut p, 0, near), 300);
+        let some = count(&mut p, 1, near);
+        assert!((170..240).contains(&some), "decreased: {some}");
+        assert_eq!(count(&mut p, 2, near), 0);
+        assert_eq!(count(&mut p, 0, [17.0, 0.0, 0.0]), 0);
+        p.list = Default::default();
+        p.setting = 2;
+        p.smoke(near, [0.0; 3], false);
+        assert_eq!(p.count(), 1, "not spawned through the world: always made");
     }
 }

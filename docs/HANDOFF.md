@@ -286,9 +286,8 @@ MINERUST_BENCH=10 minerust --seed 12345 --no-save --size 1920 1080 --distance 16
    釀造台、鐵砧、紅石線、拉桿）。待做：火把（`renderTorchAtAngle`）、中繼器與比較器、按鈕、壓力板、絆線鉤與絆線、柵欄門、活板門、
    門、梯子、鐵軌、柵欄、玻璃板、樓梯、液體、作物、莖、藤蔓、睡蓮、可可、火、床、煉藥鍋、終界門框、龍蛋、花盆、牆。
 0. **影像設定還沒生效的項目**（選單裡能調，但畫面不變，這是與原版的行為差異）：
-   - 畫質「流暢」（`fancyGraphics = false`）：不透明樹葉（`leaves_*_opaque` 與 `isOpaqueCube`）、平面雲
-     （`RenderGlobal.renderClouds`）、掉落物改平面貼圖、取消暈影、雨滴粒子減量。`rb.rs` 的 `FANCY_GRAPHICS` 仍是常數。
-   - 粒子（全部／減少／最少）：照 `RenderGlobal.doSpawnParticle` 的規則接到 `Game::named_particle` 與各個直接呼叫。
+   - 畫質「流暢」尚缺：掉落物改平面貼圖（`RenderItem` 的 `fancyGraphics` 分支）、樹葉的物品圖示用不透明貼圖、
+     水面的平滑著色（`EntityRenderer` 1055 行）。其餘已生效（2026-11-19）。
    - 各向異性過濾（原版開啟時圖集每格加 8 像素邊框並改線性取樣）、3D 立體（anaglyph）、進階 OpenGL（遮蔽查詢）、FBO 開關。
    - 平滑光照的「最小／最大」已接上 `rb.rs`，但 `mesher.rs` 裡尚未改走 `rb` 的舊繪製路徑（樓梯、柵欄、液體等）自帶 AO，
      關閉平滑光照時這些方塊還不會跟著變。
@@ -656,3 +655,17 @@ MINERUST_BENCH=10 minerust --seed 12345 --no-save --size 1920 1080 --distance 16
   5.7–6.4 ms、925–943 對 938–977 fps，差距是外圈區塊在量測期間就緒時的一次性重算，在雜訊邊緣。
   **沒有驗證的**：截圖模式重現不了那場火，所以沒有與使用者畫面相同的前後對照圖，只有數值測試；方塊光（火把）只靠同一套演算法，
   沒有單獨的測試。中間試過「任何影響光照的方塊變動都排隊」，會讓洞穴流水不停觸發重算、伺服器 tick 多 4 ms，已改成只看高度圖。
+- `本次（2026-11-19，粒子設定與畫質「流暢」生效）`：使用者要求「不要停，繼續完善」。依第 7 節第 0 項，兩個選單裡能調但沒作用的選項：
+  - **粒子**：`Particles.gated` / `spawned` 實作 `RenderGlobal.doSpawnParticle` 的閘門：減少時三分之一機率當作最少、最少時不生成、
+    與攝影機距離超過 16 格不生成（**這條距離限制原版不論設定都有，以前完全沒做**）；`hugeexplosion`、`largeexplode` 例外。
+    只有原版經 `World.spawnParticle` 產生的粒子走閘門：`named_particle`、方塊的 `randomDisplayTick`、爆炸的煙與 `explode`、
+    TNT 的煙、藥水破裂、骨粉、音符、傳送門、疾跑的塵土、爆擊；方塊碎屑（`addBlockDestroyEffects` / `addBlockHitEffects`）
+    與雨滴（`addRainParticles` 直接 `addEffect`）不走，雨滴改為依設定減半或歸零。測試 `particle_setting_and_distance`。
+  - **畫質「流暢」**：`rb::FANCY_GRAPHICS` 從常數改為執行期旗標（`rb::fancy()` / `set_fancy`，`apply_video_settings`
+    變更時整個重建網格，等同 `loadRenderers`）。樹葉用 `leaves_*_opaque` 貼圖（圖集新增六張）、`block::opaque_cube`
+    讓樹葉算不透明（相鄰面剔除，`mesher.rs` 四處與 `rb.rs` 的 `is_opaque` 改用它）、同種樹葉之間不畫面；`fancyGrass` 關閉
+    草方塊側面的覆蓋層；暈影只在精緻時畫；雨雪範圍 10 → 5 格、雨滴的雨量減半；平面雲 `Game::build_clouds_flat`
+    （`renderClouds`：每格 8 方塊、±256 格、沒有 0.33 的 z 偏移）。
+  **驗證**：`cargo test --release` 108 項通過；以兩個遊戲目錄的 `options.txt` 截圖比對精緻／流暢（樹葉、暈影、草方塊側面、平面雲）。
+  基準 1,016 對 1,050 fps、伺服器 6.6 對 6.1 ms（同時段各一次，雜訊範圍）。
+  **注意**：截圖模式讀的是**工作目錄**的 `options.txt`（`main.rs` 的 `game_dir = current_dir()`），要比對設定請用不同的工作目錄。

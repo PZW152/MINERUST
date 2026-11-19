@@ -305,7 +305,7 @@ pub struct Game {
     /// `(ticks shown, position in the frame order)` per animated tile.
     anim_state: Vec<(u32, usize)>,
     /// Cloud texel the current cloud mesh was built for.
-    cloud_cell: Option<(i32, i32)>,
+    cloud_cell: Option<(i32, i32, bool)>,
     /// Server view of the inventory and open window.
     pub view: InvView,
     /// `TileEntityEnchantmentTable` state of the tables in the world:
@@ -1291,7 +1291,7 @@ impl Game {
                                 r.next_gaussian() * 0.15,
                             ];
                             if let Some(rect) = bottle {
-                                self.particles.item_crack(pos, m, rect);
+                                self.particles.spawned(|ps| ps.item_crack(pos, m, rect));
                             }
                         }
                         let c = crate::potion::liquid_color(meta);
@@ -1312,13 +1312,9 @@ impl Game {
                             let my = 0.01 + r.next_double() * 0.5;
                             let f = 0.75 + r.next_float() * 0.25;
                             let start = [pos[0] + mx * 0.1, pos[1] + 0.3, pos[2] + mz * 0.1];
-                            self.particles.spell(
-                                start,
-                                [mx, my, mz],
-                                base,
-                                [cr * f, cg * f, cb * f],
-                                1.0,
-                            );
+                            self.particles.spawned(|ps| {
+                                ps.spell(start, [mx, my, mz], base, [cr * f, cg * f, cb * f], 1.0);
+                            });
                             // multiplyVelocity(d)
                             self.particles.scale_last_motion(d as f32);
                         }
@@ -1364,7 +1360,7 @@ impl Game {
                                     r.next_gaussian() * 0.02,
                                     r.next_gaussian() * 0.02,
                                 ];
-                                self.particles.explode(p, mv);
+                                self.particles.spawned(|ps| ps.explode(p, mv));
                             }
                         }
                     }
@@ -1482,10 +1478,12 @@ impl Game {
                                     r.next_float() as f64,
                                 )
                             });
-                            self.particles.happy_villager(
-                                [x as f64 + fx, y as f64 + fy * top, z as f64 + fz],
-                                [vx, vy, vz],
-                            );
+                            self.particles.spawned(|ps| {
+                                ps.happy_villager(
+                                    [x as f64 + fx, y as f64 + fy * top, z as f64 + fz],
+                                    [vx, vy, vz],
+                                );
+                            });
                         }
                     }
                 }
@@ -1540,7 +1538,8 @@ impl Game {
                         let f = 2f32.powf((pitch - 12) as f32 / 12.0);
                         let c = [p[0] as f64 + 0.5, p[1] as f64 + 0.5, p[2] as f64 + 0.5];
                         self.sound(inst, Some(c), 3.0, f);
-                        self.particles.note([c[0], p[1] as f64 + 1.2, c[2]], pitch);
+                        self.particles
+                            .spawned(|ps| ps.note([c[0], p[1] as f64 + 1.2, c[2]], pitch));
                     }
                 }
                 Event::Explosions(list) => {
@@ -1651,6 +1650,34 @@ impl Game {
 
     /// Fancy cloud layer around cloud texel `(bx, bz)`: one 12x4x12 box per
     /// opaque texel of `clouds.png`, only the faces on the outside.
+    /// `RenderGlobal.renderClouds` with fast graphics: `clouds.png` laid
+    /// flat, 8 blocks a texel, 256 blocks each way; here one quad per
+    /// opaque texel around texel `(bx, bz)`.
+    fn build_clouds_flat(&self, bx: i32, bz: i32) -> Vec<crate::render::mesher::Vertex> {
+        use crate::render::mesher::Vertex;
+        let mut v: Vec<Vertex> = Vec::new();
+        for i in -33..33i32 {
+            for j in -33..33i32 {
+                if !self.atlas.clouds
+                    [((((bz + j) & 255) as usize) << 8) | ((bx + i) & 255) as usize]
+                {
+                    continue;
+                }
+                let (x0, x1) = (i as f32 * 8.0, (i + 1) as f32 * 8.0);
+                let (z0, z1) = (j as f32 * 8.0, (j + 1) as f32 * 8.0);
+                for pos in [[x0, 0.0, z1], [x1, 0.0, z1], [x1, 0.0, z0], [x0, 0.0, z0]] {
+                    v.push(Vertex {
+                        pos,
+                        uv: [0.0; 2],
+                        color: [255; 4],
+                        light: [0; 4],
+                    });
+                }
+            }
+        }
+        v
+    }
+
     fn build_clouds(&self, bx: i32, bz: i32) -> Vec<crate::render::mesher::Vertex> {
         use crate::render::mesher::Vertex;
         let opaque = |i: i32, j: i32| {
@@ -2293,21 +2320,31 @@ impl Game {
                         -r.next_double(),
                         (r.next_double() - 0.5) * 2.0,
                     ];
-                    self.particles.portal(p, m);
+                    self.particles.spawned(|ps| ps.portal(p, m));
                 }
             }
         }
         // EntityTNTPrimed.onUpdate: a puff of smoke every tick.
         for &(pos, _, _) in &self.tnt {
             self.particles
-                .smoke([pos[0], pos[1] + 0.5, pos[2]], [0.0; 3], false);
+                .spawned(|ps| ps.smoke([pos[0], pos[1] + 0.5, pos[2]], [0.0; 3], false));
         }
         let eye = self.player.pos;
+        self.particles.camera = eye;
+        self.particles.setting = self.settings().particle_setting;
         self.particles.display_ticks(&self.world, eye);
         // EntityRenderer.addRainParticles
-        let rain = self.weather.rain;
+        let mut rain = self.weather.rain;
+        if !crate::render::mesher::rb::fancy() {
+            rain /= 2.0;
+        }
         if rain > 0.0 {
-            let n = (100.0 * rain * rain) as i32;
+            let mut n = (100.0 * rain * rain) as i32;
+            match self.particles.setting {
+                1 => n >>= 1,
+                2 => n = 0,
+                _ => {}
+            }
             let (px, py, pz) = (
                 math::floor_double(eye[0]),
                 math::floor_double(eye[1]),
@@ -2361,7 +2398,7 @@ impl Game {
                     1.5,
                     -self.player.motion[2] * 4.0,
                 ];
-                self.particles.dust(p, m, tex, tint);
+                self.particles.spawned(|ps| ps.dust(p, m, tex, tint));
             }
         }
     }
@@ -2385,7 +2422,12 @@ impl Game {
         };
         let (px, pz) = (math::floor_double(eye[0]), math::floor_double(eye[2]));
         let py = math::floor_double(eye[1]);
-        let r = 10;
+        // EntityRenderer.renderRainSnow: 5 blocks around with fast graphics
+        let r = if crate::render::mesher::rb::fancy() {
+            10
+        } else {
+            5
+        };
         let t = self.ticks as f32 + partial;
         for z in pz - r..=pz + r {
             for x in px - r..=px + r {
@@ -2496,6 +2538,16 @@ impl Game {
 
     /// `RenderGlobal.doSpawnParticle` for the names the world uses.
     pub(super) fn named_particle(&mut self, kind: &str, p: [f64; 3], m: [f64; 3]) {
+        // RenderGlobal.doSpawnParticle: these two are made whatever the
+        // setting and distance
+        let always = matches!(kind, "hugeexplosion" | "largeexplode");
+        let was = self.particles.gated;
+        self.particles.gated = !always;
+        self.named_particle_inner(kind, p, m);
+        self.particles.gated = was;
+    }
+
+    fn named_particle_inner(&mut self, kind: &str, p: [f64; 3], m: [f64; 3]) {
         let slime = self
             .atlas
             .items
@@ -2641,9 +2693,9 @@ impl Game {
             ];
             let mv = [x, y + 0.2, z];
             if magic {
-                self.particles.magic_crit(p, mv);
+                self.particles.spawned(|ps| ps.magic_crit(p, mv));
             } else {
-                self.particles.crit(p, mv);
+                self.particles.spawned(|ps| ps.crit(p, mv));
             }
         }
     }
@@ -4625,15 +4677,26 @@ impl Game {
         };
         let clouds = {
             let t = self.ticks as f64 + partial as f64;
-            let mut cx = (eye[0] + t * 0.03f32 as f64) / 12.0;
-            let mut cz = eye[2] / 12.0 + 0.33f32 as f64;
+            let fancy = crate::render::mesher::rb::fancy();
+            // fancy: 12 blocks a texel; fast (renderClouds): 8, no 0.33
+            let (size, zoff) = if fancy {
+                (12.0, 0.33f32 as f64)
+            } else {
+                (8.0, 0.0)
+            };
+            let mut cx = (eye[0] + t * 0.03f32 as f64) / size;
+            let mut cz = eye[2] / size + zoff;
             cx -= (math::floor_double(cx / 2048.0) * 2048) as f64;
             cz -= (math::floor_double(cz / 2048.0) * 2048) as f64;
             let (bx, bz) = (math::floor_double(cx), math::floor_double(cz));
-            if self.cloud_cell != Some((bx, bz)) {
-                let mesh = self.build_clouds(bx, bz);
+            if self.cloud_cell != Some((bx, bz, fancy)) {
+                let mesh = if fancy {
+                    self.build_clouds(bx, bz)
+                } else {
+                    self.build_clouds_flat(bx, bz)
+                };
                 self.renderer.set_clouds(&mesh);
-                self.cloud_cell = Some((bx, bz));
+                self.cloud_cell = Some((bx, bz, fancy));
             }
             let y = 128.0f32 - eye[1] as f32 + 0.33f32;
             let mut color = [
@@ -4650,9 +4713,9 @@ impl Game {
             }
             crate::render::vk::CloudDraw {
                 offset: [
-                    -((cx - bx as f64) * 12.0) as f32,
+                    -((cx - bx as f64) * size) as f32,
                     y,
-                    -((cz - bz as f64) * 12.0) as f32,
+                    -((cz - bz as f64) * size) as f32,
                 ],
                 color,
                 before_terrain: eye[1] < 128.0,
@@ -5823,7 +5886,9 @@ impl Game {
         self.renderer.set_vsync(s.enable_vsync);
         self.renderer.set_mipmap_levels(s.mipmap_levels);
         // GameSettings.setOptionValue(AMBIENT_OCCLUSION): renderGlobal.loadRenderers()
-        if crate::render::mesher::rb::set_ambient_occlusion(s.ambient_occlusion) {
+        // GameSettings.setOptionValue(GRAPHICS): renderGlobal.loadRenderers()
+        let fancy_changed = crate::render::mesher::rb::set_fancy(s.fancy_graphics);
+        if crate::render::mesher::rb::set_ambient_occlusion(s.ambient_occlusion) | fancy_changed {
             for k in self.world.chunks.keys() {
                 self.dirty.insert(*k, 0xFFFF);
             }

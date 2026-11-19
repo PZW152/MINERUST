@@ -8,8 +8,6 @@
 use super::{light_bytes, Ctx, Vertex};
 use crate::block::{self, Material};
 
-/// `RenderBlocks.fancyGrass`
-const FANCY_GRASS: bool = true;
 /// `GameSettings.ambientOcclusion` (default 2, "Maximum"), as the chunk
 /// builders see it; `set_ambient_occlusion` follows the options screen.
 static AMBIENT_OCCLUSION: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(2);
@@ -25,8 +23,20 @@ pub fn set_ambient_occlusion(v: i32) -> bool {
     AMBIENT_OCCLUSION.swap(v, std::sync::atomic::Ordering::Relaxed) != v
 }
 
-/// `GameSettings.fancyGraphics` (default on).
-pub const FANCY_GRAPHICS: bool = true;
+/// `GameSettings.fancyGraphics` (default on), which is also
+/// `RenderBlocks.fancyGrass` and the leaves' `setGraphicsLevel`.
+static FANCY_GRAPHICS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+#[inline]
+pub fn fancy() -> bool {
+    FANCY_GRAPHICS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Sets the flag; true when it changed (the meshes must be rebuilt, as
+/// `RenderGlobal.loadRenderers` does).
+pub fn set_fancy(v: bool) -> bool {
+    FANCY_GRAPHICS.swap(v, std::sync::atomic::Ordering::Relaxed) != v
+}
 
 /// `IIcon` (a `TextureAtlasSprite`'s UV rectangle).
 #[derive(Clone, Copy, Debug)]
@@ -326,7 +336,7 @@ impl<'a, 'b> Rb<'a, 'b> {
     }
 
     fn is_opaque(&self, x: i32, y: i32, z: i32) -> bool {
-        block::info(self.block_at(x, y, z)).opaque
+        block::opaque_cube(self.block_at(x, y, z))
     }
 
     fn meta_at(&self, x: i32, y: i32, z: i32) -> i32 {
@@ -366,7 +376,7 @@ impl<'a, 'b> Rb<'a, 'b> {
             }
             // BlockLeavesBase
             block::LEAVES | block::LEAVES2 => {
-                if !FANCY_GRAPHICS && n == self.id {
+                if !fancy() && n == self.id {
                     false
                 } else {
                     self.default_side(x, y, z, side)
@@ -425,6 +435,15 @@ impl<'a, 'b> Rb<'a, 'b> {
             return o;
         }
         let atlas = self.atlas();
+        if (self.id == block::LEAVES || self.id == block::LEAVES2) && !fancy() {
+            // BlockLeaves.getIcon with setGraphicsLevel(false): the opaque set
+            if let Some(n) = block::texture_name(self.id, self.meta as u8, side as usize) {
+                let r = atlas.named(&format!("{n}_opaque"));
+                if r != [0.0; 4] {
+                    return Icon::new(r);
+                }
+            }
+        }
         if self.id == block::PISTON || self.id == block::STICKY_PISTON {
             // BlockPistonBase.getIcon (the block bounds are the render bounds)
             let o = self.meta & 7;
@@ -1033,7 +1052,7 @@ impl<'a, 'b> Rb<'a, 'b> {
             self.colorBlueTopRight = self.colorBlueTopRight * (var12);
             let mut var22: Icon = self.icon(var2, var3, var4, 2);
             self.face_z_neg((var2 as f64), (var3 as f64), (var4 as f64), var22);
-            if FANCY_GRASS && var22.grass_side && !self.overrideBlockTexture.is_some() {
+            if fancy() && var22.grass_side && !self.overrideBlockTexture.is_some() {
                 self.colorRedTopLeft = self.colorRedTopLeft * (var5);
                 self.colorRedBottomLeft = self.colorRedBottomLeft * (var5);
                 self.colorRedBottomRight = self.colorRedBottomRight * (var5);
@@ -1197,7 +1216,7 @@ impl<'a, 'b> Rb<'a, 'b> {
                 (var4 as f64),
                 self.icon(var2, var3, var4, 3),
             );
-            if FANCY_GRASS && var77.grass_side && !self.overrideBlockTexture.is_some() {
+            if fancy() && var77.grass_side && !self.overrideBlockTexture.is_some() {
                 self.colorRedTopLeft = self.colorRedTopLeft * (var5);
                 self.colorRedBottomLeft = self.colorRedBottomLeft * (var5);
                 self.colorRedBottomRight = self.colorRedBottomRight * (var5);
@@ -1356,7 +1375,7 @@ impl<'a, 'b> Rb<'a, 'b> {
             self.colorBlueTopRight = self.colorBlueTopRight * (var12);
             let mut var78: Icon = self.icon(var2, var3, var4, 4);
             self.face_x_neg((var2 as f64), (var3 as f64), (var4 as f64), var78);
-            if FANCY_GRASS && var78.grass_side && !self.overrideBlockTexture.is_some() {
+            if fancy() && var78.grass_side && !self.overrideBlockTexture.is_some() {
                 self.colorRedTopLeft = self.colorRedTopLeft * (var5);
                 self.colorRedBottomLeft = self.colorRedBottomLeft * (var5);
                 self.colorRedBottomRight = self.colorRedBottomRight * (var5);
@@ -1515,7 +1534,7 @@ impl<'a, 'b> Rb<'a, 'b> {
             self.colorBlueTopRight = self.colorBlueTopRight * (var12);
             let mut var79: Icon = self.icon(var2, var3, var4, 5);
             self.face_x_pos((var2 as f64), (var3 as f64), (var4 as f64), var79);
-            if FANCY_GRASS && var79.grass_side && !self.overrideBlockTexture.is_some() {
+            if fancy() && var79.grass_side && !self.overrideBlockTexture.is_some() {
                 self.colorRedTopLeft = self.colorRedTopLeft * (var5);
                 self.colorRedBottomLeft = self.colorRedBottomLeft * (var5);
                 self.colorRedBottomRight = self.colorRedBottomRight * (var5);
@@ -2040,7 +2059,7 @@ impl<'a, 'b> Rb<'a, 'b> {
             self.colorBlueTopRight = self.colorBlueTopRight * (var12);
             let mut var84: Icon = self.icon(var2, var3, var4, 2);
             self.face_z_neg((var2 as f64), (var3 as f64), (var4 as f64), var84);
-            if FANCY_GRASS && var84.grass_side && !self.overrideBlockTexture.is_some() {
+            if fancy() && var84.grass_side && !self.overrideBlockTexture.is_some() {
                 self.colorRedTopLeft = self.colorRedTopLeft * (var5);
                 self.colorRedBottomLeft = self.colorRedBottomLeft * (var5);
                 self.colorRedBottomRight = self.colorRedBottomRight * (var5);
@@ -2259,7 +2278,7 @@ impl<'a, 'b> Rb<'a, 'b> {
             self.colorBlueTopRight = self.colorBlueTopRight * (var12);
             let mut var86: Icon = self.icon(var2, var3, var4, 3);
             self.face_z_pos((var2 as f64), (var3 as f64), (var4 as f64), var86);
-            if FANCY_GRASS && var86.grass_side && !self.overrideBlockTexture.is_some() {
+            if fancy() && var86.grass_side && !self.overrideBlockTexture.is_some() {
                 self.colorRedTopLeft = self.colorRedTopLeft * (var5);
                 self.colorRedBottomLeft = self.colorRedBottomLeft * (var5);
                 self.colorRedBottomRight = self.colorRedBottomRight * (var5);
@@ -2478,7 +2497,7 @@ impl<'a, 'b> Rb<'a, 'b> {
             self.colorBlueTopRight = self.colorBlueTopRight * (var12);
             let mut var88: Icon = self.icon(var2, var3, var4, 4);
             self.face_x_neg((var2 as f64), (var3 as f64), (var4 as f64), var88);
-            if FANCY_GRASS && var88.grass_side && !self.overrideBlockTexture.is_some() {
+            if fancy() && var88.grass_side && !self.overrideBlockTexture.is_some() {
                 self.colorRedTopLeft = self.colorRedTopLeft * (var5);
                 self.colorRedBottomLeft = self.colorRedBottomLeft * (var5);
                 self.colorRedBottomRight = self.colorRedBottomRight * (var5);
@@ -2693,7 +2712,7 @@ impl<'a, 'b> Rb<'a, 'b> {
             self.colorBlueTopRight = self.colorBlueTopRight * (var12);
             let mut var90: Icon = self.icon(var2, var3, var4, 5);
             self.face_x_pos((var2 as f64), (var3 as f64), (var4 as f64), var90);
-            if FANCY_GRASS && var90.grass_side && !self.overrideBlockTexture.is_some() {
+            if fancy() && var90.grass_side && !self.overrideBlockTexture.is_some() {
                 self.colorRedTopLeft = self.colorRedTopLeft * (var5);
                 self.colorRedBottomLeft = self.colorRedBottomLeft * (var5);
                 self.colorRedBottomRight = self.colorRedBottomRight * (var5);
@@ -2805,7 +2824,7 @@ impl<'a, 'b> Rb<'a, 'b> {
             self.color(var18, var21, var24);
             let mut var27: Icon = self.icon(var2, var3, var4, 2);
             self.face_z_neg((var2 as f64), (var3 as f64), (var4 as f64), var27);
-            if FANCY_GRASS && var27.grass_side && !self.overrideBlockTexture.is_some() {
+            if fancy() && var27.grass_side && !self.overrideBlockTexture.is_some() {
                 self.color(var18 * var5, var21 * var6, var24 * var7);
                 self.face_z_neg(
                     (var2 as f64),
@@ -2825,7 +2844,7 @@ impl<'a, 'b> Rb<'a, 'b> {
             self.color(var18, var21, var24);
             let mut var28: Icon = self.icon(var2, var3, var4, 3);
             self.face_z_pos((var2 as f64), (var3 as f64), (var4 as f64), var28);
-            if FANCY_GRASS && var28.grass_side && !self.overrideBlockTexture.is_some() {
+            if fancy() && var28.grass_side && !self.overrideBlockTexture.is_some() {
                 self.color(var18 * var5, var21 * var6, var24 * var7);
                 self.face_z_pos(
                     (var2 as f64),
@@ -2845,7 +2864,7 @@ impl<'a, 'b> Rb<'a, 'b> {
             self.color(var19, var22, var25);
             let mut var29: Icon = self.icon(var2, var3, var4, 4);
             self.face_x_neg((var2 as f64), (var3 as f64), (var4 as f64), var29);
-            if FANCY_GRASS && var29.grass_side && !self.overrideBlockTexture.is_some() {
+            if fancy() && var29.grass_side && !self.overrideBlockTexture.is_some() {
                 self.color(var19 * var5, var22 * var6, var25 * var7);
                 self.face_x_neg(
                     (var2 as f64),
@@ -2865,7 +2884,7 @@ impl<'a, 'b> Rb<'a, 'b> {
             self.color(var19, var22, var25);
             let mut var30: Icon = self.icon(var2, var3, var4, 5);
             self.face_x_pos((var2 as f64), (var3 as f64), (var4 as f64), var30);
-            if FANCY_GRASS && var30.grass_side && !self.overrideBlockTexture.is_some() {
+            if fancy() && var30.grass_side && !self.overrideBlockTexture.is_some() {
                 self.color(var19 * var5, var22 * var6, var25 * var7);
                 self.face_x_pos(
                     (var2 as f64),

@@ -878,6 +878,16 @@ fn mushroom_face(skin: &'static str, meta: u8, face: usize) -> &'static str {
 
 /// Texture (file stem under `textures/blocks/`) for a block face.
 /// Faces: 0 down, 1 up, 2 north(-Z), 3 south(+Z), 4 west(-X), 5 east(+X).
+/// `Block.isOpaqueCube()` as the renderer sees it now: leaves are opaque
+/// with fast graphics (`BlockLeaves.isOpaqueCube` is `!fancyGraphics`).
+#[inline]
+pub fn opaque_cube(id: u8) -> bool {
+    if id == LEAVES || id == LEAVES2 {
+        return !crate::render::mesher::rb::fancy();
+    }
+    info(id).opaque
+}
+
 pub fn texture_name(id: u8, meta: u8, face: usize) -> Option<&'static str> {
     let log = |set: &[(&'static str, &'static str); 4]| {
         let (side, top) = set[(meta & 3) as usize];

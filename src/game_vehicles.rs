@@ -416,9 +416,10 @@ impl Game {
                 for v in &mut d {
                     *v *= k;
                 }
-                self.particles
-                    .explode([(px + c[0]) / 2.0, (py + c[1]) / 2.0, (pz + c[2]) / 2.0], d);
-                self.particles.smoke([px, py, pz], d, false);
+                self.particles.spawned(|ps| {
+                    ps.explode([(px + c[0]) / 2.0, (py + c[1]) / 2.0, (pz + c[2]) / 2.0], d);
+                    ps.smoke([px, py, pz], d, false);
+                });
                 // setBlock(air) on the client
                 if self.world.peek_block(x, y, z) != block::AIR {
                     self.world.set_local(x, y, z, block::AIR, 0);

@@ -750,8 +750,8 @@ fn cube(cx: &Ctx, out: &mut Vec<Vertex>, id: u8, meta: i32, x: i32, y: i32, z: i
         let (qx, qy, qz) = (x + n[0], y + n[1], z + n[2]);
         let nid = r.block(qx, qy, qz);
         let visible = match id {
-            block::ICE | block::GLASS => nid != id && !block::info(nid).opaque,
-            _ => !block::info(nid).opaque,
+            block::ICE | block::GLASS => nid != id && !block::opaque_cube(nid),
+            _ => !block::opaque_cube(nid),
         };
         if !visible && !cx.all_faces {
             continue;
@@ -859,7 +859,7 @@ fn boxed(
         };
         let (qx, qy, qz) = (x + n[0], y + n[1], z + n[2]);
         let nid = r.block(qx, qy, qz);
-        if on_boundary && block::info(nid).opaque && !cx.all_faces {
+        if on_boundary && block::opaque_cube(nid) && !cx.all_faces {
             continue;
         }
         if id == block::SNOW_LAYER && f >= 2 && nid == id && r.meta(qx, qy, qz) >= meta {
@@ -1203,7 +1203,7 @@ fn liquid(cx: &Ctx, out: &mut Vec<Vertex>, id: u8, x: i32, y: i32, z: i32) {
         } else if nid == block::ICE {
             false
         } else {
-            !block::info(nid).opaque
+            !block::opaque_cube(nid)
         }
     };
     let top = side(x, y + 1, z, 1);
@@ -1366,7 +1366,7 @@ fn boxes(
                 b[axis] <= 0.0
             };
             let (qx, qy, qz) = (x + n[0], y + n[1], z + n[2]);
-            if on_boundary && block::info(r.block(qx, qy, qz)).opaque && !cx.all_faces {
+            if on_boundary && block::opaque_cube(r.block(qx, qy, qz)) && !cx.all_faces {
                 continue;
             }
             let Some((rect, flip)) = tex(bi, f) else {

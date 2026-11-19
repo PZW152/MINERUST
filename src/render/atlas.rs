@@ -498,6 +498,18 @@ impl Atlas {
             Ok(b.add(p, 16))
         };
         let grass_side_snowed = extra(jar, "grass_side_snowed")?;
+        // BlockLeaves' second icon set, used with fast graphics
+        for n in [
+            "leaves_oak_opaque",
+            "leaves_spruce_opaque",
+            "leaves_birch_opaque",
+            "leaves_jungle_opaque",
+            "leaves_acacia_opaque",
+            "leaves_big_oak_opaque",
+        ] {
+            let t = extra(jar, n)?;
+            names.insert(n, t);
+        }
         // BlockBrewingStand.iconBrewingStandBase
         let t = extra(jar, "brewing_stand_base")?;
         names.insert("brewing_stand_base", t);

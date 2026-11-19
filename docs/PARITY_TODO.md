@@ -135,8 +135,9 @@
 - [ ] 掉落物改為客戶端自行模擬（原版客戶端也跑 `EntityItem.onUpdate`，伺服器每 20 tick 校正一次）
 - [x] 渲染區塊以 16³ 為單位（`WorldRenderer`），方塊變動只重建 `markBlockForUpdate` 範圍內的分段
 - [x] 影像設定生效：垂直同步、最大幀率（`Display.sync`）、平滑光照等級、雲開關、視角晃動、Mipmap 層級、全螢幕（F11）
-- [ ] 影像設定尚未生效：畫質「流暢」（不透明樹葉、平面雲、平面掉落物、無暈影）、粒子數量、各向異性過濾、
-      3D 立體、進階 OpenGL、FBO；平滑光照關閉時非 `rb` 路徑的方塊（樓梯、柵欄、液體等）
+- [x] 粒子設定（`doSpawnParticle` 的閘門與 16 格限制）；畫質「流暢」：不透明樹葉、草方塊側面、平面雲、暈影、雨的範圍與雨滴
+- [ ] 影像設定尚未生效：流暢時的平面掉落物與樹葉物品圖示、各向異性過濾、3D 立體、進階 OpenGL、FBO；
+      平滑光照關閉時非 `rb` 路徑的方塊（樓梯、柵欄、液體等）
 
 - [x] 光照黑斑修正（`world/relight.rs`，`--vanilla-parity` 保留原版的黑斑）
 - [x] 暈影（`GuiIngame.renderVignette`）；粒子每個圖層各自 4000 上限（`EffectRenderer.fxLayers`）
