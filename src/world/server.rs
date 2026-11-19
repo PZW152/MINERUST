@@ -11,6 +11,9 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use std::hash::{BuildHasherDefault, Hasher};
 use std::sync::Arc;
 
+#[path = "relight.rs"]
+mod relight;
+
 #[derive(Default)]
 pub struct FastHasher(u64);
 
@@ -59,6 +62,9 @@ pub struct Chunk {
     pub light_populated: bool,
     pub ticked: bool,
     queued_light_checks: i32,
+    /// `relight.rs` has recomputed this chunk's light (not saved: a
+    /// chunk read back in is relit once more).
+    light_fixed: bool,
     /// `WorldProvider.hasNoSky` (Nether and End): no sky light at all.
     pub no_sky: bool,
 }
@@ -89,6 +95,7 @@ impl Chunk {
             light_populated: false,
             ticked: false,
             queued_light_checks: 0,
+            light_fixed: false,
             no_sky: false,
         }
     }
@@ -391,6 +398,7 @@ impl Chunk {
             light_populated: flags & 2 != 0,
             ticked: flags & 4 != 0,
             queued_light_checks: queued,
+            light_fixed: false,
             no_sky: false,
         })
     }
@@ -509,6 +517,9 @@ pub struct ServerWorld {
     /// `World.skylightSubtracted`
     pub skylight_subtracted: i32,
     light_queue: Vec<i32>,
+    /// `relight.rs`: chunks to relight from scratch, with the tick it is
+    /// due (`compat::fixed()` only).
+    pub relight_due: HashMap<(i32, i32), i64>,
     ticks: BTreeSet<Tick>,
     tick_keys: FastSet<(i32, i32, i32, u8)>,
     next_tick_id: u64,
@@ -602,6 +613,7 @@ impl ServerWorld {
             fall_instantly: false,
             skylight_subtracted: 0,
             light_queue: vec![0; 32768],
+            relight_due: HashMap::new(),
             ticks: BTreeSet::new(),
             tick_keys: FastSet::default(),
             next_tick_id: 0,
@@ -1528,6 +1540,12 @@ impl ServerWorld {
             }
         }
         let (wx, wz) = (key.0 * 16 + x, key.1 * 16 + z);
+        // the column's top moved: updateLightByType only fixes the range
+        // between the old and new tops beside it, which can leave the
+        // light around a burnt or cut canopy a level or three dark
+        if crate::compat::fixed() {
+            self.queue_relight(wx, wz);
+        }
         // the sky column was rewritten from the higher of the two tops down
         self.mark_dirty_range(wx, wz, 0, old_h.max(new_h) + 1);
         let (mut lo, mut hi) = (old_h, new_h);

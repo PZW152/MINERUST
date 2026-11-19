@@ -1615,6 +1615,20 @@ impl Sim {
             events.push(Event::Respawn(at));
         }
 
+        // relight.rs: once a chunk can no longer be decorated into and its
+        // neighbours are there, its light is recomputed (vanilla leaves the
+        // dark patches its generation-time updates could not spread)
+        if crate::compat::fixed() {
+            self.world.run_due_relights();
+            for i in 0..self.offsets.len() {
+                let (dx, dz) = self.offsets[i];
+                let key = (self.centre.0 + dx, self.centre.1 + dz);
+                if self.ready(key.0, key.1) && self.world.wants_light_fix(key.0, key.1) {
+                    self.world.fix_light(key.0, key.1);
+                }
+            }
+        }
+
         // Changes, in a fixed order.
         let mut dirty: Vec<((i32, i32), u16)> = self.world.dirty.drain().collect();
         dirty.sort();
@@ -4768,6 +4782,185 @@ mod tests {
             "worst {worst:.1} ms, total {total:.1} ms, peak tnt {peak}, items {}",
             sim.play.items.len()
         );
+    }
+
+    /// Sky light a from-scratch propagation gives inside a box, with the
+    /// world's own values as the boundary; returns the cells that differ
+    /// (position, stored, expected).
+    fn sky_light_errors(
+        w: &mut crate::world::server::ServerWorld,
+        x0: i32,
+        x1: i32,
+        y0: i32,
+        y1: i32,
+        z0: i32,
+        z1: i32,
+    ) -> Vec<([i32; 3], i32, i32)> {
+        let (nx, ny, nz) = (
+            (x1 - x0 + 1) as usize,
+            (y1 - y0 + 1) as usize,
+            (z1 - z0 + 1) as usize,
+        );
+        let at = |x: i32, y: i32, z: i32| {
+            ((x - x0) as usize * ny + (y - y0) as usize) * nz + (z - z0) as usize
+        };
+        let mut op = vec![0i32; nx * ny * nz];
+        let mut sky = vec![false; nx * ny * nz];
+        let mut v = vec![0i32; nx * ny * nz];
+        for x in x0..=x1 {
+            for z in z0..=z1 {
+                let h = w.height(x, z);
+                for y in y0..=y1 {
+                    let i = at(x, y, z);
+                    op[i] = (block::info(w.peek_block(x, y, z)).light_opacity as i32).max(1);
+                    sky[i] = y >= h;
+                    v[i] = if sky[i] { 15 } else { 0 };
+                }
+            }
+        }
+        loop {
+            let mut changed = false;
+            for x in x0..=x1 {
+                for y in y0..=y1 {
+                    for z in z0..=z1 {
+                        let i = at(x, y, z);
+                        if sky[i] || op[i] >= 15 {
+                            continue;
+                        }
+                        let mut m = 0;
+                        for (dx, dy, dz) in [
+                            (1, 0, 0),
+                            (-1, 0, 0),
+                            (0, 1, 0),
+                            (0, -1, 0),
+                            (0, 0, 1),
+                            (0, 0, -1),
+                        ] {
+                            let (a, b, c) = (x + dx, y + dy, z + dz);
+                            let n = if a < x0 || a > x1 || b < y0 || b > y1 || c < z0 || c > z1 {
+                                w.saved_light(true, a, b, c)
+                            } else {
+                                v[at(a, b, c)]
+                            };
+                            m = m.max(n);
+                        }
+                        let e = (m - op[i]).max(0);
+                        if e != v[i] {
+                            v[i] = e;
+                            changed = true;
+                        }
+                    }
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+        let mut out = Vec::new();
+        for x in x0 + 1..x1 {
+            for y in y0 + 1..y1 {
+                for z in z0 + 1..z1 {
+                    let got = w.saved_light(true, x, y, z);
+                    let want = v[at(x, y, z)];
+                    if got != want {
+                        out.push(([x, y, z], got, want));
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// The world from the user's screenshot (seed -2050906875735508110 at
+    /// -198, 71, 261): the canopy burns, then sky light is checked.
+    #[test]
+    fn burnt_canopy_light() {
+        let cfg = SimConfig {
+            seed: -2050906875735508110,
+            view: 4,
+            save_dir: None,
+            start_time: 3510,
+            freeze_time: true,
+            mode: GameMode::Creative,
+        };
+        let (mut sim, _) = Sim::new(&cfg);
+        let feet = [-197.7, 71.4, 261.0];
+        let mut ev = Vec::new();
+        sim.step(&[Command::Center(-13, 16)], &mut ev);
+        for _ in 0..600 {
+            sim.step(&[Command::Player(feet, [0.0, 0.0], false)], &mut ev);
+            ev.clear();
+        }
+        let (cx, cz) = (-198, 261);
+        let before = sky_light_errors(&mut sim.world, cx - 24, cx + 24, 55, 110, cz - 24, cz + 24);
+        println!("before: {} wrong", before.len());
+        let summary = |w: &mut crate::world::server::ServerWorld, v: &[([i32; 3], i32, i32)]| {
+            let (mut dark, mut bright, mut surface) = (0, 0, 0);
+            let mut cols = std::collections::BTreeMap::new();
+            for (p, got, want) in v {
+                if got < want {
+                    dark += 1
+                } else {
+                    bright += 1
+                }
+                let h = w.height(p[0], p[2]);
+                if p[1] >= h - 4 {
+                    surface += 1;
+                }
+                let edge = (
+                    p[0] & 15 == 0 || p[0] & 15 == 15,
+                    p[2] & 15 == 0 || p[2] & 15 == 15,
+                );
+                *cols.entry(edge).or_insert(0) += 1;
+            }
+            println!("  too dark {dark}, too bright {bright}, within 4 of the top {surface}, by chunk edge (x, z) {cols:?}");
+        };
+        summary(&mut sim.world, &before);
+        assert!(before.is_empty(), "generation left wrong sky light");
+        // light the leaves on fire, as a lightning strike or lava would
+        let mut lit = 0;
+        for x in cx - 16..=cx + 16 {
+            for z in cz - 16..=cz + 16 {
+                for y in 60..100 {
+                    if block::material(sim.world.peek_block(x, y, z)) == block::Material::Leaves
+                        && sim.world.peek_block(x, y + 1, z) == block::AIR
+                    {
+                        sim.world.set_block(x, y + 1, z, block::FIRE, 0, 3);
+                        lit += 1;
+                    }
+                }
+            }
+        }
+        println!("lit {lit}");
+        for _ in 0..1200 {
+            sim.step(&[Command::Player(feet, [0.0, 0.0], false)], &mut ev);
+            ev.clear();
+        }
+        let unfixed = (-15..=-11)
+            .flat_map(|x| (14..=18).map(move |z| (x, z)))
+            .filter(|&(x, z)| sim.world.wants_light_fix(x, z) || !sim.world.chunk_exists(x, z))
+            .count();
+        println!("chunks in the box not relit: {unfixed}");
+        let after = sky_light_errors(&mut sim.world, cx - 24, cx + 24, 55, 110, cz - 24, cz + 24);
+        println!("after: {} wrong", after.len());
+        summary(&mut sim.world, &after);
+        assert!(after.is_empty(), "the fire left wrong sky light");
+        let t = std::time::Instant::now();
+        for x in -15..=-11 {
+            for z in 14..=18 {
+                sim.world.relight_now(x, z);
+            }
+        }
+        println!("25 relights: {:.2} ms", t.elapsed().as_secs_f64() * 1000.0);
+        for e in after.iter().take(15) {
+            println!(
+                "  {:?} stored {} expected {} block {}",
+                e.0,
+                e.1,
+                e.2,
+                sim.world.peek_block(e.0[0], e.0[1], e.0[2])
+            );
+        }
     }
 
     /// ItemFood, ItemPotion and ItemBow through setItemInUse.
