@@ -578,6 +578,30 @@ impl Particles {
         self.add(p);
     }
 
+    /// `RenderGlobal.playAuxSFX(2006)`: `EntityBlockDustFX` bursting from
+    /// the top of the block a hard fall landed on, more for a longer fall
+    /// (`ceil(fallDistance - 3)` = `n`), with exactly the motion given.
+    pub fn fall_dust(&mut self, pos: [i32; 3], n: i32, tex: Option<[f32; 4]>) {
+        let Some(tex) = tex else { return };
+        let mut d = (0.2f32 + n as f32 / 15.0).min(10.0) as f64;
+        if d > 2.5 {
+            d = 2.5;
+        }
+        let count = (150.0 * d) as i32;
+        let c = [pos[0] as f64 + 0.5, pos[1] as f64 + 1.0, pos[2] as f64 + 0.5];
+        for _ in 0..count {
+            // MathHelper.randomFloatClamp
+            let a = self.r.next_float() * (std::f32::consts::PI * 2.0);
+            let b = (self.r.next_float() * 0.25 + 0.75) as f64;
+            let my = 0.2f32 as f64 + d / 100.0;
+            let mx = (crate::util::math::cos(a) * 0.2) as f64 * b * b * (d + 0.2);
+            let mz = (crate::util::math::sin(a) * 0.2) as f64 * b * b * (d + 0.2);
+            let mut p = self.digging(c, [mx, my, mz], tex, [1.0; 3]);
+            p.motion = [mx, my, mz];
+            self.add(p);
+        }
+    }
+
     /// `"blockcrack"` dust behind a running entity.
     pub fn dust(&mut self, pos: [f64; 3], m: [f64; 3], tex: Option<[f32; 4]>, tint: [f32; 3]) {
         let Some(tex) = tex else { return };

@@ -410,6 +410,23 @@ pub struct Mob {
     /// fizz), with their volume and pitch drawn at the time; `tick_mob`
     /// sends them on at the mob's position.
     move_sounds: Vec<(&'static str, f32, f32)>,
+    /// Particles from the same (the splash).
+    move_particles: Vec<Puff>,
+    /// What the same do to the world, done once the world can be changed.
+    move_world: Vec<WorldOp>,
+    /// `isInWeb`
+    in_web: bool,
+    /// `distanceWalkedOnStepModified`, `nextStepDistance`
+    step_dist: f32,
+    next_step: i32,
+    /// `getAir()`
+    air: i32,
+    /// `EntityLiving.livingSoundTime`
+    living_sound_time: i32,
+    /// `Entity.firstUpdate`
+    first_update: bool,
+    /// `prevRotationYaw`
+    prev_yaw: f32,
     /// The zombie's "Random spawn bonus" to knockback resistance.
     pub kb_resist: f64,
     pub persistent: bool,
@@ -762,6 +779,15 @@ impl Mob {
             infected_by: None,
             convert_now: false,
             move_sounds: Vec::new(),
+            move_particles: Vec::new(),
+            move_world: Vec::new(),
+            in_web: false,
+            step_dist: 0.0,
+            next_step: 1,
+            air: 300,
+            living_sound_time: 0,
+            first_update: true,
+            prev_yaw: 0.0,
             kb_resist: 0.0,
             persistent: false,
             variant: 0,
@@ -1164,157 +1190,280 @@ impl Mob {
         self.move_entity(w, dx, dy, dz, false);
     }
 
-    fn move_entity(&mut self, w: &ServerWorld, mut dx: f64, mut dy: f64, mut dz: f64, web: bool) {
-        if web {
-            dx *= 0.25;
-            dy *= 0.05f32 as f64;
-            dz *= 0.25;
-            self.motion = [0.0; 3];
+    /// `Entity.moveEntity` through the shared [`Ent`] with this mob's
+    /// overrides: the step height (a horse's 1.0), `canTriggerWalking`
+    /// (not bats, squid or silverfish), `playStepSound`, `setInWeb`
+    /// (spiders are not caught) and `fall`; what it reports (steps,
+    /// splashes, block contacts, landings) is handled in call order.
+    fn move_entity(&mut self, w: &ServerWorld, dx: f64, dy: f64, dz: f64, _web: bool) {
+        let (wd, ht) = self.dims();
+        let mut e = super::base::Ent::new(wd, ht, 0);
+        std::mem::swap(&mut e.rand, &mut self.rand);
+        e.pos = self.pos;
+        e.bb = self.bb;
+        e.motion = self.motion;
+        e.on_ground = self.on_ground;
+        e.collided_h = self.collided_h;
+        e.fall_distance = self.fall_distance;
+        e.in_water = self.in_water;
+        e.fire = self.fire;
+        e.immune_to_fire = self.kind.fireproof();
+        e.in_web = self.in_web;
+        e.step_height = if self.kind == Kind::Horse { 1.0 } else { 0.5 };
+        e.dist_walked_on_step = self.step_dist;
+        e.next_step_distance = self.next_step;
+        e.can_trigger_walking = !matches!(self.kind, Kind::Bat | Kind::Squid | Kind::Silverfish);
+        e.first_update = self.first_update;
+        // EntityFlying and EntityBat override updateFallState with nothing
+        e.living = !matches!(self.kind, Kind::Ghast | Kind::Bat);
+        e.own_steps = true;
+        e.riding = self.riding;
+        let mut fx = Vec::new();
+        e.move_entity(w, dx, dy, dz, false, &[], &mut fx);
+        std::mem::swap(&mut e.rand, &mut self.rand);
+        self.pos = e.pos;
+        self.bb = e.bb;
+        self.motion = e.motion;
+        self.on_ground = e.on_ground;
+        self.collided_h = e.collided_h;
+        self.fall_distance = e.fall_distance;
+        self.in_water = e.in_water;
+        self.fire = e.fire;
+        self.in_web = e.in_web;
+        self.step_dist = e.dist_walked_on_step;
+        self.next_step = e.next_step_distance;
+        for f in fx {
+            self.entity_fx(w, f);
         }
-        let (ox, oy, oz) = (dx, dy, dz);
-        let orig = self.bb;
-        let list = colliding_boxes(w, &self.bb.add_coord(dx, dy, dz));
-        for b in &list {
-            dy = b.calc_offset(&self.bb, 1, dy);
-        }
-        self.bb.offset(0.0, dy, 0.0);
-        let stepping = self.on_ground || (oy != dy && oy < 0.0);
-        for b in &list {
-            dx = b.calc_offset(&self.bb, 0, dx);
-        }
-        self.bb.offset(dx, 0.0, 0.0);
-        for b in &list {
-            dz = b.calc_offset(&self.bb, 2, dz);
-        }
-        self.bb.offset(0.0, 0.0, dz);
-        let step = if self.kind == Kind::Chicken {
-            0.5
-        } else {
-            0.5f64
-        };
-        if stepping && (ox != dx || oz != dz) {
-            let (sx, sy, sz) = (dx, dy, dz);
-            let saved = self.bb;
-            self.bb = orig;
-            dx = ox;
-            dy = step;
-            dz = oz;
-            let list = colliding_boxes(w, &self.bb.add_coord(dx, dy, dz));
-            for b in &list {
-                dy = b.calc_offset(&self.bb, 1, dy);
-            }
-            self.bb.offset(0.0, dy, 0.0);
-            for b in &list {
-                dx = b.calc_offset(&self.bb, 0, dx);
-            }
-            self.bb.offset(dx, 0.0, 0.0);
-            for b in &list {
-                dz = b.calc_offset(&self.bb, 2, dz);
-            }
-            self.bb.offset(0.0, 0.0, dz);
-            dy = -step;
-            for b in &list {
-                dy = b.calc_offset(&self.bb, 1, dy);
-            }
-            self.bb.offset(0.0, dy, 0.0);
-            if sx * sx + sz * sz >= dx * dx + dz * dz {
-                dx = sx;
-                dy = sy;
-                dz = sz;
-                self.bb = saved;
-            }
-        }
-        self.pos = [
-            (self.bb.min[0] + self.bb.max[0]) / 2.0,
-            self.bb.min[1],
-            (self.bb.min[2] + self.bb.max[2]) / 2.0,
-        ];
-        self.collided_h = ox != dx || oz != dz;
-        self.on_ground = oy != dy && oy < 0.0;
-        // Entity.updateFallState
-        if self.on_ground {
-            if self.fall_distance > 0.0 {
-                let dmg = (self.fall_distance - 3.0).ceil();
-                if dmg > 0.0 && self.kind != Kind::Chicken {
-                    self.damage(dmg, None);
-                }
-                self.fall_distance = 0.0;
-            }
-        } else if dy < 0.0 {
-            self.fall_distance -= dy as f32;
-        }
-        if ox != dx {
-            self.motion[0] = 0.0;
-        }
-        if oy != dy {
-            self.motion[1] = 0.0;
-        }
-        if oz != dz {
-            self.motion[2] = 0.0;
-        }
-        self.block_contacts(w);
     }
 
-    /// The end of `Entity.moveEntity`: `doBlockCollisions` (cactus pricks,
-    /// soul sand slows), then the fire check: touching fire or lava deals
-    /// `inFire` and, unless wet, counts `fire` up from `-fireResistance`
-    /// to light the mob for 8 seconds; being wet puts it out with a fizz.
-    fn block_contacts(&mut self, w: &ServerWorld) {
-        let bb = self.bb;
-        let x0 = math::floor_double(bb.min[0] + 0.001);
-        let y0 = math::floor_double(bb.min[1] + 0.001);
-        let z0 = math::floor_double(bb.min[2] + 0.001);
-        let x1 = math::floor_double(bb.max[0] - 0.001);
-        let y1 = math::floor_double(bb.max[1] - 0.001);
-        let z1 = math::floor_double(bb.max[2] - 0.001);
-        for x in x0..=x1 {
-            for y in y0..=y1 {
-                for z in z0..=z1 {
-                    match w.peek_block(x, y, z) {
-                        // BlockCactus.onEntityCollidedWithBlock
-                        block::CACTUS => {
-                            self.hurt_sounding(1.0, true, false);
+    /// A temporary [`Ent`] standing where this mob stands (no random).
+    fn as_ent(&self) -> super::base::Ent {
+        let (wd, ht) = self.dims();
+        let mut e = super::base::Ent::new(wd, ht, 0);
+        e.pos = self.pos;
+        e.bb = self.bb;
+        e.motion = self.motion;
+        e.in_water = self.in_water;
+        e
+    }
+
+    /// `Entity.handleWaterMovement` (the splash, the current, putting out
+    /// fire and the fall).
+    fn handle_water(&mut self, w: &ServerWorld) {
+        let mut e = self.as_ent();
+        std::mem::swap(&mut e.rand, &mut self.rand);
+        e.fall_distance = self.fall_distance;
+        e.fire = self.fire;
+        e.first_update = self.first_update;
+        let mut fx = Vec::new();
+        e.handle_water_movement(w, None, &mut fx);
+        std::mem::swap(&mut e.rand, &mut self.rand);
+        self.motion = e.motion;
+        self.in_water = e.in_water;
+        self.fall_distance = e.fall_distance;
+        self.fire = e.fire;
+        for f in fx {
+            self.entity_fx(w, f);
+        }
+    }
+
+    /// One thing `moveEntity` or `handleWaterMovement` reported, as this
+    /// mob's class handles it.
+    fn entity_fx(&mut self, w: &ServerWorld, f: super::base::Fx) {
+        use super::base::{Fx, Source as S};
+        match f {
+            Fx::Sound(n, _, v, p) => self.move_sounds.push((n, v, p)),
+            Fx::Particle(n, p, m) => self.move_particles.push((n, p, m)),
+            Fx::Damage(src, a) => {
+                match src {
+                    // dealFireDamage: not when immune
+                    S::InFire => {
+                        if !self.kind.fireproof() {
+                            self.hurt_src(a, true, true, false);
                         }
-                        // BlockSoulSand.onEntityCollidedWithBlock
-                        block::SOUL_SAND => {
-                            self.motion[0] *= 0.4;
-                            self.motion[2] *= 0.4;
-                        }
-                        _ => {}
+                    }
+                    S::Lava => {
+                        self.hurt_src(a, true, true, false);
+                    }
+                    S::OnFire => {
+                        self.hurt_src(a, false, true, false);
+                    }
+                    S::Cactus => {
+                        self.hurt_src(a, true, false, false);
+                    }
+                    S::Drown => {
+                        self.hurt_src(a, false, false, true);
+                    }
+                    S::InWall | S::OutOfWorld => {
+                        self.hurt_src(a, false, false, false);
                     }
                 }
             }
-        }
-        let wet = {
-            let x = math::floor_double(self.pos[0]);
-            let z = math::floor_double(self.pos[2]);
-            let h = self.dims().1 as f64;
-            self.in_water
-                || w.lightning_at(x, math::floor_double(self.pos[1]), z)
-                || w.lightning_at(x, math::floor_double(self.pos[1] + h), z)
-        };
-        let inner = Aabb {
-            min: [bb.min[0] + 0.001, bb.min[1] + 0.001, bb.min[2] + 0.001],
-            max: [bb.max[0] - 0.001, bb.max[1] - 0.001, bb.max[2] - 0.001],
-        };
-        if super::base::flammable_within(w, &inner) {
-            // dealFireDamage(1)
-            if !self.kind.fireproof() {
-                self.hurt_sounding(1.0, true, true);
-            }
-            if !wet {
-                self.fire += 1;
-                if self.fire == 0 {
-                    self.set_fire(8);
+            Fx::Fall(d) => self.fall(w, d),
+            Fx::Walk(x, y, z, b) => {
+                self.play_step(w, x, y, z, b);
+                // Block.onEntityWalking: BlockRedstoneOre lights up
+                if b == block::REDSTONE_ORE {
+                    self.move_world.push(WorldOp::Ore(x, y, z));
                 }
             }
-        } else if self.fire <= 0 {
-            self.fire = -1;
+            Fx::Collide(x, y, z, b) => match b {
+                // BlockWeb: setInWeb (EntitySpider.setInWeb does nothing)
+                block::WEB => {
+                    if !matches!(self.kind, Kind::Spider | Kind::CaveSpider) {
+                        self.in_web = true;
+                        self.fall_distance = 0.0;
+                    }
+                }
+                block::SOUL_SAND => {
+                    self.motion[0] *= 0.4;
+                    self.motion[2] *= 0.4;
+                }
+                block::CACTUS => {
+                    self.hurt_src(1.0, true, false, false);
+                }
+                block::CAULDRON => self.move_world.push(WorldOp::Cauldron(x, y, z)),
+                _ => {}
+            },
+            // Block.onFallenUpon: BlockFarmland may be trampled
+            Fx::Landed(x, y, z, b, fall) => {
+                if b == block::FARMLAND {
+                    self.move_world.push(WorldOp::Trample(x, y, z, fall));
+                }
+            }
+            Fx::Dust(x, y, z, n) => self.move_world.push(WorldOp::Dust(x, y, z, n)),
+            _ => {}
         }
-        if wet && self.fire > 0 {
-            let p = 1.6 + (self.rand.next_float() - self.rand.next_float()) * 0.4;
-            self.move_sounds.push(("random.fizz", 0.7, p));
-            self.fire = -1;
+    }
+
+    /// `playStepSound` of each class; `Entity.playStepSound` for the rest.
+    fn play_step(&mut self, w: &ServerWorld, x: i32, y: i32, z: i32, b: u8) {
+        let own = match self.kind {
+            Kind::Zombie | Kind::PigZombie => Some("mob.zombie.step"),
+            Kind::Skeleton => Some("mob.skeleton.step"),
+            Kind::Spider | Kind::CaveSpider => Some("mob.spider.step"),
+            Kind::Silverfish => Some("mob.silverfish.step"),
+            Kind::Chicken => Some("mob.chicken.step"),
+            Kind::Cow | Kind::Mooshroom => Some("mob.cow.step"),
+            Kind::Pig => Some("mob.pig.step"),
+            Kind::Sheep => Some("mob.sheep.step"),
+            Kind::Wolf => Some("mob.wolf.step"),
+            _ => None,
+        };
+        if let Some(n) = own {
+            self.move_sounds.push((n, 0.15, 1.0));
+            return;
+        }
+        if self.kind == Kind::IronGolem {
+            self.move_sounds.push(("mob.irongolem.walk", 1.0, 1.0));
+            return;
+        }
+        let mut st = block::step_sound(b);
+        if w.peek_block(x, y + 1, z) == block::SNOW_LAYER {
+            st = block::step_sound(block::SNOW_LAYER);
+            if self.kind != Kind::Horse {
+                self.move_sounds.push((st.step, st.volume * 0.15, st.pitch));
+                return;
+            }
+        }
+        if block::material(b).is_liquid() {
+            return;
+        }
+        if self.kind == Kind::Horse {
+            // EntityHorse.playStepSound, not ridden
+            let n = if st.name == "wood" {
+                "mob.horse.wood"
+            } else {
+                "mob.horse.soft"
+            };
+            self.move_sounds.push((n, st.volume * 0.15, st.pitch));
+        } else {
+            self.move_sounds.push((st.step, st.volume * 0.15, st.pitch));
+        }
+    }
+
+    /// `fall` of each class: nothing for chickens, bats, ghasts, blazes,
+    /// magma cubes, golems and ocelots; the horse's own; otherwise
+    /// `EntityLivingBase.fall` (Jump Boost, the fall sound, `fall` damage,
+    /// the block's step), and the creeper's fuse jumps ahead.
+    fn fall(&mut self, w: &ServerWorld, d: f32) {
+        match self.kind {
+            Kind::Chicken
+            | Kind::Bat
+            | Kind::Ghast
+            | Kind::Blaze
+            | Kind::MagmaCube
+            | Kind::IronGolem
+            | Kind::Ocelot
+            | Kind::EnderDragon
+            | Kind::EnderCrystal => return,
+            Kind::Horse => {
+                if d > 1.0 {
+                    self.move_sounds.push(("mob.horse.land", 0.4, 1.0));
+                }
+                let i = math::ceiling_float_int(d * 0.5 - 3.0);
+                if i > 0 {
+                    self.hurt_src(i as f32, false, false, false);
+                    // posY - 0.2 - prevRotationYaw, as the game has it
+                    let b = w.peek_block(
+                        math::floor_double(self.pos[0]),
+                        math::floor_double(self.pos[1] - 0.2 - self.prev_yaw as f64),
+                        math::floor_double(self.pos[2]),
+                    );
+                    if block::material(b) != Material::Air {
+                        let st = block::step_sound(b);
+                        self.move_sounds.push((st.step, st.volume * 0.5, st.pitch * 0.75));
+                    }
+                }
+                return;
+            }
+            _ => {}
+        }
+        let jump = self
+            .potions
+            .amplifier(crate::potion::JUMP)
+            .map_or(0.0, |a| (a + 1) as f32);
+        let i = math::ceiling_float_int(d - 3.0 - jump);
+        if i > 0 {
+            // EntityMob.getFallSoundString / EntityLivingBase's
+            let hostile = matches!(
+                self.kind,
+                Kind::Zombie
+                    | Kind::PigZombie
+                    | Kind::Skeleton
+                    | Kind::Creeper
+                    | Kind::Spider
+                    | Kind::CaveSpider
+                    | Kind::Enderman
+                    | Kind::Silverfish
+                    | Kind::Witch
+            );
+            let n = match (hostile, i > 4) {
+                (true, true) => "game.hostile.hurt.fall.big",
+                (true, false) => "game.hostile.hurt.fall.small",
+                (false, true) => "game.neutral.hurt.fall.big",
+                (false, false) => "game.neutral.hurt.fall.small",
+            };
+            self.move_sounds.push((n, 1.0, 1.0));
+            self.hurt_src(i as f32, false, false, false);
+            let b = w.peek_block(
+                math::floor_double(self.pos[0]),
+                math::floor_double(self.pos[1] - 0.2f32 as f64),
+                math::floor_double(self.pos[2]),
+            );
+            if block::material(b) != Material::Air {
+                let st = block::step_sound(b);
+                self.move_sounds.push((st.step, st.volume * 0.5, st.pitch * 0.75));
+            }
+        }
+        if self.kind == Kind::Creeper {
+            // EntityCreeper.fall: timeSinceIgnited += fall * 1.5, up to
+            // fuseTime - 5
+            self.fuse = (self.fuse as f32 + d * 1.5) as i32;
+            if self.fuse > 30 - 5 {
+                self.fuse = 30 - 5;
+            }
         }
     }
 
@@ -1322,11 +1471,18 @@ impl Mob {
     /// fresh hit the way `attackEntityFrom` does; fire damage does nothing
     /// under Fire Resistance.
     fn hurt_sounding(&mut self, amount: f32, blockable: bool, fire: bool) -> bool {
+        self.hurt_src(amount, blockable, fire, false)
+    }
+
+    /// `attackEntityFrom(source, amount)` for a source with no attacker:
+    /// `blockable` is `!isUnblockable`, `fire` is `isFireDamage`, `drown`
+    /// the one source that skips `setBeenAttacked`.
+    fn hurt_src(&mut self, amount: f32, blockable: bool, fire: bool, drown: bool) -> bool {
         if fire && self.potions.active(crate::potion::FIRE_RESISTANCE) {
             return false;
         }
         let before = self.hurt_resistant;
-        let hit = self.hurt_by(amount, None, blockable, false);
+        let hit = self.hurt_by(amount, None, blockable, drown);
         if hit && before as f32 <= 10.0 && self.health > 0.0 {
             let s = mob_sound(self, false);
             if !s.is_empty() {
@@ -1335,6 +1491,129 @@ impl Mob {
             }
         }
         hit
+    }
+
+    /// `Entity.isEntityInsideOpaqueBlock` at this mob's eyes.
+    fn inside_opaque_block(&self, w: &ServerWorld) -> bool {
+        let (wd, ht) = self.dims();
+        let eye = ht * 0.85;
+        for i in 0..8 {
+            let fx = (((i >> 0) % 2) as f32 - 0.5) * wd * 0.8;
+            let fy = (((i >> 1) % 2) as f32 - 0.5) * 0.1;
+            let fz = (((i >> 2) % 2) as f32 - 0.5) * wd * 0.8;
+            let x = math::floor_double(self.pos[0] + fx as f64);
+            let y = math::floor_double(self.pos[1] + fy as f64 + eye as f64);
+            let z = math::floor_double(self.pos[2] + fz as f64);
+            if block::info(w.peek_block(x, y, z)).normal_cube() {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// `Entity.onEntityUpdate` and `EntityLivingBase.onEntityUpdate` up to
+    /// the hurt timers: water, burning, lava, the void, suffocation in a
+    /// block, the air supply (`EntityWaterMob`'s the other way round), and
+    /// being put out by water or rain.
+    fn entity_update(&mut self, w: &ServerWorld, out: &mut Outcome) {
+        self.prev_yaw = self.yaw;
+        self.handle_water(w);
+        let immune = self.kind.fireproof();
+        if self.fire > 0 {
+            if immune {
+                self.fire -= 4;
+                if self.fire < 0 {
+                    self.fire = 0;
+                }
+            } else {
+                if self.fire % 20 == 0 {
+                    self.hurt_src(1.0, false, true, false);
+                }
+                self.fire -= 1;
+            }
+        }
+        // handleLavaMovement -> setOnFireFromLava
+        let lava = {
+            let b = &self.bb;
+            let bb = Aabb {
+                min: [b.min[0] + 0.1f32 as f64, b.min[1] + 0.4f32 as f64, b.min[2] + 0.1f32 as f64],
+                max: [b.max[0] - 0.1f32 as f64, b.max[1] - 0.4f32 as f64, b.max[2] - 0.1f32 as f64],
+            };
+            super::base::material_in_bb(w, &bb, Material::Lava)
+        };
+        if lava {
+            if !immune {
+                self.hurt_src(4.0, true, true, false);
+                self.set_fire(15);
+            }
+            self.fall_distance *= 0.5;
+        }
+        // kill(): attackEntityFrom(outOfWorld, 4)
+        if self.pos[1] < -64.0 {
+            self.hurt_src(4.0, false, false, false);
+        }
+        self.first_update = false;
+        // EntityLivingBase
+        let alive = self.health > 0.0;
+        if alive && self.inside_opaque_block(w) {
+            self.hurt_src(1.0, false, false, false);
+        }
+        if immune {
+            self.fire = 0;
+        }
+        let air_before = self.air;
+        let eye = self.dims().1 * 0.85;
+        let e = self.as_ent();
+        if alive && e.is_inside_of_material(w, Material::Water, eye) {
+            if self.kind != Kind::Squid && !self.potions.active(crate::potion::WATER_BREATHING) {
+                // decreaseAirSupply: Respiration on the equipment
+                let r = crate::enchant::max_level_in(crate::enchant::RESPIRATION, &self.equipment);
+                if !(r > 0 && self.rand.next_int_n(r + 1) > 0) {
+                    self.air -= 1;
+                }
+                if self.air == -20 {
+                    self.air = 0;
+                    for _ in 0..8 {
+                        let a = self.rand.next_float() - self.rand.next_float();
+                        let b = self.rand.next_float() - self.rand.next_float();
+                        let c = self.rand.next_float() - self.rand.next_float();
+                        out.particles.push((
+                            "bubble",
+                            [
+                                self.pos[0] + a as f64,
+                                self.pos[1] + b as f64,
+                                self.pos[2] + c as f64,
+                            ],
+                            self.motion,
+                        ));
+                    }
+                    self.hurt_src(2.0, false, false, true);
+                }
+            }
+        } else {
+            self.air = 300;
+        }
+        if self.health > 0.0 && e.is_wet(w) {
+            self.fire = 0;
+        }
+        // EntityWaterMob.onEntityUpdate: squid run out of air on land
+        // (EntitySquid.isInWater: the box shrunk by 0.6 at both ends)
+        if self.kind == Kind::Squid {
+            let b = &self.bb;
+            let bb = Aabb {
+                min: [b.min[0], b.min[1] + 0.6f32 as f64, b.min[2]],
+                max: [b.max[0], b.max[1] - 0.6f32 as f64, b.max[2]],
+            };
+            if self.health > 0.0 && !self.in_material(w, &bb, Material::Water) {
+                self.air = air_before - 1;
+                if self.air == -20 {
+                    self.air = 0;
+                    self.hurt_src(2.0, false, false, true);
+                }
+            } else {
+                self.air = 300;
+            }
+        }
     }
 
     fn move_flying(&mut self, mut strafe: f32, mut forward: f32, friction: f32) {
@@ -2439,6 +2718,19 @@ impl Default for Mobs {
 }
 
 /// Output of a tick: damage to the player, dropped items, sounds.
+/// A world change a mob's movement causes, done after it.
+#[derive(Clone, Copy, Debug)]
+enum WorldOp {
+    /// `BlockFarmland.onFallenUpon`: the fall distance
+    Trample(i32, i32, i32, f32),
+    /// `BlockRedstoneOre.onEntityWalking`
+    Ore(i32, i32, i32),
+    /// `BlockCauldron.onEntityCollidedWithBlock`
+    Cauldron(i32, i32, i32),
+    /// `playAuxSFX(2006)`
+    Dust(i32, i32, i32, i32),
+}
+
 #[derive(Default)]
 pub struct Outcome {
     /// Throwables spawned this tick (the witch's potions).
@@ -2454,6 +2746,8 @@ pub struct Outcome {
     pub blasts: Vec<crate::world::explosion::Blast>,
     /// Particles for the client (portal, slime, heart, smoke).
     pub particles: Vec<Puff>,
+    /// `playAuxSFX(2006)`: landing dust (block, `ceil(fall - 3)`).
+    pub dust: Vec<([i32; 3], i32)>,
     /// The mob that last hurt the player this tick.
     pub attacker: Option<u32>,
     /// `EntityAIHurtByTarget` calling the mobs around for help.
@@ -3922,6 +4216,41 @@ fn idle_name(m: &mut Mob) -> Option<&'static str> {
     })
 }
 
+/// Sends on what a mob's movement reported and does what it did to the
+/// world: farmland trampled (`rand.nextFloat() < fall - 0.5`, mobGriefing
+/// taken as on), redstone ore lit, a cauldron putting the mob out, the
+/// landing dust.
+fn drain_moves(m: &mut Mob, w: &mut ServerWorld, out: &mut Outcome) {
+    for (n, v, pi) in std::mem::take(&mut m.move_sounds) {
+        out.sounds.push((n, m.pos, v, pi));
+    }
+    out.particles.append(&mut m.move_particles);
+    for op in std::mem::take(&mut m.move_world) {
+        match op {
+            WorldOp::Trample(x, y, z, fall) => {
+                if w.block(x, y, z) == block::FARMLAND && w.rand.next_float() < fall - 0.5 {
+                    w.set_block(x, y, z, block::DIRT, 0, 3);
+                }
+            }
+            WorldOp::Ore(x, y, z) => w.redstone_ore_light_up(x, y, z),
+            WorldOp::Cauldron(x, y, z) => {
+                let level = w.meta(x, y, z) as i32;
+                let top = y as f32 + (6.0 + (3 * level) as f32) / 16.0;
+                if w.block(x, y, z) == block::CAULDRON
+                    && m.fire > 0
+                    && level > 0
+                    && m.bb.min[1] <= top as f64
+                {
+                    m.fire = 0;
+                    w.set_meta(x, y, z, (level - 1).clamp(0, 3), 2);
+                    w.update_neighbors_about_output(x, y, z, block::CAULDRON);
+                }
+            }
+            WorldOp::Dust(x, y, z, n) => out.dust.push(([x, y, z], n)),
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn tick_mob(
     m: &mut Mob,
@@ -3937,9 +4266,7 @@ fn tick_mob(
     strikes: &mut Vec<Strike>,
     balls: &mut Vec<Fireball>,
 ) {
-    for (n, v, pi) in std::mem::take(&mut m.move_sounds) {
-        out.sounds.push((n, m.pos, v, pi));
-    }
+    drain_moves(m, w, out);
     // EntityZombie.onUpdate: the cure counts down, faster near iron bars
     // and beds (getConversionTimeBoost)
     if m.conversion >= 0 && matches!(m.kind, Kind::Zombie | Kind::PigZombie) {
@@ -4013,6 +4340,9 @@ fn tick_mob(
     m.prev_wing = m.wing;
     m.ticks += 1;
     m.age += 1;
+    // Entity.onEntityUpdate / EntityLivingBase.onEntityUpdate
+    m.entity_update(w, out);
+    drain_moves(m, w, out);
     if m.hurt_time > 0 {
         m.hurt_time -= 1;
     }
@@ -4030,6 +4360,20 @@ fn tick_mob(
     }
     if m.recently_hit > 0 {
         m.recently_hit -= 1;
+    }
+    // EntityLiving.onEntityUpdate: playLivingSound when a roll of 1000
+    // falls under livingSoundTime, which then restarts at -getTalkInterval
+    // (80; 120 for squid)
+    if m.health > 0.0 {
+        let t = m.living_sound_time;
+        m.living_sound_time += 1;
+        if m.rand.next_int_n(1000) < t {
+            m.living_sound_time = if m.kind == Kind::Squid { -120 } else { -80 };
+            if let Some(s) = idle_name(m) {
+                let (v, pi) = m.sound_volume_pitch();
+                out.sounds.push((s, m.pos, v, pi));
+            }
+        }
     }
     if m.attack_cooldown > 0 {
         m.attack_cooldown -= 1;
@@ -4052,27 +4396,6 @@ fn tick_mob(
         m.move_with_heading(w, 0.0, 0.0);
         let _ = mm;
         return;
-    }
-    // water / lava / fire
-    m.in_water = m.in_material(w, &m.bb.offset_copy(0.0, 0.0, 0.0), Material::Water);
-    if m.in_water {
-        m.fall_distance = 0.0;
-        m.fire = 0;
-    }
-    if m.in_material(w, &m.bb, Material::Lava) && !m.kind.fireproof() {
-        // setOnFireFromLava: DamageSource.lava is blockable fire damage
-        m.hurt_sounding(4.0, true, true);
-        m.set_fire(15);
-    }
-    if m.kind.fireproof() {
-        m.fire = 0;
-    }
-    if m.fire > 0 {
-        if m.fire % 20 == 0 {
-            // DamageSource.onFire bypasses armour
-            m.hurt_sounding(1.0, false, true);
-        }
-        m.fire -= 1;
     }
     // EntityZombie / EntitySkeleton.onLivingUpdate: undead burn in
     // daylight unless something is on their head, which wears instead
@@ -4097,7 +4420,7 @@ fn tick_mob(
                 }
                 // setFire(8); a wither skeleton is immune to fire
                 None if !(m.kind == Kind::Skeleton && m.variant == 1) => {
-                    m.fire = m.fire.max(160);
+                    m.set_fire(8);
                 }
                 None => {}
             }
@@ -4125,17 +4448,6 @@ fn tick_mob(
                 (m.rand.next_float() - m.rand.next_float()) * 0.2 + 1.0,
             ));
             m.egg_timer = m.rand.next_int_n(6000) + 6000;
-        }
-    }
-    // idle sounds (getTalkInterval 80, livingSoundTime)
-    if m.rand.next_int_n(1000) < m.ticks % 80 && m.rand.next_int_n(80) == 0 {
-        if let Some(s) = idle_name(m) {
-            out.sounds.push((
-                s,
-                m.pos,
-                1.0,
-                (m.rand.next_float() - m.rand.next_float()) * 0.2 + 1.0,
-            ));
         }
     }
 
@@ -4374,9 +4686,7 @@ fn tick_mob(
     let (s, f) = (m.move_strafe, m.move_forward);
     let was_on_ground = m.on_ground;
     m.move_with_heading(w, s, f);
-    for (n, v, pi) in std::mem::take(&mut m.move_sounds) {
-        out.sounds.push((n, m.pos, v, pi));
-    }
+    drain_moves(m, w, out);
     if matches!(m.kind, Kind::Slime | Kind::MagmaCube) {
         extra::slime_landed(m, was_on_ground, out);
     }

@@ -264,7 +264,8 @@ pub fn blaze(
     out: &mut Outcome,
 ) {
     if m.wet(w) {
-        m.drown(1.0);
+        // attackEntityFrom(DamageSource.drown, 1)
+        m.hurt_src(1.0, false, false, true);
     }
     m.teleport_delay -= 1;
     if m.teleport_delay <= 0 {

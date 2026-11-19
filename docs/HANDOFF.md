@@ -743,3 +743,27 @@ MINERUST_BENCH=10 minerust --seed 12345 --no-save --size 1920 1080 --distance 16
   **驗證**：新測試 `fire_and_cactus_hurt`（玩家站在火裡受傷並著火超過 100 tick、殭屍著火並發出受傷聲、牛被仙人掌刺傷）；
   `cargo test --release` 113 項通過；截圖確認第一人稱的火與生物身上的火。基準 831／804 對 842／842 fps、伺服器 6.5／6.4 對
   6.2／6.4 ms（雜訊範圍）。
+- `本次（2026-11-20，生物改走原版 Entity.moveEntity 與 onEntityUpdate）`：使用者說「很多地方的行為看起來和原版很不一樣」。
+  根本原因：生物有一份自己手寫的簡化移動（`Mob::move_entity`），跳過了 `Entity.moveEntity` 後半與 `onEntityUpdate` 的大部分，
+  所以生物走路沒有腳步聲、下水沒有水花聲、不會被水流推動、掉落沒有聲音也不會揚起塵土、不會踩壞農田、不會溺水、
+  卡在方塊裡不會窒息、掉出世界不會死、蜘蛛網判定是猜的；閒置叫聲用的是自創的機率，比原版少很多且音量固定 1。
+  - `Mob::move_entity` 改成借用 `base::Ent::move_entity`（物品、礦車、船已經在用的那份逐行移植），套上生物的覆寫：
+    步高 0.5（馬 1.0）、`canTriggerWalking`（蝙蝠、魷魚、蠹蟲不觸發）、各職業的 `playStepSound`（殭屍、骷髏、蜘蛛、蠹蟲、雞、牛、豬、
+    羊、狼各自的腳步聲 0.15；鐵魔像 `mob.irongolem.walk`；馬的 wood／soft；其餘照方塊的腳步聲與頂上的雪片）、`setInWeb`（蜘蛛不受影響）、
+    各職業的 `fall`（雞、蝙蝠、惡魂、烈焰使者、岩漿怪、魔像、豹貓沒有；馬自己的那套，含原版用 `prevRotationYaw` 當高度的錯誤；
+    苦力怕的引信往前跳）。`EntityLivingBase.fall` 照原版：跳躍提升、`game.hostile／neutral.hurt.fall.big／small`、不擋護甲的傷害、
+    落地方塊的腳步聲。生物自己的 `block_contacts`（上一次加的）併入共用的流程。
+  - `Ent` 新增 `living`（`EntityLivingBase.updateFallState`：不在水裡時先 `handleWaterMovement`，落地時回報 `Fx::Landed` 與
+    `Fx::Dust`）與 `own_steps`。`base::landing` 照原版：腳下方塊、空氣時看下面的柵欄／牆／柵欄門、超過 3 格掉落才有 2006 塵土。
+  - `Mob::entity_update`：`Entity.onEntityUpdate` 與 `EntityLivingBase.onEntityUpdate` 的順序（水、燃燒、熔岩與掉落距離減半、
+    Y < −64 每 tick 4 點、方塊內窒息、空氣（水下呼吸藥水、頭盔的水下呼吸附魔）、溺水的 8 個氣泡與 2 點傷害、潮濕熄火），
+    魷魚照 `EntityWaterMob` 反過來在陸上耗空氣（取代以前「每 20 tick 三分之一機率扣 2」的自創規則）。
+    烈焰使者與終界使者碰水改用有受傷聲的 `attackEntityFrom(drown, 1)`。
+  - 閒置叫聲改成 `EntityLiving.livingSoundTime`（1000 中抽一次小於計數就叫，然後回到 −80；魷魚 −120），音量音高用 `getSoundVolume`／`getSoundPitch`。
+  - 世界的變更等到能改世界時再做（`WorldOp`）：農田被踩（`world.rand.nextFloat() < fall − 0.5`，mobGriefing 視為開啟）、紅石礦石亮起、鍋釜滅火、落地塵土。
+  - **玩家也修了**：伺服器端玩家落地的踩農田以前讀的是已經歸零的掉落距離，永遠不會踩壞，而且只有受傷時才檢查；改成每次落地照
+    `updateFallState` 回報。落地塵土 `playAuxSFX(2006)`（`EntityBlockDustFX`，150 × min(0.2 + n/15, 2.5) 顆）新增 `Particles::fall_dust`。
+  **驗證**：新測試 `mobs_fall_step_and_drown`（殭屍從 10 格掉到農田：敵對掉落聲、傷害、農田變泥土、塵土、自己的腳步聲；
+  牛被關在水裡 250 tick 仍滿血、之後溺水）；`cargo test --release` 114 項通過。基準：伺服器 6.6／6.7 對 6.2／6.4 ms
+  （每 tick 多了原版本來就有的水流、窒息、空氣檢查），fps 不變。
+  **還沒做**：生物的 `getEyeHeight` 覆寫（狼 0.8 等）、生物之間互推與被船／礦車擋住以外的實體碰撞、`mobGriefing` 遊戲規則。

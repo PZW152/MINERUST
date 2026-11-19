@@ -100,7 +100,7 @@ impl ItemEntity {
                     }
                 }
                 Fx::Sound(..) | Fx::Particle(..) => out.push(f),
-                Fx::Fall(_) | Fx::Walk(..) | Fx::BrokenItem(_) => {}
+                Fx::Fall(_) | Fx::Walk(..) | Fx::BrokenItem(_) | Fx::Landed(..) | Fx::Dust(..) => {}
             }
         }
     }

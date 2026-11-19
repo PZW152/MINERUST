@@ -197,6 +197,8 @@ pub enum Event {
     BoneMeal([i32; 3]),
     /// Particles from mobs: kind, position, motion.
     Particles(Vec<crate::entity::mob::Puff>),
+    /// `playAuxSFX(2006)`: the dust of hard landings (block, `ceil(fall - 3)`).
+    FallDust(Vec<([i32; 3], i32)>),
     /// The player moved to another dimension: drop every chunk and stand here.
     Dimension {
         dim: i32,
@@ -3216,8 +3218,10 @@ impl Sim {
         }
         let mut explosions = Vec::new();
         let mut particles = Vec::new();
+        let mut dust = Vec::new();
         let mut rnd = std::mem::replace(&mut self.world.rand, JavaRandom::new(0));
         for o in outs {
+            dust.extend(o.dust);
             if o.attacker.is_some() {
                 self.last_attacker = o.attacker;
                 self.last_attacker_time = self.world.total_time as i32;
@@ -3250,6 +3254,9 @@ impl Sim {
         }
         if !particles.is_empty() {
             events.push(Event::Particles(particles));
+        }
+        if !dust.is_empty() {
+            events.push(Event::FallDust(dust));
         }
         let r2 = ((self.view + 1) * 16) as f64;
         let views: Vec<MobView> = self
@@ -3991,6 +3998,7 @@ impl Sim {
         let fx = std::mem::take(&mut self.splayer.fx);
         let mut sounds = Vec::new();
         let mut parts = Vec::new();
+        let mut dust = Vec::new();
         for f in fx {
             match f {
                 crate::entity::base::Fx::Sound(n, p, v, pi) => sounds.push((n, p, v, pi)),
@@ -4002,14 +4010,13 @@ impl Sim {
                     let p = 0.8 + self.world.rand.next_float() * 0.4;
                     sounds.push(("random.break", self.splayer.e.pos, 0.8, p));
                 }
-                // Block.onFallenUpon: farmland is trampled
-                crate::entity::base::Fx::Walk(x, y, z, id) => {
-                    if id == crate::block::FARMLAND
-                        && self.world.rand.next_float() < self.splayer.e.fall_distance - 0.5
-                    {
+                // BlockFarmland.onFallenUpon: trampled by a player
+                crate::entity::base::Fx::Landed(x, y, z, id, fall) => {
+                    if id == crate::block::FARMLAND && self.world.rand.next_float() < fall - 0.5 {
                         self.world.set_block(x, y, z, crate::block::DIRT, 0, 3);
                     }
                 }
+                crate::entity::base::Fx::Dust(x, y, z, n) => dust.push(([x, y, z], n)),
                 _ => {}
             }
         }
@@ -4018,6 +4025,9 @@ impl Sim {
         }
         if !parts.is_empty() {
             events.push(Event::Particles(parts));
+        }
+        if !dust.is_empty() {
+            events.push(Event::FallDust(dust));
         }
         if std::mem::take(&mut self.splayer.hurt_anim) {
             events.push(Event::Hurt);
@@ -6407,6 +6417,77 @@ mod tests {
         assert!(get(zom).fire > 100, "the zombie burns: {}", get(zom).fire);
         assert!(heard, "the zombie cried out");
         assert!(get(cow).health < 10.0, "the cactus pricked the cow");
+    }
+
+    /// Mobs move through `Entity.moveEntity`: a zombie falling ten blocks
+    /// onto farmland plays the hostile fall sound, takes `ceil(fall - 3)`,
+    /// tramples the farmland, raises landing dust (`playAuxSFX(2006)`) and
+    /// steps with its own step sound; a cow held under water runs out of
+    /// air after 300 ticks and drowns two points at a time.
+    #[test]
+    fn mobs_fall_step_and_drown() {
+        use crate::entity::mob::Kind;
+        let (mut sim, x, y, z) = redstone_sim();
+        arena(&mut sim, x, y, z);
+        for dx in -2..14 {
+            for dz in -2..14 {
+                for dy in 5..16 {
+                    sim.world.set_block(x + dx, y + dy, z + dz, block::AIR, 0, 3);
+                }
+            }
+        }
+        sim.world.set_block(x + 4, y, z + 4, block::FARMLAND, 0, 3);
+        // a flooded cell with a lid for the cow
+        for dx in 7..12 {
+            for dz in 7..12 {
+                for dy in 1..4 {
+                    let edge = dx == 7 || dx == 11 || dz == 7 || dz == 11 || dy == 3;
+                    let b = if edge { block::STONE } else { block::WATER };
+                    sim.world.set_block(x + dx, y + dy, z + dz, b, 0, 3);
+                }
+            }
+        }
+        let feet = [x as f64 + 0.5, (y + 1) as f64, z as f64 + 0.5];
+        let mut r = JavaRandom::new(5);
+        let zom = sim.mobs.spawn(Kind::Zombie, [x as f64 + 4.5, (y + 11) as f64, z as f64 + 4.5], 0.0, &mut r);
+        let cow = sim.mobs.spawn(Kind::Cow, [x as f64 + 9.5, (y + 1) as f64, z as f64 + 9.5], 0.0, &mut r);
+        for m in sim.mobs.list.iter_mut() {
+            m.equipment[4] = Some(crate::item::Stack::new(310, 0, 1));
+            m.persistent = true;
+        }
+        let calm = Command::PlayerState { attackable: false };
+        let (mut fall_sound, mut step, mut dust) = (false, false, false);
+        let mut landed_hp = None;
+        for i in 0..420 {
+            let mut ev = Vec::new();
+            sim.step(&[calm.clone(), Command::Player(feet, [0.0, 0.0], true)], &mut ev);
+            for e in &ev {
+                match e {
+                    Event::Sounds(v) => {
+                        fall_sound |= v.iter().any(|s| s.0 == "game.hostile.hurt.fall.big");
+                        step |= v.iter().any(|s| s.0 == "mob.zombie.step");
+                    }
+                    Event::FallDust(v) => dust |= v.iter().any(|d| d.0 == [x + 4, y, z + 4] && d.1 >= 6),
+                    _ => {}
+                }
+            }
+            if i == 40 {
+                landed_hp = sim.mobs.list.iter().find(|m| m.id == zom).map(|m| m.health);
+            }
+            if i == 250 {
+                let hp = sim.mobs.list.iter().find(|m| m.id == cow).map(|m| m.health);
+                assert_eq!(hp, Some(10.0), "air lasts 300 ticks");
+            }
+        }
+        let hp = landed_hp.expect("the zombie is there");
+        assert!(hp <= 20.0 - 6.0 && hp > 0.0, "fall damage: {hp}");
+        assert!(fall_sound, "the hostile fall sound");
+        assert!(dust, "landing dust on the farmland");
+        assert_eq!(sim.world.block(x + 4, y, z + 4), block::DIRT, "the farmland was trampled");
+        assert!(step, "the zombie's own footsteps");
+        // 15 seconds of air, then 2 a second: gone by now, or nearly
+        let hp = sim.mobs.list.iter().find(|m| m.id == cow).map_or(0.0, |m| m.health);
+        assert!(hp < 10.0, "the cow drowned: {hp}");
     }
 
     /// Zombie villagers: on hard a zombie's villager victim rises as one

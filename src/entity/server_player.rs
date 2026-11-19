@@ -279,6 +279,9 @@ impl ServerPlayer {
             if on_ground {
                 if self.e.fall_distance > 0.0 {
                     let f = self.e.fall_distance;
+                    // EntityLivingBase.updateFallState: the landing dust
+                    // and Block.onFallenUpon, then fall()
+                    super::base::landing(w, self.e.pos, self.e.y_offset, f, &mut self.fx);
                     self.fall(w, f);
                     self.e.fall_distance = 0.0;
                 }
@@ -426,8 +429,6 @@ impl ServerPlayer {
                     st.volume * 0.5,
                     st.pitch * 0.75,
                 ));
-                // Block.onFallenUpon (farmland trampling)
-                self.fx.push(Fx::Walk(x, y, z, b));
             }
         }
     }

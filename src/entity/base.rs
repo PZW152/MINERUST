@@ -35,6 +35,12 @@ pub enum Fx {
     Walk(i32, i32, i32, u8),
     /// `Block.onEntityCollidedWithBlock`
     Collide(i32, i32, i32, u8),
+    /// `EntityLivingBase.updateFallState` on landing: the block under the
+    /// feet (`Block.onFallenUpon`) and the fall distance.
+    Landed(i32, i32, i32, u8, f32),
+    /// `playAuxSFX(2006)`: the dust of a hard landing, at the block, with
+    /// `ceil(fallDistance - 3)`.
+    Dust(i32, i32, i32, i32),
     /// `Entity.kill` (below y = -64)
     Kill,
     /// `EntityLivingBase.renderBrokenItemStack`: the "random.break" sound,
@@ -93,6 +99,12 @@ pub struct Ent {
     pub can_trigger_walking: bool,
     /// `isPushedByWater`
     pub pushed_by_water: bool,
+    /// An `EntityLivingBase`: `updateFallState` also checks the water and
+    /// reports the landing (`Fx::Landed`, `Fx::Dust`).
+    pub living: bool,
+    /// `playStepSound` is overridden: only `Fx::Walk` is reported and the
+    /// owner plays its own step.
+    pub own_steps: bool,
     pub riding: Option<u32>,
     pub ridden_by: Option<u32>,
     /// The id of an entity whose `getBoundingBox` others collide with
@@ -151,6 +163,8 @@ impl Ent {
             entity_collision_reduction: 0.0,
             can_trigger_walking: true,
             pushed_by_water: true,
+            living: false,
+            own_steps: false,
             riding: None,
             ridden_by: None,
             solid_id: None,
@@ -640,7 +654,15 @@ impl Ent {
         self.collided_v = oy != dy;
         self.on_ground = oy != dy && oy < 0.0;
         self.collided = self.collided_h || self.collided_v;
-        // updateFallState
+        // updateFallState (EntityLivingBase's first)
+        if self.living {
+            if !self.in_water {
+                self.handle_water_movement(w, None, fx);
+            }
+            if self.on_ground && self.fall_distance > 0.0 {
+                landing(w, self.pos, self.y_offset, self.fall_distance, fx);
+            }
+        }
         if self.on_ground {
             if self.fall_distance > 0.0 {
                 fx.push(Fx::Fall(self.fall_distance));
@@ -696,7 +718,8 @@ impl Ent {
                     fx.push(Fx::Sound("game.neutral.swim", self.pos, f, p));
                 }
                 // playStepSound
-                if w.peek_block(bx, by + 1, bz) == block::SNOW_LAYER {
+                if self.own_steps {
+                } else if w.peek_block(bx, by + 1, bz) == block::SNOW_LAYER {
                     let s = block::step_sound(block::SNOW_LAYER);
                     fx.push(Fx::Sound(s.step, self.pos, s.volume * 0.15, s.pitch));
                 } else if !block::material(b).is_liquid() {
@@ -890,6 +913,26 @@ pub fn flammable_within(w: &dyn BlockView, bb: &Aabb) -> bool {
         }
     }
     false
+}
+
+/// The landing part of `EntityLivingBase.updateFallState` (fallDistance
+/// > 0, on the ground): the block under the feet, or the fence, wall or
+/// gate below an air block; `playAuxSFX(2006)` for a fall of more than 3
+/// onto a solid block; then `onFallenUpon`.
+pub fn landing(w: &dyn BlockView, pos: [f64; 3], y_offset: f32, fall: f32, fx: &mut Vec<Fx>) {
+    let x = math::floor_double(pos[0]);
+    let y = math::floor_double(pos[1] - 0.2f32 as f64 - y_offset as f64);
+    let z = math::floor_double(pos[2]);
+    let mut b = w.peek_block(x, y, z);
+    if block::material(b) == Material::Air {
+        let below = w.peek_block(x, y - 1, z);
+        if block::render_type(below).is_some_and(|t| t == 11 || t == 32 || t == 21) {
+            b = below;
+        }
+    } else if fall > 3.0 {
+        fx.push(Fx::Dust(x, y, z, math::ceiling_float_int(fall - 3.0)));
+    }
+    fx.push(Fx::Landed(x, y, z, b, fall));
 }
 
 /// `World.isBlockFullCube`: the collision box has an average edge of 1.

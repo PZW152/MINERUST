@@ -1534,6 +1534,19 @@ impl Game {
                 }
                 Event::Tnt(list) => self.tnt = list,
                 Event::Fireballs(list) => self.fireballs = list,
+                Event::FallDust(list) => {
+                    for (p, n) in list {
+                        let id = self.world.peek_block(p[0], p[1], p[2]);
+                        if block::material(id) != crate::block::Material::Air {
+                            let meta = self.world.peek_meta(p[0], p[1], p[2]);
+                            let tex = self
+                                .atlas
+                                .tile(id, meta, 0)
+                                .or_else(|| self.atlas.tile(id, meta, 2));
+                            self.particles.spawned(|ps| ps.fall_dust(p, n, tex));
+                        }
+                    }
+                }
                 Event::Particles(list) => {
                     for (kind, p, m) in list {
                         self.named_particle(kind, p, m);

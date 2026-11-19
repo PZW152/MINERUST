@@ -260,7 +260,8 @@ pub fn enderman(
 ) {
     let wet = m.wet(w);
     if wet {
-        m.drown(1.0);
+        // attackEntityFrom(DamageSource.drown, 1)
+        m.hurt_src(1.0, false, false, true);
     }
     // mobGriefing: pick up or put down a block
     if m.carried == 0 {
@@ -437,10 +438,6 @@ pub fn squid(m: &mut Mob, w: &mut ServerWorld) {
         m.motion[1] *= 0.98f32 as f64;
         m.motion[2] = 0.0;
         m.sq[0] = (m.sq[0] as f64 + (-90.0 - m.sq[0] as f64) * 0.02) as f32;
-        // EntityWaterMob: suffocates on land
-        if m.ticks % 20 == 0 && m.rand.next_int_n(3) == 0 {
-            m.drown(2.0);
-        }
     }
     let mm = m.motion;
     m.move_entity(w, mm[0], mm[1], mm[2], false);
