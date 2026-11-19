@@ -396,6 +396,16 @@ pub struct Mob {
     pub can_pick_up_loot: bool,
     /// `EntityZombie.isChild` (dataWatcher 12): a baby zombie or pigman.
     pub baby: bool,
+    /// `EntityZombie.isVillager` (dataWatcher 13)
+    pub zombie_villager: bool,
+    /// `EntityZombie.conversionTime` while `isConverting` (dataWatcher 14),
+    /// else -1.
+    pub conversion: i32,
+    /// `onKillEntity` of a zombie turned this villager: the zombie's
+    /// position, for `playAuxSFX(1016)`.
+    infected_by: Option<[f64; 3]>,
+    /// `convertToVillager` is due (the countdown ran out this tick).
+    convert_now: bool,
     /// The zombie's "Random spawn bonus" to knockback resistance.
     pub kb_resist: f64,
     pub persistent: bool,
@@ -743,6 +753,10 @@ impl Mob {
             drop_chances: [0.085; 5],
             can_pick_up_loot: false,
             baby: false,
+            zombie_villager: false,
+            conversion: -1,
+            infected_by: None,
+            convert_now: false,
             kb_resist: 0.0,
             persistent: false,
             variant: 0,
@@ -926,8 +940,10 @@ impl Mob {
                 // random (not carried through a pack yet)
                 let child = world_rand.next_float() < 0.05;
                 let villager = world_rand.next_float() < 0.05;
-                // zombie villagers are not made yet (HANDOFF section 7)
-                let _ = villager;
+                // EntityPigZombie.onSpawnWithEgg: setVillager(false) after
+                if villager && self.kind == Kind::Zombie {
+                    self.zombie_villager = true;
+                }
                 if child {
                     self.set_baby(true);
                     // the chicken-jockey rolls (an existing chicken nearby,
@@ -2307,6 +2323,8 @@ pub struct Mobs {
     pub blast_targets: Vec<crate::world::explosion::Target>,
     next_id: u32,
     pub rand: JavaRandom,
+    /// `World.difficultySetting` as of the last tick (0..3)
+    pub difficulty: i32,
 }
 
 impl Default for Mobs {
@@ -2321,6 +2339,7 @@ impl Default for Mobs {
             queued_explosions: Vec::new(),
             blast_targets: Vec::new(),
             next_id: 1,
+            difficulty: 2,
             rand: JavaRandom::new(0x6D6F62),
         }
     }
@@ -2621,6 +2640,7 @@ impl Mobs {
 
     /// One tick for every mob in a loaded chunk.
     pub fn tick(&mut self, w: &mut ServerWorld, player: &PlayerInfo, out: &mut Outcome) {
+        self.difficulty = player.difficulty;
         let day = w.skylight_subtracted < 4;
         let villagers: Vec<[f64; 3]> = self
             .list
@@ -2679,6 +2699,7 @@ impl Mobs {
             }
             m.track();
         }
+        self.convert_zombies(w, out);
         ai::answer_calls(&mut self.list, &out.calls);
         out.calls.clear();
         // EntityAIMate.spawnBaby: the other parent, then the young one
@@ -2759,6 +2780,7 @@ impl Mobs {
             }
         }
         self.arrows.extend(new_arrows);
+        let mut infections: Vec<(u32, u32)> = Vec::new();
         for st in strikes {
             // attackEntityFrom: a tamed wolf's kill counts as the player's
             // for loot (recentlyHit, attackingPlayer null so no looting)
@@ -2770,6 +2792,9 @@ impl Mobs {
                 continue;
             };
             if t.hurt(st.amount, Some(st.at), true) {
+                if t.health <= 0.0 && t.kind == Kind::Villager {
+                    infections.push((st.target, st.from));
+                }
                 if tamed_wolf {
                     t.recently_hit = 100;
                 }
@@ -2784,6 +2809,25 @@ impl Mobs {
                 {
                     t.target_mob = Some(st.from);
                 }
+            }
+        }
+        // EntityZombie.onKillEntity: on normal (half the time) or hard a
+        // zombie's victim rises as a zombie villager
+        let diff = player.difficulty;
+        for (victim, from) in infections {
+            let Some(z) = self
+                .list
+                .iter_mut()
+                .find(|m| m.id == from && matches!(m.kind, Kind::Zombie | Kind::PigZombie))
+            else {
+                continue;
+            };
+            if diff < 2 || diff != 3 && z.rand.next_boolean() {
+                continue;
+            }
+            let zp = z.pos;
+            if let Some(v) = self.list.iter_mut().find(|m| m.id == victim) {
+                v.infected_by = Some(zp);
             }
         }
         // EntityTNTPrimed.onUpdate
@@ -2826,6 +2870,7 @@ impl Mobs {
         // deaths
         let mut splits: Vec<([f64; 3], i32, f32)> = Vec::new();
         let mut blasts: Vec<[f64; 3]> = Vec::new();
+        let mut risen: Vec<([f64; 3], f32, f32, bool, [f64; 3])> = Vec::new();
         let mut i = 0;
         while i < self.list.len() {
             let m = &mut self.list[i];
@@ -2838,8 +2883,15 @@ impl Mobs {
                     let (v, pi) = m.sound_volume_pitch();
                     out.sounds.push((s, m.pos, v, pi));
                 }
-                for s in m.drops(by_player, looting) {
-                    out.drops.push(([m.pos[0], m.pos[1] + 0.0, m.pos[2]], s));
+                // onDeath: onKillEntity first; the zombie removes the villager
+                if let Some(zp) = m.infected_by.take() {
+                    risen.push((m.pos, m.yaw, m.pitch, m.is_child(), zp));
+                    m.dead = true;
+                }
+                if !m.dead {
+                    for s in m.drops(by_player, looting) {
+                        out.drops.push(([m.pos[0], m.pos[1] + 0.0, m.pos[2]], s));
+                    }
                 }
                 // EntitySlime.setDead: split into smaller slimes
                 if m.kind == Kind::Slime && m.variant > 1 {
@@ -2857,7 +2909,7 @@ impl Mobs {
                     }
                 }
             }
-            if m.health <= 0.0 {
+            if m.health <= 0.0 && !m.dead {
                 match m.kind {
                     Kind::EnderDragon => {
                         if end::dragon_dying(m, w, out) {
@@ -2894,6 +2946,27 @@ impl Mobs {
             } else {
                 i += 1;
             }
+        }
+        for (pos, yaw, pitch, child, zp) in risen {
+            // new EntityZombie, copyLocationAndAnglesFrom, onSpawnWithEgg(null),
+            // setVillager(true), setChild if the villager was a child
+            let mut z = self.make(Kind::Zombie, pos, yaw);
+            z.pitch = pitch;
+            let cx = SpawnCtx::of(w, pos);
+            z.on_spawn(&mut w.rand, &cx);
+            z.zombie_villager = true;
+            if child {
+                z.set_baby(true);
+            }
+            self.list.push(z);
+            let r = &mut self.rand;
+            let pi = (r.next_float() - r.next_float()) * 0.2 + 1.0;
+            let at = [
+                (zp[0] as i32) as f64 + 0.5,
+                (zp[1] as i32) as f64 + 0.5,
+                (zp[2] as i32) as f64 + 0.5,
+            ];
+            out.sounds.push(("mob.zombie.infect", at, 2.0, pi));
         }
         for c in blasts {
             // EntityEnderCrystal: createExplosion(null, ..., 6.0F, true)
@@ -3098,6 +3171,17 @@ impl Mobs {
                 out.wear = 1;
                 Some(held)
             }
+            // EntityZombie.interact: a golden apple on a weakened zombie
+            // villager starts the cure
+            (Kind::Zombie | Kind::PigZombie, Some(322))
+                if held.is_some_and(|s| s.meta == 0)
+                    && m.zombie_villager
+                    && m.potions.active(crate::potion::WEAKNESS) =>
+            {
+                let t = m.rand.next_int_n(2401) + 3600;
+                Mobs::start_conversion(m, t, self.difficulty, &mut out.sounds, &mut self.rand);
+                Some(one_less(held.unwrap()))
+            }
             (Kind::Creeper, Some(259)) => {
                 // EntityCreeper.interact: flint and steel lights the fuse
                 let pitch = m.rand.next_float() * 0.4 + 0.8;
@@ -3201,11 +3285,68 @@ impl Mobs {
         }
     }
 
+    /// `EntityZombie.convertToVillager` for the zombies whose cure ran out:
+    /// a villager in their place (`onSpawnWithEgg`, a baby if the zombie
+    /// was one), with 10 seconds of nausea, and `playAuxSFX(1017)`.
+    fn convert_zombies(&mut self, w: &mut ServerWorld, out: &mut Outcome) {
+        let mut i = 0;
+        while i < self.list.len() {
+            if !self.list[i].convert_now {
+                i += 1;
+                continue;
+            }
+            let z = self.list.remove(i);
+            let mut v = self.make(Kind::Villager, z.pos, z.yaw);
+            v.pitch = z.pitch;
+            let cx = SpawnCtx::of(w, z.pos);
+            v.on_spawn(&mut w.rand, &cx);
+            if z.is_child() {
+                v.growing_age = -24000;
+                let p = v.pos;
+                v.set_position(p[0], p[1], p[2]);
+            }
+            v.potions
+                .add_effect(crate::potion::Effect::new(crate::potion::CONFUSION, 200, 0));
+            self.list.push(v);
+            let r = &mut self.rand;
+            let pi = (r.next_float() - r.next_float()) * 0.2 + 1.0;
+            let at = [
+                (z.pos[0] as i32) as f64 + 0.5,
+                (z.pos[1] as i32) as f64 + 0.5,
+                (z.pos[2] as i32) as f64 + 0.5,
+            ];
+            out.sounds.push(("mob.zombie.unfect", at, 2.0, pi));
+        }
+    }
+
+    /// `EntityZombie.startConversion`: the countdown, weakness off, strength
+    /// for its length, and entity state 16 (the remedy sound).
+    fn start_conversion(m: &mut Mob, time: i32, difficulty: i32, sounds: &mut Vec<(&'static str, [f64; 3], f32, f32)>, r: &mut JavaRandom) {
+        m.conversion = time;
+        m.potions.remove_effect(crate::potion::WEAKNESS);
+        m.potions.add_effect(crate::potion::Effect::new(
+            crate::potion::DAMAGE_BOOST,
+            time,
+            (difficulty - 1).min(0),
+        ));
+        // handleHealthUpdate(16) on the client
+        let v = 1.0 + r.next_float();
+        let pi = r.next_float() * 0.7 + 0.3;
+        sounds.push((
+            "mob.zombie.remedy",
+            [m.pos[0] + 0.5, m.pos[1] + 0.5, m.pos[2] + 0.5],
+            v,
+            pi,
+        ));
+    }
+
     /// Removes mobs that may despawn when far away (`despawnEntity`).
     pub fn despawn(&mut self, player: [f64; 3]) {
         let rand = &mut self.rand;
         self.list.retain_mut(|m| {
+            // EntityZombie.canDespawn: not while converting
             if m.persistent
+                || m.conversion >= 0
                 || matches!(m.kind, Kind::EnderDragon | Kind::EnderCrystal)
                 || m.kind.animal()
                 || m.kind == Kind::Villager
@@ -3358,7 +3499,8 @@ impl Mobs {
         v.push(("CanPickUpLoot", Nbt::Byte(m.can_pick_up_loot as i8)));
         if matches!(m.kind, Kind::Zombie | Kind::PigZombie) {
             v.push(("IsBaby", Nbt::Byte(m.baby as i8)));
-            v.push(("IsVillager", Nbt::Byte(0)));
+            v.push(("IsVillager", Nbt::Byte(m.zombie_villager as i8)));
+            v.push(("ConversionTime", Nbt::Int(m.conversion)));
         }
         v.push((
             "Equipment",
@@ -3454,6 +3596,16 @@ impl Mobs {
         }
         m.persistent = t.int("PersistenceRequired").unwrap_or(0) != 0;
         m.can_pick_up_loot = t.int("CanPickUpLoot").unwrap_or(0) != 0;
+        if t.int("IsVillager").unwrap_or(0) != 0 {
+            m.zombie_villager = true;
+        }
+        if let Some(c) = t.int("ConversionTime") {
+            if c > -1 {
+                // startConversion without the sound (readEntityFromNBT has
+                // no world event); the effects come back from ActiveEffects
+                m.conversion = c as i32;
+            }
+        }
         if t.int("IsBaby").unwrap_or(0) != 0 {
             m.set_baby(true);
         }
@@ -3692,6 +3844,38 @@ fn tick_mob(
     strikes: &mut Vec<Strike>,
     balls: &mut Vec<Fireball>,
 ) {
+    // EntityZombie.onUpdate: the cure counts down, faster near iron bars
+    // and beds (getConversionTimeBoost)
+    if m.conversion >= 0 && matches!(m.kind, Kind::Zombie | Kind::PigZombie) {
+        let mut boost = 1;
+        if m.rand.next_float() < 0.01 {
+            let mut n = 0;
+            let (px, py, pz) = (m.pos[0] as i32, m.pos[1] as i32, m.pos[2] as i32);
+            let mut x = px - 4;
+            while x < px + 4 && n < 14 {
+                let mut y = py - 4;
+                while y < py + 4 && n < 14 {
+                    let mut z = pz - 4;
+                    while z < pz + 4 && n < 14 {
+                        let b = w.block(x, y, z);
+                        if b == block::IRON_BARS || b == block::BED {
+                            if m.rand.next_float() < 0.3 {
+                                boost += 1;
+                            }
+                            n += 1;
+                        }
+                        z += 1;
+                    }
+                    y += 1;
+                }
+                x += 1;
+            }
+        }
+        m.conversion -= boost;
+        if m.conversion <= 0 {
+            m.convert_now = true;
+        }
+    }
     // EntityAgeable.onLivingUpdate
     if m.growing_age < 0 {
         m.growing_age += 1;

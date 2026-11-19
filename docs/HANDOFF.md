@@ -317,7 +317,7 @@ MINERUST_BENCH=10 minerust --seed 12345 --no-save --size 1920 1080 --distance 16
    **生物裝備**已做（2026-11-14）：`Mob.equipment` / `drop_chances` / `can_pick_up_loot`，骷髏、殭屍、殭屍豬人的
    `onSpawnWithEgg`（與原版 1,200 組比對一致，`spawn_equipment_matches_the_game`），區域難度 `ServerWorld::local_difficulty`
    （區塊 `inhabited` 照 `PlayerManager` 每 8000 tick 或離開視野時累加）、裝備掉落、護甲值、武器傷害與附魔、骷髏的弓附魔、
-   `RenderBiped` 的盔甲層與手持物品。**還沒做**：撿起地上物品（`canPickUpLoot` 只有旗標）、小殭屍／殭屍村民／雞騎士／
+   `RenderBiped` 的盔甲層與手持物品。撿起地上物品、小殭屍、殭屍村民已做。**還沒做**：雞騎士／
    蜘蛛騎士（亂數照抽但不生成）、殭屍增援（`summonReinforcements`）與破門、領頭殭屍的增援機率、蜘蛛在困難模式的藥水效果、
    豹貓生成時的幼貓、馬的 `onSpawnWithEgg` 逐行核對、`InhabitedTime` 還沒寫進存檔（重新載入從 0 開始）。
    掉落還沒改走 `drops.rs` 的只剩 `harvestBlock` 的覆寫（剪刀剪樹葉／草／藤蔓、冰、雪片仍用舊的 `item::drops`，
@@ -706,3 +706,20 @@ MINERUST_BENCH=10 minerust --seed 12345 --no-save --size 1920 1080 --distance 16
   **驗證**：新測試 `zombies_pick_up_loot`（撿石劍、不撿較差的木劍、換鑽石劍並掉出石劍、變成不消失）、`baby_zombies`
   （尺寸、速度、音高、存檔）；`cargo test --release` 111 項通過；截圖確認小殭屍模型。伺服器 tick 與上一次推送的版本相同
   （6.7–7.0 對 6.5–7.2 ms）。
+- `本次（2026-11-19，殭屍村民）`：
+  - **生成**：`EntityZombie$GroupData.isVillager` 的 5% 現在真的生成殭屍村民（殭屍豬人照 `EntityPigZombie` 之後設回 false）。
+    `IsVillager`、`ConversionTime` 存檔與讀檔。`--summon Zombie:villager`（可加 `:baby`）。
+  - **感染**（`onKillEntity`）：殭屍（含繼承的殭屍豬人）打死村民時，普通難度以殭屍自己的 `rand.nextBoolean()` 一半機率、困難必定，
+    村民立刻移除（不播死亡動畫、不掉落，死亡音效照播），原地生成 `onSpawnWithEgg` 後的殭屍村民，村民是小孩就是小殭屍村民，
+    `playAuxSFX(1016)`（`mob.zombie.infect`，音量 2）。
+  - **治療**（`interact` / `startConversion`）：對有虛弱效果的殭屍村民用金蘋果（meta 0；創造模式不消耗）開始轉化 3600–6000 tick，
+    移除虛弱、給同長度的力量（等級 `min(難度 − 1, 0)`）、實體狀態 16 的 `mob.zombie.remedy`。轉化中不會消失（`canDespawn`）。
+    `getConversionTimeBoost`：每 tick 1% 機率掃描周圍 8×8×8 的鐵柵欄與床（最多 14 個，各 30% 加 1）。
+    時間到：`convertToVillager`，`onSpawnWithEgg` 的職業、小孩 `growingAge −24000`、10 秒反胃、`playAuxSFX(1017)`（`mob.zombie.unfect`）。
+    `setLookingForHome` 是村莊 AI 的旗標，村莊系統還沒有，略過。
+  - **繪製**：`ModelZombieVillager`（村民的 8×10×8 頭與鼻子，64×64 的 `zombie_villager.png`），盔甲模型的頭盔是 8×6×8、
+    高兩格（原版的形狀），轉化中 `RenderZombie.rotateCorpse` 的抖動（`cos(ticksExisted × 3.25) × π/4`）。
+  - 1016、1017 與實體狀態 16 的音高在原版用客戶端的亂數，這裡用 `Mobs.rand`（只拿來給實體種子，不影響原版亂數序列）。
+  **驗證**：新測試 `zombie_villagers`（困難難度下村民被殺後變成殭屍村民、沒有虛弱時金蘋果無效、有虛弱時開始轉化並換成力量、
+  存檔保留、時間到換成有反胃效果的村民）；`cargo test --release` 112 項通過；截圖確認模型。伺服器 tick 兩輪交替比較
+  6.6／6.9 對 6.4／7.1 ms（雜訊範圍）。

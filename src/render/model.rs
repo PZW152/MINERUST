@@ -322,6 +322,22 @@ fn biped_gap(a: &Anim, thin: bool, zombie_arms: bool, g: f32) -> Vec<Part> {
     v
 }
 
+/// `ModelZombieVillager`: `ModelZombie` with the villager's head and nose
+/// (64x64 texture), or for the armour models (`gap` > 0) an 8x6x8 head
+/// box two pixels higher than the player's.
+fn zombie_villager(mut v: Vec<Part>, gap: f32) -> Vec<Part> {
+    let rot = v[0].rot;
+    v[0] = if gap > 0.0 {
+        Part::new([0.0, 0.0, 0.0]).bx(0.0, 0.0, [-4.0, -10.0, -4.0], [8.0, 6.0, 8.0], gap)
+    } else {
+        Part::new([0.0, 0.0, 0.0])
+            .bx(0.0, 32.0, [-4.0, -10.0, -4.0], [8.0, 10.0, 8.0], 0.0)
+            .bx(24.0, 32.0, [-1.0, -3.0, -6.0], [2.0, 4.0, 2.0], 0.0)
+    };
+    v[0].rot = rot;
+    v
+}
+
 fn villager(a: &Anim, witch: bool, ticks: f32, id: u32) -> Vec<Part> {
     let mut nose =
         Part::new([0.0, -2.0, 0.0]).bx(24.0, 0.0, [-1.0, -1.0, -6.0], [2.0, 4.0, 2.0], 0.0);
@@ -519,6 +535,7 @@ fn parts(mv: &MobView, a: &Anim, ticks: f32, layer: u8, partial: f32) -> Vec<Par
                     .r(0.0, 0.0, -a.wing),
             ]
         }
+        Kind::Zombie if mv.flags & 32 != 0 => zombie_villager(biped(a, false, true), 0.0),
         Kind::Zombie => biped(a, false, true),
         Kind::Skeleton => biped(a, mv.variant != 1, true),
         Kind::Creeper => {
@@ -719,7 +736,7 @@ pub fn texture(kind: Kind, variant: i32, layer: u8) -> &'static str {
     }
 }
 
-pub const TEXTURES: [&str; 25] = [
+pub const TEXTURES: [&str; 26] = [
     "../particle/particles",
     "explosion",
     "../misc/underwater",
@@ -732,6 +749,7 @@ pub const TEXTURES: [&str; 25] = [
     "sheep/sheep_fur",
     "chicken",
     "zombie/zombie",
+    "zombie/zombie_villager",
     "skeleton/skeleton",
     "creeper/creeper",
     "spider/spider",
@@ -816,6 +834,11 @@ pub fn mob(
             };
             mat = mul(&mat, &translate(0.0, dy, 0.0));
             mat = mul(&mat, &rot_y(180.0 - body));
+        }
+        // RenderZombie.rotateCorpse: a converting zombie shakes
+        Kind::Zombie if m.flags & 64 != 0 => {
+            let b = body + (f64::cos(m.ticks as f64 * 3.25) * std::f64::consts::PI * 0.25) as f32;
+            mat = mul(&mat, &rot_y(180.0 - b))
         }
         _ => mat = mul(&mat, &rot_y(180.0 - body)),
     }
@@ -1017,7 +1040,11 @@ pub fn mob(
                 None => continue,
             }
         } else {
-            texture(m.kind, m.variant, layer)
+            if m.kind == Kind::Zombie && m.flags & 32 != 0 {
+                "zombie/zombie_villager"
+            } else {
+                texture(m.kind, m.variant, layer)
+            }
         };
         let Some(t) = tex(name) else {
             continue;
@@ -1102,7 +1129,11 @@ pub fn mob(
                     tint: tint([t[0], t[1], t[2]]),
                 };
                 let gap = if pass == 2 { 0.5 } else { 1.0 };
-                let v = biped_gap(&a, false, true, gap);
+                let mut v = biped_gap(&a, false, true, gap);
+                if m.kind == Kind::Zombie && m.flags & 32 != 0 {
+                    // ModelZombieVillager(gap, 0, true): a shorter helmet
+                    v = zombie_villager(v, gap);
+                }
                 let show = [
                     pass == 0,
                     pass == 1 || pass == 2,

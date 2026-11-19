@@ -2857,6 +2857,7 @@ impl Sim {
                             let p = m.pos;
                             m.set_position(p[0], p[1], p[2]);
                         }
+                        "villager" => m.zombie_villager = true,
                         "big" => m.set_slime_size(4),
                         "hang" => m.hanging = true,
                         v => {
@@ -3286,7 +3287,9 @@ impl Sim {
                     | (m.sitting as u32) << 1
                     | (m.angry as u32) << 2
                     | (m.hanging as u32) << 3
-                    | (m.is_child() as u32) << 4,
+                    | (m.is_child() as u32) << 4
+                    | (m.zombie_villager as u32) << 5
+                    | ((m.conversion >= 0) as u32) << 6,
                 carried: [m.carried, m.carried_meta],
                 attack_timer: m.attack_timer,
                 equipment: m.equipment,
@@ -6338,6 +6341,81 @@ mod tests {
         back.from_nbt(&tag).unwrap();
         assert!(back.list[0].baby);
         assert_eq!(back.list[0].dims(), (0.3, 0.9));
+    }
+
+    /// Zombie villagers: on hard a zombie's villager victim rises as one
+    /// (`onKillEntity`), a golden apple cures a weakened one
+    /// (`interact` / `startConversion`), the cure survives a save, and when
+    /// it runs out a nauseous villager takes its place.
+    #[test]
+    fn zombie_villagers() {
+        use crate::entity::mob::{Kind, Mobs};
+        use crate::entity::living::Difficulty;
+        use crate::potion;
+        let (mut sim, x, y, z) = redstone_sim();
+        arena(&mut sim, x, y, z);
+        sim.difficulty = Difficulty::Hard;
+        let feet = [x as f64 + 0.5, (y + 1) as f64, z as f64 + 0.5];
+        let mut r = JavaRandom::new(5);
+        let at = |dx: f64, dz: f64| [x as f64 + dx, (y + 1) as f64, z as f64 + dz];
+        let vil = sim.mobs.spawn(Kind::Villager, at(6.5, 6.5), 0.0, &mut r);
+        let zom = sim.mobs.spawn(Kind::Zombie, at(7.5, 6.5), 0.0, &mut r);
+        for m in sim.mobs.list.iter_mut() {
+            m.equipment[4] = Some(crate::item::Stack::new(310, 0, 1));
+            if m.id == vil {
+                m.health = 1.0;
+            }
+            // its own 5% roll at spawn
+            m.zombie_villager = false;
+        }
+        let calm = Command::PlayerState { attackable: false };
+        let mut risen = None;
+        for _ in 0..200 {
+            sim.step(&[calm.clone(), Command::Player(feet, [0.0, 0.0], true)], &mut Vec::new());
+            if let Some(m) = sim.mobs.list.iter().find(|m| m.zombie_villager) {
+                risen = Some(m.id);
+                break;
+            }
+        }
+        let risen = risen.expect("the villager rose as a zombie villager");
+        assert!(!sim.mobs.list.iter().any(|m| m.id == vil), "the villager is gone at once");
+        assert!(sim.mobs.list.iter().any(|m| m.id == zom));
+        // the cure needs weakness
+        let mut out = crate::entity::mob::Outcome::default();
+        let apple = Some(crate::item::Stack::new(322, 0, 2));
+        assert!(sim.mobs.interact(risen, apple, feet, &mut out).is_none());
+        sim.mobs.add_effect(risen, potion::WEAKNESS, 600, 0);
+        let left = sim.mobs.interact(risen, apple, feet, &mut out);
+        assert_eq!(left.unwrap().unwrap().count, 1, "one apple used");
+        assert!(out.sounds.iter().any(|s| s.0 == "mob.zombie.remedy"));
+        let m = sim.mobs.list.iter().find(|m| m.id == risen).unwrap();
+        assert!((3600..=6000).contains(&m.conversion));
+        assert!(!m.potions.active(potion::WEAKNESS));
+        assert_eq!(m.potions.amplifier(potion::DAMAGE_BOOST), Some(0));
+        // the save keeps it
+        let tag = Mobs::to_nbt(m);
+        let mut back = Mobs::default();
+        back.from_nbt(&tag).unwrap();
+        assert!(back.list[0].zombie_villager);
+        assert_eq!(back.list[0].conversion, m.conversion);
+        // near the end
+        for m in sim.mobs.list.iter_mut() {
+            if m.id == risen {
+                m.conversion = 2;
+            }
+        }
+        for _ in 0..3 {
+            sim.step(&[calm.clone(), Command::Player(feet, [0.0, 0.0], true)], &mut Vec::new());
+        }
+        assert!(!sim.mobs.list.iter().any(|m| m.id == risen));
+        let v = sim
+            .mobs
+            .list
+            .iter()
+            .filter(|m| m.kind == Kind::Villager)
+            .max_by_key(|m| m.id)
+            .expect("a villager in its place");
+        assert!(v.potions.active(potion::CONFUSION));
     }
 
     /// Mobs keep potion effects (`activePotionsMap`): poison ticks them
