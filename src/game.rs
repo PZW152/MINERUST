@@ -675,7 +675,8 @@ impl Game {
             p_limb: [0.0; 3],
             chat: Default::default(),
             chat_screen: None,
-            hide_gui: false,
+            // `--hide-gui` (F1 at start) for screenshot comparisons
+            hide_gui: std::env::var_os("MINERUST_HIDE_GUI").is_some(),
             sent_clicks: 0,
             start_use: None,
             client_drag: Default::default(),

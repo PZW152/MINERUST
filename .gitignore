@@ -1,6 +1,7 @@
 target/
 saves/
 screenshots/
+shots/
 *.bin
 *.class
 logs/

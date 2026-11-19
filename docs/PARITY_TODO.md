@@ -112,3 +112,7 @@ AI：
 - [ ] 世界中的附魔光澤（手持、第一人稱、掉落物、盔甲模型）、方塊物品的光澤；手持箱子與掉落箱子的模型
 - [ ] 粒子系統（`EffectRenderer` 與所有 `EntityFX`）逐類核對
 - [ ] 第一人稱著火畫面目前畫在暈影之上（原版在暈影之下）
+- [ ] 與原版截圖比對（`tools/shotcompare.py`，2026-11-20）找到、還沒查原因的差異：
+  - 日出（`sunrise` 場景，時間 23500）的雲：原版染成橘紅色，這裡是灰白色（對照 `RenderGlobal.renderClouds` 與 `World.getCloudColour`）
+  - 同一場景畫面左半：這裡在鏡頭正前方畫出一片很近的樹葉，原版沒有（先確認近裁切面與相機位置，再看樹葉）
+  - 新世界的教學提示「Press 'E' to open your inventory」（`GuiAchievement`，`openInventory` 成就未達成時顯示，按 F1 也不會隱藏）完全沒有

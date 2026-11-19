@@ -231,6 +231,30 @@ minerust --seed 12345 --no-save --size 854 480 --screenshot out.png 6
 | 告示牌文字 | `MINERUST_SIGN="a|b|c|d"`，`MINERUST_SIGN_DONE=1` 直接關閉編輯器 |
 | 不等區塊載完就截圖 | `MINERUST_NOWAIT=1` |
 | 自動建立新世界 | `MINERUST_AUTOCREATE=<名稱>` |
+| 固定位置與視角（飛行，需 `--creative`） | `--pos x y z`（腳底）、`--look yaw pitch` |
+| 隱藏介面（開局按 F1） | `--hide-gui` |
+
+截圖與基準執行時，視窗不搶焦點（`WS_EX_NOACTIVATE`）、不鎖滑鼠，可以邊用電腦邊跑。渲染距離取工作目錄的
+`options.txt`，`--distance` 才會覆蓋。
+
+### 5.1.1 與原版畫面比對
+
+```
+python tools/shotcompare.py [--exe target/release/minerust.exe] [--out shots] [場景 ...]
+```
+
+`tools/ShotHarness.java` 用 Java 8 跑**真正的** 1.7.10 客戶端（MCP jar + 啟動器的函式庫與 natives），
+建立同種子的創造世界、停住時間、把飛行中的玩家放到指定位置與視角，等渲染區塊建完後用 F2 的
+`ScreenShotHelper` 截圖。MINERUST 用 `--pos/--look/--creative/--freeze-time` 截同一個場景，兩邊用同一份
+`options.txt`。每個場景輸出 `vanilla.png`、`minerust.png`、`diff.png`（差異熱圖）、`side.png`（三張並排），
+總表在 `report.md`。場景定義在腳本的 `SCENES`，要比對新東西就加一個場景。
+
+- 不會完全相同：原版是固定管線 OpenGL，這裡是 Vulkan；生物、雲與粒子在兩次執行間會動。數字用來發現
+  回歸與大差異，判斷一律看 `side.png`。同一版本重跑，數字在 ±0.5 內。
+- 原版視窗放在螢幕外、不可取得焦點的框架裡（`Display.setParent`），滑鼠換成不鎖定的 `MouseHelper`，
+  不會干擾正在用電腦的人。
+- 環境變數：`MC_ROOT`（啟動器根目錄）、`MCP_JAR`、`JAVA8`（1.7.10 與 LWJGL 2 要 Java 8）、`JAVAC`（JDK 9 以上）。
+- 找到的差異寫進 [PARITY_TODO.md](PARITY_TODO.md) 第 5 節。
 
 ### 5.2 與原版逐位元組比對
 

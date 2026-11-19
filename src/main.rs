@@ -451,6 +451,8 @@ struct Options {
     no_save: bool,
     save_dir: Option<PathBuf>,
     seed_given: bool,
+    /// `--distance` given: it overrides options.txt
+    distance_given: bool,
     /// Automated capture: file, seconds to wait.
     auto_shot: Option<(PathBuf, f64)>,
     /// Straight into a world (a seed, world, position or capture was given)
@@ -639,6 +641,7 @@ fn parse_args() -> Options {
         no_save: false,
         save_dir: None,
         seed_given: false,
+        distance_given: false,
         auto_shot: None,
         direct: false,
         title: false,
@@ -664,6 +667,7 @@ fn parse_args() -> Options {
             }
             "--distance" if i + 1 < args.len() => {
                 o.cfg.render_distance = (num(&args[i + 1]) as i32).clamp(2, 16);
+                o.distance_given = true;
                 i += 1;
             }
             "--time" if i + 1 < args.len() => {
@@ -676,6 +680,7 @@ fn parse_args() -> Options {
                 i += 1;
             }
             "--debug" => std::env::set_var("MINERUST_F3", "1"),
+            "--hide-gui" => std::env::set_var("MINERUST_HIDE_GUI", "1"),
             "--dim" if i + 1 < args.len() => {
                 std::env::set_var("MINERUST_DIM", &args[i + 1]);
                 i += 1;
@@ -814,7 +819,16 @@ struct App {
 }
 
 impl App {
+    /// Automated screenshot and benchmark runs happen while someone uses the
+    /// computer: they never take the mouse or the keyboard focus.
+    fn unattended(&self) -> bool {
+        self.opts.auto_shot.is_some() || self.bench.is_some()
+    }
+
     fn set_grab(&mut self, grab: bool) {
+        if self.unattended() {
+            return;
+        }
         let Some(w) = &self.window else { return };
         if grab {
             if w.set_cursor_grab(CursorGrabMode::Locked).is_err() {
@@ -936,7 +950,9 @@ impl ApplicationHandler for App {
             .with_inner_size(winit::dpi::PhysicalSize::new(
                 self.opts.size.0,
                 self.opts.size.1,
-            ));
+            ))
+            .with_active(!self.unattended())
+            .with_visible(!self.unattended());
         let window = match el.create_window(attrs) {
             Ok(w) => Arc::new(w),
             Err(e) => {
@@ -945,6 +961,27 @@ impl ApplicationHandler for App {
                 return;
             }
         };
+        if self.unattended() {
+            // Shown only after WS_EX_NOACTIVATE is set, so the window can
+            // never take the keyboard focus from whoever is using the computer.
+            #[cfg(windows)]
+            {
+                use windows_sys::Win32::UI::WindowsAndMessaging::{
+                    GetWindowLongPtrW, SetWindowLongPtrW, GWL_EXSTYLE, WS_EX_NOACTIVATE,
+                };
+                use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+                if let Ok(h) = window.window_handle() {
+                    if let RawWindowHandle::Win32(h) = h.as_raw() {
+                        let hwnd = h.hwnd.get() as windows_sys::Win32::Foundation::HWND;
+                        unsafe {
+                            let ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+                            SetWindowLongPtrW(hwnd, GWL_EXSTYLE, ex | WS_EX_NOACTIVATE as isize);
+                        }
+                    }
+                }
+            }
+            window.set_visible(true);
+        }
         let result = (|| -> Result<(), String> {
             let jar_path = find_jar(&self.opts.jar)?;
             println!("Jar: {}", jar_path.display());
@@ -1027,6 +1064,11 @@ impl ApplicationHandler for App {
                     })
                 });
                 self.opts.cfg.save_dir = Some(dir);
+            }
+            // Like launching from the menus: the render distance comes from
+            // options.txt (renderDistanceChunks) unless --distance overrides it.
+            if !self.opts.distance_given {
+                self.opts.cfg.render_distance = shell.settings.render_distance.clamp(2, 16);
             }
             let mut game = Game::new(renderer, atlas, &self.opts.cfg);
             game.lang = lang;
