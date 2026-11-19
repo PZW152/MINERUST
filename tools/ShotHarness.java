@@ -41,12 +41,13 @@ public class ShotHarness {
         final float yaw = Float.parseFloat(a[6]), pitch = Float.parseFloat(a[7]);
         final double settle = Double.parseDouble(a[8]);
         final boolean hideGui = Arrays.asList(a).subList(9, sep).contains("--hide-gui");
+        final boolean debug = Arrays.asList(a).subList(9, sep).contains("--debug");
         String[] mcArgs = Arrays.copyOfRange(a, sep + 1, a.length);
 
         Thread driver = new Thread(new Runnable() {
             public void run() {
                 try {
-                    drive(out, seed, time, x, y, z, yaw, pitch, settle, hideGui);
+                    drive(out, seed, time, x, y, z, yaw, pitch, settle, hideGui, debug);
                 } catch (Throwable t) {
                     t.printStackTrace();
                     System.exit(2);
@@ -99,7 +100,7 @@ public class ShotHarness {
     }
 
     static void drive(final File out, final long seed, final long time, final double x, final double y, final double z,
-                      final float yaw, final float pitch, double settle, final boolean hideGui) throws Exception {
+                      final float yaw, final float pitch, double settle, final boolean hideGui, final boolean debug) throws Exception {
         // Title screen up: resources are loaded and the game loop runs.
         while ((mc = Minecraft.getMinecraft()) == null || mc.currentScreen == null) sleep(100);
         // Never take the user's mouse: entering the world calls setIngameFocus,
@@ -137,6 +138,7 @@ public class ShotHarness {
                 }
                 mc.theWorld.setWorldTime(time);
                 mc.gameSettings.hideGUI = hideGui;
+                mc.gameSettings.showDebugInfo = debug; // F3, like MINERUST --debug
                 // A background window must not pause (options.txt also sets pauseOnLostFocus:false).
                 mc.gameSettings.pauseOnLostFocus = false;
                 mc.displayGuiScreen(null);

@@ -336,6 +336,12 @@ pub struct Game {
     /// `gameSettings.thirdPersonView` and `hideGUI`.
     pub third_person: i32,
     pub hide_gui: bool,
+    /// `Minecraft.guiAchievement`
+    gui_achievement: crate::gui_achievement::GuiAchievement,
+    /// `EntityClientPlayerMP.getStatFileWriter`: the client's statistics
+    client_stats: std::collections::HashMap<String, i32>,
+    /// `NetHandlerPlayClient.hasStatistics`
+    has_statistics: bool,
     /// `GuiEnchantment`'s book animation.
     book: crate::gui_container::BookAnim,
     /// `GuiContainer` of the open window.
@@ -677,6 +683,9 @@ impl Game {
             chat_screen: None,
             // `--hide-gui` (F1 at start) for screenshot comparisons
             hide_gui: std::env::var_os("MINERUST_HIDE_GUI").is_some(),
+            gui_achievement: Default::default(),
+            client_stats: Default::default(),
+            has_statistics: false,
             sent_clicks: 0,
             start_use: None,
             client_drag: Default::default(),
@@ -762,6 +771,41 @@ impl Game {
                 }
             }
         }
+    }
+
+    /// `NetHandlerPlayClient.handleStatistics`
+    fn handle_statistics(&mut self, list: Vec<(String, i32)>) {
+        let mut any_achievement = false;
+        for (id, value) in list {
+            if crate::stats::is_achievement(&id) && value > 0 {
+                let known = self.client_stats.get(&id).copied().unwrap_or(0);
+                if self.has_statistics && known == 0 {
+                    self.gui_achievement.display_achievement(&self.lang, &id);
+                    if id == crate::stats::OPEN_INVENTORY {
+                        if let Some(sh) = self.shell.as_mut() {
+                            sh.settings.show_inventory_achievement_hint = false;
+                            sh.settings.save();
+                        }
+                    }
+                }
+                any_achievement = true;
+            }
+            // StatFileWriter.unlockAchievement
+            self.client_stats.insert(id, value);
+        }
+        let hint = self
+            .shell
+            .as_ref()
+            .map_or(true, |sh| sh.settings.show_inventory_achievement_hint);
+        if !self.has_statistics && !any_achievement && hint {
+            let key = crate::settings::key_display(self.bind("key.inventory"), &self.lang);
+            self.gui_achievement.display_unformatted_achievement(
+                &self.lang,
+                crate::stats::OPEN_INVENTORY,
+                &key,
+            );
+        }
+        self.has_statistics = true;
     }
 
     /// `--open`: start with a screen open (automated captures).
@@ -1401,6 +1445,7 @@ impl Game {
                     self.screen = Screen::Sign;
                     self.input = Input::default();
                 }
+                Event::Statistics(list) => self.handle_statistics(list),
                 Event::Chat(list) => {
                     for m in list {
                         let t = m.text(&self.lang);
@@ -4304,6 +4349,9 @@ impl Game {
             return Request::None;
         }
         if lw == self.bind("key.inventory") {
+            // Minecraft.runTick: C16PacketClientStatus(OPEN_INVENTORY_ACHIEVEMENT)
+            // before GuiInventory
+            let _ = self.sim.commands.send(Command::OpenInventoryAchievement);
             self.screen = Screen::Window;
             self.input = Input::default();
             if self.mode == GameMode::Creative {
@@ -5715,6 +5763,8 @@ impl Game {
             Screen::Sign => self.draw_sign_editor(&mut ui, m),
             Screen::Playing => {}
         }
+        // Minecraft.runGameLoop: guiAchievement.updateAchievementWindow, last
+        self.gui_achievement.draw(&mut ui, true);
         let ui_glint = std::mem::take(&mut ui.glint);
         let ui_vignette = ui.vignette;
         let ui_verts = ui.v;

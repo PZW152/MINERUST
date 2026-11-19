@@ -34,6 +34,9 @@ mod vehicles;
 
 #[derive(Clone, Debug)]
 pub enum Command {
+    /// `C16PacketClientStatus(OPEN_INVENTORY_ACHIEVEMENT)`: sent when the
+    /// inventory key is pressed.
+    OpenInventoryAchievement,
     /// The player's chunk; loading is centred on it.
     Center(i32, i32),
     /// `MINERUST_BENCH_TNT=n`: an n-cube of TNT eight blocks east of the
@@ -145,6 +148,8 @@ pub enum Command {
 }
 
 pub enum Event {
+    /// `S37PacketStatistics`: statistic id and value.
+    Statistics(Vec<(String, i32)>),
     /// `S36PacketSignEditorOpen`
     OpenSign([i32; 3]),
     /// `S33PacketUpdateSign`
@@ -478,6 +483,13 @@ pub struct Sim {
     pending_travel: Option<i32>,
     /// Tell the client on the first tick which dimension the save is in.
     announce_dim: bool,
+    /// `EntityPlayerMP.statsFile`
+    stats_file: crate::stats::StatisticsFile,
+    /// `ServerConfigurationManager.initializeConnectionToPlayer` sends the
+    /// unlocked achievements on the first tick.
+    send_achievements: bool,
+    /// statistics to send with this tick's events
+    stats_out: Vec<(String, i32)>,
     eyes: Vec<EnderEye>,
     /// `level.dat` of a world opened from vanilla (Anvil mode).
     anvil_level: Option<crate::world::anvil::Nbt>,
@@ -673,6 +685,12 @@ impl Sim {
             base_dir: cfg.save_dir.clone(),
             pending_travel: None,
             announce_dim: false,
+            stats_file: crate::stats::StatisticsFile::open(
+                cfg.save_dir.as_deref(),
+                commands::PLAYER_NAME,
+            ),
+            send_achievements: true,
+            stats_out: Vec::new(),
             eyes: Vec::new(),
             anvil_level: None,
             anvil_imported: Default::default(),
@@ -777,6 +795,11 @@ impl Sim {
                 }
             }
         };
+        // Unit tests build small worlds of their own and would only get
+        // slower and noisier (gravel falling far away); one test covers it.
+        if !cfg!(test) {
+            sim.initial_world_chunk_load();
+        }
         // `/weather`: forced from the command line.
         if let Ok(w) = std::env::var("MINERUST_WEATHER") {
             let on = w == "rain" || w == "thunder";
@@ -822,6 +845,71 @@ impl Sim {
             (start.pos[2].floor() as i32) >> 4,
         );
         (sim, start)
+    }
+
+    /// `MinecraftServer.initialWorldChunkLoad` ("Preparing spawn area"): every
+    /// server start loads the 25x25 chunks around the overworld spawn point,
+    /// x outer and z inner, before any player is placed. Population of a
+    /// chunk runs as soon as its neighbours exist, and decorations reach into
+    /// the neighbouring chunks, so where trees overlap the result depends on
+    /// this order; loading outward from the player instead gave other trees
+    /// near spawn than vanilla.
+    ///
+    /// Terrain only depends on the seed and the chunk position, so it is
+    /// generated in parallel; chunks are inserted (and populated) strictly in
+    /// vanilla's order.
+    fn initial_world_chunk_load(&mut self) {
+        if self.world.provider.dim != 0 {
+            return;
+        }
+        // WorldInfo spawn: the block the spawn position stands on
+        let (sx, sz) = (self.spawn[0].floor() as i32, self.spawn[2].floor() as i32);
+        let order: Vec<(i32, i32)> = (-192..=192)
+            .step_by(16)
+            .flat_map(|x| {
+                (-192..=192)
+                    .step_by(16)
+                    .map(move |z| ((sx + x) >> 4, (sz + z) >> 4))
+            })
+            .collect();
+        let fresh: Vec<(i32, i32)> = order
+            .iter()
+            .copied()
+            .filter(|k| !self.world.chunk_exists(k.0, k.1) && !self.world.is_stored(k.0, k.1))
+            .collect();
+        let provider = self.world.provider.clone();
+        let workers = std::thread::available_parallelism().map_or(4, |n| n.get());
+        let per = fresh.len().div_ceil(workers.max(1)).max(1);
+        let mut generated: std::collections::HashMap<(i32, i32), ChunkData> =
+            std::thread::scope(|s| {
+                let handles: Vec<_> = fresh
+                    .chunks(per)
+                    .map(|part| {
+                        let p = provider.clone();
+                        s.spawn(move || {
+                            part.iter()
+                                .map(|&(cx, cz)| ((cx, cz), p.provide_chunk(cx, cz)))
+                                .collect::<Vec<_>>()
+                        })
+                    })
+                    .collect();
+                handles
+                    .into_iter()
+                    .flat_map(|h| h.join().expect("chunk generation panicked"))
+                    .collect()
+            });
+        for (cx, cz) in order {
+            if self.world.chunk_exists(cx, cz) {
+                // pulled in by a neighbour's population in the meantime
+                continue;
+            }
+            match generated.remove(&(cx, cz)) {
+                Some(data) => {
+                    self.world.insert_generated(data);
+                }
+                None => self.world.load_chunk(cx, cz),
+            }
+        }
     }
 
     /// `WorldServer.createSpawnPosition` followed by the player placement of
@@ -1130,6 +1218,18 @@ impl Sim {
                 let n = n.clone();
                 self.play.xp_level = self.splayer.xp_level;
                 self.play.rename(&n);
+            }
+            Command::OpenInventoryAchievement => {
+                // NetHandlerPlayServer.processClientStatus →
+                // triggerAchievement(openInventory); a new achievement is
+                // sent at once (hasUnsentAchievement → sendStats)
+                if self
+                    .stats_file
+                    .trigger_achievement(crate::stats::OPEN_INVENTORY)
+                {
+                    let dirty = self.stats_file.take_dirty();
+                    self.stats_out.extend(dirty);
+                }
             }
             Command::OpenInventory => {
                 self.play.open = Open::Inventory;
@@ -2445,6 +2545,11 @@ impl Sim {
 
     /// `Entity.onEntityUpdate` portal handling for the player.
     fn tick_portal(&mut self, events: &mut Vec<Event>) {
+        if self.send_achievements {
+            // markAllDirty, then sendAchievements
+            self.send_achievements = false;
+            events.push(Event::Statistics(self.stats_file.achievements()));
+        }
         if self.announce_dim {
             self.announce_dim = false;
             let (pos, yaw) = self.play.player;
@@ -2887,6 +2992,8 @@ impl Sim {
         let Some(base) = self.base_dir.clone() else {
             return Ok(());
         };
+        // ServerConfigurationManager.writePlayerData → saveStatFile
+        self.stats_file.save_stat_file()?;
         if self.world.anvil {
             return self.save_anvil();
         }
@@ -4061,6 +4168,9 @@ impl Sim {
         if !self.chat_out.is_empty() {
             events.push(Event::Chat(std::mem::take(&mut self.chat_out)));
         }
+        if !self.stats_out.is_empty() {
+            events.push(Event::Statistics(std::mem::take(&mut self.stats_out)));
+        }
         let splashes = std::mem::take(&mut self.mobs.splashes);
         if !splashes.is_empty() {
             events.push(Event::Splashes(splashes));
@@ -4464,6 +4574,26 @@ mod tests {
 
     /// Survival loop: dig with a pickaxe, the drop is picked up, placing
     /// consumes it, and the crafting grid works through the server.
+    #[test]
+    fn spawn_area_is_prepared_like_initial_world_chunk_load() {
+        let cfg = SimConfig {
+            seed: 12345,
+            view: 2,
+            save_dir: None,
+            start_time: 0,
+            freeze_time: true,
+            mode: GameMode::Survival,
+        };
+        let (mut sim, _) = Sim::new(&cfg);
+        sim.initial_world_chunk_load();
+        let (sx, sz) = (sim.spawn[0].floor() as i32, sim.spawn[2].floor() as i32);
+        for x in (-192..=192).step_by(16) {
+            for z in (-192..=192).step_by(16) {
+                assert!(sim.world.chunk_exists((sx + x) >> 4, (sz + z) >> 4));
+            }
+        }
+    }
+
     #[test]
     fn survival_dig_pickup_place_and_craft() {
         let cfg = SimConfig {

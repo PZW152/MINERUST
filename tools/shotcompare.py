@@ -94,7 +94,7 @@ def run_vanilla(cp: str, classes: Path, scene: dict, png: Path, game: Path):
     write_options(game)
     x, y, z = scene["pos"]
     yaw, pitch = scene["look"]
-    flags = [] if scene.get("hud") else ["--hide-gui"]
+    flags = ([] if scene.get("hud") else ["--hide-gui"]) + (["--debug"] if scene.get("debug") else [])
     cmd = [JAVA8, "-Xmx2G", f"-Djava.library.path={MC_ROOT / 'versions/1.7.10/natives'}",
            "-cp", f"{classes};{cp}", "ShotHarness",
            str(png), str(scene["seed"]), str(scene["time"]), str(x), str(y), str(z), str(yaw), str(pitch), str(SETTLE),
@@ -112,7 +112,7 @@ def run_minerust(exe: Path, scene: dict, png: Path, game: Path):
     write_options(game)
     x, y, z = scene["pos"]
     yaw, pitch = scene["look"]
-    flags = [] if scene.get("hud") else ["--hide-gui"]
+    flags = ([] if scene.get("hud") else ["--hide-gui"]) + (["--debug"] if scene.get("debug") else [])
     cmd = [str(exe), "--seed", str(scene["seed"]), "--no-save", "--size", str(WIDTH), str(HEIGHT),
            "--time", str(scene["time"]), "--freeze-time", "--creative",
            "--pos", str(x), str(y), str(z), "--look", str(yaw), str(pitch), *flags,

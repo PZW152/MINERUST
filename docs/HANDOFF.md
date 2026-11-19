@@ -254,6 +254,7 @@ python tools/shotcompare.py [--exe target/release/minerust.exe] [--out shots] [�
 - 原版視窗放在螢幕外、不可取得焦點的框架裡（`Display.setParent`），滑鼠換成不鎖定的 `MouseHelper`，
   不會干擾正在用電腦的人。
 - 環境變數：`MC_ROOT`（啟動器根目錄）、`MCP_JAR`、`JAVA8`（1.7.10 與 LWJGL 2 要 Java 8）、`JAVAC`（JDK 9 以上）。
+- 場景加上 `debug=True`（與 `hud=True`）時兩邊都開 F3，可以直接對照座標與朝向，先排除相機位置不同。
 - 找到的差異寫進 [PARITY_TODO.md](PARITY_TODO.md) 第 5 節。
 
 ### 5.2 與原版逐位元組比對
@@ -310,6 +311,8 @@ MINERUST_BENCH=10 minerust --seed 12345 --no-save --size 1920 1080 --distance 16
 - 每次推送做了什麼：[CHANGELOG.md](CHANGELOG.md)。
 
 ## 7. 已知注意事項
+
+- 裝飾（樹、礦）會寫進鄰近區塊，重疊處的結果取決於區塊被裝飾的順序。`--compare-pop` 只驗證固定順序；實際遊戲的順序來自`Sim::initial_world_chunk_load`（原版 `MinecraftServer.initialWorldChunkLoad`，出生點周圍 25×25 區塊、x 外層 z 內層）。改區塊載入流程前先用 `tools/shotcompare.py` 比對出生點附近的畫面。
 
 - 本機沒有 Vulkan validation layer；`--validate` 無法在此機驗證。
 - 舊格式存檔（`level.txt`）不會出現在原版的世界選單，這是原版行為。

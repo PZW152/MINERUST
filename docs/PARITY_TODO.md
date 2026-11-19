@@ -92,7 +92,9 @@ AI：
 
 介面：
 - [ ] 信標、漏斗、投擲器、馬的物品欄、村民交易、書與羽毛筆
-- [ ] 統計與成就（`StatList`、`AchievementList`、`GuiStats`、`GuiAchievements`）
+- [ ] 統計與成就：已有統計檔（`stats/<uuid>.json`，`src/stats.rs`）、成就樹、成就提示框（`GuiAchievement`）與
+      「Taking Inventory」。待做：`StatList` 的一般統計、其餘 32 個成就的觸發點、`GuiStats`、`GuiAchievements`、
+      `/achievement` 指令、成就的聊天公告
 - [ ] 資源包、使用統計（Snooper）、直播畫面
 - [ ] 告示牌上的非 ASCII 文字（原版用 unicode 字頁）
 - [ ] 指令：summon、enchant、gamerule、playsound、spreadplayers、testfor 等，Tab 自動補完
@@ -112,7 +114,6 @@ AI：
 - [ ] 世界中的附魔光澤（手持、第一人稱、掉落物、盔甲模型）、方塊物品的光澤；手持箱子與掉落箱子的模型
 - [ ] 粒子系統（`EffectRenderer` 與所有 `EntityFX`）逐類核對
 - [ ] 第一人稱著火畫面目前畫在暈影之上（原版在暈影之下）
-- [ ] 與原版截圖比對（`tools/shotcompare.py`，2026-11-20）找到、還沒查原因的差異：
-  - 日出（`sunrise` 場景，時間 23500）的雲：原版染成橘紅色，這裡是灰白色（對照 `RenderGlobal.renderClouds` 與 `World.getCloudColour`）
-  - 同一場景畫面左半：這裡在鏡頭正前方畫出一片很近的樹葉，原版沒有（先確認近裁切面與相機位置，再看樹葉）
-  - 新世界的教學提示「Press 'E' to open your inventory」（`GuiAchievement`，`openInventory` 成就未達成時顯示，按 F1 也不會隱藏）完全沒有
+- [ ] 與原版截圖比對（`tools/shotcompare.py`）找到、還沒查原因的差異：
+  - 第一人稱空手的手臂位置（`day_hud` 場景，飛行中）：這裡比原版低（對照 `ItemRenderer.renderItemInFirstPerson` 與飛行時的晃動）
+  - F3 畫面：原版有 `E: …`、`P: … T: …`、`MultiplayerChunkCache` 等行，這裡沒有；`C:` 一行的數字也不同（`RenderGlobal.getDebugInfoRenders`）

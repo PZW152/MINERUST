@@ -17,6 +17,7 @@ mod entity;
 mod front;
 mod game;
 mod gui;
+mod gui_achievement;
 mod gui_container;
 mod gui_repair;
 mod inventory;
@@ -39,6 +40,7 @@ mod screens;
 mod settings;
 mod shapes;
 mod sim;
+mod stats;
 mod util;
 mod world;
 
