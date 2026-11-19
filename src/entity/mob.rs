@@ -406,6 +406,10 @@ pub struct Mob {
     infected_by: Option<[f64; 3]>,
     /// `convertToVillager` is due (the countdown ran out this tick).
     convert_now: bool,
+    /// Sounds played inside `moveEntity` (hurt by fire or cactus, the
+    /// fizz), with their volume and pitch drawn at the time; `tick_mob`
+    /// sends them on at the mob's position.
+    move_sounds: Vec<(&'static str, f32, f32)>,
     /// The zombie's "Random spawn bonus" to knockback resistance.
     pub kb_resist: f64,
     pub persistent: bool,
@@ -757,6 +761,7 @@ impl Mob {
             conversion: -1,
             infected_by: None,
             convert_now: false,
+            move_sounds: Vec::new(),
             kb_resist: 0.0,
             persistent: false,
             variant: 0,
@@ -1247,6 +1252,89 @@ impl Mob {
         if oz != dz {
             self.motion[2] = 0.0;
         }
+        self.block_contacts(w);
+    }
+
+    /// The end of `Entity.moveEntity`: `doBlockCollisions` (cactus pricks,
+    /// soul sand slows), then the fire check: touching fire or lava deals
+    /// `inFire` and, unless wet, counts `fire` up from `-fireResistance`
+    /// to light the mob for 8 seconds; being wet puts it out with a fizz.
+    fn block_contacts(&mut self, w: &ServerWorld) {
+        let bb = self.bb;
+        let x0 = math::floor_double(bb.min[0] + 0.001);
+        let y0 = math::floor_double(bb.min[1] + 0.001);
+        let z0 = math::floor_double(bb.min[2] + 0.001);
+        let x1 = math::floor_double(bb.max[0] - 0.001);
+        let y1 = math::floor_double(bb.max[1] - 0.001);
+        let z1 = math::floor_double(bb.max[2] - 0.001);
+        for x in x0..=x1 {
+            for y in y0..=y1 {
+                for z in z0..=z1 {
+                    match w.peek_block(x, y, z) {
+                        // BlockCactus.onEntityCollidedWithBlock
+                        block::CACTUS => {
+                            self.hurt_sounding(1.0, true, false);
+                        }
+                        // BlockSoulSand.onEntityCollidedWithBlock
+                        block::SOUL_SAND => {
+                            self.motion[0] *= 0.4;
+                            self.motion[2] *= 0.4;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+        let wet = {
+            let x = math::floor_double(self.pos[0]);
+            let z = math::floor_double(self.pos[2]);
+            let h = self.dims().1 as f64;
+            self.in_water
+                || w.lightning_at(x, math::floor_double(self.pos[1]), z)
+                || w.lightning_at(x, math::floor_double(self.pos[1] + h), z)
+        };
+        let inner = Aabb {
+            min: [bb.min[0] + 0.001, bb.min[1] + 0.001, bb.min[2] + 0.001],
+            max: [bb.max[0] - 0.001, bb.max[1] - 0.001, bb.max[2] - 0.001],
+        };
+        if super::base::flammable_within(w, &inner) {
+            // dealFireDamage(1)
+            if !self.kind.fireproof() {
+                self.hurt_sounding(1.0, true, true);
+            }
+            if !wet {
+                self.fire += 1;
+                if self.fire == 0 {
+                    self.set_fire(8);
+                }
+            }
+        } else if self.fire <= 0 {
+            self.fire = -1;
+        }
+        if wet && self.fire > 0 {
+            let p = 1.6 + (self.rand.next_float() - self.rand.next_float()) * 0.4;
+            self.move_sounds.push(("random.fizz", 0.7, p));
+            self.fire = -1;
+        }
+    }
+
+    /// `attackEntityFrom` with no attacker, playing the hurt sound on a
+    /// fresh hit the way `attackEntityFrom` does; fire damage does nothing
+    /// under Fire Resistance.
+    fn hurt_sounding(&mut self, amount: f32, blockable: bool, fire: bool) -> bool {
+        if fire && self.potions.active(crate::potion::FIRE_RESISTANCE) {
+            return false;
+        }
+        let before = self.hurt_resistant;
+        let hit = self.hurt_by(amount, None, blockable, false);
+        if hit && before as f32 <= 10.0 && self.health > 0.0 {
+            let s = mob_sound(self, false);
+            if !s.is_empty() {
+                let (v, pi) = self.sound_volume_pitch();
+                self.move_sounds.push((s, v, pi));
+            }
+        }
+        hit
     }
 
     fn move_flying(&mut self, mut strafe: f32, mut forward: f32, friction: f32) {
@@ -1976,9 +2064,14 @@ impl Mob {
         v
     }
 
-    /// `Entity.setFire` (mobs wear nothing, so no Fire Protection).
+    /// `Entity.setFire`, shortened by Fire Protection on the equipment
+    /// (`EnchantmentProtection.func_92093_a`).
     pub fn set_fire(&mut self, seconds: i32) {
-        let t = seconds * 20;
+        let mut t = seconds * 20;
+        let j = crate::enchant::max_level_in(crate::enchant::FIRE_PROTECTION, &self.equipment);
+        if j > 0 {
+            t -= math::floor_float(t as f32 * (j as f32 * 0.15));
+        }
         if self.fire < t {
             self.fire = t;
         }
@@ -3844,6 +3937,9 @@ fn tick_mob(
     strikes: &mut Vec<Strike>,
     balls: &mut Vec<Fireball>,
 ) {
+    for (n, v, pi) in std::mem::take(&mut m.move_sounds) {
+        out.sounds.push((n, m.pos, v, pi));
+    }
     // EntityZombie.onUpdate: the cure counts down, faster near iron bars
     // and beds (getConversionTimeBoost)
     if m.conversion >= 0 && matches!(m.kind, Kind::Zombie | Kind::PigZombie) {
@@ -3964,16 +4060,17 @@ fn tick_mob(
         m.fire = 0;
     }
     if m.in_material(w, &m.bb, Material::Lava) && !m.kind.fireproof() {
-        // DamageSource.lava is blockable
-        m.hurt(4.0, None, true);
-        m.fire = 300;
+        // setOnFireFromLava: DamageSource.lava is blockable fire damage
+        m.hurt_sounding(4.0, true, true);
+        m.set_fire(15);
     }
     if m.kind.fireproof() {
         m.fire = 0;
     }
     if m.fire > 0 {
         if m.fire % 20 == 0 {
-            m.damage(1.0, None);
+            // DamageSource.onFire bypasses armour
+            m.hurt_sounding(1.0, false, true);
         }
         m.fire -= 1;
     }
@@ -4277,6 +4374,9 @@ fn tick_mob(
     let (s, f) = (m.move_strafe, m.move_forward);
     let was_on_ground = m.on_ground;
     m.move_with_heading(w, s, f);
+    for (n, v, pi) in std::mem::take(&mut m.move_sounds) {
+        out.sounds.push((n, m.pos, v, pi));
+    }
     if matches!(m.kind, Kind::Slime | Kind::MagmaCube) {
         extra::slime_landed(m, was_on_ground, out);
     }

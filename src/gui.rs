@@ -85,6 +85,12 @@ impl<'a> Ui<'a> {
         );
     }
 
+    /// A block-atlas region on any four GUI points (top-left, bottom-left,
+    /// bottom-right, top-right).
+    pub fn atlas_quad(&mut self, p: [[f32; 2]; 4], uv: [[f32; 2]; 4], color: u32, alpha: f32) {
+        self.quad(p, uv, rgba(color, alpha), BLOCKS);
+    }
+
     /// `Gui.drawRect`
     pub fn rect(&mut self, x: f32, y: f32, w: f32, h: f32, color: u32, alpha: f32) {
         self.quad(

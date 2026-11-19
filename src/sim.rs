@@ -358,6 +358,8 @@ pub struct MobView {
 
 #[derive(Clone, Debug)]
 pub struct ArrowView {
+    /// `isBurning`
+    pub burning: bool,
     pub pos: [f64; 3],
     pub prev: [f64; 3],
     pub yaw: f32,
@@ -950,6 +952,8 @@ impl Sim {
                 }
                 let (g, sn, sp) = self.motion_flags;
                 self.splayer.moved(&self.world, p, g, f, sn, sp);
+                let d = self.difficulty;
+                self.splayer.block_contacts(&mut self.world, d);
                 self.player = Some((p, r, f));
                 self.play.player = (p, r[0]);
                 self.play.pitch = r[1];
@@ -3322,6 +3326,7 @@ impl Sim {
             .arrows
             .iter()
             .map(|a| ArrowView {
+                burning: a.e.fire > 0,
                 pos: a.e.pos,
                 prev: a.e.prev,
                 yaw: a.e.yaw,
@@ -6188,11 +6193,17 @@ mod tests {
         use crate::entity::mob::{ai::Target, Kind};
         let (mut sim, x, y, z) = redstone_sim();
         arena(&mut sim, x, y, z);
-        // a roof, so the zombie does not burn up
+        // a roof, so the zombie does not burn up, and walls, so it is not
+        // knocked off the edge into the world below
         for dx in -2..14 {
             for dz in -2..14 {
                 sim.world
                     .set_block(x + dx, y + 5, z + dz, block::STONE, 0, 3);
+                if dx == -2 || dx == 13 || dz == -2 || dz == 13 {
+                    for dy in 1..5 {
+                        sim.world.set_block(x + dx, y + dy, z + dz, block::STONE, 0, 3);
+                    }
+                }
             }
         }
         let feet = [x as f64 + 0.5, (y + 1) as f64, z as f64 + 0.5];
@@ -6341,6 +6352,61 @@ mod tests {
         back.from_nbt(&tag).unwrap();
         assert!(back.list[0].baby);
         assert_eq!(back.list[0].dims(), (0.3, 0.9));
+    }
+
+    /// `Entity.moveEntity`'s end on the server: a player or a mob standing
+    /// in fire takes `inFire` and, after `fireResistance` ticks (20 for the
+    /// player, 1 for mobs), burns for 8 seconds, taking `onFire` with a hurt
+    /// sound; a cactus pricks a mob; water puts the burning out.
+    #[test]
+    fn fire_and_cactus_hurt() {
+        use crate::entity::mob::Kind;
+        let (mut sim, x, y, z) = redstone_sim();
+        arena(&mut sim, x, y, z);
+        sim.play.mode = GameMode::Survival;
+        sim.splayer.creative = false;
+        let feet = [x as f64 + 0.5, (y + 1) as f64, z as f64 + 0.5];
+        let here = Command::Player(feet, [0.0, 0.0], true);
+        sim.step(&[here.clone()], &mut Vec::new());
+        sim.splayer.respawn_invulnerable = 0;
+        let mut r = JavaRandom::new(5);
+        let zat = [x as f64 + 4.5, (y + 1) as f64, z as f64 + 4.5];
+        let zom = sim.mobs.spawn(Kind::Zombie, zat, 0.0, &mut r);
+        let cow = sim.mobs.spawn(Kind::Cow, [x as f64 + 8.5, (y + 1) as f64, z as f64 + 8.5], 0.0, &mut r);
+        for m in sim.mobs.list.iter_mut() {
+            m.equipment[4] = Some(crate::item::Stack::new(310, 0, 1));
+            m.persistent = true;
+        }
+        let calm = Command::PlayerState { attackable: false };
+        let mut heard = false;
+        for i in 0..30 {
+            // keep the fire lit (from the second tick: one move outside
+            // it first sets fire to -fireResistance) and the mobs in place
+            if i > 0 {
+                sim.world.set_block(x, y + 1, z, block::FIRE, 0, 3);
+                sim.world.set_block(x + 4, y + 1, z + 4, block::FIRE, 0, 3);
+            }
+            sim.world.set_block(x + 9, y + 1, z + 8, block::CACTUS, 0, 3);
+            for m in sim.mobs.list.iter_mut() {
+                if m.id == zom {
+                    m.set_position(zat[0], zat[1], zat[2]);
+                } else if m.id == cow {
+                    let p = [x as f64 + 8.75, (y + 1) as f64, z as f64 + 8.5];
+                    m.set_position(p[0], p[1], p[2]);
+                    m.motion = [0.2, 0.0, 0.0];
+                }
+            }
+            let mut ev = Vec::new();
+            sim.step(&[calm.clone(), here.clone()], &mut ev);
+            heard |= ev.iter().any(|e| matches!(e, Event::Sounds(v) if v.iter().any(|s| s.0 == "mob.zombie.hurt")));
+        }
+        assert!(sim.splayer.living.health < 20.0, "fire hurt the player");
+        assert!(sim.splayer.e.fire > 100, "the player caught fire: {}", sim.splayer.e.fire);
+        let get = |id: u32| sim.mobs.list.iter().find(|m| m.id == id).unwrap();
+        assert!(get(zom).health < 20.0);
+        assert!(get(zom).fire > 100, "the zombie burns: {}", get(zom).fire);
+        assert!(heard, "the zombie cried out");
+        assert!(get(cow).health < 10.0, "the cactus pricked the cow");
     }
 
     /// Zombie villagers: on hard a zombie's villager victim rises as one

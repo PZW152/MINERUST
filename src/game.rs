@@ -1843,6 +1843,8 @@ impl Game {
             self.world.light(true, lx, ly, lz),
             self.world.light(false, lx, ly, lz),
         );
+        let burning = self.stats.fire > 0;
+        let (blk, sky) = if burning { (15, 15) } else { (blk, sky) };
         let m = crate::render::model::player_matrix([0.0, -1.62, 0.0], body);
         let tint = if self.stats.hurt_time > 0 {
             [1.0, 0.6, 0.6, 1.0]
@@ -1861,6 +1863,29 @@ impl Game {
             tint,
         ) {
             out.extend(raw);
+        }
+        if burning {
+            // the client player's posY is its eye: posY - minY = 1.62
+            entities::on_fire(
+                out,
+                &self.atlas,
+                [0.0, 0.0, 0.0],
+                0.6,
+                1.8,
+                1.62,
+                self.view_yaw(),
+                [240, 240, 0, 0],
+            );
+        }
+    }
+
+    /// `RenderManager.playerViewY`: the camera's yaw, turned round in the
+    /// front-facing third-person view.
+    fn view_yaw(&self) -> f32 {
+        if self.third_person == 2 {
+            self.player.yaw + 180.0
+        } else {
+            self.player.yaw
         }
     }
 
@@ -4900,8 +4925,13 @@ impl Game {
                 self.world.light(true, lx, ly, lz),
                 self.world.light(false, lx, ly, lz),
             );
-            let blk = if m.fire { 15 } else { blk };
-            let light = [(blk << 4) as u8, (sky << 4) as u8, 0, 0];
+            // RenderManager.renderEntityStatic: a burning entity is drawn
+            // at full brightness (15728880)
+            let light = if m.fire {
+                [240, 240, 0, 0]
+            } else {
+                [(blk << 4) as u8, (sky << 4) as u8, 0, 0]
+            };
             let atlas = &self.atlas;
             crate::render::model::mob(
                 &mut dynamic,
@@ -4914,6 +4944,19 @@ impl Game {
                 partial,
                 light,
             );
+            // Render.doRenderShadowAndFire
+            if m.fire {
+                entities::on_fire(
+                    &mut dynamic,
+                    atlas,
+                    rel,
+                    (m.bb[3] - m.bb[0]) as f32,
+                    (m.bb[4] - m.bb[1]) as f32,
+                    0.0,
+                    self.view_yaw(),
+                    light,
+                );
+            }
         }
         {
             let w = &self.world;
@@ -4960,7 +5003,11 @@ impl Game {
                     0,
                     0,
                 ];
+                let light = if a.burning { [240, 240, 0, 0] } else { light };
                 crate::render::model::arrow(&mut dynamic, at, rel, a.yaw, a.pitch, light);
+                if a.burning {
+                    entities::on_fire(&mut dynamic, &self.atlas, rel, 0.5, 0.5, 0.0, self.view_yaw(), light);
+                }
             }
         }
         let fire_tex = self.atlas.mob_tex("../items/fireball");
@@ -5377,6 +5424,40 @@ impl Game {
                         ui.atlas_rect(x0, y0, x1 - x0, y1 - y0, uv, color, 0.5);
                     }
                 }
+            }
+        }
+        // ItemRenderer.renderFireInFirstPerson (renderOverlays, after the
+        // hand, without view bobbing): two tilted squares of fire_layer_1
+        // half a block ahead, at 0.9 alpha, seen through the hand's
+        // 70-degree projection
+        if self.third_person == 0 && self.sleeping.is_none() && self.stats.fire > 0 && !self.stats.dead {
+            let t = self.atlas.named("fire_layer_1");
+            let aspect = ui.w / ui.h;
+            let tan = (35.0f32).to_radians().tan();
+            let (sw, sh) = (ui.w, ui.h);
+            let project = |p: [f32; 3]| -> [f32; 2] {
+                let d = -p[2];
+                [
+                    (p[0] / d / (tan * aspect) * 0.5 + 0.5) * sw,
+                    (0.5 - p[1] / d / tan * 0.5) * sh,
+                ]
+            };
+            for k in 0..2 {
+                let side = (k * 2 - 1) as f32;
+                let tx = -side * 0.24;
+                let a = (side * 10.0f32).to_radians();
+                let (sa, ca) = (a.sin(), a.cos());
+                // glTranslatef(tx, -0.3, 0) then glRotatef(a, 0, 1, 0)
+                let place = |x: f32, y: f32, z: f32| -> [f32; 2] {
+                    project([x * ca + z * sa + tx, y - 0.3, -x * sa + z * ca])
+                };
+                let (x0, x1, y0, y1, z) = (-0.5f32, 0.5f32, -0.5f32, 0.5f32, -0.5f32);
+                ui.atlas_quad(
+                    [place(x0, y1, z), place(x0, y0, z), place(x1, y0, z), place(x1, y1, z)],
+                    [[t[2], t[1]], [t[2], t[3]], [t[0], t[3]], [t[0], t[1]]],
+                    0xFFFFFF,
+                    0.9,
+                );
             }
         }
         // GuiIngame.renderPumpkinBlur

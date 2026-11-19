@@ -723,3 +723,23 @@ MINERUST_BENCH=10 minerust --seed 12345 --no-save --size 1920 1080 --distance 16
   **驗證**：新測試 `zombie_villagers`（困難難度下村民被殺後變成殭屍村民、沒有虛弱時金蘋果無效、有虛弱時開始轉化並換成力量、
   存檔保留、時間到換成有反胃效果的村民）；`cargo test --release` 112 項通過；截圖確認模型。伺服器 tick 兩輪交替比較
   6.6／6.9 對 6.4／7.1 ms（雜訊範圍）。
+- `本次（2026-11-19，燃燒傷害與著火的貼圖）`：使用者回報「好像沒有燃燒傷害、著火的實體身上沒有火」。
+  - **原因一**：伺服器端的玩家位置來自客戶端（`Command::Player`），`ServerPlayer::moved` 只做掉落與消耗，沒有跑
+    `Entity.moveEntity` 結尾的 `doBlockCollisions` 與火焰檢查。所以走進火方塊不會受傷也不會著火，仙人掌也不會刺傷玩家。
+    新增 `ServerPlayer::block_contacts`（在 `processPlayer` 的位置更新之後呼叫）：仙人掌、鍋釜滅火、`isFlammableWithin` 的
+    `inFire` 傷害、`fire` 從 `-fireResistance` 數到 0 才 `setFire(8)`、潮濕時嘶一聲熄滅。玩家的 `fireResistance` 原本沒設成 20
+    （`EntityPlayer` 建構子），已補上。
+  - **原因二**：生物的 `move_entity` 同樣沒有這一段，生物踩進火、碰到仙人掌都沒事，也不會被靈魂沙減速。新增
+    `Mob::block_contacts`（仙人掌、靈魂沙、火、潮濕熄滅，`fireResistance` 1）。燒傷、熔岩、火方塊與仙人掌的傷害改走
+    `hurt_sounding`：照 `attackEntityFrom` 在新的一擊時播受傷音效（以前完全安靜，所以看起來像沒傷害），火焰傷害在抗火藥水下無效。
+    生物的 `setFire` 加上裝備上的火焰保護（`EnchantmentProtection.func_92093_a`）。
+  - **原因三**：`Render.renderEntityOnFire` 根本沒有移植。新增 `entities::on_fire`（`fire_layer_0/1` 交替、寬 `width × 1.4`、
+    每層上移 0.45、縮 0.9、往後 0.03，面向 `playerViewY`），畫在著火的生物、著火的箭、第三人稱的自己身上；著火的實體照
+    `RenderManager.renderEntityStatic` 用全亮光照（15728880，以前只把方塊光設 15）。第一人稱補上
+    `ItemRenderer.renderFireInFirstPerson`（兩片 `fire_layer_1`，平移 ±0.24、下移 0.3、轉 ±10 度，0.9 透明度，以手的 70 度投影算到螢幕）。
+    這層覆蓋目前畫在暗角之上（原版在暗角之下），差別很小。
+  - 測試 `wolves_and_golems_pick_their_targets` 的殭屍會被打出場地掉進下面的熔岩，燒傷有了受傷音效後亂數順序改變，
+    殭屍在鐵魔像選目標前就死了；場地加了圍牆（測試本身的問題，不是行為錯誤）。
+  **驗證**：新測試 `fire_and_cactus_hurt`（玩家站在火裡受傷並著火超過 100 tick、殭屍著火並發出受傷聲、牛被仙人掌刺傷）；
+  `cargo test --release` 113 項通過；截圖確認第一人稱的火與生物身上的火。基準 831／804 對 842／842 fps、伺服器 6.5／6.4 對
+  6.2／6.4 ms（雜訊範圍）。

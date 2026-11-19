@@ -10,6 +10,69 @@ use crate::block::{self, Shape};
 use crate::item::Stack;
 use crate::java::JavaRandom;
 
+/// `Render.renderEntityOnFire`: layers of `fire_layer_0` / `fire_layer_1`
+/// facing the camera, `width * 1.4` across, stacked 0.45 apart (in the
+/// scaled space) up the entity's height, each narrower and nearer.
+/// `rel` is the render position, `y_off` is `posY - boundingBox.minY`,
+/// `view_yaw` is `RenderManager.playerViewY`.
+#[allow(clippy::too_many_arguments)]
+pub fn on_fire(
+    out: &mut Vec<Vertex>,
+    atlas: &Atlas,
+    rel: [f32; 3],
+    width: f32,
+    height: f32,
+    y_off: f32,
+    view_yaw: f32,
+    light: [u8; 4],
+) {
+    let t0 = atlas.named("fire_layer_0");
+    let t1 = atlas.named("fire_layer_1");
+    let s = width * 1.4;
+    let mut m = translate(rel[0], rel[1], rel[2]);
+    m = mul(&m, &scale(s, s, s));
+    let mut half = 0.5f32;
+    let mut h = height / s;
+    let mut v16 = y_off;
+    m = mul(&m, &rot_y(-view_yaw));
+    m = mul(&m, &translate(0.0, 0.0, -0.3 + (h as i32) as f32 * 0.02));
+    let mut z = 0.0f32;
+    let mut i = 0;
+    let c = [255u8; 4];
+    while h > 0.0 {
+        let t = if i % 2 == 0 { t0 } else { t1 };
+        let (mut u0, v0, mut u1, v1) = (t[0], t[1], t[2], t[3]);
+        if i / 2 % 2 == 0 {
+            std::mem::swap(&mut u0, &mut u1);
+        }
+        let p = [
+            ([half, -v16, z], [u1, v1]),
+            ([-half, -v16, z], [u0, v1]),
+            ([-half, 1.4 - v16, z], [u0, v0]),
+            ([half, 1.4 - v16, z], [u1, v0]),
+        ];
+        let vs: Vec<Vertex> = p
+            .iter()
+            .map(|(q, uv)| {
+                let r = transform(&m, [q[0], q[1], q[2], 1.0]);
+                Vertex {
+                    pos: [r[0], r[1], r[2]],
+                    uv: *uv,
+                    color: c,
+                    light,
+                }
+            })
+            .collect();
+        out.extend_from_slice(&vs);
+        out.extend_from_slice(&[vs[3], vs[2], vs[1], vs[0]]);
+        h -= 0.45;
+        v16 -= 0.45;
+        half *= 0.9;
+        z += 0.03;
+        i += 1;
+    }
+}
+
 pub fn scale(x: f32, y: f32, z: f32) -> Mat4 {
     let mut m = super::IDENTITY;
     m[0] = x;

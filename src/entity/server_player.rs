@@ -143,6 +143,8 @@ impl ServerPlayer {
         let mut l = Living::new(Attributes::new(20.0, 0.10000000149011612, 1.0));
         l.max_hurt_resistant_time = 20;
         let mut e = Ent::new(0.6, 1.8, 0x706C61796572);
+        // EntityPlayer: fireResistance = 20
+        e.fire_resistance = 20;
         e.y_offset = 1.62;
         e.portal_cooldown = 10;
         ServerPlayer {
@@ -283,6 +285,58 @@ impl ServerPlayer {
             } else if d[1] < 0.0 {
                 self.e.fall_distance = (self.e.fall_distance as f64 - d[1]) as f32;
             }
+        }
+    }
+
+    /// The end of `Entity.moveEntity` for the move `processPlayer` makes
+    /// on the server: `doBlockCollisions` (cactus, a cauldron putting the
+    /// player out), then the fire check (`isFlammableWithin`,
+    /// `dealFireDamage`, the count from `-fireResistance` to `setFire(8)`,
+    /// and a wet player put out with a fizz).
+    pub fn block_contacts(&mut self, w: &mut ServerWorld, diff: Difficulty) {
+        if self.dead {
+            return;
+        }
+        let bb = self.e.bb;
+        let x0 = math::floor_double(bb.min[0] + 0.001);
+        let y0 = math::floor_double(bb.min[1] + 0.001);
+        let z0 = math::floor_double(bb.min[2] + 0.001);
+        let x1 = math::floor_double(bb.max[0] - 0.001);
+        let y1 = math::floor_double(bb.max[1] - 0.001);
+        let z1 = math::floor_double(bb.max[2] - 0.001);
+        for x in x0..=x1 {
+            for y in y0..=y1 {
+                for z in z0..=z1 {
+                    match w.peek_block(x, y, z) {
+                        block::CACTUS => {
+                            self.attack(w, Source::named(SourceKind::Cactus), 1.0, diff);
+                        }
+                        block::CAULDRON => {
+                            let _ = super::collide::collided(w, &mut self.e, x, y, z, block::CAULDRON);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+        let wet = self.e.is_wet(&*w as &dyn BlockView);
+        let inner = Ent::expand(&self.e.bb, -0.001, -0.001, -0.001);
+        if super::base::flammable_within(&*w as &dyn BlockView, &inner) {
+            self.attack(w, Source::named(SourceKind::InFire), 1.0, diff);
+            if !wet {
+                self.e.fire += 1;
+                if self.e.fire == 0 {
+                    self.e.set_fire(8);
+                }
+            }
+        } else if self.e.fire <= 0 {
+            self.e.fire = -self.e.fire_resistance;
+        }
+        if wet && self.e.fire > 0 {
+            let r = &mut self.e.rand;
+            let p = 1.6 + (r.next_float() - r.next_float()) * 0.4;
+            self.fx.push(Fx::Sound("random.fizz", self.e.pos, 0.7, p));
+            self.e.fire = -self.e.fire_resistance;
         }
     }
 
