@@ -567,6 +567,15 @@ pub struct Renderer {
     vsync: bool,
     mipmap_levels: i32,
     pub device_name: String,
+    /// `RenderGlobal.getDebugInfoRenders` for the render chunks inside the
+    /// `renderDistanceChunks` grid around the camera: first-pass render
+    /// chunks drawn and those outside the view (`renderersBeingRendered`,
+    /// `renderersBeingClipped`).
+    pub debug_renders: (u32, u32),
+    /// `renderDistanceChunks` for the grid above
+    pub debug_rd: i32,
+    /// Render chunks uploaded so far (`WorldRenderer.chunksUpdated`).
+    pub sections_built: u64,
     debug: Option<(ash::ext::debug_utils::Instance, vk::DebugUtilsMessengerEXT)>,
 }
 
@@ -1229,6 +1238,9 @@ impl Renderer {
                 wide_lines,
                 needs_recreate: false,
                 vsync: true,
+                debug_renders: (0, 0),
+                debug_rd: 8,
+                sections_built: 0,
                 mipmap_levels: MIP_LEVELS as i32 - 1,
                 device_name,
                 debug,
@@ -2242,6 +2254,7 @@ impl Renderer {
                 max_quads = max_quads.max(new.opaque_quads.max(new.translucent_quads));
             }
             self.meshes.get_mut(&key).unwrap().secs[sec.sy as usize] = new;
+            self.sections_built += 1;
             if old.verts() > 0 {
                 self.garbage_ranges
                     .push((self.frame_no, old.block, old.first, old.verts()));
@@ -2437,36 +2450,18 @@ impl Renderer {
 
             // Render chunks in view (`WorldRenderer.updateInFrustum`), nearest
             // first (`RenderSorter`).
-            let m = &frame.globals.view_proj;
-            let row = |r: usize| [m[r], m[4 + r], m[8 + r], m[12 + r]];
-            let (r0, r1, r2, r3) = (row(0), row(1), row(2), row(3));
-            let add = |a: [f32; 4], b: [f32; 4], s: f32| {
-                [
-                    a[0] + s * b[0],
-                    a[1] + s * b[1],
-                    a[2] + s * b[2],
-                    a[3] + s * b[3],
-                ]
-            };
-            let planes = [
-                add(r3, r0, 1.0),
-                add(r3, r0, -1.0),
-                add(r3, r1, 1.0),
-                add(r3, r1, -1.0),
-                r2,
-                add(r3, r2, -1.0),
-            ];
-            let inside = |mn: [f32; 3], mx: [f32; 3]| {
-                planes.iter().all(|p| {
-                    let x = if p[0] >= 0.0 { mx[0] } else { mn[0] };
-                    let y = if p[1] >= 0.0 { mx[1] } else { mn[1] };
-                    let z = if p[2] >= 0.0 { mx[2] } else { mn[2] };
-                    p[0] * x + p[1] * y + p[2] * z + p[3] >= 0.0
-                })
-            };
+            let planes = super::frustum_planes(&frame.globals.view_proj);
+            let inside = |mn: [f32; 3], mx: [f32; 3]| super::box_in_frustum(&planes, mn, mx);
             let mut visible = std::mem::take(&mut self.visible);
             visible.clear();
+            let (ccx, ccz) = (
+                (frame.cam[0] / 16.0).floor() as i32,
+                (frame.cam[2] / 16.0).floor() as i32,
+            );
+            let rd = self.debug_rd;
+            let (mut drawn, mut clipped) = (0u32, 0u32);
             for (&(cx, cz), col) in &self.meshes {
+                let in_grid = (cx - ccx).abs() <= rd && (cz - ccz).abs() <= rd;
                 let o = [
                     ((cx * 16) as f64 - frame.cam[0]) as f32,
                     (0.0 - frame.cam[1]) as f32,
@@ -2478,6 +2473,9 @@ impl Renderer {
                     [o[0] - e, o[1] - e, o[2] - e],
                     [o[0] + 16.0 + e, o[1] + 256.0 + e, o[2] + 16.0 + e],
                 ) {
+                    if in_grid {
+                        clipped += col.secs.iter().filter(|s| s.opaque_quads > 0).count() as u32;
+                    }
                     continue;
                 }
                 for (sy, sec) in col.secs.iter().enumerate() {
@@ -2485,10 +2483,20 @@ impl Renderer {
                         continue;
                     }
                     let y0 = o[1] + (sy * 16) as f32;
-                    if inside(
+                    let seen = inside(
                         [o[0] - e, y0 - e, o[2] - e],
                         [o[0] + 16.0 + e, y0 + 16.0 + e, o[2] + 16.0 + e],
-                    ) {
+                    );
+                    // RenderGlobal.renderSortedRenderers, pass 0: empty for
+                    // the pass counts as skipped, then clipped, then drawn
+                    if in_grid && sec.opaque_quads > 0 {
+                        if seen {
+                            drawn += 1;
+                        } else {
+                            clipped += 1;
+                        }
+                    }
+                    if seen {
                         let (dx, dy, dz) = (o[0] + 8.0, y0 + 8.0, o[2] + 8.0);
                         visible.push(Visible {
                             dist: dx * dx + dy * dy + dz * dz,
@@ -2498,6 +2506,7 @@ impl Renderer {
                     }
                 }
             }
+            self.debug_renders = (drawn, clipped);
             visible.sort_unstable_by(|a, b| a.dist.total_cmp(&b.dist));
 
             // Sunrise / sunset glow: a fan from the zenith of the rotated frame

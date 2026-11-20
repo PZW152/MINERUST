@@ -675,8 +675,22 @@ fn model_box(
     o: [f32; 3],
     d: [f32; 3],
     light: [u8; 4],
+    lights: Option<[[f32; 3]; 2]>,
 ) {
     let (u, v) = tex;
+    // RenderHelper.enableStandardItemLighting: 0.4 ambient plus 0.6 from each
+    // of two directional lights, by the face normal in the same space
+    let lit = |n: [f32; 3], fixed: f32| match lights {
+        None => fixed,
+        Some(l) => {
+            let t = transform(m, [n[0], n[1], n[2], 0.0]);
+            let len = (t[0] * t[0] + t[1] * t[1] + t[2] * t[2]).sqrt().max(1e-6);
+            let n = [t[0] / len, t[1] / len, t[2] / len];
+            let d0 = (n[0] * l[0][0] + n[1] * l[0][1] + n[2] * l[0][2]).max(0.0);
+            let d1 = (n[0] * l[1][0] + n[1] * l[1][1] + n[2] * l[1][2]).max(0.0);
+            (0.4 + 0.6 * (d0 + d1)).min(1.0)
+        }
+    };
     let (w, h, dd) = (d[0], d[1], d[2]);
     let px = |x: f32, y: f32| {
         [
@@ -709,27 +723,27 @@ fn model_box(
     quad(
         [[x1, y0, z1], [x1, y0, z0], [x1, y1, z0], [x1, y1, z1]],
         [px(u + dd + w, v + dd), px(u + dd + w + dd, v + dd + h)],
-        0.6,
+        lit([1.0, 0.0, 0.0], 0.6),
     );
     quad(
         [[x0, y0, z0], [x0, y0, z1], [x0, y1, z1], [x0, y1, z0]],
         [px(u, v + dd), px(u + dd, v + dd + h)],
-        0.6,
+        lit([-1.0, 0.0, 0.0], 0.6),
     );
     quad(
         [[x1, y0, z1], [x0, y0, z1], [x0, y0, z0], [x1, y0, z0]],
         [px(u + dd, v), px(u + dd + w, v + dd)],
-        1.0,
+        lit([0.0, -1.0, 0.0], 1.0),
     );
     quad(
         [[x1, y1, z0], [x0, y1, z0], [x0, y1, z1], [x1, y1, z1]],
         [px(u + dd + w, v + dd), px(u + dd + w + w, v)],
-        0.5,
+        lit([0.0, 1.0, 0.0], 0.5),
     );
     quad(
         [[x1, y0, z0], [x0, y0, z0], [x0, y1, z0], [x1, y1, z0]],
         [px(u + dd, v + dd), px(u + dd + w, v + dd + h)],
-        0.8,
+        lit([0.0, 0.0, -1.0], 0.8),
     );
     quad(
         [[x0, y0, z1], [x1, y0, z1], [x1, y1, z1], [x0, y1, z1]],
@@ -737,13 +751,16 @@ fn model_box(
             px(u + dd + w + dd, v + dd),
             px(u + dd + w + dd + w, v + dd + h),
         ],
-        0.8,
+        lit([0.0, 0.0, 1.0], 0.8),
     );
 }
 
 /// `ItemRenderer.renderItemInFirstPerson`, in view space (camera at the
 /// origin looking down -Z). `equip` is the interpolated equip progress and
-/// `swing` the swing progress (0..1).
+/// `swing` the swing progress (0..1). `view` is the player's pitch and yaw,
+/// under which `RenderHelper.enableStandardItemLighting` places the lights;
+/// `arm_lag` is `rotationPitch - renderArmPitch` and `rotationYaw -
+/// renderArmYaw` (`EntityPlayerSP`), a tenth of which turns the hand.
 pub fn hand(
     out: &mut Vec<Vertex>,
     atlas: &Atlas,
@@ -752,7 +769,20 @@ pub fn hand(
     swing: f32,
     light: (i32, i32),
     using: Option<(crate::item_use::Action, f32, i32)>,
+    view: (f32, f32),
+    arm_lag: (f32, f32),
 ) {
+    let lag = mul(&rot_x(arm_lag.0 * 0.1), &rot_y(arm_lag.1 * 0.1));
+    let lights = {
+        let lm = mul(&rot_x(view.0), &rot_y(view.1));
+        let dir = |l: [f32; 3]| {
+            let t = transform(&lm, [l[0], l[1], l[2], 0.0]);
+            let len = (t[0] * t[0] + t[1] * t[1] + t[2] * t[2]).sqrt();
+            [t[0] / len, t[1] / len, t[2] / len]
+        };
+        // RenderHelper.LIGHT0_POS / LIGHT1_POS
+        [dir([0.2, 1.0, -0.7]), dir([-0.2, 1.0, 0.7])]
+    };
     use crate::item_use::Action;
     let l = light_bytes(light.0, light.1);
     let pi = std::f32::consts::PI;
@@ -847,6 +877,7 @@ pub fn hand(
                     s.meta = 1000 + frame;
                 }
             }
+            let m = mul(&lag, &m);
             render_item(out, atlas, s, &m, l);
         }
         None => {
@@ -869,6 +900,11 @@ pub fn hand(
             m = mul(&m, &translate(5.6, 0.0, 0.0));
             // ModelBiped.bipedRightArm: rotation point (-5, 2, 0), box (-3, -2, -2, 4, 12, 4).
             m = mul(&m, &translate(-5.0 / 16.0, 2.0 / 16.0, 0.0));
+            // RenderPlayer.renderFirstPersonArm: setRotationAngles with every
+            // argument 0 still leaves the idle sway of ModelBiped, rotateAngleZ
+            // += cos(0) * 0.05 + 0.05 (ModelRenderer.render turns Z first)
+            m = mul(&m, &rot_z(0.1f32.to_degrees()));
+            let m = mul(&lag, &m);
             model_box(
                 out,
                 &m,
@@ -877,6 +913,7 @@ pub fn hand(
                 [-3.0, -2.0, -2.0],
                 [4.0, 12.0, 4.0],
                 l,
+                Some(lights),
             );
         }
     }

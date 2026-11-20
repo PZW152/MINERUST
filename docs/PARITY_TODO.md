@@ -115,5 +115,8 @@ AI：
 - [ ] 粒子系統（`EffectRenderer` 與所有 `EntityFX`）逐類核對
 - [ ] 第一人稱著火畫面目前畫在暈影之上（原版在暈影之下）
 - [ ] 與原版截圖比對（`tools/shotcompare.py`）找到、還沒查原因的差異：
-  - 第一人稱空手的手臂位置（`day_hud` 場景，飛行中）：這裡比原版低（對照 `ItemRenderer.renderItemInFirstPerson` 與飛行時的晃動）
-  - F3 畫面：原版有 `E: …`、`P: … T: …`、`MultiplayerChunkCache` 等行，這裡沒有；`C:` 一行的數字也不同（`RenderGlobal.getDebugInfoRenders`）
+  - 手持物品（第一人稱）仍用固定的面亮度，原版用 `RenderHelper.enableStandardItemLighting`（空手的手臂已改，見 `entities::hand`）
+  - F3 的 `C:` 行（`f3` 場景）：同一位置原版 649/4624、F 924、E 3051，這裡 515、F 970、E 3139。先對照
+    `RenderGlobal.markRenderersForNewPosition` 的渲染區塊格位置（原版不是以相機所在區塊為中心），再看哪些區塊算空的
+- [ ] 伺服器送給客戶端的範圍（F3 對照找到）：渲染距離 8 時原版客戶端有 289 個區塊（`PlayerManager`，17×17），這裡 441 個
+      （`Sim` 的 `spiral(v + 2)`）；客戶端的實體 376 個對原版 100 個，應照 `EntityTracker` 各類別的追蹤距離送出

@@ -67,6 +67,7 @@ SCENES = {
     "sunset":  dict(seed=12345, time=12500, pos=(-242.5, 90.0, 130.5),  look=(90.0, 0.0)),
     "night":   dict(seed=12345, time=18000, pos=(-242.5, 90.0, 130.5),  look=(0.0, -40.0)),
     "above":   dict(seed=12345, time=6000,  pos=(-242.5, 130.0, 130.5), look=(45.0, 60.0)),
+    "f3":      dict(seed=12345, time=6000,  pos=(-242.5, 90.0, 130.5),  look=(-90.0, 60.0), hud=True, debug=True),
 }
 
 

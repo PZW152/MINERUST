@@ -9,7 +9,8 @@
 
 ## 2026-11-20
 
-- Spawn area prepared like MinecraftServer.initialWorldChunkLoad (vanilla decoration order: same trees near spawn); statistics file and achievement tree, inventory hint and "Taking Inventory" (GuiAchievement); shotcompare --debug
+- First-person arm: ModelBiped idle sway (0.1 rad), EntityPlayerSP arm lag, standard item lighting; F3 screen ported line by line (render chunk, entity, particle, chunk cache and memory lines, vanilla positions and colours); shotcompare f3 scene
+- `c5269b8` Spawn area prepared like MinecraftServer.initialWorldChunkLoad (vanilla decoration order: same trees near spawn); statistics file and achievement tree, inventory hint and "Taking Inventory" (GuiAchievement); shotcompare --debug
 - `678e5ae` Screenshot comparison with the real 1.7.10 client (tools/shotcompare.py, tools/ShotHarness.java); direct launches take the render distance from options.txt; unattended runs never take focus or the mouse; --hide-gui
 - `9c5fd64` Renderer moves to Vulkan 1.3: dynamic rendering instead of render pass and framebuffers, synchronization2 barriers and queue_submit2 (screenshots pixel-identical, same fps)
 - `18842ad` Run cargo fmt over the last commits

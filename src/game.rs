@@ -116,6 +116,33 @@ impl ClientWorld {
     }
 
     /// `Chunk.getPrecipitationHeight`
+    /// `ChunkProviderClient`: chunks held
+    pub fn chunk_count(&self) -> usize {
+        self.chunks.len()
+    }
+
+    pub fn has_chunk(&self, cx: i32, cz: i32) -> bool {
+        self.chunks.contains_key(&(cx, cz))
+    }
+
+    /// `Chunk.getTopFilledSegment` of the chunk holding (x, z), if loaded.
+    pub fn top_filled_segment(&self, x: i32, z: i32) -> Option<i32> {
+        let c = self.chunks.get(&(x >> 4, z >> 4))?;
+        Some(
+            (0..16)
+                .rev()
+                .find(|&i| c.mc.sections & (1 << i) != 0)
+                .map_or(0, |i| i * 16),
+        )
+    }
+
+    /// `World.getHeightValue`: the height map, 0 for a chunk not loaded.
+    pub fn height_value(&self, x: i32, z: i32) -> i32 {
+        self.chunks
+            .get(&(x >> 4, z >> 4))
+            .map_or(0, |c| c.mc.height[(((z & 15) << 4) | (x & 15)) as usize])
+    }
+
     pub fn precipitation_height(&self, x: i32, z: i32) -> i32 {
         let Some(c) = self.chunks.get(&(x >> 4, z >> 4)) else {
             return 0;
@@ -429,6 +456,9 @@ pub struct Game {
     swing_f: f32,
     equip: f32,
     prev_equip: f32,
+    /// `EntityPlayerSP.renderArmPitch`, `renderArmYaw` and the previous tick's
+    render_arm: [f32; 2],
+    prev_render_arm: [f32; 2],
     equipped: Option<Stack>,
     death_sent: bool,
     jitter: JavaRandom,
@@ -437,6 +467,10 @@ pub struct Game {
     pub show_debug: bool,
     fps: u32,
     fps_frames: u32,
+    /// `WorldRenderer.chunksUpdated` of the last second, and the renderer's
+    /// running count when it was taken
+    chunk_updates: u64,
+    sections_built_mark: u64,
     fps_since: Instant,
 }
 
@@ -735,6 +769,8 @@ impl Game {
             swing_f: 0.0,
             equip: 0.0,
             prev_equip: 0.0,
+            render_arm: [0.0; 2],
+            prev_render_arm: [0.0; 2],
             equipped: None,
             death_sent: false,
             jitter: JavaRandom::new(312871),
@@ -742,6 +778,8 @@ impl Game {
             show_debug: std::env::var_os("MINERUST_F3").is_some(),
             fps: 0,
             fps_frames: 0,
+            chunk_updates: 0,
+            sections_built_mark: 0,
             fps_since: Instant::now(),
         }
     }
@@ -771,6 +809,240 @@ impl Game {
                 }
             }
         }
+    }
+
+    /// `GuiIngame.renderGameOverlay` with `showDebugInfo` (F3), line by line:
+    /// the first five lines with shadow in white at y 2, 12, 22, 32, 42, the
+    /// two memory lines on the right and the position lines from y 64 in
+    /// 0xE0E0E0.
+    fn debug_overlay(
+        &self,
+        ui: &mut crate::gui::Ui,
+        g: &crate::render::vk::Globals,
+        eye: [f64; 3],
+    ) {
+        let p = &self.player;
+        let white = 0xFFFFFF;
+        let grey = 14737632;
+        // Minecraft.debug
+        ui.text(
+            &format!(
+                "Minecraft 1.7.10 ({} fps, {} chunk updates)",
+                self.fps, self.chunk_updates
+            ),
+            2.0,
+            2.0,
+            white,
+            true,
+        );
+        // RenderGlobal.getDebugInfoRenders: the renderer grid is
+        // (2 * renderDistanceChunks + 1)^2 columns of 16; render chunks with
+        // nothing for the first pass are skipped (E), occlusion queries are off
+        let rd = self.render_distance;
+        let loaded = ((2 * rd + 1) * (2 * rd + 1) * 16) as u32;
+        let (drawn, clipped) = self.renderer.debug_renders;
+        ui.text(
+            &format!(
+                "C: {}/{}. F: {}, O: 0, E: {}",
+                drawn,
+                loaded,
+                clipped,
+                loaded.saturating_sub(drawn + clipped)
+            ),
+            2.0,
+            12.0,
+            white,
+            true,
+        );
+        // RenderGlobal.renderEntities: the client's loadedEntityList, and
+        // those in their render range (isInRangeToRender3d) and in view
+        let (total, rendered) = self.entity_debug(g, eye);
+        ui.text(
+            &format!("E: {}/{}. B: 0, I: {}", rendered, total, total - rendered),
+            2.0,
+            22.0,
+            white,
+            true,
+        );
+        // EffectRenderer.getStatistics, WorldClient.getDebugLoadedEntities
+        ui.text(
+            &format!("P: {}. T: All: {}", self.particles.count(), total),
+            2.0,
+            32.0,
+            white,
+            true,
+        );
+        // WorldClient.getProviderName → ChunkProviderClient.makeString
+        let n = self.world.chunk_count();
+        ui.text(
+            &format!("MultiplayerChunkCache: {n}, {n}"),
+            2.0,
+            42.0,
+            white,
+            true,
+        );
+        // Runtime.maxMemory / totalMemory / freeMemory: there is no Java heap,
+        // so the process's working set and commit charge out of the
+        // computer's physical memory stand in for them
+        if let Some((used, allocated, max)) = crate::util::memory_usage() {
+            let r = format!(
+                "Used memory: {}% ({}MB) of {}MB",
+                used * 100 / max.max(1),
+                used / 1024 / 1024,
+                max / 1024 / 1024
+            );
+            ui.text(&r, ui.w - ui.text_width(&r) - 2.0, 2.0, grey, true);
+            let r = format!(
+                "Allocated memory: {}% ({}MB)",
+                allocated * 100 / max.max(1),
+                allocated / 1024 / 1024
+            );
+            ui.text(&r, ui.w - ui.text_width(&r) - 2.0, 12.0, grey, true);
+        }
+        // the client player's posY is the eye height
+        let (x, y, z) = (
+            math::floor_double(p.pos[0]),
+            math::floor_double(p.pos[1]),
+            math::floor_double(p.pos[2]),
+        );
+        let lines = [
+            format!("x: {:.5} ({}) // c: {} ({})", p.pos[0], x, x >> 4, x & 15),
+            format!("y: {:.3} (feet pos, {:.3} eyes pos)", p.bb.min[1], p.pos[1]),
+            format!("z: {:.5} ({}) // c: {} ({})", p.pos[2], z, z >> 4, z & 15),
+        ];
+        for (i, l) in lines.iter().enumerate() {
+            ui.text(l, 2.0, 64.0 + i as f32 * 8.0, grey, true);
+        }
+        let facing = (math::floor_double((p.yaw * 4.0f32 / 360.0f32) as f64 + 0.5) & 3) as usize;
+        ui.text(
+            &format!(
+                "f: {} ({}) / {}",
+                facing,
+                ["SOUTH", "WEST", "NORTH", "EAST"][facing],
+                crate::util::java_float(math::wrap_angle_180(p.yaw))
+            ),
+            2.0,
+            88.0,
+            grey,
+            true,
+        );
+        if (0..256).contains(&y) {
+            if let Some(top) = self.world.top_filled_segment(x, z) {
+                let (bl, sl) = (
+                    self.world.light(false, x, y, z),
+                    self.world.light(true, x, y, z),
+                );
+                ui.text(
+                    &format!(
+                        "lc: {} b: {} bl: {} sl: {} rl: {}",
+                        top + 15,
+                        self.world.biome(x, z).name,
+                        bl,
+                        sl,
+                        sl.max(bl)
+                    ),
+                    2.0,
+                    96.0,
+                    grey,
+                    true,
+                );
+            }
+        }
+        // PlayerCapabilities walkSpeed and flySpeed; World.getHeightValue
+        ui.text(
+            &format!(
+                "ws: {:.3}, fs: {:.3}, g: {}, fl: {}",
+                0.1f32,
+                0.05f32,
+                p.on_ground,
+                self.world.height_value(x, z)
+            ),
+            2.0,
+            104.0,
+            grey,
+            true,
+        );
+    }
+
+    /// `RenderGlobal.renderEntities`: `countEntitiesTotal` (the local player
+    /// included) and `countEntitiesRendered`.
+    fn entity_debug(&self, g: &crate::render::vk::Globals, eye: [f64; 3]) -> (i32, i32) {
+        let planes = crate::render::frustum_planes(&g.view_proj);
+        let mut total = 1; // the player itself, not drawn in first person
+        let mut rendered = 0;
+        // Entity.isInRangeToRender3d with the class's isInRangeToRenderDist,
+        // then the frustum (ignoreFrustumCheck for the dragon), and the chunk
+        // must exist (blockExists(x, 0, z))
+        let mut check = |bb: [f64; 6], weight: f64, ignore_frustum: bool| {
+            total += 1;
+            let c = [
+                (bb[0] + bb[3]) * 0.5 - eye[0],
+                (bb[1] + bb[4]) * 0.5 - eye[1],
+                (bb[2] + bb[5]) * 0.5 - eye[2],
+            ];
+            let avg = ((bb[3] - bb[0]) + (bb[4] - bb[1]) + (bb[5] - bb[2])) / 3.0;
+            let range = avg * 64.0 * weight;
+            if c[0] * c[0] + c[1] * c[1] + c[2] * c[2] >= range * range {
+                return;
+            }
+            let rel = |i: usize| (bb[i] - eye[i % 3]) as f32;
+            if !ignore_frustum
+                && !crate::render::box_in_frustum(
+                    &planes,
+                    [rel(0), rel(1), rel(2)],
+                    [rel(3), rel(4), rel(5)],
+                )
+            {
+                return;
+            }
+            let (cx, cz) = (
+                math::floor_double((bb[0] + bb[3]) * 0.5) >> 4,
+                math::floor_double((bb[2] + bb[5]) * 0.5) >> 4,
+            );
+            if self.world.has_chunk(cx, cz) {
+                rendered += 1;
+            }
+        };
+        // a box of `w` by `h` around `pos` whose bottom is `pos.y - y_offset`
+        let sized = |pos: [f64; 3], w: f64, h: f64, y_offset: f64| {
+            let y0 = pos[1] - y_offset;
+            [
+                pos[0] - w / 2.0,
+                y0,
+                pos[2] - w / 2.0,
+                pos[0] + w / 2.0,
+                y0 + h,
+                pos[2] + w / 2.0,
+            ]
+        };
+        for m in &self.mobs {
+            check(m.bb, 1.0, m.kind == crate::entity::mob::Kind::EnderDragon);
+        }
+        for i in &self.items {
+            // EntityItem: setSize(0.25, 0.25), yOffset = height / 2
+            check(sized(i.pos, 0.25, 0.25, 0.125), 1.0, false);
+        }
+        for c in &self.boats {
+            let b = &c.v.e().bb;
+            check(
+                [b.min[0], b.min[1], b.min[2], b.max[0], b.max[1], b.max[2]],
+                1.0,
+                false,
+            );
+        }
+        for f in &self.falling {
+            // EntityFallingBlock: 0.98 x 0.98, yOffset = height / 2
+            check(sized(f.pos, 0.98, 0.98, 0.49), 1.0, false);
+        }
+        for a in &self.arrows {
+            // EntityArrow: 0.5 x 0.5, renderDistanceWeight 10
+            check(sized(a.pos, 0.5, 0.5, 0.0), 10.0, false);
+        }
+        for t in &self.tnt {
+            // EntityTNTPrimed: 0.98 x 0.98, yOffset = height / 2
+            check(sized(t.0, 0.98, 0.98, 0.49), 1.0, false);
+        }
+        (total, rendered)
     }
 
     /// `NetHandlerPlayClient.handleStatistics`
@@ -2233,6 +2505,10 @@ impl Game {
             self.prev_swing_f = 0.0;
         }
         self.prev_equip = self.equip;
+        // EntityPlayerSP.updateEntityActionState: the arm follows the view
+        self.prev_render_arm = self.render_arm;
+        self.render_arm[0] += (self.player.pitch - self.render_arm[0]) * 0.5;
+        self.render_arm[1] += (self.player.yaw - self.render_arm[1]) * 0.5;
         let held = self.view.inv.held();
         let same = match (held, self.equipped) {
             (Some(a), Some(b)) => a.id == b.id && a.meta == b.meta,
@@ -4942,6 +5218,9 @@ impl Game {
         if self.fps_since.elapsed().as_secs_f32() >= 1.0 {
             self.fps = self.fps_frames;
             self.fps_frames = 0;
+            // Minecraft.runGameLoop: debug string, then chunksUpdated = 0
+            self.chunk_updates = self.renderer.sections_built - self.sections_built_mark;
+            self.sections_built_mark = self.renderer.sections_built;
             self.fps_since = Instant::now();
         }
         self.gui_scale = scale as f32;
@@ -5389,6 +5668,15 @@ impl Game {
                 swing,
                 light,
                 using,
+                (self.player.pitch, self.player.yaw),
+                (
+                    self.player.pitch
+                        - (self.prev_render_arm[0]
+                            + (self.render_arm[0] - self.prev_render_arm[0]) * partial),
+                    self.player.yaw
+                        - (self.prev_render_arm[1]
+                            + (self.render_arm[1] - self.prev_render_arm[1]) * partial),
+                ),
             );
         }
 
@@ -5624,67 +5912,9 @@ impl Game {
                 ui.centered(&t, (w / 2.0).floor(), (h / 2.0).floor() - 50.0, 0xFFFFFF);
             }
         }
+        self.renderer.debug_rd = self.render_distance;
         if self.show_debug {
-            let p = &self.player;
-            let (fx, fy, fz) = (
-                math::floor_double(p.pos[0]),
-                math::floor_double(p.bb.min[1]),
-                math::floor_double(p.pos[2]),
-            );
-            let facing =
-                (math::floor_double((p.yaw * 4.0f32 / 360.0f32) as f64 + 0.5) & 3) as usize;
-            let left = vec![
-                format!(
-                    "Minecraft 1.7.10 ({} fps, {} chunk updates)",
-                    self.fps, self.in_flight
-                ),
-                format!(
-                    "C: {}/{}. F: 0, O: 0, E: 0",
-                    self.renderer.mesh_count(),
-                    self.world.chunks.len()
-                ),
-                String::new(),
-                format!(
-                    "x: {:.5} ({}) // c: {} ({})",
-                    p.pos[0],
-                    fx,
-                    fx >> 4,
-                    fx & 15
-                ),
-                format!("y: {:.3} (feet pos, {:.3} eyes pos)", p.bb.min[1], p.pos[1]),
-                format!(
-                    "z: {:.5} ({}) // c: {} ({})",
-                    p.pos[2],
-                    fz,
-                    fz >> 4,
-                    fz & 15
-                ),
-                format!(
-                    "f: {} ({}) / {:.5}",
-                    facing,
-                    ["SOUTH", "WEST", "NORTH", "EAST"][facing],
-                    math::wrap_angle_180(p.yaw)
-                ),
-                format!(
-                    "lc: {} b: {} bl: {} sl: {} rl: {}",
-                    0,
-                    self.world.biome(fx, fz).name,
-                    self.world.light(false, fx, fy, fz),
-                    self.world.light(true, fx, fy, fz),
-                    self.world
-                        .light(true, fx, fy, fz)
-                        .max(self.world.light(false, fx, fy, fz))
-                ),
-                format!(
-                    "ws: {:.3}, fs: {:.3}, g: {}, fl: {}",
-                    0.1, 0.05, p.on_ground, 0
-                ),
-            ];
-            let right = vec![
-                format!("Seed: {}", self.seed),
-                format!("Time: {}", self.world_time),
-            ];
-            crate::gui::debug_overlay(&mut ui, &left, &right);
+            self.debug_overlay(&mut ui, &g, eye);
         }
         if let Some((x, y)) = std::env::var("MINERUST_MOUSE")
             .ok()
