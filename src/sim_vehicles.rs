@@ -351,25 +351,34 @@ impl Sim {
 
     /// `EntityPlayer.attackTargetEntityWithCurrentItem` on a vehicle.
     pub(super) fn attack_vehicle(&mut self, id: u32, damage: f32, knockback: i32) {
-        let creative = self.play.mode == GameMode::Creative;
-        let yaw = self.play.player.1;
-        let Some(i) = self.play.vehicles.iter().position(|b| b.v.id() == id) else {
-            return;
-        };
         if damage <= 0.0 {
             return;
         }
         let mut play = std::mem::replace(&mut self.play, Play::new(GameMode::Survival));
+        self.attack_vehicle_in(&mut play, id, damage, knockback);
+        self.play = play;
+    }
+
+    /// `attackEntityFrom` on a boat or minecart; false for an orb or none.
+    pub(super) fn attack_vehicle_in(
+        &mut self,
+        play: &mut Play,
+        id: u32,
+        damage: f32,
+        knockback: i32,
+    ) -> bool {
+        let creative = play.mode == GameMode::Creative;
+        let yaw = play.player.1;
+        let Some(i) = play.vehicles.iter().position(|b| b.v.id() == id) else {
+            return false;
+        };
         let mut outs = Vec::new();
         let mut broke = None;
         match &mut play.vehicles[i].v {
             Vehicle::Boat(b) => broke = b.attack(damage, creative),
             Vehicle::Cart(c) => c.attack(damage, creative, false, false, &mut outs),
             // canAttackWithItem: false
-            Vehicle::Orb(_) => {
-                self.play = play;
-                return;
-            }
+            Vehicle::Orb(_) => return false,
         }
         if knockback > 0 {
             let r = std::f32::consts::PI;
@@ -390,11 +399,11 @@ impl Sim {
             }
             if drop {
                 let p = play.vehicles[i].v.e().pos;
-                Self::entity_drop(&mut play, p, crate::item::Stack::new(333, 0, 1));
+                Self::entity_drop(play, p, crate::item::Stack::new(333, 0, 1));
             }
         }
-        self.cart_outs(&mut play, i, outs);
-        self.play = play;
+        self.cart_outs(play, i, outs);
+        true
     }
 
     /// `new EntityXPOrb(world, x, y, z, value)` for each split of `xp`.

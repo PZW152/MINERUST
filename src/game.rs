@@ -399,6 +399,8 @@ pub struct Game {
     orb_pickups: Vec<(crate::entity::xp_orb::XpOrb, i32)>,
     /// Throwables: position, previous position, item, damage.
     throwables: Vec<([f64; 3], [f64; 3], u16, i32)>,
+    /// The player's `EntityFishHook`: position and previous position.
+    fish_hook: Option<([f64; 3], [f64; 3])>,
     /// `EntityBoat`s in the client's world.
     boats: Vec<vehicles::ClientVehicle>,
     /// The player's `ridingEntity`.
@@ -730,6 +732,7 @@ impl Game {
             using: None,
             falling: Vec::new(),
             throwables: Vec::new(),
+            fish_hook: None,
             boats: Vec::new(),
             riding: None,
             record: None,
@@ -1585,6 +1588,7 @@ impl Game {
                 Event::Items(v) => self.items = v,
                 Event::Falling(v) => self.falling = v,
                 Event::Throwables(v) => self.throwables = v,
+                Event::FishHook(v) => self.fish_hook = v,
                 Event::Vehicles(v) => self.vehicle_packets(v),
                 Event::VehicleMeta(v) => self.vehicle_meta(v),
                 Event::VehicleStatus(v) => self.vehicle_status(v),
@@ -2144,7 +2148,7 @@ impl Game {
         let body = lerp(self.p_body);
         let yaw = lerp(self.p_yaw);
         let pitch = lerp(self.p_pitch);
-        let st = self.equipped;
+        let st = self.equipped_icon();
         let action = self
             .using
             .map(|(u, _)| crate::item_use::action(u.id, u.meta));
@@ -2252,6 +2256,11 @@ impl Game {
                     let _ = self.sim.commands.send(Command::Chat(l.to_string()));
                 }
             }
+        }
+        // MINERUST_USE_AIR: one right click in the air once the world is up
+        // (casts a fishing rod, throws a snowball) for captures
+        if self.ticks == 60 && std::env::var_os("MINERUST_USE_AIR").is_some() {
+            self.use_item_air();
         }
         if self.ticks >= 60 {
             if let Some(t) = self.start_use.take() {
@@ -2948,6 +2957,7 @@ impl Game {
             "hugeexplosion" => self.particles.huge_explosion(p),
             "explode" => self.particles.explode(p, m),
             "splash" => self.particles.splash(p, m),
+            "wake" => self.particles.wake(p, m),
             "reddust" => self
                 .particles
                 .reddust(p, [m[0] as f32, m[1] as f32, m[2] as f32]),
@@ -3110,6 +3120,116 @@ impl Game {
             e.width as f32 / self.gui_scale,
             e.height as f32 / self.gui_scale,
         )
+    }
+
+    /// The held stack as drawn: `EntityPlayer.getItemIcon` shows the cast
+    /// rod while the hook is out.
+    fn equipped_icon(&self) -> Option<crate::item::Stack> {
+        let mut s = self.equipped;
+        if let Some(st) = s.as_mut() {
+            if st.id == 346 && self.fish_hook.is_some() {
+                st.meta = 1000;
+            }
+        }
+        s
+    }
+
+    /// `RenderFish`: the bobber, and the line from the rod tip to it.
+    fn draw_fish_hook(
+        &self,
+        out: &mut Vec<crate::render::mesher::Vertex>,
+        line: &mut Vec<[f32; 3]>,
+        eye: [f64; 3],
+        partial: f32,
+    ) {
+        let Some((pos, prev)) = self.fish_hook else {
+            return;
+        };
+        let t = partial as f64;
+        let h = [
+            prev[0] + (pos[0] - prev[0]) * t,
+            prev[1] + (pos[1] - prev[1]) * t,
+            prev[2] + (pos[2] - prev[2]) * t,
+        ];
+        // Entity.getBrightnessForRender: 0.66 of the 0.25 box up
+        let (lx, ly, lz) = (
+            math::floor_double(pos[0]),
+            math::floor_double(pos[1] + 0.25f32 as f64 * 0.66),
+            math::floor_double(pos[2]),
+        );
+        let light = (
+            self.world.light(true, lx, ly, lz),
+            self.world.light(false, lx, ly, lz),
+        );
+        let rel = [
+            (h[0] - eye[0]) as f32,
+            (h[1] - eye[1]) as f32,
+            (h[2] - eye[2]) as f32,
+        ];
+        if let Some(s) = self.atlas.mob_tex("../particle/particles") {
+            let cell = (s.rect[2] - s.rect[0]) * 8.0 / s.size;
+            let cellv = (s.rect[3] - s.rect[1]) * 8.0 / s.size;
+            let u0 = s.rect[0] + cell;
+            let v0 = s.rect[1] + 2.0 * cellv;
+            entities::fish_bobber(
+                out,
+                [u0, v0, u0 + cell, v0 + cellv],
+                rel,
+                self.player.yaw,
+                self.player.pitch,
+                light,
+            );
+        }
+        // the angler is the local player: posY is its eye height, and
+        // RenderFish adds no getEyeHeight for it
+        let swing = self.prev_swing_f + (self.swing_f - self.prev_swing_f) * partial;
+        let var21 = math::sin(math::sqrt_float(swing) * math::PI);
+        let lerp = |a: [f32; 2]| a[0] + (a[1] - a[0]) * partial;
+        let pitch = lerp(self.p_pitch);
+        let yaw = lerp(self.p_yaw);
+        // Vec3.rotateAroundX / rotateAroundY
+        let rot_x = |v: [f64; 3], a: f32| {
+            let (c, s) = (math::cos(a) as f64, math::sin(a) as f64);
+            [v[0], v[1] * c + v[2] * s, v[2] * c - v[1] * s]
+        };
+        let rot_y = |v: [f64; 3], a: f32| {
+            let (c, s) = (math::cos(a) as f64, math::sin(a) as f64);
+            [v[0] * c + v[2] * s, v[1], v[2] * c - v[0] * s]
+        };
+        let mut v = [-0.5, 0.03, 0.8];
+        v = rot_x(v, -pitch * math::PI / 180.0);
+        v = rot_y(v, -yaw * math::PI / 180.0);
+        v = rot_y(v, var21 * 0.5);
+        v = rot_x(v, -var21 * 0.7);
+        let e = self.eye(partial);
+        let mut start = [e[0] + v[0], e[1] + v[1], e[2] + v[2]];
+        if self.third_person > 0 {
+            let var31 = lerp(self.p_body) * math::PI / 180.0;
+            let (s, c) = (math::sin(var31) as f64, math::cos(var31) as f64);
+            start = [
+                e[0] - c * 0.35 - s * 0.85,
+                e[1] - 0.45,
+                e[2] - s * 0.35 + c * 0.85,
+            ];
+        }
+        let d = [
+            (start[0] - h[0]) as f32,
+            (start[1] - (h[1] + 0.25)) as f32,
+            (start[2] - h[2]) as f32,
+        ];
+        let n = 16;
+        let point = |i: i32| {
+            let f = i as f32 / n as f32;
+            [
+                rel[0] + d[0] * f,
+                rel[1] + d[1] * (f * f + f) * 0.5 + 0.25,
+                rel[2] + d[2] * f,
+            ]
+        };
+        for i in 0..n {
+            line.push(point(i));
+            line.push(point(i + 1));
+        }
     }
 
     /// `EntityLivingBase.swingItem`
@@ -3415,10 +3535,19 @@ impl Game {
     }
 
     /// `Minecraft.func_147121_ag` on a block: `onPlayerRightClick`.
+    /// `sendUseItem` without a block in view.
+    fn use_item_air(&mut self) {
+        let _ = self.sim.commands.send(Command::UseAir);
+        if self.view.inv.held().is_some_and(|s| s.id == 346) {
+            self.swing_item();
+        }
+    }
+
     fn use_item(&mut self) {
         self.right_delay = 4;
         let Some((b, n)) = self.selected else {
-            let _ = self.sim.commands.send(Command::UseAir);
+            // ItemFishingRod.onItemRightClick on the client: swingItem
+            self.use_item_air();
             return;
         };
         if n == [0, 0, 0] {
@@ -5227,6 +5356,7 @@ impl Game {
 
         // --- Dropped items, crack overlay, hand ---
         let mut dynamic: Vec<crate::render::mesher::Vertex> = Vec::new();
+        let mut fish_line: Vec<[f32; 3]> = Vec::new();
         let mut translucent: Vec<crate::render::mesher::Vertex> = Vec::new();
         for m in &self.mobs {
             let t = partial as f64;
@@ -5450,6 +5580,7 @@ impl Game {
                 );
             }
         }
+        self.draw_fish_hook(&mut dynamic, &mut fish_line, eye, sp);
         // RenderFallingBlock
         for f in &self.falling {
             let t = sp as f64;
@@ -5663,7 +5794,7 @@ impl Game {
             entities::hand(
                 &mut hand,
                 &self.atlas,
-                self.equipped,
+                self.equipped_icon(),
                 equip,
                 swing,
                 light,
@@ -6069,6 +6200,7 @@ impl Game {
             globals: &g,
             cam: eye,
             outline,
+            fish_line: &fish_line,
             gui_scale: scale as f32,
             screenshot: self.screenshot.take(),
             star_brightness: star,
@@ -6128,6 +6260,7 @@ pub fn draw_ui_only(
         globals: &g,
         cam: [0.0, -1000.0, 0.0],
         outline: None,
+        fish_line: &[],
         gui_scale,
         screenshot,
         star_brightness: 0.0,

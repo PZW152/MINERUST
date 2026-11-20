@@ -29,6 +29,8 @@ const AUTOSAVE_TICKS: i64 = 900;
 mod bed;
 #[path = "commands.rs"]
 mod commands;
+#[path = "sim_fishing.rs"]
+mod fishing;
 #[path = "sim_vehicles.rs"]
 mod vehicles;
 
@@ -246,6 +248,8 @@ pub enum Event {
     /// Snowballs, eggs, pearls and potions in flight: position, previous
     /// position, item and damage.
     Throwables(Vec<([f64; 3], [f64; 3], u16, i32)>),
+    /// The player's `EntityFishHook` (position, previous position).
+    FishHook(Option<([f64; 3], [f64; 3])>),
     /// `EntityTrackerEntry` packets about vehicles: id and packet.
     Vehicles(Vec<(u32, crate::entity::tracker::Packet)>),
     /// `S1CPacketEntityMetadata` of vehicles.
@@ -466,6 +470,10 @@ pub struct Sim {
     pub mobs: crate::entity::mob::Mobs,
     player_attackable: bool,
     pending_out: Vec<crate::entity::mob::Outcome>,
+    /// `EntityPlayer.fishEntity`
+    fish_hook: Option<crate::entity::fish_hook::FishHook>,
+    /// `NetHandlerPlayClient.avRandomizer` for server particle packets
+    av_rand: JavaRandom,
     pub weather: Weather,
     /// `EntityPlayer.dimension`
     pub dim: i32,
@@ -675,6 +683,10 @@ impl Sim {
             mobs: crate::entity::mob::Mobs::default(),
             player_attackable: true,
             pending_out: Vec::new(),
+            fish_hook: None,
+            av_rand: JavaRandom::new(
+                (crate::util::math::math_random() * (1u64 << 48) as f64) as i64,
+            ),
             weather: Weather::default(),
             dim: 0,
             parked: Vec::new(),
@@ -1666,6 +1678,7 @@ impl Sim {
         self.world.rand = rnd;
         self.tick_mobs(&mut play, events);
         self.tick_vehicles(&mut play, events);
+        self.tick_fish_hook(&mut play);
         // World.updateEntities: tile entities after the entities.
         self.world.tick_moving();
         self.apply_pushes(&mut play, events);
@@ -1721,6 +1734,9 @@ impl Sim {
                     (t.e.pos, t.e.prev, id, m)
                 })
                 .collect(),
+        ));
+        events.push(Event::FishHook(
+            self.fish_hook.as_ref().map(|h| (h.e.pos, h.e.prev)),
         ));
         events.push(Event::Falling(
             self.play.falling.iter().map(|f| f.view()).collect(),
@@ -2213,6 +2229,11 @@ impl Sim {
             self.place_boat();
             return;
         }
+        // ItemFishingRod
+        if held.id == fishing::FISHING_ROD {
+            self.use_fishing_rod(held);
+            return;
+        }
         // ItemArmor.onItemRightClick: into the empty armour slot
         if let Some(t) = crate::container::armor_type(held.id) {
             let k = 3 - t;
@@ -2691,6 +2712,8 @@ impl Sim {
         }
         self.parked.push(old);
         self.dim = to;
+        // the hook stays behind in the old world
+        self.fish_hook = None;
         self.world.total_time = self.parked.last().unwrap().world.total_time;
         self.last_attacked = None;
         self.last_attacker = None;
@@ -5376,6 +5399,98 @@ mod tests {
         };
         let e = crate::potion::effects_of(slots[0].unwrap().meta, false);
         assert_eq!(e[0].id, crate::potion::MOVE_SPEED);
+    }
+
+    /// ItemFishingRod casts an EntityFishHook into a pool; once a fish
+    /// bites (ticksCatchable), reeling in throws the catch at the player,
+    /// drops experience and wears the rod by 1. Reeling an empty line in
+    /// costs nothing.
+    #[test]
+    fn fishing_catches_something() {
+        use crate::entity::vehicle::Vehicle;
+        let (mut sim, x, y, z) = redstone_sim();
+        sim.play.mode = GameMode::Survival;
+        for dx in 4..10 {
+            for dz in 2..10 {
+                sim.world
+                    .set_block(x + dx, y - 2, z + dz, block::STONE, 0, 3);
+                sim.world
+                    .set_block(x + dx, y - 1, z + dz, block::WATER, 0, 3);
+            }
+        }
+        let feet = [x as f64 + 2.5, y as f64, z as f64 + 5.5];
+        let look = [-90.0f32, 20.0];
+        let sel = sim.play.inv.selected;
+        sim.play.inv.main[sel] = Some(crate::item::Stack::new(346, 0, 1));
+        for _ in 0..2 {
+            sim.step(&[Command::Player(feet, look, false)], &mut Vec::new());
+        }
+        sim.step(&[Command::UseAir], &mut Vec::new());
+        assert!(sim.fish_hook.is_some(), "the hook is cast");
+        // an empty reel-in: no catch, no wear
+        sim.step(&[Command::UseAir], &mut Vec::new());
+        assert!(sim.fish_hook.is_none());
+        assert_eq!(sim.play.inv.main[sel].unwrap().meta, 0);
+        sim.step(&[Command::UseAir], &mut Vec::new());
+        let mut bit = false;
+        let mut in_water = false;
+        let mut saw_wake = false;
+        for _ in 0..3000 {
+            let mut ev = Vec::new();
+            sim.step(&[Command::Player(feet, look, false)], &mut ev);
+            saw_wake |= ev
+                .iter()
+                .any(|e| matches!(e, Event::Particles(l) if l.iter().any(|p| p.0 == "wake")));
+            let h = sim.fish_hook.as_ref().expect("the hook stays out");
+            in_water |= block::material(sim.world.peek_block(
+                h.e.pos[0].floor() as i32,
+                h.e.pos[1].floor() as i32,
+                h.e.pos[2].floor() as i32,
+            )) == block::Material::Water;
+            if h.catchable() {
+                bit = true;
+                break;
+            }
+        }
+        assert!(in_water, "the bobber floats in the pool");
+        assert!(saw_wake, "the fish swims up with a wake");
+        assert!(bit, "a fish bites within 3000 ticks");
+        let items_before = sim.play.items.len();
+        let orbs_before = sim
+            .play
+            .vehicles
+            .iter()
+            .filter(|v| matches!(v.v, Vehicle::Orb(_)))
+            .count();
+        let xp_before = sim.splayer.xp_total;
+        sim.step(&[Command::UseAir], &mut Vec::new());
+        assert!(sim.fish_hook.is_none());
+        assert_eq!(
+            sim.play.items.len(),
+            items_before + 1,
+            "the catch flies out"
+        );
+        let orbs = sim
+            .play
+            .vehicles
+            .iter()
+            .filter(|v| matches!(v.v, Vehicle::Orb(_)))
+            .count();
+        // the orb lands at the player's feet and is usually collected at once
+        let gained = sim.splayer.xp_total - xp_before;
+        assert!(
+            orbs == orbs_before + 1 || (1..=6).contains(&gained),
+            "one orb worth 1..6 ({orbs} orbs, {gained} xp)"
+        );
+        assert_eq!(
+            sim.play.inv.main[sel].unwrap().meta,
+            1,
+            "the rod wears by 1"
+        );
+        let caught = sim.stats_file.write_stat("stat.fishCaught")
+            + sim.stats_file.write_stat("stat.junkFished")
+            + sim.stats_file.write_stat("stat.treasureFished");
+        assert_eq!(caught, 1);
     }
 
     /// EntityExpBottle breaks into 3..11 experience; the EntityXPOrbs fly

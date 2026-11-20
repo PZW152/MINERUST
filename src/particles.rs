@@ -61,6 +61,8 @@ enum Kind {
     Spell(i32),
     /// `EntityAuraFX`: no gravity, slowed by 0.99
     Aura,
+    /// `EntityFishWakeFX`: counts its `particleMaxAge` down
+    Wake,
 }
 
 impl Particle {
@@ -499,6 +501,21 @@ impl Particles {
         self.add(p);
     }
 
+    /// `EntityFishWakeFX`
+    pub fn wake(&mut self, pos: [f64; 3], m: [f64; 3]) {
+        let mut p = self.moving(pos, [0.0; 3]);
+        p.motion[0] *= 0.3f32 as f64;
+        p.motion[1] = (self.rnd() as f32 * 0.2 + 0.1) as f64;
+        p.motion[2] *= 0.3f32 as f64;
+        p.color = [1.0, 1.0, 1.0, 1.0];
+        p.sprite = Sprite::Index(19);
+        p.max_age = (8.0 / (self.rnd() * 0.8 + 0.2)) as i32;
+        p.gravity = 0.0;
+        p.motion = m;
+        p.kind = Kind::Wake;
+        self.add(p);
+    }
+
     /// `EntitySplashFX` (an `EntityRainFX` with gravity 0.04)
     pub fn splash(&mut self, pos: [f64; 3], m: [f64; 3]) {
         let mut p = self.base(pos);
@@ -634,6 +651,19 @@ impl Particles {
         for list in lists.iter_mut() {
             list.retain_mut(|p| {
                 p.prev = p.pos;
+                if p.kind == Kind::Wake {
+                    // EntityFishWakeFX.onUpdate
+                    p.motion[1] -= p.gravity as f64;
+                    move_particle(p, w);
+                    for v in &mut p.motion {
+                        *v *= 0.98f32 as f64;
+                    }
+                    let var1 = 60 - p.max_age;
+                    p.sprite = Sprite::Index(19 + var1 % 4);
+                    let alive = p.max_age > 0;
+                    p.max_age -= 1;
+                    return alive;
+                }
                 p.age += 1;
                 if p.age >= p.max_age {
                     return false;

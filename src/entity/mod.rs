@@ -3,6 +3,7 @@ pub mod base;
 pub mod boat;
 pub mod collide;
 pub mod falling;
+pub mod fish_hook;
 pub mod item;
 pub mod living;
 pub mod minecart;

@@ -195,6 +195,16 @@ impl StatisticsFile {
         old == 0
     }
 
+    /// `EntityPlayer.addStat(stat, n)` for a general statistic
+    /// (`StatisticsFile.increaseStat`).
+    pub fn increase_stat(&mut self, id: &str, n: i32) {
+        let old = self.write_stat(id);
+        self.set(id, old.saturating_add(n));
+        if !self.dirty.iter().any(|d| d == id) {
+            self.dirty.push(id.to_string());
+        }
+    }
+
     fn set(&mut self, id: &str, v: i32) {
         match self.data.iter_mut().find(|e| e.0 == id).map(|e| &mut e.1) {
             // an entry with progress keeps it (TupleIntJsonSerializable)

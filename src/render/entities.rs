@@ -414,6 +414,39 @@ pub fn billboard(
     out.extend_from_slice(&[vs[3], vs[2], vs[1], vs[0]]);
 }
 
+/// `RenderFish`: cell (1, 2) of `particles.png`, half a block wide,
+/// centred on the hook and facing the camera.
+pub fn fish_bobber(
+    out: &mut Vec<Vertex>,
+    rect: [f32; 4],
+    c: [f32; 3],
+    yaw: f32,
+    pitch: f32,
+    light: (i32, i32),
+) {
+    let mut m = translate(c[0], c[1], c[2]);
+    m = mul(&m, &scale(0.5, 0.5, 0.5));
+    m = mul(&m, &rot_y(180.0 - yaw));
+    m = mul(&m, &rot_x(-pitch));
+    let p = |x: f32, y: f32| transform(&m, [x, y, 0.0, 1.0]);
+    let (u0, v0, u1, v1) = (rect[0], rect[1], rect[2], rect[3]);
+    let l = light_bytes(light.0, light.1);
+    let q = [
+        (p(-0.5, -0.5), [u0, v1]),
+        (p(0.5, -0.5), [u1, v1]),
+        (p(0.5, 0.5), [u1, v0]),
+        (p(-0.5, 0.5), [u0, v0]),
+    ];
+    for (o, uv) in q {
+        out.push(Vertex {
+            pos: [o[0], o[1], o[2]],
+            uv,
+            color: [255; 4],
+            light: l,
+        });
+    }
+}
+
 /// `RenderSnowball.func_77026_a`: an item icon facing the camera, lit by
 /// the entity's brightness and tinted.
 #[allow(clippy::too_many_arguments)]

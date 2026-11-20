@@ -372,6 +372,8 @@ pub struct Frame<'a> {
     /// Selection box of the block under the crosshair: min and max corners
     /// in world coordinates.
     pub outline: Option<[f64; 6]>,
+    /// `RenderFish`'s line: camera-relative segment ends (line list).
+    pub fish_line: &'a [[f32; 3]],
     pub gui_scale: f32,
     pub screenshot: Option<std::path::PathBuf>,
     /// `World.getStarBrightness`
@@ -2427,6 +2429,9 @@ impl Renderer {
                 }
                 outline_count = 24;
             }
+            let line_first = dynv.len() as u32;
+            dynv.extend_from_slice(frame.fish_line);
+            let line_count = dynv.len() as u32 - line_first;
             let cross_first = dynv.len() as u32;
             {
                 let sx = 2.0 * frame.gui_scale / self.extent.width as f32;
@@ -2896,6 +2901,16 @@ impl Renderer {
                 push([0.0; 4], [0.0, 0.0, 0.0, 0.4]);
                 dev.cmd_bind_vertex_buffers(cmd, 0, &[dynbuf], &[0]);
                 dev.cmd_draw(cmd, outline_count, 1, 0, 0);
+            }
+            if line_count > 0 {
+                // RenderFish: GL_LINE_STRIP, setColorOpaque_I(0), width 1
+                dev.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, self.pipe_line);
+                if self.wide_lines {
+                    dev.cmd_set_line_width(cmd, 1.0);
+                }
+                push([0.0; 4], [0.0, 0.0, 0.0, 1.0]);
+                dev.cmd_bind_vertex_buffers(cmd, 0, &[dynbuf], &[0]);
+                dev.cmd_draw(cmd, line_count, 1, line_first, 0);
             }
             dev.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, self.pipe_translucent);
             let mut bound = u32::MAX;

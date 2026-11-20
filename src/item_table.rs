@@ -241,6 +241,7 @@ pub fn variant(id: ItemId, meta: i32) -> Option<(&'static str, &'static str)> {
         261 if meta == 1000 => ("bow_pulling_0", "Bow"),
         261 if meta == 1001 => ("bow_pulling_1", "Bow"),
         261 if meta == 1002 => ("bow_pulling_2", "Bow"),
+        346 if meta == 1000 => ("fishing_rod_cast", "Fishing Rod"),
         349 => [
             ("fish_cod_raw", "Raw Fish"),
             ("fish_salmon_raw", "Raw Salmon"),

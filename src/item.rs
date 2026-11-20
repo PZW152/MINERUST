@@ -639,6 +639,8 @@ pub fn all_items() -> Vec<(ItemId, i32)> {
     for m in 1000..1003 {
         v.push((261, m));
     }
+    // ItemFishingRod.func_94597_g: the cast rod
+    v.push((346, 1000));
     v
 }
 

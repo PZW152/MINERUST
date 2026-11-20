@@ -9,7 +9,8 @@
 
 ## 2026-11-20
 
-- renderBlockStairs and renderBlockFence ported (smooth lighting, field_152631_f, the lone post's hidden bar); shotcompare `stairs` scene
+- Fishing: ItemFishingRod and EntityFishHook (casting, float, lure and weather timing, bites with wake and splash particles, hooking mobs, boats and minecarts, junk/treasure/fish tables with Luck of the Sea, XP orb, rod wear, fishing statistics); RenderFish bobber and line, cast rod icon, EntityFishWakeFX; MINERUST_USE_AIR for captures
+- `4f88e09` renderBlockStairs and renderBlockFence ported (smooth lighting, field_152631_f, the lone post's hidden bar); shotcompare `stairs` scene
 - `8ae53ef` Slabs, snow layers, buttons, pressure plates, carpet, trapdoors, farmland and enchanting tables drawn by renderStandardBlock (smooth lighting, BlockSlab culling); renderBlockCactus ported; no block outline while F1 hides the GUI; shotcompare `shapes` scene
 - `d051db5` RenderBlocks ported line by line for torches, repeaters (locked-repeater bedrock bar, diode top), ladders, rails and crops; shotcompare `redstone` scene with `--setblock` in ShotHarness
 - `c7262c2` First-person arm: ModelBiped idle sway (0.1 rad), EntityPlayerSP arm lag, standard item lighting; F3 screen ported line by line (render chunk, entity, particle, chunk cache and memory lines, vanilla positions and colours); shotcompare f3 scene
