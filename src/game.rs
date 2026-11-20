@@ -5363,6 +5363,8 @@ impl Game {
         let mut dynamic: Vec<crate::render::mesher::Vertex> = Vec::new();
         let mut fish_line: Vec<[f32; 3]> = Vec::new();
         let mut translucent: Vec<crate::render::mesher::Vertex> = Vec::new();
+        // RenderGlobal.renderEntities: isBoundingBoxInFrustum
+        let planes = render::frustum_planes(&view_proj);
         for m in &self.mobs {
             let t = partial as f64;
             let p = [
@@ -5382,6 +5384,13 @@ impl Game {
             let edge =
                 ((m.bb[3] - m.bb[0]) + (m.bb[4] - m.bb[1]) + (m.bb[5] - m.bb[2])) / 3.0 * 64.0;
             if (rel[0] * rel[0] + rel[1] * rel[1] + rel[2] * rel[2]) as f64 > edge * edge {
+                continue;
+            }
+            // the dragon has ignoreFrustumCheck
+            let b = |i: usize| (m.bb[i] - eye[i % 3]) as f32;
+            if m.kind != crate::entity::mob::Kind::EnderDragon
+                && !render::box_in_frustum(&planes, [b(0), b(1), b(2)], [b(3), b(4), b(5)])
+            {
                 continue;
             }
             // Entity.getBrightnessForRender
