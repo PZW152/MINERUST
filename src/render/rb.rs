@@ -408,6 +408,33 @@ impl<'a, 'b> Rb<'a, 'b> {
             }
             block::SNOW_LAYER | block::CARPET if side == 1 => true,
             block::DRAGON_EGG => true,
+            // BlockSlab.shouldSideBeRendered (half slabs; x, y, z is the neighbour)
+            block::STONE_SLAB | block::WOODEN_SLAB => {
+                let is_slab = |id: u8| id == block::STONE_SLAB || id == block::WOODEN_SLAB;
+                if side != 1 && side != 0 && !self.default_side(x, y, z, side) {
+                    return false;
+                }
+                const OX: [i32; 6] = [0, 0, 0, 0, -1, 1];
+                const OY: [i32; 6] = [-1, 1, 0, 0, 0, 0];
+                const OZ: [i32; 6] = [0, 0, -1, 1, 0, 0];
+                let s = side as usize;
+                let top = (self.meta_at(x - OX[s], y - OY[s], z - OZ[s]) & 8) != 0;
+                if top {
+                    if side == 0 {
+                        true
+                    } else if side == 1 && self.default_side(x, y, z, side) {
+                        true
+                    } else {
+                        !is_slab(n) || (self.meta_at(x, y, z) & 8) == 0
+                    }
+                } else if side == 1 {
+                    true
+                } else if side == 0 && self.default_side(x, y, z, side) {
+                    true
+                } else {
+                    !is_slab(n) || (self.meta_at(x, y, z) & 8) != 0
+                }
+            }
             // BlockRedstoneDiode.shouldSideBeRendered
             block::UNPOWERED_REPEATER | block::POWERED_REPEATER => side != 0 && side != 1,
             // BlockFenceGate.shouldSideBeRendered
@@ -5214,5 +5241,58 @@ impl<'a, 'b> Rb<'a, 'b> {
         self.vertex(var19, var5 + 0.0, var25, var11, var17);
         self.vertex(var21, var5 + 0.0, var25, var15, var17);
         self.vertex(var21, var5 + 1.0, var25, var15, var13);
+    }
+}
+
+impl<'a, 'b> Rb<'a, 'b> {
+    /// `renderBlockCactus` / `renderBlockCactusImpl` (no anaglyph)
+    pub fn render_block_cactus(&mut self, x: i32, y: i32, z: i32) -> bool {
+        let c = self.color_multiplier(x, y, z);
+        let (var5, var6, var7) = (c[0], c[1], c[2]);
+        let (var10, var11, var12, var13) = (0.5f32, 1.0f32, 0.8f32, 0.6f32);
+        let var26 = 0.0625f32 as f64;
+        let var27 = self.mixed(x, y, z);
+        let (fx, fy, fz) = (x as f64, y as f64, z as f64);
+        if self.renderAllFaces || self.should_side(x, y - 1, z, 0) {
+            self.bright = if self.renderMinY > 0.0 {
+                var27
+            } else {
+                self.mixed(x, y - 1, z)
+            };
+            self.color(var10 * var5, var10 * var6, var10 * var7);
+            let i = self.icon(x, y, z, 0);
+            self.face_y_neg(fx, fy, fz, i);
+        }
+        if self.renderAllFaces || self.should_side(x, y + 1, z, 1) {
+            self.bright = if self.renderMaxY < 1.0 {
+                var27
+            } else {
+                self.mixed(x, y + 1, z)
+            };
+            self.color(var11 * var5, var11 * var6, var11 * var7);
+            let i = self.icon(x, y, z, 1);
+            self.face_y_pos(fx, fy, fz, i);
+        }
+        self.bright = var27;
+        self.color(var12 * var5, var12 * var6, var12 * var7);
+        // Tessellator.addTranslation moves every vertex; vertex() subtracts origin.
+        self.origin[2] -= var26;
+        let i = self.icon(x, y, z, 2);
+        self.face_z_neg(fx, fy, fz, i);
+        self.origin[2] += var26;
+        self.origin[2] += var26;
+        let i = self.icon(x, y, z, 3);
+        self.face_z_pos(fx, fy, fz, i);
+        self.origin[2] -= var26;
+        self.color(var13 * var5, var13 * var6, var13 * var7);
+        self.origin[0] -= var26;
+        let i = self.icon(x, y, z, 4);
+        self.face_x_neg(fx, fy, fz, i);
+        self.origin[0] += var26;
+        self.origin[0] += var26;
+        let i = self.icon(x, y, z, 5);
+        self.face_x_pos(fx, fy, fz, i);
+        self.origin[0] -= var26;
+        true
     }
 }

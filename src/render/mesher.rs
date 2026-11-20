@@ -608,38 +608,46 @@ fn mesh_block(cx: &Ctx, out: &mut Vec<Vertex>, id: u8, meta: i32, x: i32, y: i32
         Shape::DoublePlant => double_plant(&cx, out, meta, x, y, z),
         Shape::Vine => vine(&cx, out, meta, x, y, z),
         Shape::LilyPad => lily_pad(&cx, out, x, y, z),
-        Shape::Cactus => boxed(
-            &cx,
-            out,
-            id,
-            meta,
-            x,
-            y,
-            z,
-            [0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
-            0.0625,
-        ),
-        Shape::SnowLayer => {
-            let h = ((meta & 7) + 1) as f32 * 0.125;
-            boxed(
-                &cx,
-                out,
-                id,
-                meta,
-                x,
-                y,
-                z,
-                [0.0, 0.0, 0.0, 1.0, h, 1.0],
-                0.0,
-            )
+        // renderBlockCactus (13)
+        Shape::Cactus => {
+            rb::Rb::new(cx, out, id, meta).render_block_cactus(x, y, z);
         }
+        // render type 0 with BlockSnow.setBlockBoundsForSnowDepth
+        Shape::SnowLayer => {
+            let h = (2 * (1 + (meta & 7))) as f32 / 16.0;
+            let mut rb = rb::Rb::new(cx, out, id, meta);
+            rb.set_bounds([0.0, 0.0, 0.0, 1.0, h, 1.0]);
+            rb.render_standard(x, y, z);
+        }
+        // render type 0 with BlockSlab.setBlockBoundsBasedOnState
         Shape::Slab => {
             let b = if meta & 8 != 0 {
                 [0.0, 0.5, 0.0, 1.0, 1.0, 1.0]
             } else {
                 [0.0, 0.0, 0.0, 1.0, 0.5, 1.0]
             };
-            boxed(&cx, out, id, meta, x, y, z, b, 0.0)
+            let mut rb = rb::Rb::new(cx, out, id, meta);
+            rb.set_bounds(b);
+            rb.render_standard(x, y, z);
+        }
+        // render type 0 with setBlockBoundsBasedOnState: one box each
+        Shape::Boxes
+            if matches!(
+                id,
+                block::FARMLAND
+                    | block::ENCHANTING_TABLE
+                    | block::STONE_PRESSURE_PLATE
+                    | block::WOODEN_PRESSURE_PLATE
+                    | block::STONE_BUTTON
+                    | block::WOODEN_BUTTON
+                    | block::CARPET
+                    | block::TRAPDOOR
+            ) =>
+        {
+            let list = crate::shapes::static_boxes(id, meta as u8);
+            let mut rb = rb::Rb::new(cx, out, id, meta);
+            rb.set_bounds(list[0]);
+            rb.render_standard(x, y, z);
         }
         // render type 22: drawn by TileEntityChestRenderer, not the chunk
         Shape::Chest | Shape::Sign => {}

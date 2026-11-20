@@ -5999,7 +5999,8 @@ impl Game {
         let ui_vignette = ui.vignette;
         let ui_verts = ui.v;
         // RenderGlobal.drawSelectionBox: getSelectedBoundingBoxFromPool
-        let outline = if self.screen == Screen::Playing {
+        // (EntityRenderer.renderWorld skips it while F1 hides the GUI)
+        let outline = if self.screen == Screen::Playing && !self.hide_gui {
             self.selected.map(|(p, _)| {
                 let w = &self.world;
                 let get = |x: i32, y: i32, z: i32| (w.peek_block(x, y, z), w.peek_meta(x, y, z));
