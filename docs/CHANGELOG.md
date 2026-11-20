@@ -9,7 +9,8 @@
 
 ## 2026-11-20
 
-- Slabs, snow layers, buttons, pressure plates, carpet, trapdoors, farmland and enchanting tables drawn by renderStandardBlock (smooth lighting, BlockSlab culling); renderBlockCactus ported; no block outline while F1 hides the GUI; shotcompare `shapes` scene
+- renderBlockStairs and renderBlockFence ported (smooth lighting, field_152631_f, the lone post's hidden bar); shotcompare `stairs` scene
+- `8ae53ef` Slabs, snow layers, buttons, pressure plates, carpet, trapdoors, farmland and enchanting tables drawn by renderStandardBlock (smooth lighting, BlockSlab culling); renderBlockCactus ported; no block outline while F1 hides the GUI; shotcompare `shapes` scene
 - `d051db5` RenderBlocks ported line by line for torches, repeaters (locked-repeater bedrock bar, diode top), ladders, rails and crops; shotcompare `redstone` scene with `--setblock` in ShotHarness
 - `c7262c2` First-person arm: ModelBiped idle sway (0.1 rad), EntityPlayerSP arm lag, standard item lighting; F3 screen ported line by line (render chunk, entity, particle, chunk cache and memory lines, vanilla positions and colours); shotcompare f3 scene
 - `c5269b8` Spawn area prepared like MinecraftServer.initialWorldChunkLoad (vanilla decoration order: same trees near spawn); statistics file and achievement tree, inventory hint and "Taking Inventory" (GuiAchievement); shotcompare --debug

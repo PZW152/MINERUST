@@ -178,7 +178,7 @@ pub fn wall_connects(id: u8) -> bool {
         || (b.material.is_opaque() && b.normal && b.material != Material::Gourd)
 }
 
-fn fence_links(get: Get, x: i32, y: i32, z: i32) -> [bool; 4] {
+pub fn fence_links(get: Get, x: i32, y: i32, z: i32) -> [bool; 4] {
     let own = get(x, y, z).0;
     let own = if block::info(own).shape == block::Shape::Fence {
         own
@@ -278,28 +278,6 @@ pub fn fence_collision(get: Get, x: i32, y: i32, z: i32) -> Vec<Bx> {
     }
     if w || e || (!n && !s) {
         out.push([f, 0.0, f2, f1, 1.5, f3]);
-    }
-    out
-}
-
-/// `RenderBlocks.renderBlockFence`
-pub fn fence_render(get: Get, x: i32, y: i32, z: i32) -> Vec<Bx> {
-    let [n, s, w, e] = fence_links(get, x, y, z);
-    let mut out = vec![[0.375, 0.0, 0.375, 0.625, 1.0, 0.625]];
-    let ew = w || e;
-    let ns = n || s;
-    let (f, f1) = (0.4375f32, 0.5625f32);
-    let x0 = if w { 0.0 } else { f };
-    let x1 = if e { 1.0 } else { f1 };
-    let z0 = if n { 0.0 } else { f };
-    let z1 = if s { 1.0 } else { f1 };
-    for (y0, y1) in [(0.75f32, 0.9375f32), (0.375, 0.5625)] {
-        if ew {
-            out.push([x0, y0, f, x1, y1, f1]);
-        }
-        if ns {
-            out.push([f, y0, z0, f1, y1, z1]);
-        }
     }
     out
 }

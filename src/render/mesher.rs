@@ -1400,11 +1400,11 @@ fn shaped(cx: &Ctx, out: &mut Vec<Vertex>, id: u8, meta: i32, x: i32, y: i32, z:
     match block::info(id).shape {
         Shape::Stairs => {
             let list = shapes::stairs(&get, x, y, z, m);
-            boxes(cx, out, x, y, z, &list, &|_, f| plain(f), white);
+            rb::Rb::new(cx, out, id, meta).render_block_stairs(x, y, z, &list);
         }
         Shape::Fence => {
-            let list = shapes::fence_render(&get, x, y, z);
-            boxes(cx, out, x, y, z, &list, &|_, f| plain(f), white);
+            let [n, s, w, e] = shapes::fence_links(&get, x, y, z);
+            rb::Rb::new(cx, out, id, meta).render_block_fence(x, y, z, [w, e, n, s]);
         }
         Shape::Pane => {
             let list = shapes::pane(&get, id, x, y, z);

@@ -5296,3 +5296,60 @@ impl<'a, 'b> Rb<'a, 'b> {
         true
     }
 }
+
+impl<'a, 'b> Rb<'a, 'b> {
+    /// `renderBlockStairs`: the base, then the step boxes of
+    /// `isInnerStair` / `setStepShapeForCollisions` with `field_152631_f`
+    /// (`shapes::stairs` returns them in that order).
+    pub fn render_block_stairs(&mut self, x: i32, y: i32, z: i32, list: &[[f32; 6]]) -> bool {
+        self.set_bounds(list[0]);
+        self.render_standard(x, y, z);
+        self.field_152631_f = true;
+        for b in &list[1..] {
+            self.set_bounds(*b);
+            self.render_standard(x, y, z);
+        }
+        self.field_152631_f = false;
+        true
+    }
+
+    /// `renderBlockFence`; `links` is `canConnectFenceTo` for x-1, x+1, z-1, z+1.
+    pub fn render_block_fence(&mut self, x: i32, y: i32, z: i32, links: [bool; 4]) -> bool {
+        let mut var6 = 0.375f32;
+        let mut var7 = 0.625f32;
+        let d = |v: f32| v as f64;
+        self.set_render_bounds(d(var6), 0.0, d(var6), d(var7), 1.0, d(var7));
+        self.render_standard(x, y, z);
+        let [var10, var11, var12, var13] = links;
+        let mut var8 = var10 || var11;
+        let var9 = var12 || var13;
+        if !var8 && !var9 {
+            var8 = true;
+        }
+        var6 = 0.4375;
+        var7 = 0.5625;
+        let mut var14 = 0.75f32;
+        let mut var15 = 0.9375f32;
+        let var16 = if var10 { 0.0 } else { var6 };
+        let var17 = if var11 { 1.0 } else { var7 };
+        let var18 = if var12 { 0.0 } else { var6 };
+        let var19 = if var13 { 1.0 } else { var7 };
+        self.field_152631_f = true;
+        for pass in 0..2 {
+            if pass == 1 {
+                var14 = 0.375;
+                var15 = 0.5625;
+            }
+            if var8 {
+                self.set_render_bounds(d(var16), d(var14), d(var6), d(var17), d(var15), d(var7));
+                self.render_standard(x, y, z);
+            }
+            if var9 {
+                self.set_render_bounds(d(var6), d(var14), d(var18), d(var7), d(var15), d(var19));
+                self.render_standard(x, y, z);
+            }
+        }
+        self.field_152631_f = false;
+        true
+    }
+}
