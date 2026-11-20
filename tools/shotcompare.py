@@ -68,6 +68,18 @@ SCENES = {
     "night":   dict(seed=12345, time=18000, pos=(-242.5, 90.0, 130.5),  look=(0.0, -40.0)),
     "above":   dict(seed=12345, time=6000,  pos=(-242.5, 130.0, 130.5), look=(45.0, 60.0)),
     "f3":      dict(seed=12345, time=6000,  pos=(-242.5, 90.0, 130.5),  look=(-90.0, 60.0), hud=True, debug=True),
+    # RenderBlocks types built on a floating stone platform: torch, repeaters (every
+    # facing and delay, one locked by a powered repeater), ladder, rails, crops.
+    "redstone": dict(seed=12345, time=6000, pos=(-242.5, 98.5, 131.5), look=(0.0, 55.0), setblock=";".join(
+        [f"{x} 95 {z} 1" for x in range(-247, -237) for z in range(132, 139)] + [
+        "-246 96 133 50 5", "-246 96 134 76 5",
+        "-245 96 133 93 0", "-244 96 133 93 5", "-243 96 133 93 10", "-242 96 133 93 15",
+        "-245 96 135 152", "-244 96 135 94 1", "-243 96 135 93 0",
+        "-240 96 133 1", "-240 96 134 65 3",
+        "-242 96 137 66 0", "-241 96 137 66 6", "-240 96 137 27 1", "-239 96 137 27 9",
+        "-245 95 137 60 7", "-245 96 137 59 7", "-244 95 137 60 7", "-244 96 137 141 3",
+        "-246 95 137 88", "-246 96 137 115 3",
+    ])),
 }
 
 
@@ -96,6 +108,7 @@ def run_vanilla(cp: str, classes: Path, scene: dict, png: Path, game: Path):
     x, y, z = scene["pos"]
     yaw, pitch = scene["look"]
     flags = ([] if scene.get("hud") else ["--hide-gui"]) + (["--debug"] if scene.get("debug") else [])
+    flags += ["--setblock", scene["setblock"]] if scene.get("setblock") else []
     cmd = [JAVA8, "-Xmx2G", f"-Djava.library.path={MC_ROOT / 'versions/1.7.10/natives'}",
            "-cp", f"{classes};{cp}", "ShotHarness",
            str(png), str(scene["seed"]), str(scene["time"]), str(x), str(y), str(z), str(yaw), str(pitch), str(SETTLE),
@@ -114,6 +127,7 @@ def run_minerust(exe: Path, scene: dict, png: Path, game: Path):
     x, y, z = scene["pos"]
     yaw, pitch = scene["look"]
     flags = ([] if scene.get("hud") else ["--hide-gui"]) + (["--debug"] if scene.get("debug") else [])
+    flags += ["--setblock", scene["setblock"]] if scene.get("setblock") else []
     cmd = [str(exe), "--seed", str(scene["seed"]), "--no-save", "--size", str(WIDTH), str(HEIGHT),
            "--time", str(scene["time"]), "--freeze-time", "--creative",
            "--pos", str(x), str(y), str(z), "--look", str(yaw), str(pitch), *flags,

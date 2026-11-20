@@ -408,6 +408,8 @@ impl<'a, 'b> Rb<'a, 'b> {
             }
             block::SNOW_LAYER | block::CARPET if side == 1 => true,
             block::DRAGON_EGG => true,
+            // BlockRedstoneDiode.shouldSideBeRendered
+            block::UNPOWERED_REPEATER | block::POWERED_REPEATER => side != 0 && side != 1,
             // BlockFenceGate.shouldSideBeRendered
             block::FENCE_GATE => true,
             // BlockWall.shouldSideBeRendered: only the bottom is culled
@@ -4714,5 +4716,503 @@ impl<'a, 'b> Rb<'a, 'b> {
         }
         self.flipTexture = false;
         true
+    }
+}
+
+/// Render types 2 (torch), 8 (ladder), 9 (rail), 6 (crops) and 15
+/// (repeater), ported line by line from `RenderBlocks`.
+#[allow(clippy::too_many_arguments)]
+impl<'a, 'b> Rb<'a, 'b> {
+    /// `renderBlockTorch`
+    pub fn render_block_torch(&mut self, x: i32, y: i32, z: i32) -> bool {
+        let var5 = self.meta;
+        let b = self.mixed(x, y, z);
+        self.set_color_brightness(1.0, b);
+        let var7 = 0.4f32 as f64;
+        let var9 = 0.5 - var7;
+        let var11 = 0.2f32 as f64;
+        let (x, y, z) = (x as f64, y as f64, z as f64);
+        match var5 {
+            1 => self.render_torch_at_angle(x - var9, y + var11, z, -var7, 0.0, 0),
+            2 => self.render_torch_at_angle(x + var9, y + var11, z, var7, 0.0, 0),
+            3 => self.render_torch_at_angle(x, y + var11, z - var9, 0.0, -var7, 0),
+            4 => self.render_torch_at_angle(x, y + var11, z + var9, 0.0, var7, 0),
+            _ => self.render_torch_at_angle(x, y, z, 0.0, 0.0, 0),
+        }
+        true
+    }
+
+    /// `renderTorchAtAngle`
+    pub fn render_torch_at_angle(
+        &mut self,
+        mut var2: f64,
+        var4: f64,
+        mut var6: f64,
+        var8: f64,
+        var10: f64,
+        var12: i32,
+    ) {
+        let var14 = match self.overrideBlockTexture {
+            Some(o) => o,
+            None => Icon::new(
+                self.atlas()
+                    .tile(self.id, var12 as u8, 0)
+                    .unwrap_or([0.0; 4]),
+            ),
+        };
+        let var15 = var14.min_u();
+        let var17 = var14.min_v();
+        let var19 = var14.max_u();
+        let var21 = var14.max_v();
+        let var23 = var14.u(7.0);
+        let var25 = var14.v(6.0);
+        let var27 = var14.u(9.0);
+        let var29 = var14.v(8.0);
+        let var31 = var14.u(7.0);
+        let var33 = var14.v(13.0);
+        let var35 = var14.u(9.0);
+        let var37 = var14.v(15.0);
+        var2 += 0.5;
+        var6 += 0.5;
+        let var39 = var2 - 0.5;
+        let var41 = var2 + 0.5;
+        let var43 = var6 - 0.5;
+        let var45 = var6 + 0.5;
+        let var47 = 0.0625;
+        let var49 = 0.625;
+        let tx = var2 + var8 * (1.0 - var49);
+        let tz = var6 + var10 * (1.0 - var49);
+        self.vertex(tx - var47, var4 + var49, tz - var47, var23, var25);
+        self.vertex(tx - var47, var4 + var49, tz + var47, var23, var29);
+        self.vertex(tx + var47, var4 + var49, tz + var47, var27, var29);
+        self.vertex(tx + var47, var4 + var49, tz - var47, var27, var25);
+        self.vertex(
+            var2 + var47 + var8,
+            var4,
+            var6 - var47 + var10,
+            var35,
+            var33,
+        );
+        self.vertex(
+            var2 + var47 + var8,
+            var4,
+            var6 + var47 + var10,
+            var35,
+            var37,
+        );
+        self.vertex(
+            var2 - var47 + var8,
+            var4,
+            var6 + var47 + var10,
+            var31,
+            var37,
+        );
+        self.vertex(
+            var2 - var47 + var8,
+            var4,
+            var6 - var47 + var10,
+            var31,
+            var33,
+        );
+        self.vertex(var2 - var47, var4 + 1.0, var43, var15, var17);
+        self.vertex(var2 - var47 + var8, var4 + 0.0, var43 + var10, var15, var21);
+        self.vertex(var2 - var47 + var8, var4 + 0.0, var45 + var10, var19, var21);
+        self.vertex(var2 - var47, var4 + 1.0, var45, var19, var17);
+        self.vertex(var2 + var47, var4 + 1.0, var45, var15, var17);
+        self.vertex(var2 + var8 + var47, var4 + 0.0, var45 + var10, var15, var21);
+        self.vertex(var2 + var8 + var47, var4 + 0.0, var43 + var10, var19, var21);
+        self.vertex(var2 + var47, var4 + 1.0, var43, var19, var17);
+        self.vertex(var39, var4 + 1.0, var6 + var47, var15, var17);
+        self.vertex(var39 + var8, var4 + 0.0, var6 + var47 + var10, var15, var21);
+        self.vertex(var41 + var8, var4 + 0.0, var6 + var47 + var10, var19, var21);
+        self.vertex(var41, var4 + 1.0, var6 + var47, var19, var17);
+        self.vertex(var41, var4 + 1.0, var6 - var47, var15, var17);
+        self.vertex(var41 + var8, var4 + 0.0, var6 - var47 + var10, var15, var21);
+        self.vertex(var39 + var8, var4 + 0.0, var6 - var47 + var10, var19, var21);
+        self.vertex(var39, var4 + 1.0, var6 - var47, var19, var17);
+    }
+
+    /// `BlockRedstoneRepeater.isLocked`: a powered repeater beside this one
+    /// pointing into it (`getInputSignalFromSides`; only repeaters can
+    /// power a repeater's side, and they give 15 or nothing).
+    fn repeater_locked(&self, x: i32, y: i32, z: i32, meta: i32) -> bool {
+        // BlockRedstoneDiode.isProvidingWeakPower
+        let side_power = |nx: i32, ny: i32, nz: i32, side: i32| -> bool {
+            if self.block_at(nx, ny, nz) != block::POWERED_REPEATER {
+                return false;
+            }
+            let d = self.meta_at(nx, ny, nz) & 3;
+            (d == 0 && side == 3)
+                || (d == 1 && side == 4)
+                || (d == 2 && side == 2)
+                || (d == 3 && side == 5)
+        };
+        match meta & 3 {
+            0 | 2 => side_power(x - 1, y, z, 4) || side_power(x + 1, y, z, 5),
+            _ => side_power(x, y, z + 1, 3) || side_power(x, y, z - 1, 2),
+        }
+    }
+
+    /// `renderBlockRepeater`
+    pub fn render_block_repeater(&mut self, x: i32, y: i32, z: i32) -> bool {
+        const REPEATER_TORCH_OFFSET: [f64; 4] = [-0.0625, 0.0625, 0.1875, 0.3125];
+        // setRenderBoundsFromBlock: BlockRedstoneDiode's bounds
+        self.set_render_bounds(0.0, 0.0, 0.0, 1.0, 0.125f32 as f64, 1.0);
+        let var5 = self.meta;
+        let var6 = var5 & 3;
+        let var7 = ((var5 & 12) >> 2) as usize;
+        let b = self.mixed(x, y, z);
+        self.set_color_brightness(1.0, b);
+        let var9 = -0.1875;
+        let var11 = self.repeater_locked(x, y, z, var5);
+        let mut var12 = 0.0;
+        let mut var14 = 0.0;
+        let mut var16 = 0.0;
+        let mut var18 = 0.0;
+        match var6 {
+            0 => {
+                var18 = -0.3125;
+                var14 = REPEATER_TORCH_OFFSET[var7];
+            }
+            1 => {
+                var16 = 0.3125;
+                var12 = -REPEATER_TORCH_OFFSET[var7];
+            }
+            2 => {
+                var18 = 0.3125;
+                var14 = -REPEATER_TORCH_OFFSET[var7];
+            }
+            _ => {
+                var16 = -0.3125;
+                var12 = REPEATER_TORCH_OFFSET[var7];
+            }
+        }
+        let (fx, fy, fz) = (x as f64, y as f64, z as f64);
+        if !var11 {
+            self.render_torch_at_angle(fx + var12, fy + var9, fz + var14, 0.0, 0.0, 0);
+        } else {
+            let var20 = Icon::new(self.atlas().tile(block::BEDROCK, 0, 0).unwrap_or([0.0; 4]));
+            self.overrideBlockTexture = Some(var20);
+            let (mut var21, mut var22, mut var23, mut var24) = (2.0f32, 14.0f32, 7.0f32, 9.0f32);
+            if var6 == 1 || var6 == 3 {
+                var21 = 7.0;
+                var22 = 9.0;
+                var23 = 2.0;
+                var24 = 14.0;
+            }
+            self.set_render_bounds(
+                (var21 / 16.0 + var12 as f32) as f64,
+                0.125,
+                (var23 / 16.0 + var14 as f32) as f64,
+                (var22 / 16.0 + var12 as f32) as f64,
+                0.25,
+                (var24 / 16.0 + var14 as f32) as f64,
+            );
+            let var25 = var20.u(var21 as f64);
+            let var27 = var20.v(var23 as f64);
+            let var29 = var20.u(var22 as f64);
+            let var31 = var20.v(var24 as f64);
+            let top = fy + 0.25f32 as f64;
+            let (a, c) = ((var21 / 16.0) as f64, (var22 / 16.0) as f64);
+            let (e, g) = ((var23 / 16.0) as f64, (var24 / 16.0) as f64);
+            self.vertex(fx + a + var12, top, fz + e + var14, var25, var27);
+            self.vertex(fx + a + var12, top, fz + g + var14, var25, var31);
+            self.vertex(fx + c + var12, top, fz + g + var14, var29, var31);
+            self.vertex(fx + c + var12, top, fz + e + var14, var29, var27);
+            self.render_standard(x, y, z);
+            self.set_render_bounds(0.0, 0.0, 0.0, 1.0, 0.125, 1.0);
+            self.overrideBlockTexture = None;
+        }
+        let b = self.mixed(x, y, z);
+        self.set_color_brightness(1.0, b);
+        self.render_torch_at_angle(fx + var16, fy + var9, fz + var18, 0.0, 0.0, 0);
+        self.render_block_redstone_diode_metadata(x, y, z, var6);
+        true
+    }
+
+    /// `renderBlockRedstoneDiodeMetadata`
+    fn render_block_redstone_diode_metadata(&mut self, x: i32, y: i32, z: i32, var5: i32) {
+        self.render_standard(x, y, z);
+        let b = self.mixed(x, y, z);
+        self.set_color_brightness(1.0, b);
+        let var8 = self.side_icon(1);
+        let var9 = var8.min_u();
+        let var11 = var8.max_u();
+        let var13 = var8.min_v();
+        let var15 = var8.max_v();
+        let (x, y, z) = (x as f64, y as f64, z as f64);
+        let var17 = 0.125;
+        let mut var19 = x + 1.0;
+        let mut var21 = x + 1.0;
+        let mut var23 = x + 0.0;
+        let mut var25 = x + 0.0;
+        let mut var27 = z + 0.0;
+        let mut var29 = z + 1.0;
+        let mut var31 = z + 1.0;
+        let mut var33 = z + 0.0;
+        let var35 = y + var17;
+        if var5 == 2 {
+            var19 = x;
+            var21 = x;
+            var23 = x + 1.0;
+            var25 = x + 1.0;
+            var27 = z + 1.0;
+            var33 = z + 1.0;
+            var29 = z;
+            var31 = z;
+        } else if var5 == 3 {
+            var19 = x;
+            var25 = x;
+            var21 = x + 1.0;
+            var23 = x + 1.0;
+            var27 = z;
+            var29 = z;
+            var31 = z + 1.0;
+            var33 = z + 1.0;
+        } else if var5 == 1 {
+            var19 = x + 1.0;
+            var25 = x + 1.0;
+            var21 = x;
+            var23 = x;
+            var27 = z + 1.0;
+            var29 = z + 1.0;
+            var31 = z;
+            var33 = z;
+        }
+        self.vertex(var25, var35, var33, var9, var13);
+        self.vertex(var23, var35, var31, var9, var15);
+        self.vertex(var21, var35, var29, var11, var15);
+        self.vertex(var19, var35, var27, var11, var13);
+    }
+
+    /// `renderBlockMinecartTrack`
+    pub fn render_block_minecart_track(&mut self, x: i32, y: i32, z: i32) -> bool {
+        let mut var6 = self.meta;
+        let var7 = self
+            .overrideBlockTexture
+            .unwrap_or_else(|| self.side_icon(0));
+        // BlockRailBase.isPowered: every rail but the plain one
+        if self.id != block::RAIL {
+            var6 &= 7;
+        }
+        let b = self.mixed(x, y, z);
+        self.set_color_brightness(1.0, b);
+        let var8 = var7.min_u();
+        let var10 = var7.min_v();
+        let var12 = var7.max_u();
+        let var14 = var7.max_v();
+        let (x, y, z) = (x as f64, y as f64, z as f64);
+        let var16 = 0.0625;
+        let mut var18 = x + 1.0;
+        let mut var20 = x + 1.0;
+        let mut var22 = x + 0.0;
+        let mut var24 = x + 0.0;
+        let mut var26 = z + 0.0;
+        let mut var28 = z + 1.0;
+        let mut var30 = z + 1.0;
+        let mut var32 = z + 0.0;
+        let mut var34 = y + var16;
+        let mut var36 = y + var16;
+        let mut var38 = y + var16;
+        let mut var40 = y + var16;
+        if var6 == 1 || var6 == 2 || var6 == 3 || var6 == 7 {
+            var18 = x + 1.0;
+            var24 = x + 1.0;
+            var20 = x;
+            var22 = x;
+            var26 = z + 1.0;
+            var28 = z + 1.0;
+            var30 = z;
+            var32 = z;
+        } else if var6 == 8 {
+            var18 = x;
+            var20 = x;
+            var22 = x + 1.0;
+            var24 = x + 1.0;
+            var26 = z + 1.0;
+            var32 = z + 1.0;
+            var28 = z;
+            var30 = z;
+        } else if var6 == 9 {
+            var18 = x;
+            var24 = x;
+            var20 = x + 1.0;
+            var22 = x + 1.0;
+            var26 = z;
+            var28 = z;
+            var30 = z + 1.0;
+            var32 = z + 1.0;
+        }
+        if var6 == 2 || var6 == 4 {
+            var34 += 1.0;
+            var40 += 1.0;
+        } else if var6 == 3 || var6 == 5 {
+            var36 += 1.0;
+            var38 += 1.0;
+        }
+        self.vertex(var18, var34, var26, var12, var10);
+        self.vertex(var20, var36, var28, var12, var14);
+        self.vertex(var22, var38, var30, var8, var14);
+        self.vertex(var24, var40, var32, var8, var10);
+        self.vertex(var24, var40, var32, var8, var10);
+        self.vertex(var22, var38, var30, var8, var14);
+        self.vertex(var20, var36, var28, var12, var14);
+        self.vertex(var18, var34, var26, var12, var10);
+        true
+    }
+
+    /// `renderBlockLadder`
+    pub fn render_block_ladder(&mut self, x: i32, y: i32, z: i32) -> bool {
+        // getBlockIconFromSide(block, 0) = getIcon(0, 0)
+        let var6 = self
+            .overrideBlockTexture
+            .unwrap_or_else(|| Icon::new(self.atlas().tile(self.id, 0, 0).unwrap_or([0.0; 4])));
+        let b = self.mixed(x, y, z);
+        self.set_color_brightness(1.0, b);
+        let var7 = var6.min_u();
+        let var9 = var6.min_v();
+        let var11 = var6.max_u();
+        let var13 = var6.max_v();
+        let var15 = self.meta;
+        let (x, y, z) = (x as f64, y as f64, z as f64);
+        let var16 = 0.0;
+        let var18 = 0.05f32 as f64;
+        if var15 == 5 {
+            self.vertex(x + var18, y + 1.0 + var16, z + 1.0 + var16, var7, var9);
+            self.vertex(x + var18, y + 0.0 - var16, z + 1.0 + var16, var7, var13);
+            self.vertex(x + var18, y + 0.0 - var16, z + 0.0 - var16, var11, var13);
+            self.vertex(x + var18, y + 1.0 + var16, z + 0.0 - var16, var11, var9);
+        }
+        if var15 == 4 {
+            self.vertex(
+                x + 1.0 - var18,
+                y + 0.0 - var16,
+                z + 1.0 + var16,
+                var11,
+                var13,
+            );
+            self.vertex(
+                x + 1.0 - var18,
+                y + 1.0 + var16,
+                z + 1.0 + var16,
+                var11,
+                var9,
+            );
+            self.vertex(
+                x + 1.0 - var18,
+                y + 1.0 + var16,
+                z + 0.0 - var16,
+                var7,
+                var9,
+            );
+            self.vertex(
+                x + 1.0 - var18,
+                y + 0.0 - var16,
+                z + 0.0 - var16,
+                var7,
+                var13,
+            );
+        }
+        if var15 == 3 {
+            self.vertex(x + 1.0 + var16, y + 0.0 - var16, z + var18, var11, var13);
+            self.vertex(x + 1.0 + var16, y + 1.0 + var16, z + var18, var11, var9);
+            self.vertex(x + 0.0 - var16, y + 1.0 + var16, z + var18, var7, var9);
+            self.vertex(x + 0.0 - var16, y + 0.0 - var16, z + var18, var7, var13);
+        }
+        if var15 == 2 {
+            self.vertex(
+                x + 1.0 + var16,
+                y + 1.0 + var16,
+                z + 1.0 - var18,
+                var7,
+                var9,
+            );
+            self.vertex(
+                x + 1.0 + var16,
+                y + 0.0 - var16,
+                z + 1.0 - var18,
+                var7,
+                var13,
+            );
+            self.vertex(
+                x + 0.0 - var16,
+                y + 0.0 - var16,
+                z + 1.0 - var18,
+                var11,
+                var13,
+            );
+            self.vertex(
+                x + 0.0 - var16,
+                y + 1.0 + var16,
+                z + 1.0 - var18,
+                var11,
+                var9,
+            );
+        }
+        true
+    }
+
+    /// `renderBlockCrops`
+    pub fn render_block_crops(&mut self, x: i32, y: i32, z: i32) -> bool {
+        let b = self.mixed(x, y, z);
+        self.set_color_brightness(1.0, b);
+        let m = self.meta;
+        self.render_block_crops_impl(m, x as f64, y as f64 - 0.0625f32 as f64, z as f64);
+        true
+    }
+
+    /// `renderBlockCropsImpl`
+    pub fn render_block_crops_impl(&mut self, var2: i32, var3: f64, var5: f64, var7: f64) {
+        let var10 = self.overrideBlockTexture.unwrap_or_else(|| {
+            Icon::new(
+                self.atlas()
+                    .tile(self.id, var2 as u8, 0)
+                    .unwrap_or([0.0; 4]),
+            )
+        });
+        let var11 = var10.min_u();
+        let var13 = var10.min_v();
+        let var15 = var10.max_u();
+        let var17 = var10.max_v();
+        let mut var19 = var3 + 0.5 - 0.25;
+        let mut var21 = var3 + 0.5 + 0.25;
+        let mut var23 = var7 + 0.5 - 0.5;
+        let mut var25 = var7 + 0.5 + 0.5;
+        self.vertex(var19, var5 + 1.0, var23, var11, var13);
+        self.vertex(var19, var5 + 0.0, var23, var11, var17);
+        self.vertex(var19, var5 + 0.0, var25, var15, var17);
+        self.vertex(var19, var5 + 1.0, var25, var15, var13);
+        self.vertex(var19, var5 + 1.0, var25, var11, var13);
+        self.vertex(var19, var5 + 0.0, var25, var11, var17);
+        self.vertex(var19, var5 + 0.0, var23, var15, var17);
+        self.vertex(var19, var5 + 1.0, var23, var15, var13);
+        self.vertex(var21, var5 + 1.0, var25, var11, var13);
+        self.vertex(var21, var5 + 0.0, var25, var11, var17);
+        self.vertex(var21, var5 + 0.0, var23, var15, var17);
+        self.vertex(var21, var5 + 1.0, var23, var15, var13);
+        self.vertex(var21, var5 + 1.0, var23, var11, var13);
+        self.vertex(var21, var5 + 0.0, var23, var11, var17);
+        self.vertex(var21, var5 + 0.0, var25, var15, var17);
+        self.vertex(var21, var5 + 1.0, var25, var15, var13);
+        var19 = var3 + 0.5 - 0.5;
+        var21 = var3 + 0.5 + 0.5;
+        var23 = var7 + 0.5 - 0.25;
+        var25 = var7 + 0.5 + 0.25;
+        self.vertex(var19, var5 + 1.0, var23, var11, var13);
+        self.vertex(var19, var5 + 0.0, var23, var11, var17);
+        self.vertex(var21, var5 + 0.0, var23, var15, var17);
+        self.vertex(var21, var5 + 1.0, var23, var15, var13);
+        self.vertex(var21, var5 + 1.0, var23, var11, var13);
+        self.vertex(var21, var5 + 0.0, var23, var11, var17);
+        self.vertex(var19, var5 + 0.0, var23, var15, var17);
+        self.vertex(var19, var5 + 1.0, var23, var15, var13);
+        self.vertex(var21, var5 + 1.0, var25, var11, var13);
+        self.vertex(var21, var5 + 0.0, var25, var11, var17);
+        self.vertex(var19, var5 + 0.0, var25, var15, var17);
+        self.vertex(var19, var5 + 1.0, var25, var15, var13);
+        self.vertex(var19, var5 + 1.0, var25, var11, var13);
+        self.vertex(var19, var5 + 0.0, var25, var11, var17);
+        self.vertex(var21, var5 + 0.0, var25, var15, var17);
+        self.vertex(var21, var5 + 1.0, var25, var15, var13);
     }
 }

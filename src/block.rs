@@ -1417,6 +1417,14 @@ pub fn texture_name(id: u8, meta: u8, face: usize) -> Option<&'static str> {
         NETHERRACK => "netherrack",
         SOUL_SAND => "soul_sand",
         GLOWSTONE => "glowstone",
+        // BlockRedstoneDiode.getIcon: the bottom is the torch
+        UNPOWERED_REPEATER | POWERED_REPEATER if face == 0 => {
+            if id == POWERED_REPEATER {
+                "redstone_torch_on"
+            } else {
+                "redstone_torch_off"
+            }
+        }
         UNPOWERED_REPEATER | POWERED_REPEATER => {
             if face == 1 {
                 if id == POWERED_REPEATER {

@@ -21,7 +21,8 @@ import net.minecraft.world.WorldType;
  * scene (same seed, time, position, view direction, window size and
  * options.txt).
  *
- * Args: out.png seed time x y z yaw pitch settleSeconds [--hide-gui] -- <net.minecraft.client.main.Main args>
+ * Args: out.png seed time x y z yaw pitch settleSeconds [--hide-gui] [--debug] [--setblock "x y z id meta;..."]
+ *       -- <net.minecraft.client.main.Main args>
  *
  * The scene is driven from a helper thread through Minecraft.addScheduledTask,
  * so everything that touches the game runs on the client thread, as a player's
@@ -42,12 +43,14 @@ public class ShotHarness {
         final double settle = Double.parseDouble(a[8]);
         final boolean hideGui = Arrays.asList(a).subList(9, sep).contains("--hide-gui");
         final boolean debug = Arrays.asList(a).subList(9, sep).contains("--debug");
+        int sb = Arrays.asList(a).subList(9, sep).indexOf("--setblock");
+        final String setblock = sb < 0 ? "" : a[9 + sb + 1];
         String[] mcArgs = Arrays.copyOfRange(a, sep + 1, a.length);
 
         Thread driver = new Thread(new Runnable() {
             public void run() {
                 try {
-                    drive(out, seed, time, x, y, z, yaw, pitch, settle, hideGui, debug);
+                    drive(out, seed, time, x, y, z, yaw, pitch, settle, hideGui, debug, setblock);
                 } catch (Throwable t) {
                     t.printStackTrace();
                     System.exit(2);
@@ -100,7 +103,8 @@ public class ShotHarness {
     }
 
     static void drive(final File out, final long seed, final long time, final double x, final double y, final double z,
-                      final float yaw, final float pitch, double settle, final boolean hideGui, final boolean debug) throws Exception {
+                      final float yaw, final float pitch, double settle, final boolean hideGui, final boolean debug,
+                      final String setblock) throws Exception {
         // Title screen up: resources are loaded and the game loop runs.
         while ((mc = Minecraft.getMinecraft()) == null || mc.currentScreen == null) sleep(100);
         // Never take the user's mouse: entering the world calls setIngameFocus,
@@ -137,6 +141,14 @@ public class ShotHarness {
                     w.setWorldTime(time);
                 }
                 mc.theWorld.setWorldTime(time);
+                // /setblock in the overworld, in order (supports before what hangs on them)
+                for (String cmd : setblock.split(";")) {
+                    String[] t = cmd.trim().split("\\s+");
+                    if (t.length < 4) continue;
+                    server.worldServers[0].setBlock(Integer.parseInt(t[0]), Integer.parseInt(t[1]), Integer.parseInt(t[2]),
+                            net.minecraft.block.Block.getBlockById(Integer.parseInt(t[3])),
+                            t.length > 4 ? Integer.parseInt(t[4]) : 0, 3);
+                }
                 mc.gameSettings.hideGUI = hideGui;
                 mc.gameSettings.showDebugInfo = debug; // F3, like MINERUST --debug
                 // A background window must not pause (options.txt also sets pauseOnLostFocus:false).

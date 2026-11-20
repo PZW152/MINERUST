@@ -253,6 +253,9 @@ python tools/shotcompare.py [--exe target/release/minerust.exe] [--out shots] [�
   回歸與大差異，判斷一律看 `side.png`。同一版本重跑，數字在 ±0.5 內。
 - 原版視窗放在螢幕外、不可取得焦點的框架裡（`Display.setParent`），滑鼠換成不鎖定的 `MouseHelper`，
   不會干擾正在用電腦的人。
+- 場景可帶 `setblock`（`x y z id meta`，以 `;` 分隔，依序放置，先放支撐物），兩邊各用 `/setblock` 的旗標 3 放置。
+  場景裡不要放靠排程更新才會穩定的東西（沒有輸入的通電中繼器等）：生成時沙礫的 `onBlockAdded` 在出生點留下約
+  15 萬筆排程更新，每 tick 只處理 1000 筆（原版也一樣），兩邊截圖的時間點不同，結果就不同。
 - 環境變數：`MC_ROOT`（啟動器根目錄）、`MCP_JAR`、`JAVA8`（1.7.10 與 LWJGL 2 要 Java 8）、`JAVAC`（JDK 9 以上）。
 - 場景加上 `debug=True`（與 `hud=True`）時兩邊都開 F3，可以直接對照座標與朝向，先排除相機位置不同。
 - 找到的差異寫進 [PARITY_TODO.md](PARITY_TODO.md) 第 5 節。

@@ -643,13 +643,21 @@ fn mesh_block(cx: &Ctx, out: &mut Vec<Vertex>, id: u8, meta: i32, x: i32, y: i32
         }
         // render type 22: drawn by TileEntityChestRenderer, not the chunk
         Shape::Chest | Shape::Sign => {}
-        Shape::Torch => torch(&cx, out, id, meta, x, y, z),
+        Shape::Torch => {
+            rb::Rb::new(cx, out, id, meta).render_block_torch(x, y, z);
+        }
         Shape::Stairs | Shape::Fence | Shape::Pane | Shape::Door | Shape::Boxes => {
             shaped(&cx, out, id, meta, x, y, z)
         }
-        Shape::Ladder => ladder(&cx, out, meta, x, y, z),
-        Shape::Rail => rail(&cx, out, id, meta, x, y, z),
-        Shape::Crops => crops(&cx, out, id, meta, x, y, z),
+        Shape::Ladder => {
+            rb::Rb::new(cx, out, id, meta).render_block_ladder(x, y, z);
+        }
+        Shape::Rail => {
+            rb::Rb::new(cx, out, id, meta).render_block_minecart_track(x, y, z);
+        }
+        Shape::Crops => {
+            rb::Rb::new(cx, out, id, meta).render_block_crops(x, y, z);
+        }
         Shape::Wire => wire(&cx, out, meta, x, y, z),
         Shape::Fire => fire(&cx, out, x, y, z),
         Shape::Tripwire => tripwire(&cx, out, meta, x, y, z),
@@ -1020,65 +1028,6 @@ fn double_plant(cx: &Ctx, out: &mut Vec<Vertex>, meta: i32, x: i32, y: i32, z: i
             v(p1, 0.0, b[0], b[1]),
         ]);
     }
-}
-
-/// `renderBlockTorch` / `renderTorchAtAngle`
-fn torch(cx: &Ctx, out: &mut Vec<Vertex>, id: u8, meta: i32, x: i32, y: i32, z: i32) {
-    let r = &cx.r;
-    let Some(t) = cx.rect(id, 0, 0) else { return };
-    let light = light_bytes(r.bright(x, y, z));
-    let color = [255u8; 4];
-    let (bx, by, bz) = ((x - 16) as f64, y as f64, (z - 16) as f64);
-    let (d7, d9, d11) = (0.4f32 as f64, 0.5 - 0.4f32 as f64, 0.2f32 as f64);
-    let (mut px, py, mut pz, dx, dz) = match meta {
-        1 => (bx - d9, by + d11, bz, -d7, 0.0),
-        2 => (bx + d9, by + d11, bz, d7, 0.0),
-        3 => (bx, by + d11, bz - d9, 0.0, -d7),
-        4 => (bx, by + d11, bz + d9, 0.0, d7),
-        _ => (bx, by, bz, 0.0, 0.0),
-    };
-    let u = |p: f32| t[0] + (t[2] - t[0]) * p / 16.0;
-    let v = |p: f32| t[1] + (t[3] - t[1]) * p / 16.0;
-    let (u0, v0, u1, v1) = (t[0], t[1], t[2], t[3]);
-    px += 0.5;
-    pz += 0.5;
-    let (x0, x1, z0, z1) = (px - 0.5, px + 0.5, pz - 0.5, pz + 0.5);
-    let e = 0.0625f64;
-    let h = 0.625f64;
-    let vt = |x: f64, y: f64, z: f64, uu: f32, vv: f32| Vertex {
-        pos: [x as f32, y as f32, z as f32],
-        uv: [uu, vv],
-        color,
-        light,
-    };
-    let tx = px + dx * (1.0 - h);
-    let tz = pz + dz * (1.0 - h);
-    out.extend_from_slice(&[
-        vt(tx - e, py + h, tz - e, u(7.0), v(6.0)),
-        vt(tx - e, py + h, tz + e, u(7.0), v(8.0)),
-        vt(tx + e, py + h, tz + e, u(9.0), v(8.0)),
-        vt(tx + e, py + h, tz - e, u(9.0), v(6.0)),
-        vt(px + e + dx, py, pz - e + dz, u(9.0), v(13.0)),
-        vt(px + e + dx, py, pz + e + dz, u(9.0), v(15.0)),
-        vt(px - e + dx, py, pz + e + dz, u(7.0), v(15.0)),
-        vt(px - e + dx, py, pz - e + dz, u(7.0), v(13.0)),
-        vt(px - e, py + 1.0, z0, u0, v0),
-        vt(px - e + dx, py, z0 + dz, u0, v1),
-        vt(px - e + dx, py, z1 + dz, u1, v1),
-        vt(px - e, py + 1.0, z1, u1, v0),
-        vt(px + e, py + 1.0, z1, u0, v0),
-        vt(px + dx + e, py, z1 + dz, u0, v1),
-        vt(px + dx + e, py, z0 + dz, u1, v1),
-        vt(px + e, py + 1.0, z0, u1, v0),
-        vt(x0, py + 1.0, pz + e, u0, v0),
-        vt(x0 + dx, py, pz + e + dz, u0, v1),
-        vt(x1 + dx, py, pz + e + dz, u1, v1),
-        vt(x1, py + 1.0, pz + e, u1, v0),
-        vt(x1, py + 1.0, pz - e, u0, v0),
-        vt(x1 + dx, py, pz - e + dz, u0, v1),
-        vt(x0 + dx, py, pz - e + dz, u1, v1),
-        vt(x0, py + 1.0, pz - e, u1, v0),
-    ]);
 }
 
 /// `renderBlockVine`
@@ -1519,27 +1468,7 @@ fn shaped(cx: &Ctx, out: &mut Vec<Vertex>, id: u8, meta: i32, x: i32, y: i32, z:
                 rb::Rb::new(cx, out, id, meta).render_block_lever(x, y, z);
             }
             block::UNPOWERED_REPEATER | block::POWERED_REPEATER => {
-                let list = shapes::static_boxes(id, m);
-                boxes(cx, out, x, y, z, &list, &|_, f| plain(f), white);
-                // The two torches of RenderBlocks.renderBlockRepeater.
-                let torch_id = if id == block::POWERED_REPEATER {
-                    block::REDSTONE_TORCH
-                } else {
-                    block::UNLIT_REDSTONE_TORCH
-                };
-                let d = (m & 3) as usize;
-                let delay = ((m >> 2) & 3) as f32;
-                let back = [
-                    (0.0f32, 0.3125f32),
-                    (-0.3125, 0.0),
-                    (0.0, -0.3125),
-                    (0.3125, 0.0),
-                ][d];
-                let fo = -0.0625 + delay * 0.125;
-                let front = [(0.0f32, -fo), (fo, 0.0), (0.0, fo), (-fo, 0.0)][d];
-                for (ox, oz) in [back, front] {
-                    small_torch(cx, out, torch_id, x, y, z, ox, -0.1875, oz);
-                }
+                rb::Rb::new(cx, out, id, meta).render_block_repeater(x, y, z);
             }
             _ => {
                 let list = shapes::static_boxes(id, m);
@@ -1803,221 +1732,6 @@ fn flower_pot(cx: &Ctx, out: &mut Vec<Vertex>, meta: i32, x: i32, y: i32, z: i32
 
 /// A standing torch displaced inside the cell (repeater torches).
 #[allow(clippy::too_many_arguments)]
-fn small_torch(
-    cx: &Ctx,
-    out: &mut Vec<Vertex>,
-    id: u8,
-    x: i32,
-    y: i32,
-    z: i32,
-    ox: f32,
-    oy: f32,
-    oz: f32,
-) {
-    let Some(t) = cx.rect(id, 0, 0) else { return };
-    let light = light_bytes(cx.r.bright(x, y, z));
-    let (px, py, pz) = (
-        (x - 16) as f32 + 0.5 + ox,
-        y as f32 + oy,
-        (z - 16) as f32 + 0.5 + oz,
-    );
-    let e = 0.0625f32;
-    let uv = [[t[0], t[1]], [t[0], t[3]], [t[2], t[3]], [t[2], t[1]]];
-    let c = [255u8; 4];
-    quad(
-        out,
-        [
-            [px - e, py + 1.0, pz - 0.5],
-            [px - e, py, pz - 0.5],
-            [px - e, py, pz + 0.5],
-            [px - e, py + 1.0, pz + 0.5],
-        ],
-        uv,
-        c,
-        light,
-        false,
-    );
-    quad(
-        out,
-        [
-            [px + e, py + 1.0, pz + 0.5],
-            [px + e, py, pz + 0.5],
-            [px + e, py, pz - 0.5],
-            [px + e, py + 1.0, pz - 0.5],
-        ],
-        uv,
-        c,
-        light,
-        false,
-    );
-    quad(
-        out,
-        [
-            [px - 0.5, py + 1.0, pz + e],
-            [px - 0.5, py, pz + e],
-            [px + 0.5, py, pz + e],
-            [px + 0.5, py + 1.0, pz + e],
-        ],
-        uv,
-        c,
-        light,
-        false,
-    );
-    quad(
-        out,
-        [
-            [px + 0.5, py + 1.0, pz - e],
-            [px + 0.5, py, pz - e],
-            [px - 0.5, py, pz - e],
-            [px - 0.5, py + 1.0, pz - e],
-        ],
-        uv,
-        c,
-        light,
-        false,
-    );
-}
-
-/// `renderBlockLadder`
-fn ladder(cx: &Ctx, out: &mut Vec<Vertex>, meta: i32, x: i32, y: i32, z: i32) {
-    let Some(t) = cx.rect(block::LADDER, 0, 0) else {
-        return;
-    };
-    let light = light_bytes(cx.r.bright(x, y, z));
-    let (lx, ly, lz) = ((x - 16) as f32, y as f32, (z - 16) as f32);
-    let f = 0.05f32;
-    let (u0, v0, u1, v1) = (t[0], t[1], t[2], t[3]);
-    let p = match meta {
-        5 => [
-            [lx + f, ly + 1.0, lz + 1.0],
-            [lx + f, ly, lz + 1.0],
-            [lx + f, ly, lz],
-            [lx + f, ly + 1.0, lz],
-        ],
-        4 => [
-            [lx + 1.0 - f, ly, lz + 1.0],
-            [lx + 1.0 - f, ly + 1.0, lz + 1.0],
-            [lx + 1.0 - f, ly + 1.0, lz],
-            [lx + 1.0 - f, ly, lz],
-        ],
-        3 => [
-            [lx + 1.0, ly, lz + f],
-            [lx + 1.0, ly + 1.0, lz + f],
-            [lx, ly + 1.0, lz + f],
-            [lx, ly, lz + f],
-        ],
-        _ => [
-            [lx + 1.0, ly + 1.0, lz + 1.0 - f],
-            [lx + 1.0, ly, lz + 1.0 - f],
-            [lx, ly, lz + 1.0 - f],
-            [lx, ly + 1.0, lz + 1.0 - f],
-        ],
-    };
-    let uv = match meta {
-        5 | 2 => [[u0, v0], [u0, v1], [u1, v1], [u1, v0]],
-        _ => [[u1, v1], [u1, v0], [u0, v0], [u0, v1]],
-    };
-    quad(out, p, uv, [255; 4], light, true);
-}
-
-/// `renderBlockMinecartTrack`
-fn rail(cx: &Ctx, out: &mut Vec<Vertex>, id: u8, meta: i32, x: i32, y: i32, z: i32) {
-    let Some(t) = cx.rect(id, meta, 0) else {
-        return;
-    };
-    let light = light_bytes(cx.r.bright(x, y, z));
-    let l = if id == block::RAIL { meta } else { meta & 7 };
-    let (bx, by, bz) = ((x - 16) as f32, y as f32, (z - 16) as f32);
-    let (d0, d1, d2, d3) = (t[0], t[1], t[2], t[3]);
-    let e = 0.0625f32;
-    let (mut f1, mut f2, mut f3, mut f4) = (bx + 1.0, bx + 1.0, bx, bx);
-    let (mut f5, mut f6, mut f7, mut f8) = (bz, bz + 1.0, bz + 1.0, bz);
-    let (mut f9, mut f10, mut f11, mut f12) = (by + e, by + e, by + e, by + e);
-    if l != 1 && l != 2 && l != 3 && l != 7 {
-        if l == 8 {
-            f1 = bx;
-            f2 = bx;
-            f3 = bx + 1.0;
-            f4 = bx + 1.0;
-            f5 = bz + 1.0;
-            f8 = bz + 1.0;
-            f6 = bz;
-            f7 = bz;
-        } else if l == 9 {
-            f1 = bx;
-            f4 = bx;
-            f2 = bx + 1.0;
-            f3 = bx + 1.0;
-            f5 = bz;
-            f6 = bz;
-            f7 = bz + 1.0;
-            f8 = bz + 1.0;
-        }
-    } else {
-        f1 = bx + 1.0;
-        f4 = bx + 1.0;
-        f2 = bx;
-        f3 = bx;
-        f5 = bz + 1.0;
-        f6 = bz + 1.0;
-        f7 = bz;
-        f8 = bz;
-    }
-    if l == 2 || l == 4 {
-        f9 += 1.0;
-        f12 += 1.0;
-    } else if l == 3 || l == 5 {
-        f10 += 1.0;
-        f11 += 1.0;
-    }
-    quad(
-        out,
-        [[f1, f9, f5], [f2, f10, f6], [f3, f11, f7], [f4, f12, f8]],
-        [[d2, d1], [d2, d3], [d0, d3], [d0, d1]],
-        [255; 4],
-        light,
-        true,
-    );
-}
-
-/// `renderBlockCrops` / `renderBlockCropsImpl`
-fn crops(cx: &Ctx, out: &mut Vec<Vertex>, id: u8, meta: i32, x: i32, y: i32, z: i32) {
-    let Some(t) = cx.rect(id, meta, 0) else {
-        return;
-    };
-    let light = light_bytes(cx.r.bright(x, y, z));
-    let (bx, by, bz) = ((x - 16) as f32, y as f32 - 0.0625, (z - 16) as f32);
-    let uv = [[t[0], t[1]], [t[0], t[3]], [t[2], t[3]], [t[2], t[1]]];
-    let c = [255u8; 4];
-    for o in [0.25f32, 0.75] {
-        quad(
-            out,
-            [
-                [bx + o, by + 1.0, bz],
-                [bx + o, by, bz],
-                [bx + o, by, bz + 1.0],
-                [bx + o, by + 1.0, bz + 1.0],
-            ],
-            uv,
-            c,
-            light,
-            true,
-        );
-        quad(
-            out,
-            [
-                [bx, by + 1.0, bz + o],
-                [bx, by, bz + o],
-                [bx + 1.0, by, bz + o],
-                [bx + 1.0, by + 1.0, bz + o],
-            ],
-            uv,
-            c,
-            light,
-            true,
-        );
-    }
-}
 
 /// `renderBlockStem` (render type 19): `renderBlockStemSmall` up to the
 /// stem's height, and with a fruit beside a grown stem the bent
