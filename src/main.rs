@@ -20,6 +20,7 @@ mod gui;
 mod gui_achievement;
 mod gui_container;
 mod gui_repair;
+mod hopper;
 mod inventory;
 mod item;
 mod item_data;

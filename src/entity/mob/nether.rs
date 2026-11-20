@@ -26,6 +26,21 @@ impl Fireball {
         self.ticks
     }
 
+    /// `new EntityFireball(world, x, y, z, ax, ay, az)`: no shooter, no
+    /// spread (dispensers).
+    pub fn at(pos: [f64; 3], a: [f64; 3], small: bool) -> Fireball {
+        let l = (a[0] * a[0] + a[1] * a[1] + a[2] * a[2]).sqrt().max(1e-9);
+        Fireball {
+            pos,
+            prev_pos: pos,
+            motion: [0.0; 3],
+            acc: [a[0] / l * 0.1, a[1] / l * 0.1, a[2] / l * 0.1],
+            small,
+            shooter: u32::MAX,
+            ticks: 0,
+        }
+    }
+
     /// `new EntityFireball(world, shooter, ax, ay, az)` placed at `pos`.
     pub fn new(
         r: &mut JavaRandom,

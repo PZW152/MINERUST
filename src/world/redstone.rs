@@ -515,6 +515,8 @@ impl ServerWorld {
     /// `onBlockAdded` of the redstone blocks.
     pub(crate) fn redstone_added(&mut self, id: u8, x: i32, y: i32, z: i32) -> bool {
         match id {
+            // BlockHopper.onBlockAdded: updateBlockData
+            HOPPER => self.hopper_power(x, y, z),
             REDSTONE_WIRE => {
                 self.wire_update(x, y, z);
                 self.notify_neighbours(x, y + 1, z, id);
@@ -677,7 +679,9 @@ impl ServerWorld {
                     self.note_powered.insert((x, y, z), p);
                 }
             }
-            DISPENSER => {
+            // BlockHopper.onNeighborBlockChange: updateBlockData
+            HOPPER => self.hopper_power(x, y, z),
+            DISPENSER | DROPPER => {
                 let p = self.indirectly_powered(x, y, z) || self.indirectly_powered(x, y + 1, z);
                 let m = self.meta(x, y, z);
                 let triggered = m & 8 != 0;
@@ -817,7 +821,7 @@ impl ServerWorld {
                     self.set_block(x, y, z, REDSTONE_LAMP, 0, 2);
                 }
             }
-            DISPENSER => {
+            DISPENSER | DROPPER => {
                 let m = self.meta(x, y, z);
                 self.redstone_effects
                     .push(Effect::Dispense([x, y, z], m & 7));
@@ -1079,6 +1083,17 @@ impl ServerWorld {
     }
 
     /// `BlockBasePressurePlate.onEntityCollidedWithBlock` / `updateTick`.
+    /// `BlockHopper.updateBlockData`: bit 8 while powered (disabled).
+    fn hopper_power(&mut self, x: i32, y: i32, z: i32) {
+        let m = self.meta(x, y, z) as i32;
+        let on = !self.indirectly_powered(x, y, z);
+        let was = m & 8 != 8;
+        if on != was {
+            let v = (m & 7) | if on { 0 } else { 8 };
+            self.set_meta(x, y, z, v as _, 4);
+        }
+    }
+
     pub fn plate_update(&mut self, id: u8, x: i32, y: i32, z: i32, old_power: i32) {
         let sensitive = Aabb6 {
             min: [x as f64 + 0.125, y as f64, z as f64 + 0.125],
@@ -1869,6 +1884,12 @@ fn pushable(w: &ServerWorld, id: u8, x: i32, y: i32, z: i32, destroy_ok: bool) -
             | FURNACE
             | LIT_FURNACE
             | DISPENSER
+            | DROPPER
+            | HOPPER
+            | BREWING_STAND
+            | ENCHANTING_TABLE
+            | STANDING_SIGN
+            | WALL_SIGN
             | MOB_SPAWNER
             | NOTEBLOCK
             | JUKEBOX

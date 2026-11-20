@@ -3572,6 +3572,8 @@ impl Game {
                     | block::ANVIL
                     | block::ENCHANTING_TABLE
                     | block::DISPENSER
+                    | block::DROPPER
+                    | block::HOPPER
                     | block::BREWING_STAND
                     | block::LEVER
                     | block::STONE_BUTTON
@@ -3611,6 +3613,8 @@ impl Game {
                         | block::FURNACE
                         | block::LIT_FURNACE
                         | block::DISPENSER
+                        | block::DROPPER
+                        | block::HOPPER
                         | block::PISTON
                         | block::STICKY_PISTON
                         | block::PUMPKIN

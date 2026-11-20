@@ -15,6 +15,7 @@ pub const SPAWN_EGG: crate::item::ItemId = 383;
 /// The fizz of water in the Nether comes back as a sound and particles.
 pub fn try_place_contained_liquid(
     w: &mut ServerWorld,
+    r: &mut JavaRandom,
     liquid: u8,
     x: i32,
     y: i32,
@@ -30,7 +31,7 @@ pub fn try_place_contained_liquid(
     }
     if hell && liquid == block::FLOWING_WATER {
         let c = [x as f64 + 0.5, y as f64 + 0.5, z as f64 + 0.5];
-        let pitch = 2.6 + (w.rand.next_float() - w.rand.next_float()) * 0.8;
+        let pitch = 2.6 + (r.next_float() - r.next_float()) * 0.8;
         fx.push(Fx::Sound("random.fizz", c, 0.5, pitch));
         for _ in 0..8 {
             let p = [
@@ -43,9 +44,7 @@ pub fn try_place_contained_liquid(
     } else {
         if not_solid && !m.is_liquid() {
             // World.func_147480_a(x, y, z, true): break with drops
-            let mut r = std::mem::replace(&mut w.rand, JavaRandom::new(0));
-            w.destroy_block_with(&mut r, x, y, z);
-            w.rand = r;
+            w.destroy_block_with(r, x, y, z);
         }
         w.set_block(x, y, z, liquid, 0, 3);
     }
@@ -124,9 +123,11 @@ impl Sim {
             };
             let mut fx = Vec::new();
             let hell = self.dim == -1;
-            if try_place_contained_liquid(&mut self.world, liquid, x, y, z, hell, &mut fx)
-                && !creative
-            {
+            let mut r = std::mem::replace(&mut self.world.rand, JavaRandom::new(0));
+            let placed =
+                try_place_contained_liquid(&mut self.world, &mut r, liquid, x, y, z, hell, &mut fx);
+            self.world.rand = r;
+            if placed && !creative {
                 self.play.inv.main[sel] = Some(Stack::new(BUCKET, 0, 1));
                 self.play.inv_dirty = true;
             }
@@ -138,18 +139,27 @@ impl Sim {
     /// random, then `onSpawnWithEgg` and `playLivingSound`.
     /// (`setCustomNameTag` from a renamed egg waits for name tags.)
     pub(super) fn spawn_creature(&mut self, egg: i32, pos: [f64; 3]) -> bool {
+        let mut rnd = std::mem::replace(&mut self.world.rand, JavaRandom::new(0));
+        let ok = self.spawn_creature_with(egg, pos, &mut rnd);
+        self.world.rand = rnd;
+        ok
+    }
+
+    /// `spawn_creature` with the world's random lent out by the caller.
+    pub(super) fn spawn_creature_with(
+        &mut self,
+        egg: i32,
+        pos: [f64; 3],
+        rnd: &mut JavaRandom,
+    ) -> bool {
         let Some(e) = crate::item_data::EGGS.iter().find(|e| e.0 == egg) else {
             return false;
         };
         let Some(kind) = crate::entity::mob::Kind::from_id(e.1) else {
             return false;
         };
-        let mut rnd = std::mem::replace(&mut self.world.rand, JavaRandom::new(0));
         let yaw = math::wrap_angle_180(rnd.next_float() * 360.0);
-        let id = self
-            .mobs
-            .spawn_in(&mut self.world, kind, pos, yaw, &mut rnd);
-        self.world.rand = rnd;
+        let id = self.mobs.spawn_in(&mut self.world, kind, pos, yaw, rnd);
         if let Some(m) = self.mobs.list.iter_mut().find(|m| m.id == id) {
             if let Some(s) = m.living_sound() {
                 self.pending_out.push(crate::entity::mob::Outcome {

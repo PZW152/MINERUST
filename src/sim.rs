@@ -29,6 +29,8 @@ const AUTOSAVE_TICKS: i64 = 900;
 mod bed;
 #[path = "commands.rs"]
 mod commands;
+#[path = "sim_dispense.rs"]
+mod dispense;
 #[path = "sim_fishing.rs"]
 mod fishing;
 #[path = "sim_items.rs"]
@@ -476,6 +478,12 @@ pub struct Sim {
     fish_hook: Option<crate::entity::fish_hook::FishHook>,
     /// `NetHandlerPlayClient.avRandomizer` for server particle packets
     av_rand: JavaRandom,
+    /// Stands in for each `TileEntityDispenser`'s own `new Random()`.
+    tile_rand: JavaRandom,
+    /// `Bootstrap$12.succeeded` / `Bootstrap$13.succeeded`: once false,
+    /// false for good (fixed outside `--vanilla-parity`).
+    flint_succeeded: bool,
+    dye_succeeded: bool,
     pub weather: Weather,
     /// `EntityPlayer.dimension`
     pub dim: i32,
@@ -689,6 +697,11 @@ impl Sim {
             av_rand: JavaRandom::new(
                 (crate::util::math::math_random() * (1u64 << 48) as f64) as i64,
             ),
+            tile_rand: JavaRandom::new(
+                (crate::util::math::math_random() * (1u64 << 48) as f64) as i64,
+            ),
+            flint_succeeded: true,
+            dye_succeeded: true,
             weather: Weather::default(),
             dim: 0,
             parked: Vec::new(),
@@ -3391,20 +3404,7 @@ impl Sim {
                     Effect::Tnt(p, fuse) => self.mobs.prime_tnt(p, fuse),
                     Effect::BoneMeal(p) => self.bone_meal_fx.push(p),
                     Effect::Dispense(p, facing) => {
-                        if let Some((s, at, dir)) = play.dispense(p, facing, &mut rnd, &mut sounds)
-                        {
-                            if s.id == 262 {
-                                self.mobs.dispense_arrow(at, dir);
-                            } else {
-                                // BlockSourceImpl: TNT primes in the block in front.
-                                let q = [
-                                    p[0] as f64 + 0.5 + dir[0],
-                                    p[1] as f64 + 0.5 + dir[1],
-                                    p[2] as f64 + 0.5 + dir[2],
-                                ];
-                                self.mobs.prime_tnt(q, 80);
-                            }
-                        }
+                        self.dispense_block(play, p, facing, &mut rnd, &mut sounds);
                     }
                 }
             }
@@ -5462,6 +5462,153 @@ mod tests {
         };
         let e = crate::potion::effects_of(slots[0].unwrap().meta, false);
         assert_eq!(e[0].id, crate::potion::MOVE_SPEED);
+    }
+
+    /// TileEntityHopper moves one item every 8 ticks from the chest above
+    /// into the chest it faces, picks up items lying on top, and stops
+    /// while powered. A dropper pushes into the chest in front; a dispenser
+    /// fires snowballs and pours a water bucket, keeping the empty bucket.
+    #[test]
+    fn hoppers_droppers_and_dispensers() {
+        use crate::item::Stack;
+        use crate::play::Tile;
+        let (mut sim, x, y, z) = redstone_sim();
+        let feet = [x as f64 + 9.5, y as f64, z as f64 + 9.5];
+        let step = |sim: &mut Sim, n: usize| {
+            for _ in 0..n {
+                sim.step(&[Command::Player(feet, [0.0, 0.0], false)], &mut Vec::new());
+            }
+        };
+        let chest = |slots: &[(usize, Stack)]| {
+            let mut a = [None; 27];
+            for (k, s) in slots {
+                a[*k] = Some(*s);
+            }
+            Tile::Chest { slots: a }
+        };
+        let count = |sim: &Sim, p: [i32; 3]| -> u32 {
+            match sim.play.tiles.get(&p) {
+                Some(Tile::Chest { slots }) => slots.iter().flatten().map(|s| s.count).sum(),
+                Some(Tile::Hopper { slots, .. }) => slots.iter().flatten().map(|s| s.count).sum(),
+                _ => 0,
+            }
+        };
+        // chest, hopper (facing down), chest
+        let (top, hop, bottom) = ([x, y + 2, z], [x, y + 1, z], [x, y, z]);
+        sim.world
+            .set_block(bottom[0], bottom[1], bottom[2], block::CHEST, 2, 3);
+        sim.world
+            .set_block(hop[0], hop[1], hop[2], block::HOPPER, 0, 3);
+        sim.world
+            .set_block(top[0], top[1], top[2], block::CHEST, 2, 3);
+        sim.play
+            .tiles
+            .insert(top, chest(&[(0, Stack::new(4, 0, 3))]));
+        sim.play.tiles.insert(bottom, chest(&[]));
+        sim.play.tiles.insert(
+            hop,
+            Tile::Hopper {
+                slots: [None; 5],
+                cooldown: -1,
+            },
+        );
+        step(&mut sim, 60);
+        assert_eq!(count(&sim, top), 0, "the top chest is emptied");
+        assert_eq!(count(&sim, bottom), 3, "into the bottom chest");
+        // an item on the top chest's place: take the chest away
+        sim.world
+            .set_block(top[0], top[1], top[2], block::AIR, 0, 3);
+        sim.play.tiles.remove(&top);
+        let id = sim.play.next_item;
+        sim.play.next_item += 1;
+        let mut it = crate::entity::item::ItemEntity::new(
+            id,
+            Stack::new(12, 0, 2),
+            [x as f64 + 0.5, (y + 2) as f64 + 0.1, z as f64 + 0.5],
+        );
+        it.e.motion = [0.0; 3];
+        sim.play.spawn(it);
+        step(&mut sim, 40);
+        assert_eq!(count(&sim, bottom), 5, "the dropped sand went through");
+        // powered: nothing moves
+        sim.world
+            .set_block(x + 1, y + 1, z, block::REDSTONE_BLOCK, 0, 3);
+        step(&mut sim, 2);
+        assert_eq!(sim.world.meta(hop[0], hop[1], hop[2]) & 8, 8, "disabled");
+        if let Some(Tile::Hopper { slots, .. }) = sim.play.tiles.get_mut(&hop) {
+            slots[0] = Some(Stack::new(1, 0, 1));
+        }
+        step(&mut sim, 40);
+        assert_eq!(count(&sim, bottom), 5, "a powered hopper holds on");
+        assert_eq!(count(&sim, hop), 1);
+
+        // a dropper facing +x into a chest, triggered by a redstone block
+        let (dr, ch) = ([x + 4, y, z + 4], [x + 5, y, z + 4]);
+        sim.world.set_block(ch[0], ch[1], ch[2], block::CHEST, 4, 3);
+        sim.world
+            .set_block(dr[0], dr[1], dr[2], block::DROPPER, 5, 3);
+        sim.world.set_meta(dr[0], dr[1], dr[2], 5, 2);
+        sim.play.tiles.insert(ch, chest(&[]));
+        let mut ds = [None; 9];
+        ds[4] = Some(Stack::new(264, 0, 2));
+        sim.play.tiles.insert(
+            dr,
+            Tile::Dispenser {
+                slots: ds,
+                dropper: true,
+            },
+        );
+        sim.world
+            .set_block(dr[0] - 1, dr[1], dr[2], block::REDSTONE_BLOCK, 0, 3);
+        step(&mut sim, 10);
+        assert_eq!(count(&sim, ch), 1, "one diamond into the chest");
+
+        // a dispenser facing +x: snowballs, then a water bucket
+        let dp = [x + 4, y, z + 8];
+        sim.world
+            .set_block(dp[0], dp[1], dp[2], block::DISPENSER, 5, 3);
+        // BlockDispenser.onBlockAdded turns it away from solid neighbours
+        sim.world.set_meta(dp[0], dp[1], dp[2], 5, 2);
+        let mut ds = [None; 9];
+        ds[0] = Some(Stack::new(332, 0, 4));
+        sim.play.tiles.insert(
+            dp,
+            Tile::Dispenser {
+                slots: ds,
+                dropper: false,
+            },
+        );
+        let thrown = sim.mobs.throwables.len();
+        sim.world
+            .set_block(dp[0], dp[1] + 1, dp[2], block::REDSTONE_BLOCK, 0, 3);
+        step(&mut sim, 6);
+        assert_eq!(sim.mobs.throwables.len(), thrown + 1, "a snowball flies");
+        sim.world
+            .set_block(dp[0], dp[1] + 1, dp[2], block::AIR, 0, 3);
+        step(&mut sim, 6);
+        let mut ds = [None; 9];
+        ds[0] = Some(Stack::new(326, 0, 1));
+        sim.play.tiles.insert(
+            dp,
+            Tile::Dispenser {
+                slots: ds,
+                dropper: false,
+            },
+        );
+        sim.world
+            .set_block(dp[0], dp[1] + 1, dp[2], block::REDSTONE_BLOCK, 0, 3);
+        step(&mut sim, 6);
+        assert_eq!(
+            block::material(sim.world.block(dp[0] + 1, dp[1], dp[2])),
+            block::Material::Water,
+            "water poured in front"
+        );
+        match sim.play.tiles.get(&dp) {
+            Some(Tile::Dispenser { slots, .. }) => {
+                assert_eq!(slots[0].map(|s| s.id), Some(325), "the empty bucket stays")
+            }
+            _ => panic!(),
+        }
     }
 
     /// ItemBucket picks up a source block and pours it out on the face

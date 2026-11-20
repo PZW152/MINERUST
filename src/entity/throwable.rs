@@ -113,6 +113,22 @@ impl Throwable {
         t
     }
 
+    /// `new EntityXxx(world, x, y, z)` (dispensers): no thrower.
+    pub fn at_pos(id: u32, kind: Kind, pos: [f64; 3]) -> Throwable {
+        let mut e = Ent::new(0.25, 0.25, super::item::entity_seed(id));
+        e.can_trigger_walking = false;
+        e.set_position(pos[0], pos[1], pos[2]);
+        e.y_offset = 0.0;
+        Throwable {
+            id,
+            e,
+            kind,
+            thrower: Shooter::None,
+            ticks_in_air: 0,
+            shake: 0,
+        }
+    }
+
     /// `EntityThrowable.setThrowableHeading`
     pub fn set_heading(&mut self, mut x: f64, mut y: f64, mut z: f64, v: f32, inacc: f32) {
         let l = math::sqrt_double(x * x + y * y + z * z) as f64;

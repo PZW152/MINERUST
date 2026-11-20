@@ -1689,73 +1689,6 @@ impl Play {
         }
     }
 
-    /// `BlockDispenser.func_149941_e`: fires one random stack. Arrows and
-    /// TNT come back for the caller to spawn as entities.
-    pub fn dispense(
-        &mut self,
-        pos: Pos,
-        facing: i32,
-        r: &mut JavaRandom,
-        sounds: &mut Vec<(&'static str, [f64; 3], f32, f32)>,
-    ) -> Option<(Stack, [f64; 3], [f64; 3])> {
-        const FX: [i32; 6] = [0, 0, 0, 0, -1, 1];
-        const FY: [i32; 6] = [-1, 1, 0, 0, 0, 0];
-        const FZ: [i32; 6] = [0, 0, -1, 1, 0, 0];
-        let f = (facing as usize).min(5);
-        let c = [
-            pos[0] as f64 + 0.5,
-            pos[1] as f64 + 0.5,
-            pos[2] as f64 + 0.5,
-        ];
-        let Some(Tile::Dispenser { slots, .. }) = self.tiles.get_mut(&pos) else {
-            sounds.push(("random.click", c, 1.0, 1.2));
-            return None;
-        };
-        // TileEntityDispenser.func_146017_i
-        let mut pick = None;
-        let mut j = 1;
-        for (k, s) in slots.iter().enumerate() {
-            if s.is_some() {
-                if r.next_int_n(j) == 0 {
-                    pick = Some(k);
-                }
-                j += 1;
-            }
-        }
-        let Some(k) = pick else {
-            sounds.push(("random.click", c, 1.0, 1.2));
-            return None;
-        };
-        let mut s = slots[k].unwrap();
-        let one = Stack { count: 1, ..s };
-        s.count -= 1;
-        slots[k] = if s.count == 0 { None } else { Some(s) };
-        let dir = [FX[f] as f64, FY[f] as f64, FZ[f] as f64];
-        let mut at = [
-            c[0] + 0.7 * dir[0],
-            c[1] + 0.7 * dir[1],
-            c[2] + 0.7 * dir[2],
-        ];
-        if one.id == 262 || one.id == block::TNT as u16 {
-            let snd = if one.id == 262 { 1.2 } else { 1.0 };
-            sounds.push(("random.click", c, 1.0, snd));
-            return Some((one, at, dir));
-        }
-        // BehaviorDefaultDispenseItem.doDispense
-        at[1] -= if FY[f] != 0 { 0.125 } else { 0.15625 };
-        let id = self.next_item;
-        self.next_item += 1;
-        let mut e = ItemEntity::new(id, one, at);
-        let d3 = r.next_double() * 0.1 + 0.2;
-        e.e.motion = [dir[0] * d3, 0.20000000298023224, dir[2] * d3];
-        for v in &mut e.e.motion {
-            *v += r.next_gaussian() * 0.007499999832361937 * 6.0;
-        }
-        self.spawn(e);
-        sounds.push(("random.click", c, 1.0, 1.0));
-        None
-    }
-
     /// `ItemSign.onItemUse`: a standing sign on top, a wall sign on a side,
     /// then the sign editor (`func_146100_a`).
     fn place_sign(&mut self, w: &mut ServerWorld, t: Pos, face: [i32; 3]) -> bool {
@@ -2189,6 +2122,8 @@ impl Play {
 
     /// Items, furnaces and pickup for one tick.
     pub fn tick(&mut self, w: &mut ServerWorld) {
+        // TileEntityHopper.updateEntity
+        self.tick_hoppers(w);
         // TileEntityBrewingStand.updateEntity
         let keys: Vec<Pos> = self.tiles.keys().copied().collect();
         for p in &keys {

@@ -2045,8 +2045,8 @@ impl ServerWorld {
                     super::rail::neighbour_changed(self, x, y, z, id);
                 }
             }
-            block::FURNACE | block::LIT_FURNACE | block::DISPENSER => {
-                // BlockFurnace / BlockDispenser.updateFacing
+            block::FURNACE | block::LIT_FURNACE | block::DISPENSER | block::DROPPER => {
+                // BlockFurnace / BlockDispenser.updateFacing (BlockDropper inherits it)
                 let full = |w: &mut ServerWorld, x: i32, y: i32, z: i32| {
                     block::info(w.block(x, y, z)).full_block
                 };
@@ -3031,11 +3031,11 @@ pub fn has_comparator_input_override(id: u8) -> bool {
             | block::CHEST
             | 137
             | block::DISPENSER
-            | 158
+            | block::DROPPER
             | block::END_PORTAL_FRAME
             | block::FURNACE
             | block::LIT_FURNACE
-            | 154
+            | block::HOPPER
             | block::JUKEBOX
             | block::DETECTOR_RAIL
             | 146
