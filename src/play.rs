@@ -715,7 +715,11 @@ impl Play {
     /// The player finished digging `p` (or clicked it in creative).
     pub fn dig(&mut self, w: &mut ServerWorld, p: Pos) {
         let id = w.block(p[0], p[1], p[2]);
-        if id == block::AIR || crate::item::hardness(id) < 0.0 || block::material(id).is_liquid() {
+        // ItemInWorldManager.onBlockClicked: a creative player harvests at
+        // once, unbreakable blocks (bedrock, end portal frames) included;
+        // in survival a hardness below 0 never finishes
+        let unbreakable = crate::item::hardness(id) < 0.0 && self.mode != GameMode::Creative;
+        if id == block::AIR || unbreakable || block::material(id).is_liquid() {
             return;
         }
         let meta = w.meta(p[0], p[1], p[2]);

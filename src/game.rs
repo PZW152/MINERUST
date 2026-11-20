@@ -3454,7 +3454,7 @@ impl Game {
                 crate::item::tool(s.id).is_some_and(|t| t.kind == crate::item::ToolKind::Sword)
             });
         if id != block::AIR
-            && crate::item::hardness(id) >= 0.0
+            && (self.mode == GameMode::Creative || crate::item::hardness(id) >= 0.0)
             && !block::material(id).is_liquid()
             && !sword
         {

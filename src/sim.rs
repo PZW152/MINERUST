@@ -5611,6 +5611,29 @@ mod tests {
         }
     }
 
+    /// ItemInWorldManager: a creative player breaks bedrock at once; a
+    /// survival player never does.
+    #[test]
+    fn creative_breaks_bedrock() {
+        let (mut sim, x, y, z) = redstone_sim();
+        let p = [x + 3, y - 1, z + 3];
+        sim.world.set_block(p[0], p[1], p[2], block::BEDROCK, 0, 3);
+        sim.play.mode = GameMode::Survival;
+        sim.play.dig(&mut sim.world, p);
+        assert_eq!(
+            sim.world.block(p[0], p[1], p[2]),
+            block::BEDROCK,
+            "survival: no"
+        );
+        sim.play.mode = GameMode::Creative;
+        sim.play.dig(&mut sim.world, p);
+        assert_eq!(
+            sim.world.block(p[0], p[1], p[2]),
+            block::AIR,
+            "creative: gone"
+        );
+    }
+
     /// ItemBucket picks up a source block and pours it out on the face
     /// in view; ItemMonsterPlacer spawns its mob on the clicked face.
     #[test]
