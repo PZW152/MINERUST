@@ -7175,6 +7175,13 @@ mod tests {
             if i == 40 {
                 landed_hp = sim.mobs.list.iter().find(|m| m.id == zom).map(|m| m.health);
             }
+            // walk it across the floor (its own AI may stand still): the
+            // steps come from moveEntity's distance, not from the AI
+            if (60..90).contains(&i) {
+                if let Some(m) = sim.mobs.list.iter_mut().find(|m| m.id == zom) {
+                    m.motion[0] = if i < 75 { 0.2 } else { -0.2 };
+                }
+            }
             if i == 250 {
                 let hp = sim.mobs.list.iter().find(|m| m.id == cow).map(|m| m.health);
                 assert_eq!(hp, Some(10.0), "air lasts 300 ticks");

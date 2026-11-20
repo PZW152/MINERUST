@@ -253,8 +253,10 @@ pub fn spring(w: &mut ServerWorld, r: &mut JavaRandom, x: i32, y: i32, z: i32, i
     if stone == 3 && air == 1 {
         w.set_block(x, y, z, id, 0, 2);
         w.scheduled_immediate = true;
+        w.tick_rand_foreign = true;
         w.update_tick(id, x, y, z, r);
         w.scheduled_immediate = false;
+        w.tick_rand_foreign = false;
     }
     true
 }

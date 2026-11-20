@@ -513,6 +513,11 @@ pub struct ServerWorld {
     pub rand: JavaRandom,
     pub total_time: i64,
     pub scheduled_immediate: bool,
+    /// The random handed to `update_tick` is not the world's (a generator
+    /// calling `Block.updateTick(world, x, y, z, rand)` itself, as
+    /// `WorldGenLiquids` does): code that uses `world.rand` must take
+    /// `self.rand` instead of the argument.
+    pub tick_rand_foreign: bool,
     pub fall_instantly: bool,
     /// `World.skylightSubtracted`
     pub skylight_subtracted: i32,
@@ -610,6 +615,7 @@ impl ServerWorld {
             rand: JavaRandom::new(0x1D2E3F4A5B6C),
             total_time: 0,
             scheduled_immediate: false,
+            tick_rand_foreign: false,
             fall_instantly: false,
             skylight_subtracted: 0,
             light_queue: vec![0; 32768],
@@ -1902,9 +1908,12 @@ impl ServerWorld {
                     if block::material(b) != Material::Air
                         && super::redstone::tick_family(b) == super::redstone::tick_family(id)
                     {
+                        // WorldServer passes this.rand to the nested update
+                        let foreign = std::mem::replace(&mut self.tick_rand_foreign, false);
                         let mut rnd = std::mem::replace(&mut self.rand, JavaRandom::new(0));
                         self.update_tick(b, x, y, z, &mut rnd);
                         self.rand = rnd;
+                        self.tick_rand_foreign = foreign;
                     }
                 }
                 return;
@@ -2750,13 +2759,31 @@ impl ServerWorld {
     /// into, water drops it as an item first.
     fn spread_to(&mut self, id: u8, x: i32, y: i32, z: i32, level: i32, r: &mut JavaRandom) {
         if self.can_spread_to(block::material(id), x, y, z) {
+            // playFizzSound and dropBlockAsItem draw from world.rand
             if block::material(id) == Material::Lava {
-                self.fizz(x, y, z, r);
+                self.with_world_rand(r, |w, r| w.fizz(x, y, z, r));
             } else {
                 let (b, m) = (self.block(x, y, z), self.meta(x, y, z));
-                self.drop_block_with(r, b, m, x, y, z);
+                self.with_world_rand(r, |w, r| w.drop_block_with(r, b, m, x, y, z));
             }
             self.set_block(x, y, z, id, level, 3);
+        }
+    }
+
+    /// Runs `f` with `world.rand`: the tick's own random `r` when that is
+    /// the world's (lent out), else `self.rand`.
+    fn with_world_rand<T>(
+        &mut self,
+        r: &mut JavaRandom,
+        f: impl FnOnce(&mut Self, &mut JavaRandom) -> T,
+    ) -> T {
+        if self.tick_rand_foreign {
+            let mut wr = std::mem::replace(&mut self.rand, JavaRandom::new(0));
+            let t = f(self, &mut wr);
+            self.rand = wr;
+            t
+        } else {
+            f(self, r)
         }
     }
 
@@ -2925,7 +2952,7 @@ impl ServerWorld {
         if self.can_spread_to(mat, x, y - 1, z) {
             if mat == Material::Lava && self.material(x, y - 1, z) == Material::Water {
                 self.set_block(x, y - 1, z, block::STONE, 0, 3);
-                self.fizz(x, y - 1, z, rand);
+                self.with_world_rand(rand, |w, r| w.fizz(x, y - 1, z, r));
                 return;
             }
             if level >= 8 {

@@ -616,8 +616,10 @@ fn hell_lava(w: &mut ServerWorld, r: &mut JavaRandom, x: i32, y: i32, z: i32, in
     if (!inside && rock == 4 && air == 1) || rock == 5 {
         w.set_block(x, y, z, block::FLOWING_LAVA, 0, 2);
         w.scheduled_immediate = true;
+        w.tick_rand_foreign = true;
         w.update_tick(block::FLOWING_LAVA, x, y, z, r);
         w.scheduled_immediate = false;
+        w.tick_rand_foreign = false;
     }
 }
 

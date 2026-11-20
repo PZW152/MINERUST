@@ -723,8 +723,10 @@ pub fn add_parts(p: &mut Piece, w: &mut ServerWorld, r: &mut JavaRandom, clip: &
             );
             if clip.inside(x, y, z) {
                 w.scheduled_immediate = true;
+                w.tick_rand_foreign = true;
                 w.update_tick(FLOWING_LAVA, x, y, z, r);
                 w.scheduled_immediate = false;
+                w.tick_rand_foreign = false;
             }
         }
         FKind::Crossing2 => {

@@ -94,7 +94,7 @@ AI：
 - [ ] 經驗來源：繁殖、村民交易
 
 介面：
-- [ ] 信標、漏斗、投擲器、馬的物品欄、村民交易、書與羽毛筆
+- [ ] 信標、馬的物品欄、村民交易、書與羽毛筆
 - [ ] 統計與成就：已有統計檔（`stats/<uuid>.json`，`src/stats.rs`）、成就樹、成就提示框（`GuiAchievement`）與
       「Taking Inventory」。待做：`StatList` 的一般統計、其餘 32 個成就的觸發點、`GuiStats`、`GuiAchievements`、
       `/achievement` 指令、成就的聊天公告

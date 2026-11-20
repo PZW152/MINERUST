@@ -329,6 +329,11 @@ MINERUST_BENCH=10 minerust --seed 12345 --no-save --size 1920 1080 --distance 16
   （`drop_block_with(r, ..)`、`destroy_block_with(r, ..)`、`fizz(.., r)`），不要在可能已借出的路徑上呼叫會自己借的函式。
   徹底的解法是把 `on_neighbor_change` / `on_block_added` 也改成接收 `r`，或讓 tick 函式直接用 `self.rand`、只在呼叫
   世界生成器（樹、巨型蘑菇）時借出；這是一次大範圍的機械式改寫，還沒做。
+  反過來的情形也要注意：`update_tick(.., r)` 的 `r` **不一定**是世界亂數。生成器自己呼叫 `Block.updateTick` 時
+  （`WorldGenLiquids`、地獄的岩漿、地獄要塞）傳的是生成用的亂數，原版這時 `playFizzSound`、`dropBlockAsItem` 仍然抽
+  `world.rand`。這種呼叫要設 `w.tick_rand_foreign = true`，tick 程式裡原版用 `world.rand` 的地方要經過
+  `with_world_rand(r, ..)`。2026-11-14 到 11-20 之間岩漿流動的嘶嘶聲直接抽 `r`，把生成亂數打亂，`--compare-pop` 三個種子都不一致，
+  直到 2026-11-20 才發現：**改到 tick、液體、方塊更新時一定要跑 `--compare-pop`**（`cargo test` 不包含它）。
 - **使用者說某處「和原版不一樣」時**，先查原版原始碼確認原版確實不是這樣（例：1.7.10 拉桿本來就放不上 TNT）；
   再找有沒有繞過共用移植的手寫平行版本（2026-11-19/20 的燃燒傷害、腳步聲、頭轉 180 度都是這個原因）。
   稽核舊程式時，grep 原版的 `dropBlockAsItem`、`playSoundEffect`、`super.` 呼叫，確認每一個都有移植。
