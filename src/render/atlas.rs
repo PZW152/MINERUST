@@ -524,6 +524,9 @@ impl Atlas {
                 }
             }
         }
+        // BlockHopper.hopperInsideIcon
+        let t = extra(jar, "hopper_inside")?;
+        names.insert("hopper_inside", t);
         // BlockBrewingStand.iconBrewingStandBase
         let t = extra(jar, "brewing_stand_base")?;
         names.insert("brewing_stand_base", t);
@@ -566,6 +569,8 @@ impl Atlas {
             "leather_leggings_overlay",
             "leather_boots_overlay",
             "spawn_egg_overlay",
+            // BlockHopper.getItemIconName
+            "hopper",
         ] {
             let img = read_png(jar, &format!("assets/minecraft/textures/items/{name}.png"))?;
             let t = b.add(crop(&img, 0, 0, 16), 16);

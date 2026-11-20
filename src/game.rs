@@ -694,6 +694,7 @@ impl Game {
                 enchant: [0; 3],
                 name_seed: 0,
                 repair_cost: 0,
+                dropper: false,
             },
             gui: Default::default(),
             anvil: None,

@@ -2170,6 +2170,13 @@ impl Mob {
 
     /// `getSoundVolume()` and `getSoundPitch()` for the hurt and death
     /// sounds, the pitch from this mob's random.
+    /// `EntityLiving.playLivingSound`
+    pub fn living_sound(&mut self) -> Option<(&'static str, [f64; 3], f32, f32)> {
+        let s = idle_name(self)?;
+        let (v, p) = self.sound_volume_pitch();
+        Some((s, self.pos, v, p))
+    }
+
     pub fn sound_volume_pitch(&mut self) -> (f32, f32) {
         let v = match self.kind {
             Kind::EnderDragon => 5.0,

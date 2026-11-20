@@ -17,6 +17,7 @@ const FURNACE: (f32, f32) = (512.0, 256.0);
 const CHEST: (f32, f32) = (768.0, 0.0);
 const BREWING: (f32, f32) = (256.0, 512.0);
 const DISPENSER: (f32, f32) = (1792.0, 512.0);
+const HOPPER: (f32, f32) = (1792.0, 768.0);
 
 /// One active effect as `InventoryEffectRenderer` draws it: status icon
 /// index, the name line and the duration line.
@@ -55,6 +56,8 @@ pub struct GuiContainer {
 pub fn size(open: &Open) -> (i32, i32) {
     match container_window(open) {
         Window::Chest(rows) => (176, 114 + rows as i32 * 18),
+        // GuiHopper: ySize 133
+        Window::Hopper => (176, 133),
         _ => (176, 166),
     }
 }
@@ -625,6 +628,7 @@ fn background(ui: &mut Ui, view: &InvView, left: f32, top: f32, xs: f32, ys: f32
         Open::Inventory | Open::None => ui.sheet(left, top, INVENTORY.0, INVENTORY.1, xs, ys),
         Open::Workbench(_) => ui.sheet(left, top, WORKBENCH.0, WORKBENCH.1, xs, ys),
         Open::Dispenser(_) => ui.sheet(left, top, DISPENSER.0, DISPENSER.1, xs, ys),
+        Open::Hopper(_) => ui.sheet(left, top, HOPPER.0, HOPPER.1, xs, ys),
         Open::Enchant(_) => ui.sheet(left, top, ENCHANT.0, ENCHANT.1, xs, ys),
         Open::Anvil(_) => crate::gui_repair::background(ui, view, left, top),
         Open::Furnace(_) => {
@@ -728,7 +732,24 @@ fn foreground(ui: &mut Ui, view: &InvView, lang: &Lang, left: f32, top: f32, xs:
         Open::Anvil(_) => return,
         Open::Furnace(_) => centered(ui, lang.get("container.furnace")),
         Open::Brewing(_) => centered(ui, lang.get("container.brewing")),
-        Open::Dispenser(_) => centered(ui, lang.get("container.dispenser")),
+        Open::Dispenser(_) => centered(
+            ui,
+            lang.get(if view.dropper {
+                "container.dropper"
+            } else {
+                "container.dispenser"
+            }),
+        ),
+        // GuiHopper.drawGuiContainerForegroundLayer
+        Open::Hopper(_) => {
+            ui.text(
+                lang.get("container.hopper"),
+                left + 8.0,
+                top + 6.0,
+                fg,
+                false,
+            );
+        }
         Open::Enchant(_) => {
             ui.text(
                 lang.get("container.enchant"),

@@ -690,7 +690,8 @@ pub fn hardness(id: u8) -> f32 {
         STAINED_HARDENED_CLAY | HARDENED_CLAY => 1.25,
         SPONGE | FARMLAND => 0.6,
         LAPIS_BLOCK | GOLD_BLOCK | END_STONE | WOODEN_DOOR | LIT_REDSTONE_ORE => 3.0,
-        DISPENSER => 3.5,
+        DISPENSER | DROPPER => 3.5,
+        HOPPER => 3.0,
         NOTEBLOCK | WOOL | SANDSTONE_STAIRS | QUARTZ_BLOCK => 0.8,
         RAIL | GOLDEN_RAIL | DETECTOR_RAIL => 0.7,
         PISTON
@@ -1082,8 +1083,8 @@ pub fn drops(id: u8, meta: i32, r: &mut JavaRandom) -> Vec<Stack> {
         | LADDER
         | FENCE
         | IRON_BARS => one(id as ItemId, 0),
-        RAIL | GOLDEN_RAIL | DETECTOR_RAIL | DISPENSER | PISTON | STICKY_PISTON | TNT
-        | LIT_PUMPKIN => one(id as ItemId, 0),
+        RAIL | GOLDEN_RAIL | DETECTOR_RAIL | DISPENSER | DROPPER | HOPPER | PISTON
+        | STICKY_PISTON | TNT | LIT_PUMPKIN => one(id as ItemId, 0),
         id if is_stairs(id) => one(id as ItemId, 0),
         STONE_SLAB => one(id as ItemId, meta & 7),
         _ => one(id as ItemId, 0),

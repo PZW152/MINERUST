@@ -117,6 +117,8 @@ pub const JUKEBOX: u8 = 84;
 pub const LIGHT_WEIGHTED_PRESSURE_PLATE: u8 = 147;
 pub const HEAVY_WEIGHTED_PRESSURE_PLATE: u8 = 148;
 pub const STAINED_GLASS_PANE: u8 = 160;
+pub const HOPPER: u8 = 154;
+pub const DROPPER: u8 = 158;
 pub const FENCE: u8 = 85;
 pub const NETHERRACK: u8 = 87;
 pub const SOUL_SAND: u8 = 88;
@@ -236,6 +238,8 @@ pub enum Shape {
     Fence,
     /// `renderBlockPane` (18)
     Pane,
+    /// `renderBlockHopper` (38)
+    Hopper,
     /// `renderBlockDoor` (7)
     Door,
     /// `renderBlockLadder` (8)
@@ -567,6 +571,7 @@ fn build() -> [BlockInfo; 256] {
         (SPONGE, M::Sponge),
         (LAPIS_BLOCK, M::Iron),
         (DISPENSER, M::Rock),
+        (DROPPER, M::Rock),
         (NOTEBLOCK, M::Wood),
         (WOOL, M::Cloth),
         (GOLD_BLOCK, M::Iron),
@@ -603,6 +608,8 @@ fn build() -> [BlockInfo; 256] {
     t[LIT_REDSTONE_LAMP as usize].light_value = 15;
     t[PISTON_HEAD as usize] = base(Shape::Boxes, M::Piston, false);
     // BlockBrewingStand: Material.iron, setLightLevel(0.125F)
+    // BlockHopper: Material.iron, not opaque, every side drawn
+    t[HOPPER as usize] = base(Shape::Hopper, M::Iron, false);
     let mut brew = base(Shape::BrewingStand, M::Iron, false);
     brew.light_value = (0.125f32 * 15.0) as u8;
     t[BREWING_STAND as usize] = brew;
@@ -1230,15 +1237,24 @@ pub fn texture_name(id: u8, meta: u8, face: usize) -> Option<&'static str> {
         ][((meta & 7) as usize).min(5)],
         SPONGE => "sponge",
         LAPIS_BLOCK => "lapis_block",
-        DISPENSER => {
-            // BlockDispenser.getIcon
+        // BlockHopper.getIcon
+        HOPPER => {
+            if face == 1 {
+                "hopper_top"
+            } else {
+                "hopper_outside"
+            }
+        }
+        DISPENSER | DROPPER => {
+            // BlockDispenser.getIcon (BlockDropper registers its own fronts)
             let k = (meta & 7) as usize;
             let vertical = k == 0 || k == 1;
             if face == k {
-                if vertical {
-                    "dispenser_front_vertical"
-                } else {
-                    "dispenser_front_horizontal"
+                match (id == DROPPER, vertical) {
+                    (false, true) => "dispenser_front_vertical",
+                    (false, false) => "dispenser_front_horizontal",
+                    (true, true) => "dropper_front_vertical",
+                    (true, false) => "dropper_front_horizontal",
                 }
             } else if vertical || face < 2 {
                 "furnace_top"

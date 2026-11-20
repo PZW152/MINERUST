@@ -612,6 +612,15 @@ pub fn collision(get: Get, id: u8, meta: u8, x: i32, y: i32, z: i32, out: &mut V
                 out.push([0.4375, 0.0, 0.4375, 0.5625, 0.875, 0.5625]);
                 out.push([0.0, 0.0, 0.0, 1.0, 0.125, 1.0]);
             }
+            // BlockHopper.addCollisionBoxesToList
+            block::HOPPER => {
+                let f = 0.125f32;
+                out.push([0.0, 0.0, 0.0, 1.0, 0.625, 1.0]);
+                out.push([0.0, 0.0, 0.0, f, 1.0, 1.0]);
+                out.push([0.0, 0.0, 0.0, 1.0, 1.0, f]);
+                out.push([1.0 - f, 0.0, 0.0, 1.0, 1.0, 1.0]);
+                out.push([0.0, 0.0, 1.0 - f, 1.0, 1.0, 1.0]);
+            }
             block::CAULDRON => {
                 // BlockCauldron.addCollisionBoxesToList
                 let f = 0.125f32;

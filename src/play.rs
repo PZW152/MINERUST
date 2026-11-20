@@ -25,8 +25,17 @@ pub enum Tile {
     },
     /// `TileEntityChest`
     Chest { slots: [Option<Stack>; 27] },
-    /// `TileEntityDispenser`
-    Dispenser { slots: [Option<Stack>; 9] },
+    /// `TileEntityDispenser`; `TileEntityDropper` when `dropper`
+    Dispenser {
+        slots: [Option<Stack>; 9],
+        dropper: bool,
+    },
+    /// `TileEntityHopper`
+    Hopper {
+        slots: [Option<Stack>; 5],
+        /// `transferCooldown`
+        cooldown: i32,
+    },
     /// `TileEntityMobSpawner` (`MobSpawnerBaseLogic.mobID`)
     Spawner { mob: String },
     /// `TileEntitySign.signText`; `editable` until the placer's update.
@@ -142,6 +151,8 @@ pub enum Open {
     Cart(u32),
     /// A dispenser or dropper (`TileEntityDispenser`).
     Dispenser(Pos),
+    /// `ContainerHopper`
+    Hopper(Pos),
     /// `ContainerEnchantment` at the table
     Enchant(Pos),
     /// `ContainerRepair` at an anvil
@@ -158,6 +169,7 @@ pub fn window_of(o: &Open) -> Window {
         Open::Chest(ps) => Window::Chest(ps.len() * 3),
         Open::Cart(_) => Window::Chest(3),
         Open::Dispenser(_) => Window::Dispenser,
+        Open::Hopper(_) => Window::Hopper,
         Open::Enchant(_) => Window::Enchant,
         Open::Anvil(_) => Window::Repair,
     }
@@ -181,6 +193,8 @@ pub struct InvView {
     pub name_seed: i64,
     /// `ContainerRepair.maximumCost` (`S31` bar 0).
     pub repair_cost: i32,
+    /// The open dispenser window is a dropper's (`container.dropper`).
+    pub dropper: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -467,6 +481,7 @@ impl InvView {
             enchant: [0; 3],
             name_seed: 0,
             repair_cost: 0,
+            dropper: false,
         }
     }
 }
@@ -552,6 +567,8 @@ impl Play {
             enchant: self.enchant_levels,
             name_seed: self.name_seed,
             repair_cost,
+            dropper: matches!(&self.open, Open::Dispenser(p)
+                if matches!(self.tiles.get(p), Some(Tile::Dispenser { dropper: true, .. }))),
         }
     }
 
@@ -575,7 +592,13 @@ impl Play {
                 for (d, s) in a.iter_mut().zip(slots) {
                     *d = s;
                 }
-                self.tiles.insert(pos, Tile::Dispenser { slots: a });
+                self.tiles.insert(
+                    pos,
+                    Tile::Dispenser {
+                        slots: a,
+                        dropper: false,
+                    },
+                );
             }
             GenTile::Spawner { pos, mob } => {
                 self.tiles.insert(
@@ -718,7 +741,8 @@ impl Play {
             let slots: Vec<Option<Stack>> = match t {
                 Tile::Furnace { slots, .. } => slots.to_vec(),
                 Tile::Chest { slots } => slots.to_vec(),
-                Tile::Dispenser { slots } => slots.to_vec(),
+                Tile::Dispenser { slots, .. } => slots.to_vec(),
+                Tile::Hopper { slots, .. } => slots.to_vec(),
                 Tile::Brewing { slots, .. } => slots.to_vec(),
                 Tile::Spawner { .. } | Tile::Sign { .. } => Vec::new(),
             };
@@ -893,12 +917,23 @@ impl Play {
                     self.inv_dirty = true;
                     return true;
                 }
-                block::DISPENSER => {
+                block::DISPENSER | block::DROPPER => {
                     // BlockDispenser.onBlockActivated: displayGUIDispenser
-                    self.tiles
-                        .entry(target)
-                        .or_insert(Tile::Dispenser { slots: [None; 9] });
+                    self.tiles.entry(target).or_insert(Tile::Dispenser {
+                        slots: [None; 9],
+                        dropper: tid == block::DROPPER,
+                    });
                     self.open = Open::Dispenser(target);
+                    self.inv_dirty = true;
+                    return true;
+                }
+                block::HOPPER => {
+                    // BlockHopper.onBlockActivated: openHopperMenu
+                    self.tiles.entry(target).or_insert(Tile::Hopper {
+                        slots: [None; 5],
+                        cooldown: -1,
+                    });
+                    self.open = Open::Hopper(target);
                     self.inv_dirty = true;
                     return true;
                 }
@@ -970,10 +1005,18 @@ impl Play {
                     self.eat_cake(w, target);
                     return true;
                 }
-                block::DISPENSER => {
-                    self.tiles
-                        .entry(target)
-                        .or_insert(Tile::Dispenser { slots: [None; 9] });
+                block::DISPENSER | block::DROPPER => {
+                    self.tiles.entry(target).or_insert(Tile::Dispenser {
+                        slots: [None; 9],
+                        dropper: tid == block::DROPPER,
+                    });
+                    return true;
+                }
+                block::HOPPER => {
+                    self.tiles.entry(target).or_insert(Tile::Hopper {
+                        slots: [None; 5],
+                        cooldown: -1,
+                    });
                     return true;
                 }
                 block::END_PORTAL_FRAME if self.inv.held().map(|s| s.id) == Some(381) => {
@@ -1387,8 +1430,21 @@ impl Play {
                 }
                 meta = (yaw4 + 2) % 4;
             }
-            block::PISTON | block::STICKY_PISTON | block::DISPENSER => {
+            block::PISTON | block::STICKY_PISTON | block::DISPENSER | block::DROPPER => {
                 meta = self.orientation(p);
+            }
+            // BlockHopper.onBlockPlaced: away from the clicked face, never up
+            block::HOPPER => {
+                let side = match face {
+                    [0, -1, 0] => 0,
+                    [0, 1, 0] => 1,
+                    [0, 0, -1] => 2,
+                    [0, 0, 1] => 3,
+                    [-1, 0, 0] => 4,
+                    _ => 5,
+                };
+                let opp = [1, 0, 3, 2, 5, 4][side];
+                meta = if opp == 1 { 0 } else { opp };
             }
             block::TORCH | block::REDSTONE_TORCH => {
                 // BlockTorch.onBlockPlaced: attach to the clicked face.
@@ -1651,7 +1707,7 @@ impl Play {
             pos[1] as f64 + 0.5,
             pos[2] as f64 + 0.5,
         ];
-        let Some(Tile::Dispenser { slots }) = self.tiles.get_mut(&pos) else {
+        let Some(Tile::Dispenser { slots, .. }) = self.tiles.get_mut(&pos) else {
             sounds.push(("random.click", c, 1.0, 1.2));
             return None;
         };
@@ -1786,7 +1842,11 @@ impl Play {
                 _ => Vec::new(),
             },
             Open::Dispenser(p) => match self.tiles.get(p) {
-                Some(Tile::Dispenser { slots }) => slots.to_vec(),
+                Some(Tile::Dispenser { slots, .. }) => slots.to_vec(),
+                _ => Vec::new(),
+            },
+            Open::Hopper(p) => match self.tiles.get(p) {
+                Some(Tile::Hopper { slots, .. }) => slots.to_vec(),
                 _ => Vec::new(),
             },
             Open::Enchant(_) => self.enchant_slot.to_vec(),
@@ -1829,7 +1889,12 @@ impl Play {
                 }
             }
             Open::Dispenser(p) => {
-                if let Some(Tile::Dispenser { slots }) = self.tiles.get_mut(&p) {
+                if let Some(Tile::Dispenser { slots, .. }) = self.tiles.get_mut(&p) {
+                    copy(slots, v);
+                }
+            }
+            Open::Hopper(p) => {
+                if let Some(Tile::Hopper { slots, .. }) = self.tiles.get_mut(&p) {
                     copy(slots, v);
                 }
             }
@@ -2373,7 +2438,17 @@ impl Play {
             .map(|(p, t)| {
                 let (id, mut extra) = match t {
                     Tile::Chest { slots } => ("Chest", vec![("Items", items(slots))]),
-                    Tile::Dispenser { slots } => ("Trap", vec![("Items", items(slots))]),
+                    Tile::Dispenser { slots, dropper } => (
+                        if *dropper { "Dropper" } else { "Trap" },
+                        vec![("Items", items(slots))],
+                    ),
+                    Tile::Hopper { slots, cooldown } => (
+                        "Hopper",
+                        vec![
+                            ("Items", items(slots)),
+                            ("TransferCooldown", Nbt::Int(*cooldown)),
+                        ],
+                    ),
                     Tile::Furnace {
                         slots,
                         burn,
@@ -2455,11 +2530,23 @@ impl Play {
                 a.copy_from_slice(&v);
                 Tile::Chest { slots: a }
             }
-            "Trap" => {
+            "Trap" | "Dropper" => {
                 let v = fill(9);
                 let mut a = [None; 9];
                 a.copy_from_slice(&v);
-                Tile::Dispenser { slots: a }
+                Tile::Dispenser {
+                    slots: a,
+                    dropper: id == "Dropper",
+                }
+            }
+            "Hopper" => {
+                let v = fill(5);
+                let mut a = [None; 5];
+                a.copy_from_slice(&v);
+                Tile::Hopper {
+                    slots: a,
+                    cooldown: t.int("TransferCooldown").unwrap_or(-1) as i32,
+                }
             }
             "Furnace" => {
                 let v = fill(3);
@@ -2711,7 +2798,17 @@ impl Play {
                     enc(slots)
                 ),
                 Tile::Chest { slots } => format!("C,{},{},{},{}", p[0], p[1], p[2], enc(slots)),
-                Tile::Dispenser { slots } => format!("D,{},{},{},{}", p[0], p[1], p[2], enc(slots)),
+                Tile::Dispenser { slots, dropper } => format!(
+                    "{},{},{},{},{}",
+                    if *dropper { "R" } else { "D" },
+                    p[0],
+                    p[1],
+                    p[2],
+                    enc(slots)
+                ),
+                Tile::Hopper { slots, cooldown } => {
+                    format!("H,{},{},{},{},{}", p[0], p[1], p[2], cooldown, enc(slots))
+                }
                 Tile::Spawner { mob } => format!("S,{},{},{},{}", p[0], p[1], p[2], mob),
                 Tile::Sign { text, .. } => {
                     format!("G,{},{},{},{}", p[0], p[1], p[2], text.join("\u{1f}"))
@@ -2806,13 +2903,31 @@ impl Play {
                 self.tiles
                     .insert(pos(f[1], f[2], f[3])?, Tile::Chest { slots });
             }
-            "D" => {
+            "D" | "R" => {
                 let f: Vec<&str> = line.splitn(5, ',').collect();
                 let s = dec(f.get(4)?, 9)?;
                 let mut slots = [None; 9];
                 slots.copy_from_slice(&s);
-                self.tiles
-                    .insert(pos(f[1], f[2], f[3])?, Tile::Dispenser { slots });
+                self.tiles.insert(
+                    pos(f[1], f[2], f[3])?,
+                    Tile::Dispenser {
+                        slots,
+                        dropper: f[0] == "R",
+                    },
+                );
+            }
+            "H" => {
+                let f: Vec<&str> = line.splitn(6, ',').collect();
+                let s = dec(f.get(5)?, 5)?;
+                let mut slots = [None; 5];
+                slots.copy_from_slice(&s);
+                self.tiles.insert(
+                    pos(f[1], f[2], f[3])?,
+                    Tile::Hopper {
+                        slots,
+                        cooldown: f[4].parse().ok()?,
+                    },
+                );
             }
             "S" => {
                 let f: Vec<&str> = line.splitn(5, ',').collect();

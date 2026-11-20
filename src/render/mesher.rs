@@ -562,6 +562,9 @@ fn mesh_block(cx: &Ctx, out: &mut Vec<Vertex>, id: u8, meta: i32, x: i32, y: i32
             rb.set_bounds(crate::shapes::cake(meta as u8));
             rb.render_standard(x, y, z);
         }
+        Shape::Hopper => {
+            rb::Rb::new(cx, out, id, meta).render_block_hopper(x, y, z);
+        }
         Shape::FenceGate => {
             rb::Rb::new(cx, out, id, meta).render_block_fence_gate(x, y, z);
         }

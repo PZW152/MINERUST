@@ -65,6 +65,8 @@ pub enum Window {
     Chest(usize),
     /// `ContainerDispenser`
     Dispenser,
+    /// `ContainerHopper`
+    Hopper,
     /// `ContainerEnchantment`
     Enchant,
     /// `ContainerRepair`: the two inputs are the tile slots.
@@ -215,6 +217,12 @@ impl Window {
                     }
                 }
                 player_slots(&mut v, 84);
+            }
+            Window::Hopper => {
+                for c in 0..5 {
+                    v.push(slot(Inv::Tile, c, SlotKind::Plain, 44 + c as i32 * 18, 20));
+                }
+                player_slots(&mut v, 51);
             }
             Window::Enchant => {
                 v.push(slot(Inv::Tile, 0, SlotKind::Enchant, 25, 47));
@@ -768,6 +776,14 @@ impl<'a> Ctx<'a> {
                     self.merge(&mut s, 9, 45, true)
                 } else {
                     self.merge(&mut s, 0, 9, false)
+                }
+            }
+            // ContainerHopper.transferStackInSlot
+            Window::Hopper => {
+                if i < 5 {
+                    self.merge(&mut s, 5, 41, true)
+                } else {
+                    self.merge(&mut s, 0, 5, false)
                 }
             }
             Window::Repair => {

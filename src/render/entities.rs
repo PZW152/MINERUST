@@ -361,6 +361,10 @@ fn item_block(
 
 fn sprite_rect(atlas: &Atlas, s: &Stack) -> Option<[f32; 4]> {
     if let Some(b) = s.block() {
+        if b == block::HOPPER {
+            // BlockHopper.getItemIconName
+            return Some(atlas.named("hopper"));
+        }
         let face = block::item_icon_face(b);
         return atlas.tile(b, s.meta as u8, face);
     }

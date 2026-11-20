@@ -408,6 +408,8 @@ impl<'a, 'b> Rb<'a, 'b> {
             }
             block::SNOW_LAYER | block::CARPET if side == 1 => true,
             block::DRAGON_EGG => true,
+            // BlockHopper.shouldSideBeRendered
+            block::HOPPER => true,
             // BlockSlab.shouldSideBeRendered (half slabs; x, y, z is the neighbour)
             block::STONE_SLAB | block::WOODEN_SLAB => {
                 let is_slab = |id: u8| id == block::STONE_SLAB || id == block::WOODEN_SLAB;
@@ -6014,6 +6016,64 @@ impl<'a, 'b> Rb<'a, 'b> {
             self.vertex(var48, (var3 as f64) + 0.001, var44, var18, var24);
             self.vertex(var48, (var3 as f64) + 0.999, var44, var18, var22);
         }
+        true
+    }
+}
+
+impl<'a, 'b> Rb<'a, 'b> {
+    /// `renderBlockHopper` + `renderBlockHopperMetadata(.., false)`
+    pub fn render_block_hopper(&mut self, x: i32, y: i32, z: i32) -> bool {
+        let b = self.mixed(x, y, z);
+        self.bright = b;
+        let c = self.color_multiplier(x, y, z);
+        self.color(c[0], c[1], c[2]);
+        let var8 = self.meta & 7;
+        let var9 = 0.625;
+        self.set_render_bounds(0.0, var9, 0.0, 1.0, 1.0, 1.0);
+        self.render_standard(x, y, z);
+        let b = self.mixed(x, y, z);
+        self.bright = b;
+        let c = self.color_multiplier(x, y, z);
+        self.color(c[0], c[1], c[2]);
+        let var24 = Icon::new(self.atlas().named("hopper_outside"));
+        let var25 = Icon::new(self.atlas().named("hopper_inside"));
+        let var26 = 0.125f32 as f64;
+        let (fx, fy, fz) = (x as f64, y as f64, z as f64);
+        self.face_x_pos(fx - 1.0 + var26, fy, fz, var24);
+        self.face_x_neg(fx + 1.0 - var26, fy, fz, var24);
+        self.face_z_pos(fx, fy, fz - 1.0 + var26, var24);
+        self.face_z_neg(fx, fy, fz + 1.0 - var26, var24);
+        self.face_y_pos(fx, fy - 1.0 + var9, fz, var25);
+        self.overrideBlockTexture = Some(var24);
+        let var27 = 0.25;
+        let var28 = 0.25;
+        let var18 = var9;
+        self.set_render_bounds(var27, var28, var27, 1.0 - var27, var18 - 0.002, 1.0 - var27);
+        self.render_standard(x, y, z);
+        let var20 = 0.375;
+        let var22 = 0.25;
+        self.overrideBlockTexture = Some(var24);
+        if var8 == 0 {
+            self.set_render_bounds(var20, 0.0, var20, 1.0 - var20, 0.25, 1.0 - var20);
+            self.render_standard(x, y, z);
+        }
+        if var8 == 2 {
+            self.set_render_bounds(var20, var28, 0.0, 1.0 - var20, var28 + var22, var27);
+            self.render_standard(x, y, z);
+        }
+        if var8 == 3 {
+            self.set_render_bounds(var20, var28, 1.0 - var27, 1.0 - var20, var28 + var22, 1.0);
+            self.render_standard(x, y, z);
+        }
+        if var8 == 4 {
+            self.set_render_bounds(0.0, var28, var20, var27, var28 + var22, 1.0 - var20);
+            self.render_standard(x, y, z);
+        }
+        if var8 == 5 {
+            self.set_render_bounds(1.0 - var27, var28, var20, 1.0, var28 + var22, 1.0 - var20);
+            self.render_standard(x, y, z);
+        }
+        self.overrideBlockTexture = None;
         true
     }
 }

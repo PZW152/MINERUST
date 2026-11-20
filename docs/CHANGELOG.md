@@ -9,7 +9,8 @@
 
 ## 2026-11-20
 
-- Weighted pressure plates (light and heavy: entity count, tick rate 10) and stained glass panes; renderBlockStainedGlassPane and renderBlockPane converted from the Java; panes join stained glass and each other (canPaneConnectToBlock), pane items and break particles show the glass; thrown items, falling blocks and the fishing hook count on plates; shotcompare `panes` scene
+- Buckets (ItemBucket: fill from sources, pour, water fizzes in the Nether) and spawn eggs (ItemMonsterPlacer on blocks and into liquids), both missing until now; hopper and dropper blocks with renderBlockHopper, collision boxes, windows and saving (transfer logic next)
+- `c82c142` Weighted pressure plates (light and heavy: entity count, tick rate 10) and stained glass panes; renderBlockStainedGlassPane and renderBlockPane converted from the Java; panes join stained glass and each other (canPaneConnectToBlock), pane items and break particles show the glass; thrown items, falling blocks and the fishing hook count on plates; shotcompare `panes` scene
 - `1e7b8f1` Fishing: ItemFishingRod and EntityFishHook (casting, float, lure and weather timing, bites with wake and splash particles, hooking mobs, boats and minecarts, junk/treasure/fish tables with Luck of the Sea, XP orb, rod wear, fishing statistics); RenderFish bobber and line, cast rod icon, EntityFishWakeFX; MINERUST_USE_AIR for captures
 - `4f88e09` renderBlockStairs and renderBlockFence ported (smooth lighting, field_152631_f, the lone post's hidden bar); shotcompare `stairs` scene
 - `8ae53ef` Slabs, snow layers, buttons, pressure plates, carpet, trapdoors, farmland and enchanting tables drawn by renderStandardBlock (smooth lighting, BlockSlab culling); renderBlockCactus ported; no block outline while F1 hides the GUI; shotcompare `shapes` scene

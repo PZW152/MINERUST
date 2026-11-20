@@ -31,6 +31,8 @@ mod bed;
 mod commands;
 #[path = "sim_fishing.rs"]
 mod fishing;
+#[path = "sim_items.rs"]
+mod items;
 #[path = "sim_vehicles.rs"]
 mod vehicles;
 
@@ -1170,7 +1172,11 @@ impl Sim {
                     self.splayer.fx.push(crate::entity::base::Fx::BrokenItem(s));
                 }
                 self.play = play;
-                if !used {
+                // ItemMonsterPlacer.onItemUse always returns true: no sendUseItem
+                let egg = self.play.inv.held().filter(|s| s.id == items::SPAWN_EGG);
+                if !used && egg.is_some() {
+                    self.use_egg_on(egg.unwrap(), target, face);
+                } else if !used {
                     // Minecraft.func_147121_ag: sendUseItem
                     self.use_air();
                 }
@@ -2271,6 +2277,19 @@ impl Sim {
         // ItemBoat
         if held.id == 333 {
             self.place_boat();
+            return;
+        }
+        // ItemBucket (milk is drunk below)
+        if matches!(
+            held.id,
+            items::BUCKET | items::WATER_BUCKET | items::LAVA_BUCKET
+        ) {
+            self.use_bucket(held);
+            return;
+        }
+        // ItemMonsterPlacer
+        if held.id == items::SPAWN_EGG {
+            self.use_egg_air(held);
             return;
         }
         // ItemFishingRod
@@ -5443,6 +5462,60 @@ mod tests {
         };
         let e = crate::potion::effects_of(slots[0].unwrap().meta, false);
         assert_eq!(e[0].id, crate::potion::MOVE_SPEED);
+    }
+
+    /// ItemBucket picks up a source block and pours it out on the face
+    /// in view; ItemMonsterPlacer spawns its mob on the clicked face.
+    #[test]
+    fn buckets_and_spawn_eggs() {
+        let (mut sim, x, y, z) = redstone_sim();
+        sim.play.mode = GameMode::Survival;
+        // a water source two blocks ahead, at floor level, in a stone basin
+        sim.world.set_block(x + 2, y - 1, z, block::WATER, 0, 3);
+        let feet = [x as f64 + 0.5, y as f64, z as f64 + 0.5];
+        // looking down at it: yaw -90 faces +x
+        let look = [-90.0f32, 40.0];
+        let sel = sim.play.inv.selected;
+        sim.play.inv.main[sel] = Some(crate::item::Stack::new(325, 0, 1));
+        for _ in 0..2 {
+            sim.step(&[Command::Player(feet, look, false)], &mut Vec::new());
+        }
+        sim.step(&[Command::UseAir], &mut Vec::new());
+        assert_eq!(sim.play.inv.main[sel].unwrap().id, 326, "filled with water");
+        assert_eq!(
+            sim.world.block(x + 2, y - 1, z),
+            block::AIR,
+            "the source is gone"
+        );
+        // pour it back: the ray now hits the stone under the hole
+        sim.step(&[Command::UseAir], &mut Vec::new());
+        assert_eq!(sim.play.inv.main[sel].unwrap().id, 325, "empty again");
+        assert_eq!(
+            sim.world.block(x + 2, y - 1, z),
+            block::FLOWING_WATER,
+            "poured"
+        );
+        // a pig from an egg on the floor
+        let pigs = |s: &Sim| {
+            s.mobs
+                .list
+                .iter()
+                .filter(|m| m.kind == crate::entity::mob::Kind::Pig)
+                .count()
+        };
+        let before = pigs(&sim);
+        sim.play.inv.main[sel] = Some(crate::item::Stack::new(383, 90, 2));
+        sim.step(
+            &[Command::Use {
+                target: [x + 1, y - 1, z],
+                face: [0, 1, 0],
+                sneaking: false,
+                hit: [0.5, 1.0, 0.5],
+            }],
+            &mut Vec::new(),
+        );
+        assert_eq!(pigs(&sim), before + 1, "a pig");
+        assert_eq!(sim.play.inv.main[sel].unwrap().count, 1, "one egg used");
     }
 
     /// BlockPressurePlateWeighted: the power is the number of entities on

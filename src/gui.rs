@@ -440,7 +440,12 @@ impl<'a> Ui<'a> {
         }
         // Flat sprite (`renderIcon` of the block's item icon).
         let face = block::item_icon_face(id);
-        if let Some(t) = self.atlas.tile(id, meta as u8, face) {
+        let icon = if id == block::HOPPER {
+            Some(self.atlas.named("hopper"))
+        } else {
+            self.atlas.tile(id, meta as u8, face)
+        };
+        if let Some(t) = icon {
             let tint = if id == block::TALLGRASS || id == block::VINE || id == block::WATERLILY {
                 0x48B518
             } else {
