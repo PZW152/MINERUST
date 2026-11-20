@@ -39,6 +39,8 @@ pub fn render_type(id: u8) -> Option<i32> {
             | block::TRAPDOOR
             | block::STONE_PRESSURE_PLATE
             | block::WOODEN_PRESSURE_PLATE
+            | block::LIGHT_WEIGHTED_PRESSURE_PLATE
+            | block::HEAVY_WEIGHTED_PRESSURE_PLATE
             | block::STONE_BUTTON
             | block::WOODEN_BUTTON
             | block::CARPET
@@ -70,7 +72,10 @@ fn item_bounds(id: u8, meta: i32) -> [f64; 6] {
             let a = 0.1875f32;
             f([0.0, 0.5 - a / 2.0, 0.0, 1.0, 0.5 + a / 2.0, 1.0])
         }
-        block::STONE_PRESSURE_PLATE | block::WOODEN_PRESSURE_PLATE => {
+        block::STONE_PRESSURE_PLATE
+        | block::WOODEN_PRESSURE_PLATE
+        | block::LIGHT_WEIGHTED_PRESSURE_PLATE
+        | block::HEAVY_WEIGHTED_PRESSURE_PLATE => {
             let (a, b, c) = (0.5f32, 0.125f32, 0.5f32);
             f([0.5 - a, 0.5 - b, 0.5 - c, 0.5 + a, 0.5 + b, 0.5 + c])
         }

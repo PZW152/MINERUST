@@ -439,7 +439,7 @@ impl<'a> Ui<'a> {
             return;
         }
         // Flat sprite (`renderIcon` of the block's item icon).
-        let face = if id == block::DOUBLE_PLANT { 1 } else { 0 };
+        let face = block::item_icon_face(id);
         if let Some(t) = self.atlas.tile(id, meta as u8, face) {
             let tint = if id == block::TALLGRASS || id == block::VINE || id == block::WATERLILY {
                 0x48B518

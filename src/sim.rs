@@ -1552,6 +1552,7 @@ impl Sim {
                     living: true,
                     minecart: false,
                     arrow: false,
+                    collides: true,
                 });
             }
             for m in &self.mobs.list {
@@ -1564,6 +1565,7 @@ impl Sim {
                         living: true,
                         minecart: false,
                         arrow: false,
+                        collides: true,
                     });
                 }
             }
@@ -1577,6 +1579,7 @@ impl Sim {
                     living: false,
                     minecart: false,
                     arrow: false,
+                    collides: true,
                 });
             }
             for a in &self.mobs.arrows {
@@ -1588,6 +1591,7 @@ impl Sim {
                     living: false,
                     minecart: false,
                     arrow: true,
+                    collides: true,
                 });
             }
             for t in &self.mobs.tnt {
@@ -1599,6 +1603,7 @@ impl Sim {
                     living: false,
                     minecart: false,
                     arrow: false,
+                    collides: true,
                 });
             }
             for b in &play.vehicles {
@@ -1611,6 +1616,45 @@ impl Sim {
                     living: false,
                     minecart: matches!(b.v, crate::entity::vehicle::Vehicle::Cart(_)),
                     arrow: false,
+                    collides: true,
+                });
+            }
+            // EntityThrowable moves without doBlockCollisions
+            for t in &self.mobs.throwables {
+                occ.push(Occupant {
+                    bb: Aabb6 {
+                        min: t.e.bb.min,
+                        max: t.e.bb.max,
+                    },
+                    living: false,
+                    minecart: false,
+                    arrow: false,
+                    collides: false,
+                });
+            }
+            for f in &play.falling {
+                let b = f.e.bb;
+                occ.push(Occupant {
+                    bb: Aabb6 {
+                        min: b.min,
+                        max: b.max,
+                    },
+                    living: false,
+                    minecart: false,
+                    arrow: false,
+                    collides: true,
+                });
+            }
+            if let Some(h) = &self.fish_hook {
+                occ.push(Occupant {
+                    bb: Aabb6 {
+                        min: h.e.bb.min,
+                        max: h.e.bb.max,
+                    },
+                    living: false,
+                    minecart: false,
+                    arrow: false,
+                    collides: true,
                 });
             }
             self.world.occupants = occ;
@@ -5399,6 +5443,54 @@ mod tests {
         };
         let e = crate::potion::effects_of(slots[0].unwrap().meta, false);
         assert_eq!(e[0].id, crate::potion::MOVE_SPEED);
+    }
+
+    /// BlockPressurePlateWeighted: the power is the number of entities on
+    /// the plate scaled to its maximum (15 for gold, 150 for iron), rounded
+    /// up, and it lets go 10 ticks after they leave.
+    #[test]
+    fn weighted_plates_count_entities() {
+        let (mut sim, x, y, z) = redstone_sim();
+        sim.world
+            .set_block(x, y, z, block::LIGHT_WEIGHTED_PRESSURE_PLATE, 0, 3);
+        sim.world
+            .set_block(x + 4, y, z, block::HEAVY_WEIGHTED_PRESSURE_PLATE, 0, 3);
+        // keep the player away from both
+        let feet = [x as f64 + 8.5, y as f64, z as f64 + 8.5];
+        for px in [x, x + 4] {
+            // five different items, so none merge
+            for (i, id) in [1u16, 3, 4, 5, 12].iter().enumerate() {
+                let n = sim.play.next_item;
+                sim.play.next_item += 1;
+                let mut e = crate::entity::item::ItemEntity::new(
+                    n,
+                    crate::item::Stack::new(*id, 0, 1),
+                    [
+                        px as f64 + 0.3 + i as f64 * 0.1,
+                        y as f64 + 0.2,
+                        z as f64 + 0.5,
+                    ],
+                );
+                e.e.motion = [0.0; 3];
+                e.pickup_delay = 32767;
+                sim.play.spawn(e);
+            }
+        }
+        for _ in 0..20 {
+            sim.step(&[Command::Player(feet, [0.0, 0.0], false)], &mut Vec::new());
+        }
+        assert_eq!(sim.world.meta(x, y, z), 5, "gold: 5 of 15");
+        assert_eq!(sim.world.meta(x + 4, y, z), 1, "iron: ceil(5 / 150 * 15)");
+        assert_eq!(
+            crate::world::redstone::plate_power(block::LIGHT_WEIGHTED_PRESSURE_PLATE, 5),
+            5
+        );
+        sim.play.items.clear();
+        for _ in 0..25 {
+            sim.step(&[Command::Player(feet, [0.0, 0.0], false)], &mut Vec::new());
+        }
+        assert_eq!(sim.world.meta(x, y, z), 0, "released");
+        assert_eq!(sim.world.meta(x + 4, y, z), 0, "released");
     }
 
     /// ItemFishingRod casts an EntityFishHook into a pool; once a fish

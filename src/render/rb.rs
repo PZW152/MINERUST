@@ -5353,3 +5353,667 @@ impl<'a, 'b> Rb<'a, 'b> {
         true
     }
 }
+
+/// `RenderBlocks.renderBlockPane` (render type 18, iron bars) and
+/// `renderBlockStainedGlassPane` (41, glass and stained glass panes),
+/// converted statement by statement from the Java.
+#[allow(unused_mut, unused_variables, unused_parens, clippy::all)]
+impl<'a, 'b> Rb<'a, 'b> {
+    /// `World.isAirBlock`
+    fn is_air(&self, x: i32, y: i32, z: i32) -> bool {
+        block::material(self.block_at(x, y, z)) == Material::Air
+    }
+
+    /// `BlockPane.getTopSprite` / `BlockStainedGlassPane.getTopSprite`
+    fn pane_top(&self) -> Icon {
+        let name = block::pane_top_texture(self.id, self.meta as u8);
+        Icon::new(self.atlas().named(name))
+    }
+
+    /// `renderBlockPane`; `links` is `canPaneConnectToBlock` for z-1, z+1,
+    /// x-1, x+1.
+    pub fn render_block_pane(&mut self, x: i32, y: i32, z: i32, links: [bool; 4]) -> bool {
+        let (var2, var3, var4) = (x, y, z);
+        let var5 = 256;
+        let b = self.mixed(x, y, z);
+        self.bright = b;
+        let c = self.color_multiplier(x, y, z);
+        self.color(c[0], c[1], c[2]);
+        let (var63, var64) = match self.overrideBlockTexture {
+            Some(o) => (o, o),
+            None => (self.side_icon(0), self.pane_top()),
+        };
+        let var66 = var63.min_u();
+        let var15 = var63.u(8.0);
+        let var17 = var63.max_u();
+        let var19 = var63.min_v();
+        let var21 = var63.max_v();
+        let var23 = var64.u(7.0);
+        let var25 = var64.u(9.0);
+        let var27 = var64.min_v();
+        let var29 = var64.v(8.0);
+        let var31 = var64.max_v();
+        let var33 = var2 as f64;
+        let var35 = var2 as f64 + 0.5;
+        let var37 = (var2 + 1) as f64;
+        let var39 = var4 as f64;
+        let var41 = var4 as f64 + 0.5;
+        let var43 = (var4 + 1) as f64;
+        let var45 = var2 as f64 + 0.5 - 0.0625;
+        let var47 = var2 as f64 + 0.5 + 0.0625;
+        let var49 = var4 as f64 + 0.5 - 0.0625;
+        let var51 = var4 as f64 + 0.5 + 0.0625;
+        let [var53, var54, var55, var56] = links;
+        let var57 = self.should_side(var2, var3 + 1, var4, 1);
+        let var58 = self.should_side(var2, var3 - 1, var4, 0);
+        let var59 = 0.01;
+        let var61 = 0.005;
+        if (!var55 || !var56) && (var55 || var56 || var53 || var54) {
+            if var55 && !var56 {
+                self.vertex(var33, (var3 as f64) + 1.0, var41, var66, var19);
+                self.vertex(var33, (var3 as f64) + 0.0, var41, var66, var21);
+                self.vertex(var35, (var3 as f64) + 0.0, var41, var15, var21);
+                self.vertex(var35, (var3 as f64) + 1.0, var41, var15, var19);
+                self.vertex(var35, (var3 as f64) + 1.0, var41, var66, var19);
+                self.vertex(var35, (var3 as f64) + 0.0, var41, var66, var21);
+                self.vertex(var33, (var3 as f64) + 0.0, var41, var15, var21);
+                self.vertex(var33, (var3 as f64) + 1.0, var41, var15, var19);
+                if !var54 && !var53 {
+                    self.vertex(var35, (var3 as f64) + 1.0, var51, var23, var27);
+                    self.vertex(var35, (var3 as f64) + 0.0, var51, var23, var31);
+                    self.vertex(var35, (var3 as f64) + 0.0, var49, var25, var31);
+                    self.vertex(var35, (var3 as f64) + 1.0, var49, var25, var27);
+                    self.vertex(var35, (var3 as f64) + 1.0, var49, var23, var27);
+                    self.vertex(var35, (var3 as f64) + 0.0, var49, var23, var31);
+                    self.vertex(var35, (var3 as f64) + 0.0, var51, var25, var31);
+                    self.vertex(var35, (var3 as f64) + 1.0, var51, var25, var27);
+                }
+                if var57 || var3 < var5 - 1 && self.is_air(var2 - 1, var3 + 1, var4) {
+                    self.vertex(var33, (var3 as f64) + 1.0 + 0.01, var51, var25, var29);
+                    self.vertex(var35, (var3 as f64) + 1.0 + 0.01, var51, var25, var31);
+                    self.vertex(var35, (var3 as f64) + 1.0 + 0.01, var49, var23, var31);
+                    self.vertex(var33, (var3 as f64) + 1.0 + 0.01, var49, var23, var29);
+                    self.vertex(var35, (var3 as f64) + 1.0 + 0.01, var51, var25, var29);
+                    self.vertex(var33, (var3 as f64) + 1.0 + 0.01, var51, var25, var31);
+                    self.vertex(var33, (var3 as f64) + 1.0 + 0.01, var49, var23, var31);
+                    self.vertex(var35, (var3 as f64) + 1.0 + 0.01, var49, var23, var29);
+                }
+                if var58 || var3 > 1 && self.is_air(var2 - 1, var3 - 1, var4) {
+                    self.vertex(var33, (var3 as f64) - 0.01, var51, var25, var29);
+                    self.vertex(var35, (var3 as f64) - 0.01, var51, var25, var31);
+                    self.vertex(var35, (var3 as f64) - 0.01, var49, var23, var31);
+                    self.vertex(var33, (var3 as f64) - 0.01, var49, var23, var29);
+                    self.vertex(var35, (var3 as f64) - 0.01, var51, var25, var29);
+                    self.vertex(var33, (var3 as f64) - 0.01, var51, var25, var31);
+                    self.vertex(var33, (var3 as f64) - 0.01, var49, var23, var31);
+                    self.vertex(var35, (var3 as f64) - 0.01, var49, var23, var29);
+                }
+            } else if !var55 && var56 {
+                self.vertex(var35, (var3 as f64) + 1.0, var41, var15, var19);
+                self.vertex(var35, (var3 as f64) + 0.0, var41, var15, var21);
+                self.vertex(var37, (var3 as f64) + 0.0, var41, var17, var21);
+                self.vertex(var37, (var3 as f64) + 1.0, var41, var17, var19);
+                self.vertex(var37, (var3 as f64) + 1.0, var41, var15, var19);
+                self.vertex(var37, (var3 as f64) + 0.0, var41, var15, var21);
+                self.vertex(var35, (var3 as f64) + 0.0, var41, var17, var21);
+                self.vertex(var35, (var3 as f64) + 1.0, var41, var17, var19);
+                if !var54 && !var53 {
+                    self.vertex(var35, (var3 as f64) + 1.0, var49, var23, var27);
+                    self.vertex(var35, (var3 as f64) + 0.0, var49, var23, var31);
+                    self.vertex(var35, (var3 as f64) + 0.0, var51, var25, var31);
+                    self.vertex(var35, (var3 as f64) + 1.0, var51, var25, var27);
+                    self.vertex(var35, (var3 as f64) + 1.0, var51, var23, var27);
+                    self.vertex(var35, (var3 as f64) + 0.0, var51, var23, var31);
+                    self.vertex(var35, (var3 as f64) + 0.0, var49, var25, var31);
+                    self.vertex(var35, (var3 as f64) + 1.0, var49, var25, var27);
+                }
+                if var57 || var3 < var5 - 1 && self.is_air(var2 + 1, var3 + 1, var4) {
+                    self.vertex(var35, (var3 as f64) + 1.0 + 0.01, var51, var25, var27);
+                    self.vertex(var37, (var3 as f64) + 1.0 + 0.01, var51, var25, var29);
+                    self.vertex(var37, (var3 as f64) + 1.0 + 0.01, var49, var23, var29);
+                    self.vertex(var35, (var3 as f64) + 1.0 + 0.01, var49, var23, var27);
+                    self.vertex(var37, (var3 as f64) + 1.0 + 0.01, var51, var25, var27);
+                    self.vertex(var35, (var3 as f64) + 1.0 + 0.01, var51, var25, var29);
+                    self.vertex(var35, (var3 as f64) + 1.0 + 0.01, var49, var23, var29);
+                    self.vertex(var37, (var3 as f64) + 1.0 + 0.01, var49, var23, var27);
+                }
+                if var58 || var3 > 1 && self.is_air(var2 + 1, var3 - 1, var4) {
+                    self.vertex(var35, (var3 as f64) - 0.01, var51, var25, var27);
+                    self.vertex(var37, (var3 as f64) - 0.01, var51, var25, var29);
+                    self.vertex(var37, (var3 as f64) - 0.01, var49, var23, var29);
+                    self.vertex(var35, (var3 as f64) - 0.01, var49, var23, var27);
+                    self.vertex(var37, (var3 as f64) - 0.01, var51, var25, var27);
+                    self.vertex(var35, (var3 as f64) - 0.01, var51, var25, var29);
+                    self.vertex(var35, (var3 as f64) - 0.01, var49, var23, var29);
+                    self.vertex(var37, (var3 as f64) - 0.01, var49, var23, var27);
+                }
+            }
+        } else {
+            self.vertex(var33, (var3 as f64) + 1.0, var41, var66, var19);
+            self.vertex(var33, (var3 as f64) + 0.0, var41, var66, var21);
+            self.vertex(var37, (var3 as f64) + 0.0, var41, var17, var21);
+            self.vertex(var37, (var3 as f64) + 1.0, var41, var17, var19);
+            self.vertex(var37, (var3 as f64) + 1.0, var41, var66, var19);
+            self.vertex(var37, (var3 as f64) + 0.0, var41, var66, var21);
+            self.vertex(var33, (var3 as f64) + 0.0, var41, var17, var21);
+            self.vertex(var33, (var3 as f64) + 1.0, var41, var17, var19);
+            if var57 {
+                self.vertex(var33, (var3 as f64) + 1.0 + 0.01, var51, var25, var31);
+                self.vertex(var37, (var3 as f64) + 1.0 + 0.01, var51, var25, var27);
+                self.vertex(var37, (var3 as f64) + 1.0 + 0.01, var49, var23, var27);
+                self.vertex(var33, (var3 as f64) + 1.0 + 0.01, var49, var23, var31);
+                self.vertex(var37, (var3 as f64) + 1.0 + 0.01, var51, var25, var31);
+                self.vertex(var33, (var3 as f64) + 1.0 + 0.01, var51, var25, var27);
+                self.vertex(var33, (var3 as f64) + 1.0 + 0.01, var49, var23, var27);
+                self.vertex(var37, (var3 as f64) + 1.0 + 0.01, var49, var23, var31);
+            } else {
+                if var3 < var5 - 1 && self.is_air(var2 - 1, var3 + 1, var4) {
+                    self.vertex(var33, (var3 as f64) + 1.0 + 0.01, var51, var25, var29);
+                    self.vertex(var35, (var3 as f64) + 1.0 + 0.01, var51, var25, var31);
+                    self.vertex(var35, (var3 as f64) + 1.0 + 0.01, var49, var23, var31);
+                    self.vertex(var33, (var3 as f64) + 1.0 + 0.01, var49, var23, var29);
+                    self.vertex(var35, (var3 as f64) + 1.0 + 0.01, var51, var25, var29);
+                    self.vertex(var33, (var3 as f64) + 1.0 + 0.01, var51, var25, var31);
+                    self.vertex(var33, (var3 as f64) + 1.0 + 0.01, var49, var23, var31);
+                    self.vertex(var35, (var3 as f64) + 1.0 + 0.01, var49, var23, var29);
+                }
+                if var3 < var5 - 1 && self.is_air(var2 + 1, var3 + 1, var4) {
+                    self.vertex(var35, (var3 as f64) + 1.0 + 0.01, var51, var25, var27);
+                    self.vertex(var37, (var3 as f64) + 1.0 + 0.01, var51, var25, var29);
+                    self.vertex(var37, (var3 as f64) + 1.0 + 0.01, var49, var23, var29);
+                    self.vertex(var35, (var3 as f64) + 1.0 + 0.01, var49, var23, var27);
+                    self.vertex(var37, (var3 as f64) + 1.0 + 0.01, var51, var25, var27);
+                    self.vertex(var35, (var3 as f64) + 1.0 + 0.01, var51, var25, var29);
+                    self.vertex(var35, (var3 as f64) + 1.0 + 0.01, var49, var23, var29);
+                    self.vertex(var37, (var3 as f64) + 1.0 + 0.01, var49, var23, var27);
+                }
+            }
+            if var58 {
+                self.vertex(var33, (var3 as f64) - 0.01, var51, var25, var31);
+                self.vertex(var37, (var3 as f64) - 0.01, var51, var25, var27);
+                self.vertex(var37, (var3 as f64) - 0.01, var49, var23, var27);
+                self.vertex(var33, (var3 as f64) - 0.01, var49, var23, var31);
+                self.vertex(var37, (var3 as f64) - 0.01, var51, var25, var31);
+                self.vertex(var33, (var3 as f64) - 0.01, var51, var25, var27);
+                self.vertex(var33, (var3 as f64) - 0.01, var49, var23, var27);
+                self.vertex(var37, (var3 as f64) - 0.01, var49, var23, var31);
+            } else {
+                if var3 > 1 && self.is_air(var2 - 1, var3 - 1, var4) {
+                    self.vertex(var33, (var3 as f64) - 0.01, var51, var25, var29);
+                    self.vertex(var35, (var3 as f64) - 0.01, var51, var25, var31);
+                    self.vertex(var35, (var3 as f64) - 0.01, var49, var23, var31);
+                    self.vertex(var33, (var3 as f64) - 0.01, var49, var23, var29);
+                    self.vertex(var35, (var3 as f64) - 0.01, var51, var25, var29);
+                    self.vertex(var33, (var3 as f64) - 0.01, var51, var25, var31);
+                    self.vertex(var33, (var3 as f64) - 0.01, var49, var23, var31);
+                    self.vertex(var35, (var3 as f64) - 0.01, var49, var23, var29);
+                }
+                if var3 > 1 && self.is_air(var2 + 1, var3 - 1, var4) {
+                    self.vertex(var35, (var3 as f64) - 0.01, var51, var25, var27);
+                    self.vertex(var37, (var3 as f64) - 0.01, var51, var25, var29);
+                    self.vertex(var37, (var3 as f64) - 0.01, var49, var23, var29);
+                    self.vertex(var35, (var3 as f64) - 0.01, var49, var23, var27);
+                    self.vertex(var37, (var3 as f64) - 0.01, var51, var25, var27);
+                    self.vertex(var35, (var3 as f64) - 0.01, var51, var25, var29);
+                    self.vertex(var35, (var3 as f64) - 0.01, var49, var23, var29);
+                    self.vertex(var37, (var3 as f64) - 0.01, var49, var23, var27);
+                }
+            }
+        }
+        if (!var53 || !var54) && (var55 || var56 || var53 || var54) {
+            if var53 && !var54 {
+                self.vertex(var35, (var3 as f64) + 1.0, var39, var66, var19);
+                self.vertex(var35, (var3 as f64) + 0.0, var39, var66, var21);
+                self.vertex(var35, (var3 as f64) + 0.0, var41, var15, var21);
+                self.vertex(var35, (var3 as f64) + 1.0, var41, var15, var19);
+                self.vertex(var35, (var3 as f64) + 1.0, var41, var66, var19);
+                self.vertex(var35, (var3 as f64) + 0.0, var41, var66, var21);
+                self.vertex(var35, (var3 as f64) + 0.0, var39, var15, var21);
+                self.vertex(var35, (var3 as f64) + 1.0, var39, var15, var19);
+                if !var56 && !var55 {
+                    self.vertex(var45, (var3 as f64) + 1.0, var41, var23, var27);
+                    self.vertex(var45, (var3 as f64) + 0.0, var41, var23, var31);
+                    self.vertex(var47, (var3 as f64) + 0.0, var41, var25, var31);
+                    self.vertex(var47, (var3 as f64) + 1.0, var41, var25, var27);
+                    self.vertex(var47, (var3 as f64) + 1.0, var41, var23, var27);
+                    self.vertex(var47, (var3 as f64) + 0.0, var41, var23, var31);
+                    self.vertex(var45, (var3 as f64) + 0.0, var41, var25, var31);
+                    self.vertex(var45, (var3 as f64) + 1.0, var41, var25, var27);
+                }
+                if var57 || var3 < var5 - 1 && self.is_air(var2, var3 + 1, var4 - 1) {
+                    self.vertex(var45, (var3 as f64) + 1.0 + 0.005, var39, var25, var27);
+                    self.vertex(var45, (var3 as f64) + 1.0 + 0.005, var41, var25, var29);
+                    self.vertex(var47, (var3 as f64) + 1.0 + 0.005, var41, var23, var29);
+                    self.vertex(var47, (var3 as f64) + 1.0 + 0.005, var39, var23, var27);
+                    self.vertex(var45, (var3 as f64) + 1.0 + 0.005, var41, var25, var27);
+                    self.vertex(var45, (var3 as f64) + 1.0 + 0.005, var39, var25, var29);
+                    self.vertex(var47, (var3 as f64) + 1.0 + 0.005, var39, var23, var29);
+                    self.vertex(var47, (var3 as f64) + 1.0 + 0.005, var41, var23, var27);
+                }
+                if var58 || var3 > 1 && self.is_air(var2, var3 - 1, var4 - 1) {
+                    self.vertex(var45, (var3 as f64) - 0.005, var39, var25, var27);
+                    self.vertex(var45, (var3 as f64) - 0.005, var41, var25, var29);
+                    self.vertex(var47, (var3 as f64) - 0.005, var41, var23, var29);
+                    self.vertex(var47, (var3 as f64) - 0.005, var39, var23, var27);
+                    self.vertex(var45, (var3 as f64) - 0.005, var41, var25, var27);
+                    self.vertex(var45, (var3 as f64) - 0.005, var39, var25, var29);
+                    self.vertex(var47, (var3 as f64) - 0.005, var39, var23, var29);
+                    self.vertex(var47, (var3 as f64) - 0.005, var41, var23, var27);
+                }
+            } else if !var53 && var54 {
+                self.vertex(var35, (var3 as f64) + 1.0, var41, var15, var19);
+                self.vertex(var35, (var3 as f64) + 0.0, var41, var15, var21);
+                self.vertex(var35, (var3 as f64) + 0.0, var43, var17, var21);
+                self.vertex(var35, (var3 as f64) + 1.0, var43, var17, var19);
+                self.vertex(var35, (var3 as f64) + 1.0, var43, var15, var19);
+                self.vertex(var35, (var3 as f64) + 0.0, var43, var15, var21);
+                self.vertex(var35, (var3 as f64) + 0.0, var41, var17, var21);
+                self.vertex(var35, (var3 as f64) + 1.0, var41, var17, var19);
+                if !var56 && !var55 {
+                    self.vertex(var47, (var3 as f64) + 1.0, var41, var23, var27);
+                    self.vertex(var47, (var3 as f64) + 0.0, var41, var23, var31);
+                    self.vertex(var45, (var3 as f64) + 0.0, var41, var25, var31);
+                    self.vertex(var45, (var3 as f64) + 1.0, var41, var25, var27);
+                    self.vertex(var45, (var3 as f64) + 1.0, var41, var23, var27);
+                    self.vertex(var45, (var3 as f64) + 0.0, var41, var23, var31);
+                    self.vertex(var47, (var3 as f64) + 0.0, var41, var25, var31);
+                    self.vertex(var47, (var3 as f64) + 1.0, var41, var25, var27);
+                }
+                if var57 || var3 < var5 - 1 && self.is_air(var2, var3 + 1, var4 + 1) {
+                    self.vertex(var45, (var3 as f64) + 1.0 + 0.005, var41, var23, var29);
+                    self.vertex(var45, (var3 as f64) + 1.0 + 0.005, var43, var23, var31);
+                    self.vertex(var47, (var3 as f64) + 1.0 + 0.005, var43, var25, var31);
+                    self.vertex(var47, (var3 as f64) + 1.0 + 0.005, var41, var25, var29);
+                    self.vertex(var45, (var3 as f64) + 1.0 + 0.005, var43, var23, var29);
+                    self.vertex(var45, (var3 as f64) + 1.0 + 0.005, var41, var23, var31);
+                    self.vertex(var47, (var3 as f64) + 1.0 + 0.005, var41, var25, var31);
+                    self.vertex(var47, (var3 as f64) + 1.0 + 0.005, var43, var25, var29);
+                }
+                if var58 || var3 > 1 && self.is_air(var2, var3 - 1, var4 + 1) {
+                    self.vertex(var45, (var3 as f64) - 0.005, var41, var23, var29);
+                    self.vertex(var45, (var3 as f64) - 0.005, var43, var23, var31);
+                    self.vertex(var47, (var3 as f64) - 0.005, var43, var25, var31);
+                    self.vertex(var47, (var3 as f64) - 0.005, var41, var25, var29);
+                    self.vertex(var45, (var3 as f64) - 0.005, var43, var23, var29);
+                    self.vertex(var45, (var3 as f64) - 0.005, var41, var23, var31);
+                    self.vertex(var47, (var3 as f64) - 0.005, var41, var25, var31);
+                    self.vertex(var47, (var3 as f64) - 0.005, var43, var25, var29);
+                }
+            }
+        } else {
+            self.vertex(var35, (var3 as f64) + 1.0, var43, var66, var19);
+            self.vertex(var35, (var3 as f64) + 0.0, var43, var66, var21);
+            self.vertex(var35, (var3 as f64) + 0.0, var39, var17, var21);
+            self.vertex(var35, (var3 as f64) + 1.0, var39, var17, var19);
+            self.vertex(var35, (var3 as f64) + 1.0, var39, var66, var19);
+            self.vertex(var35, (var3 as f64) + 0.0, var39, var66, var21);
+            self.vertex(var35, (var3 as f64) + 0.0, var43, var17, var21);
+            self.vertex(var35, (var3 as f64) + 1.0, var43, var17, var19);
+            if var57 {
+                self.vertex(var47, (var3 as f64) + 1.0 + 0.005, var43, var25, var31);
+                self.vertex(var47, (var3 as f64) + 1.0 + 0.005, var39, var25, var27);
+                self.vertex(var45, (var3 as f64) + 1.0 + 0.005, var39, var23, var27);
+                self.vertex(var45, (var3 as f64) + 1.0 + 0.005, var43, var23, var31);
+                self.vertex(var47, (var3 as f64) + 1.0 + 0.005, var39, var25, var31);
+                self.vertex(var47, (var3 as f64) + 1.0 + 0.005, var43, var25, var27);
+                self.vertex(var45, (var3 as f64) + 1.0 + 0.005, var43, var23, var27);
+                self.vertex(var45, (var3 as f64) + 1.0 + 0.005, var39, var23, var31);
+            } else {
+                if var3 < var5 - 1 && self.is_air(var2, var3 + 1, var4 - 1) {
+                    self.vertex(var45, (var3 as f64) + 1.0 + 0.005, var39, var25, var27);
+                    self.vertex(var45, (var3 as f64) + 1.0 + 0.005, var41, var25, var29);
+                    self.vertex(var47, (var3 as f64) + 1.0 + 0.005, var41, var23, var29);
+                    self.vertex(var47, (var3 as f64) + 1.0 + 0.005, var39, var23, var27);
+                    self.vertex(var45, (var3 as f64) + 1.0 + 0.005, var41, var25, var27);
+                    self.vertex(var45, (var3 as f64) + 1.0 + 0.005, var39, var25, var29);
+                    self.vertex(var47, (var3 as f64) + 1.0 + 0.005, var39, var23, var29);
+                    self.vertex(var47, (var3 as f64) + 1.0 + 0.005, var41, var23, var27);
+                }
+                if var3 < var5 - 1 && self.is_air(var2, var3 + 1, var4 + 1) {
+                    self.vertex(var45, (var3 as f64) + 1.0 + 0.005, var41, var23, var29);
+                    self.vertex(var45, (var3 as f64) + 1.0 + 0.005, var43, var23, var31);
+                    self.vertex(var47, (var3 as f64) + 1.0 + 0.005, var43, var25, var31);
+                    self.vertex(var47, (var3 as f64) + 1.0 + 0.005, var41, var25, var29);
+                    self.vertex(var45, (var3 as f64) + 1.0 + 0.005, var43, var23, var29);
+                    self.vertex(var45, (var3 as f64) + 1.0 + 0.005, var41, var23, var31);
+                    self.vertex(var47, (var3 as f64) + 1.0 + 0.005, var41, var25, var31);
+                    self.vertex(var47, (var3 as f64) + 1.0 + 0.005, var43, var25, var29);
+                }
+            }
+            if var58 {
+                self.vertex(var47, (var3 as f64) - 0.005, var43, var25, var31);
+                self.vertex(var47, (var3 as f64) - 0.005, var39, var25, var27);
+                self.vertex(var45, (var3 as f64) - 0.005, var39, var23, var27);
+                self.vertex(var45, (var3 as f64) - 0.005, var43, var23, var31);
+                self.vertex(var47, (var3 as f64) - 0.005, var39, var25, var31);
+                self.vertex(var47, (var3 as f64) - 0.005, var43, var25, var27);
+                self.vertex(var45, (var3 as f64) - 0.005, var43, var23, var27);
+                self.vertex(var45, (var3 as f64) - 0.005, var39, var23, var31);
+            } else {
+                if var3 > 1 && self.is_air(var2, var3 - 1, var4 - 1) {
+                    self.vertex(var45, (var3 as f64) - 0.005, var39, var25, var27);
+                    self.vertex(var45, (var3 as f64) - 0.005, var41, var25, var29);
+                    self.vertex(var47, (var3 as f64) - 0.005, var41, var23, var29);
+                    self.vertex(var47, (var3 as f64) - 0.005, var39, var23, var27);
+                    self.vertex(var45, (var3 as f64) - 0.005, var41, var25, var27);
+                    self.vertex(var45, (var3 as f64) - 0.005, var39, var25, var29);
+                    self.vertex(var47, (var3 as f64) - 0.005, var39, var23, var29);
+                    self.vertex(var47, (var3 as f64) - 0.005, var41, var23, var27);
+                }
+                if var3 > 1 && self.is_air(var2, var3 - 1, var4 + 1) {
+                    self.vertex(var45, (var3 as f64) - 0.005, var41, var23, var29);
+                    self.vertex(var45, (var3 as f64) - 0.005, var43, var23, var31);
+                    self.vertex(var47, (var3 as f64) - 0.005, var43, var25, var31);
+                    self.vertex(var47, (var3 as f64) - 0.005, var41, var25, var29);
+                    self.vertex(var45, (var3 as f64) - 0.005, var43, var23, var29);
+                    self.vertex(var45, (var3 as f64) - 0.005, var41, var23, var31);
+                    self.vertex(var47, (var3 as f64) - 0.005, var41, var25, var31);
+                    self.vertex(var47, (var3 as f64) - 0.005, var43, var25, var29);
+                }
+            }
+        }
+        true
+    }
+
+    /// `renderBlockStainedGlassPane`; `links` as for `render_block_pane`.
+    pub fn render_block_stained_glass_pane(
+        &mut self,
+        x: i32,
+        y: i32,
+        z: i32,
+        links: [bool; 4],
+    ) -> bool {
+        let (var2, var3, var4) = (x, y, z);
+        let var5 = 256;
+        let b = self.mixed(x, y, z);
+        self.bright = b;
+        let c = self.color_multiplier(x, y, z);
+        self.color(c[0], c[1], c[2]);
+        let (var65, var66) = match self.overrideBlockTexture {
+            Some(o) => (o, o),
+            None => (self.side_icon(0), self.pane_top()),
+        };
+        let var68 = var65.min_u();
+        let var16 = var65.u(7.0);
+        let var18 = var65.u(9.0);
+        let var20 = var65.max_u();
+        let var22 = var65.min_v();
+        let var24 = var65.max_v();
+        let var26 = var66.u(7.0);
+        let var28 = var66.u(9.0);
+        let var30 = var66.min_v();
+        let var32 = var66.max_v();
+        let var34 = var66.v(7.0);
+        let var36 = var66.v(9.0);
+        let var38 = var2 as f64;
+        let var40 = (var2 + 1) as f64;
+        let var42 = var4 as f64;
+        let var44 = (var4 + 1) as f64;
+        let var46 = var2 as f64 + 0.5 - 0.0625;
+        let var48 = var2 as f64 + 0.5 + 0.0625;
+        let var50 = var4 as f64 + 0.5 - 0.0625;
+        let var52 = var4 as f64 + 0.5 + 0.0625;
+        let [var54, var55, var56, var57] = links;
+        let var58 = 0.001;
+        let var60 = 0.999;
+        let var62 = 0.001;
+        let var64 = !var54 && !var55 && !var56 && !var57;
+        if !var56 && !var64 {
+            if !var54 && !var55 {
+                self.vertex(var46, (var3 as f64) + 0.999, var50, var16, var22);
+                self.vertex(var46, (var3 as f64) + 0.001, var50, var16, var24);
+                self.vertex(var46, (var3 as f64) + 0.001, var52, var18, var24);
+                self.vertex(var46, (var3 as f64) + 0.999, var52, var18, var22);
+            }
+        } else if var56 && var57 {
+            if !var54 {
+                self.vertex(var40, (var3 as f64) + 0.999, var50, var20, var22);
+                self.vertex(var40, (var3 as f64) + 0.001, var50, var20, var24);
+                self.vertex(var38, (var3 as f64) + 0.001, var50, var68, var24);
+                self.vertex(var38, (var3 as f64) + 0.999, var50, var68, var22);
+            } else {
+                self.vertex(var46, (var3 as f64) + 0.999, var50, var16, var22);
+                self.vertex(var46, (var3 as f64) + 0.001, var50, var16, var24);
+                self.vertex(var38, (var3 as f64) + 0.001, var50, var68, var24);
+                self.vertex(var38, (var3 as f64) + 0.999, var50, var68, var22);
+                self.vertex(var40, (var3 as f64) + 0.999, var50, var20, var22);
+                self.vertex(var40, (var3 as f64) + 0.001, var50, var20, var24);
+                self.vertex(var48, (var3 as f64) + 0.001, var50, var18, var24);
+                self.vertex(var48, (var3 as f64) + 0.999, var50, var18, var22);
+            }
+            if !var55 {
+                self.vertex(var38, (var3 as f64) + 0.999, var52, var68, var22);
+                self.vertex(var38, (var3 as f64) + 0.001, var52, var68, var24);
+                self.vertex(var40, (var3 as f64) + 0.001, var52, var20, var24);
+                self.vertex(var40, (var3 as f64) + 0.999, var52, var20, var22);
+            } else {
+                self.vertex(var38, (var3 as f64) + 0.999, var52, var68, var22);
+                self.vertex(var38, (var3 as f64) + 0.001, var52, var68, var24);
+                self.vertex(var46, (var3 as f64) + 0.001, var52, var16, var24);
+                self.vertex(var46, (var3 as f64) + 0.999, var52, var16, var22);
+                self.vertex(var48, (var3 as f64) + 0.999, var52, var18, var22);
+                self.vertex(var48, (var3 as f64) + 0.001, var52, var18, var24);
+                self.vertex(var40, (var3 as f64) + 0.001, var52, var20, var24);
+                self.vertex(var40, (var3 as f64) + 0.999, var52, var20, var22);
+            }
+            self.vertex(var38, (var3 as f64) + 0.999, var52, var28, var30);
+            self.vertex(var40, (var3 as f64) + 0.999, var52, var28, var32);
+            self.vertex(var40, (var3 as f64) + 0.999, var50, var26, var32);
+            self.vertex(var38, (var3 as f64) + 0.999, var50, var26, var30);
+            self.vertex(var40, (var3 as f64) + 0.001, var52, var26, var32);
+            self.vertex(var38, (var3 as f64) + 0.001, var52, var26, var30);
+            self.vertex(var38, (var3 as f64) + 0.001, var50, var28, var30);
+            self.vertex(var40, (var3 as f64) + 0.001, var50, var28, var32);
+        } else {
+            if !var54 && !var64 {
+                self.vertex(var48, (var3 as f64) + 0.999, var50, var18, var22);
+                self.vertex(var48, (var3 as f64) + 0.001, var50, var18, var24);
+                self.vertex(var38, (var3 as f64) + 0.001, var50, var68, var24);
+                self.vertex(var38, (var3 as f64) + 0.999, var50, var68, var22);
+            } else {
+                self.vertex(var46, (var3 as f64) + 0.999, var50, var16, var22);
+                self.vertex(var46, (var3 as f64) + 0.001, var50, var16, var24);
+                self.vertex(var38, (var3 as f64) + 0.001, var50, var68, var24);
+                self.vertex(var38, (var3 as f64) + 0.999, var50, var68, var22);
+            }
+            if !var55 && !var64 {
+                self.vertex(var38, (var3 as f64) + 0.999, var52, var68, var22);
+                self.vertex(var38, (var3 as f64) + 0.001, var52, var68, var24);
+                self.vertex(var48, (var3 as f64) + 0.001, var52, var18, var24);
+                self.vertex(var48, (var3 as f64) + 0.999, var52, var18, var22);
+            } else {
+                self.vertex(var38, (var3 as f64) + 0.999, var52, var68, var22);
+                self.vertex(var38, (var3 as f64) + 0.001, var52, var68, var24);
+                self.vertex(var46, (var3 as f64) + 0.001, var52, var16, var24);
+                self.vertex(var46, (var3 as f64) + 0.999, var52, var16, var22);
+            }
+            self.vertex(var38, (var3 as f64) + 0.999, var52, var28, var30);
+            self.vertex(var46, (var3 as f64) + 0.999, var52, var28, var34);
+            self.vertex(var46, (var3 as f64) + 0.999, var50, var26, var34);
+            self.vertex(var38, (var3 as f64) + 0.999, var50, var26, var30);
+            self.vertex(var46, (var3 as f64) + 0.001, var52, var26, var34);
+            self.vertex(var38, (var3 as f64) + 0.001, var52, var26, var30);
+            self.vertex(var38, (var3 as f64) + 0.001, var50, var28, var30);
+            self.vertex(var46, (var3 as f64) + 0.001, var50, var28, var34);
+        }
+        if (var57 || var64) && !var56 {
+            if !var55 && !var64 {
+                self.vertex(var46, (var3 as f64) + 0.999, var52, var16, var22);
+                self.vertex(var46, (var3 as f64) + 0.001, var52, var16, var24);
+                self.vertex(var40, (var3 as f64) + 0.001, var52, var20, var24);
+                self.vertex(var40, (var3 as f64) + 0.999, var52, var20, var22);
+            } else {
+                self.vertex(var48, (var3 as f64) + 0.999, var52, var18, var22);
+                self.vertex(var48, (var3 as f64) + 0.001, var52, var18, var24);
+                self.vertex(var40, (var3 as f64) + 0.001, var52, var20, var24);
+                self.vertex(var40, (var3 as f64) + 0.999, var52, var20, var22);
+            }
+            if !var54 && !var64 {
+                self.vertex(var40, (var3 as f64) + 0.999, var50, var20, var22);
+                self.vertex(var40, (var3 as f64) + 0.001, var50, var20, var24);
+                self.vertex(var46, (var3 as f64) + 0.001, var50, var16, var24);
+                self.vertex(var46, (var3 as f64) + 0.999, var50, var16, var22);
+            } else {
+                self.vertex(var40, (var3 as f64) + 0.999, var50, var20, var22);
+                self.vertex(var40, (var3 as f64) + 0.001, var50, var20, var24);
+                self.vertex(var48, (var3 as f64) + 0.001, var50, var18, var24);
+                self.vertex(var48, (var3 as f64) + 0.999, var50, var18, var22);
+            }
+            self.vertex(var48, (var3 as f64) + 0.999, var52, var28, var36);
+            self.vertex(var40, (var3 as f64) + 0.999, var52, var28, var30);
+            self.vertex(var40, (var3 as f64) + 0.999, var50, var26, var30);
+            self.vertex(var48, (var3 as f64) + 0.999, var50, var26, var36);
+            self.vertex(var40, (var3 as f64) + 0.001, var52, var26, var32);
+            self.vertex(var48, (var3 as f64) + 0.001, var52, var26, var36);
+            self.vertex(var48, (var3 as f64) + 0.001, var50, var28, var36);
+            self.vertex(var40, (var3 as f64) + 0.001, var50, var28, var32);
+        } else if !var57 && !var54 && !var55 {
+            self.vertex(var48, (var3 as f64) + 0.999, var52, var16, var22);
+            self.vertex(var48, (var3 as f64) + 0.001, var52, var16, var24);
+            self.vertex(var48, (var3 as f64) + 0.001, var50, var18, var24);
+            self.vertex(var48, (var3 as f64) + 0.999, var50, var18, var22);
+        }
+        if !var54 && !var64 {
+            if !var57 && !var56 {
+                self.vertex(var48, (var3 as f64) + 0.999, var50, var18, var22);
+                self.vertex(var48, (var3 as f64) + 0.001, var50, var18, var24);
+                self.vertex(var46, (var3 as f64) + 0.001, var50, var16, var24);
+                self.vertex(var46, (var3 as f64) + 0.999, var50, var16, var22);
+            }
+        } else if var54 && var55 {
+            if !var56 {
+                self.vertex(var46, (var3 as f64) + 0.999, var42, var68, var22);
+                self.vertex(var46, (var3 as f64) + 0.001, var42, var68, var24);
+                self.vertex(var46, (var3 as f64) + 0.001, var44, var20, var24);
+                self.vertex(var46, (var3 as f64) + 0.999, var44, var20, var22);
+            } else {
+                self.vertex(var46, (var3 as f64) + 0.999, var42, var68, var22);
+                self.vertex(var46, (var3 as f64) + 0.001, var42, var68, var24);
+                self.vertex(var46, (var3 as f64) + 0.001, var50, var16, var24);
+                self.vertex(var46, (var3 as f64) + 0.999, var50, var16, var22);
+                self.vertex(var46, (var3 as f64) + 0.999, var52, var18, var22);
+                self.vertex(var46, (var3 as f64) + 0.001, var52, var18, var24);
+                self.vertex(var46, (var3 as f64) + 0.001, var44, var20, var24);
+                self.vertex(var46, (var3 as f64) + 0.999, var44, var20, var22);
+            }
+            if !var57 {
+                self.vertex(var48, (var3 as f64) + 0.999, var44, var20, var22);
+                self.vertex(var48, (var3 as f64) + 0.001, var44, var20, var24);
+                self.vertex(var48, (var3 as f64) + 0.001, var42, var68, var24);
+                self.vertex(var48, (var3 as f64) + 0.999, var42, var68, var22);
+            } else {
+                self.vertex(var48, (var3 as f64) + 0.999, var50, var16, var22);
+                self.vertex(var48, (var3 as f64) + 0.001, var50, var16, var24);
+                self.vertex(var48, (var3 as f64) + 0.001, var42, var68, var24);
+                self.vertex(var48, (var3 as f64) + 0.999, var42, var68, var22);
+                self.vertex(var48, (var3 as f64) + 0.999, var44, var20, var22);
+                self.vertex(var48, (var3 as f64) + 0.001, var44, var20, var24);
+                self.vertex(var48, (var3 as f64) + 0.001, var52, var18, var24);
+                self.vertex(var48, (var3 as f64) + 0.999, var52, var18, var22);
+            }
+            self.vertex(var48, (var3 as f64) + 0.999, var42, var28, var30);
+            self.vertex(var46, (var3 as f64) + 0.999, var42, var26, var30);
+            self.vertex(var46, (var3 as f64) + 0.999, var44, var26, var32);
+            self.vertex(var48, (var3 as f64) + 0.999, var44, var28, var32);
+            self.vertex(var46, (var3 as f64) + 0.001, var42, var26, var30);
+            self.vertex(var48, (var3 as f64) + 0.001, var42, var28, var30);
+            self.vertex(var48, (var3 as f64) + 0.001, var44, var28, var32);
+            self.vertex(var46, (var3 as f64) + 0.001, var44, var26, var32);
+        } else {
+            if !var56 && !var64 {
+                self.vertex(var46, (var3 as f64) + 0.999, var42, var68, var22);
+                self.vertex(var46, (var3 as f64) + 0.001, var42, var68, var24);
+                self.vertex(var46, (var3 as f64) + 0.001, var52, var18, var24);
+                self.vertex(var46, (var3 as f64) + 0.999, var52, var18, var22);
+            } else {
+                self.vertex(var46, (var3 as f64) + 0.999, var42, var68, var22);
+                self.vertex(var46, (var3 as f64) + 0.001, var42, var68, var24);
+                self.vertex(var46, (var3 as f64) + 0.001, var50, var16, var24);
+                self.vertex(var46, (var3 as f64) + 0.999, var50, var16, var22);
+            }
+            if !var57 && !var64 {
+                self.vertex(var48, (var3 as f64) + 0.999, var52, var18, var22);
+                self.vertex(var48, (var3 as f64) + 0.001, var52, var18, var24);
+                self.vertex(var48, (var3 as f64) + 0.001, var42, var68, var24);
+                self.vertex(var48, (var3 as f64) + 0.999, var42, var68, var22);
+            } else {
+                self.vertex(var48, (var3 as f64) + 0.999, var50, var16, var22);
+                self.vertex(var48, (var3 as f64) + 0.001, var50, var16, var24);
+                self.vertex(var48, (var3 as f64) + 0.001, var42, var68, var24);
+                self.vertex(var48, (var3 as f64) + 0.999, var42, var68, var22);
+            }
+            self.vertex(var48, (var3 as f64) + 0.999, var42, var28, var30);
+            self.vertex(var46, (var3 as f64) + 0.999, var42, var26, var30);
+            self.vertex(var46, (var3 as f64) + 0.999, var50, var26, var34);
+            self.vertex(var48, (var3 as f64) + 0.999, var50, var28, var34);
+            self.vertex(var46, (var3 as f64) + 0.001, var42, var26, var30);
+            self.vertex(var48, (var3 as f64) + 0.001, var42, var28, var30);
+            self.vertex(var48, (var3 as f64) + 0.001, var50, var28, var34);
+            self.vertex(var46, (var3 as f64) + 0.001, var50, var26, var34);
+        }
+        if (var55 || var64) && !var54 {
+            if !var56 && !var64 {
+                self.vertex(var46, (var3 as f64) + 0.999, var50, var16, var22);
+                self.vertex(var46, (var3 as f64) + 0.001, var50, var16, var24);
+                self.vertex(var46, (var3 as f64) + 0.001, var44, var20, var24);
+                self.vertex(var46, (var3 as f64) + 0.999, var44, var20, var22);
+            } else {
+                self.vertex(var46, (var3 as f64) + 0.999, var52, var18, var22);
+                self.vertex(var46, (var3 as f64) + 0.001, var52, var18, var24);
+                self.vertex(var46, (var3 as f64) + 0.001, var44, var20, var24);
+                self.vertex(var46, (var3 as f64) + 0.999, var44, var20, var22);
+            }
+            if !var57 && !var64 {
+                self.vertex(var48, (var3 as f64) + 0.999, var44, var20, var22);
+                self.vertex(var48, (var3 as f64) + 0.001, var44, var20, var24);
+                self.vertex(var48, (var3 as f64) + 0.001, var50, var16, var24);
+                self.vertex(var48, (var3 as f64) + 0.999, var50, var16, var22);
+            } else {
+                self.vertex(var48, (var3 as f64) + 0.999, var44, var20, var22);
+                self.vertex(var48, (var3 as f64) + 0.001, var44, var20, var24);
+                self.vertex(var48, (var3 as f64) + 0.001, var52, var18, var24);
+                self.vertex(var48, (var3 as f64) + 0.999, var52, var18, var22);
+            }
+            self.vertex(var48, (var3 as f64) + 0.999, var52, var28, var36);
+            self.vertex(var46, (var3 as f64) + 0.999, var52, var26, var36);
+            self.vertex(var46, (var3 as f64) + 0.999, var44, var26, var32);
+            self.vertex(var48, (var3 as f64) + 0.999, var44, var28, var32);
+            self.vertex(var46, (var3 as f64) + 0.001, var52, var26, var36);
+            self.vertex(var48, (var3 as f64) + 0.001, var52, var28, var36);
+            self.vertex(var48, (var3 as f64) + 0.001, var44, var28, var32);
+            self.vertex(var46, (var3 as f64) + 0.001, var44, var26, var32);
+        } else if !var55 && !var57 && !var56 {
+            self.vertex(var46, (var3 as f64) + 0.999, var52, var16, var22);
+            self.vertex(var46, (var3 as f64) + 0.001, var52, var16, var24);
+            self.vertex(var48, (var3 as f64) + 0.001, var52, var18, var24);
+            self.vertex(var48, (var3 as f64) + 0.999, var52, var18, var22);
+        }
+        self.vertex(var48, (var3 as f64) + 0.999, var50, var28, var34);
+        self.vertex(var46, (var3 as f64) + 0.999, var50, var26, var34);
+        self.vertex(var46, (var3 as f64) + 0.999, var52, var26, var36);
+        self.vertex(var48, (var3 as f64) + 0.999, var52, var28, var36);
+        self.vertex(var46, (var3 as f64) + 0.001, var50, var26, var34);
+        self.vertex(var48, (var3 as f64) + 0.001, var50, var28, var34);
+        self.vertex(var48, (var3 as f64) + 0.001, var52, var28, var36);
+        self.vertex(var46, (var3 as f64) + 0.001, var52, var26, var36);
+        if var64 {
+            self.vertex(var38, (var3 as f64) + 0.999, var50, var16, var22);
+            self.vertex(var38, (var3 as f64) + 0.001, var50, var16, var24);
+            self.vertex(var38, (var3 as f64) + 0.001, var52, var18, var24);
+            self.vertex(var38, (var3 as f64) + 0.999, var52, var18, var22);
+            self.vertex(var40, (var3 as f64) + 0.999, var52, var16, var22);
+            self.vertex(var40, (var3 as f64) + 0.001, var52, var16, var24);
+            self.vertex(var40, (var3 as f64) + 0.001, var50, var18, var24);
+            self.vertex(var40, (var3 as f64) + 0.999, var50, var18, var22);
+            self.vertex(var48, (var3 as f64) + 0.999, var42, var18, var22);
+            self.vertex(var48, (var3 as f64) + 0.001, var42, var18, var24);
+            self.vertex(var46, (var3 as f64) + 0.001, var42, var16, var24);
+            self.vertex(var46, (var3 as f64) + 0.999, var42, var16, var22);
+            self.vertex(var46, (var3 as f64) + 0.999, var44, var16, var22);
+            self.vertex(var46, (var3 as f64) + 0.001, var44, var16, var24);
+            self.vertex(var48, (var3 as f64) + 0.001, var44, var18, var24);
+            self.vertex(var48, (var3 as f64) + 0.999, var44, var18, var22);
+        }
+        true
+    }
+}

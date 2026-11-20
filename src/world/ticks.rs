@@ -56,6 +56,8 @@ pub fn ticks_randomly(id: u8) -> bool {
             | block::WOODEN_BUTTON
             | block::STONE_PRESSURE_PLATE
             | block::WOODEN_PRESSURE_PLATE
+            | block::LIGHT_WEIGHTED_PRESSURE_PLATE
+            | block::HEAVY_WEIGHTED_PRESSURE_PLATE
             | block::DETECTOR_RAIL
             | block::TRIPWIRE
             | block::TRIPWIRE_HOOK
@@ -231,6 +233,8 @@ impl ServerWorld {
             | block::WOODEN_BUTTON
             | block::STONE_PRESSURE_PLATE
             | block::WOODEN_PRESSURE_PLATE
+            | block::LIGHT_WEIGHTED_PRESSURE_PLATE
+            | block::HEAVY_WEIGHTED_PRESSURE_PLATE
             | block::DETECTOR_RAIL
             | block::TRIPWIRE
             | block::TRIPWIRE_HOOK => self.update_tick(id, x, y, z, r),

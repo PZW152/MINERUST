@@ -284,7 +284,13 @@ pub fn fence_collision(get: Get, x: i32, y: i32, z: i32) -> Vec<Bx> {
 
 /// `BlockPane.canPaneConnectToBlock`
 fn pane_connects(own: u8, id: u8) -> bool {
-    block::info(id).full_block || id == own || id == block::GLASS
+    block::info(id).full_block
+        || id == own
+        || id == block::GLASS
+        || id == block::STAINED_GLASS
+        || id == block::STAINED_GLASS_PANE
+        // instanceof BlockPane
+        || block::info(id).shape == block::Shape::Pane
 }
 
 pub fn pane_links(get: Get, own: u8, x: i32, y: i32, z: i32) -> [bool; 4] {
@@ -513,7 +519,11 @@ pub fn static_boxes(id: u8, meta: u8) -> Vec<Bx> {
     match id {
         block::FARMLAND => vec![[0.0, 0.0, 0.0, 1.0, 0.9375, 1.0]],
         block::ENCHANTING_TABLE => vec![[0.0, 0.0, 0.0, 1.0, 0.75, 1.0]],
-        block::STONE_PRESSURE_PLATE | block::WOODEN_PRESSURE_PLATE => {
+        // BlockBasePressurePlate.setBlockBoundsFromMeta: pressed when powered
+        block::STONE_PRESSURE_PLATE
+        | block::WOODEN_PRESSURE_PLATE
+        | block::LIGHT_WEIGHTED_PRESSURE_PLATE
+        | block::HEAVY_WEIGHTED_PRESSURE_PLATE => {
             let h = if meta > 0 { 0.03125 } else { 0.0625 };
             vec![[0.0625, 0.0, 0.0625, 0.9375, h, 0.9375]]
         }

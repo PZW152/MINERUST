@@ -1359,7 +1359,10 @@ impl Play {
                     };
                 }
             }
-            block::STONE_PRESSURE_PLATE | block::WOODEN_PRESSURE_PLATE => {
+            block::STONE_PRESSURE_PLATE
+            | block::WOODEN_PRESSURE_PLATE
+            | block::LIGHT_WEIGHTED_PRESSURE_PLATE
+            | block::HEAVY_WEIGHTED_PRESSURE_PLATE => {
                 if !w.solid_top_surface(p[0], p[1] - 1, p[2])
                     && !matches!(
                         w.block(p[0], p[1] - 1, p[2]),

@@ -54,6 +54,10 @@ pub struct Occupant {
     pub minecart: bool,
     /// An `EntityArrow` (wooden buttons)
     pub arrow: bool,
+    /// Calls `doBlockCollisions` (`func_145775_I`) as it moves, so it
+    /// presses plates and buttons itself; `EntityThrowable`s do not, but
+    /// are still counted by a weighted plate's `getEntitiesWithinAABB`.
+    pub collides: bool,
 }
 
 pub fn can_provide_power(id: u8) -> bool {
@@ -67,6 +71,8 @@ pub fn can_provide_power(id: u8) -> bool {
             | WOODEN_BUTTON
             | STONE_PRESSURE_PLATE
             | WOODEN_PRESSURE_PLATE
+            | LIGHT_WEIGHTED_PRESSURE_PLATE
+            | HEAVY_WEIGHTED_PRESSURE_PLATE
             | UNPOWERED_REPEATER
             | POWERED_REPEATER
             | REDSTONE_BLOCK
@@ -150,6 +156,8 @@ impl ServerWorld {
                     0
                 }
             }
+            // BlockPressurePlateWeighted.getPowerFromMeta
+            LIGHT_WEIGHTED_PRESSURE_PLATE | HEAVY_WEIGHTED_PRESSURE_PLATE => m as i32,
             POWERED_REPEATER => {
                 let d = m & 3;
                 if (d == 0 && side == 3)
@@ -236,6 +244,13 @@ impl ServerWorld {
             STONE_PRESSURE_PLATE | WOODEN_PRESSURE_PLATE => {
                 if side == 1 && m == 1 {
                     15
+                } else {
+                    0
+                }
+            }
+            LIGHT_WEIGHTED_PRESSURE_PLATE | HEAVY_WEIGHTED_PRESSURE_PLATE => {
+                if side == 1 {
+                    m as i32
                 } else {
                     0
                 }
@@ -565,8 +580,11 @@ impl ServerWorld {
                     self.attached_neighbours(old, old_meta & 7, x, y, z);
                 }
             }
-            STONE_PRESSURE_PLATE | WOODEN_PRESSURE_PLATE => {
-                if old_meta == 1 {
+            STONE_PRESSURE_PLATE
+            | WOODEN_PRESSURE_PLATE
+            | LIGHT_WEIGHTED_PRESSURE_PLATE
+            | HEAVY_WEIGHTED_PRESSURE_PLATE => {
+                if plate_power(old, old_meta as i32) > 0 {
                     self.notify_neighbours(x, y, z, old);
                     self.notify_neighbours(x, y - 1, z, old);
                 }
@@ -630,7 +648,10 @@ impl ServerWorld {
                     self.drop_block(x, y, z, id as u16, 0);
                 }
             }
-            STONE_PRESSURE_PLATE | WOODEN_PRESSURE_PLATE => {
+            STONE_PRESSURE_PLATE
+            | WOODEN_PRESSURE_PLATE
+            | LIGHT_WEIGHTED_PRESSURE_PLATE
+            | HEAVY_WEIGHTED_PRESSURE_PLATE => {
                 if !self.solid_top_surface(x, y - 1, z) && self.block(x, y - 1, z) != FENCE {
                     self.drop_block(x, y, z, id as u16, 0);
                 }
@@ -777,9 +798,13 @@ impl ServerWorld {
                     ));
                 }
             }
-            STONE_PRESSURE_PLATE | WOODEN_PRESSURE_PLATE => {
-                if self.meta(x, y, z) == 1 {
-                    self.plate_update(id, x, y, z, 15);
+            STONE_PRESSURE_PLATE
+            | WOODEN_PRESSURE_PLATE
+            | LIGHT_WEIGHTED_PRESSURE_PLATE
+            | HEAVY_WEIGHTED_PRESSURE_PLATE => {
+                let p = plate_power(id, self.meta(x, y, z) as i32);
+                if p > 0 {
+                    self.plate_update(id, x, y, z, p);
                 }
             }
             DETECTOR_RAIL => {
@@ -1059,13 +1084,44 @@ impl ServerWorld {
             min: [x as f64 + 0.125, y as f64, z as f64 + 0.125],
             max: [x as f64 + 0.875, y as f64 + 0.25, z as f64 + 0.875],
         };
-        let any = self
-            .occupants
-            .iter()
-            .any(|o| (id == WOODEN_PRESSURE_PLATE || o.living) && o.bb.intersects(&sensitive));
-        let new_power = if any { 15 } else { 0 };
+        // getPlateState: BlockPressurePlate (everything / mobs) and
+        // BlockPressurePlateWeighted (how many entities, up to 15 or 150)
+        let inside = |o: &&Occupant| o.bb.intersects(&sensitive);
+        let new_power = match id {
+            LIGHT_WEIGHTED_PRESSURE_PLATE | HEAVY_WEIGHTED_PRESSURE_PLATE => {
+                let max = if id == LIGHT_WEIGHTED_PRESSURE_PLATE {
+                    15
+                } else {
+                    150
+                };
+                let n = (self.occupants.iter().filter(inside).count() as i32).min(max);
+                if n <= 0 {
+                    0
+                } else {
+                    let f = n.min(max) as f32 / max as f32;
+                    crate::util::math::ceiling_float_int(f * 15.0)
+                }
+            }
+            _ => {
+                let any = self
+                    .occupants
+                    .iter()
+                    .filter(inside)
+                    .any(|o| id == WOODEN_PRESSURE_PLATE || o.living);
+                if any {
+                    15
+                } else {
+                    0
+                }
+            }
+        };
+        let any = new_power > 0;
         if new_power != old_power {
-            self.set_meta(x, y, z, if any { 1 } else { 0 }, 2);
+            let meta = match id {
+                LIGHT_WEIGHTED_PRESSURE_PLATE | HEAVY_WEIGHTED_PRESSURE_PLATE => new_power,
+                _ => any as i32,
+            };
+            self.set_meta(x, y, z, meta as _, 2);
             self.notify_neighbours(x, y, z, id);
             self.notify_neighbours(x, y - 1, z, id);
         }
@@ -1078,7 +1134,9 @@ impl ServerWorld {
                 .push(Effect::Sound("random.click", c, 0.3, 0.6));
         }
         if any {
-            self.schedule_update(x, y, z, id, 20);
+            // tickRate: 20, BlockPressurePlateWeighted 10
+            let rate = if plate_power(id, 2) == 2 { 10 } else { 20 };
+            self.schedule_update(x, y, z, id, rate);
         }
     }
 
@@ -1198,7 +1256,7 @@ impl ServerWorld {
     pub fn redstone_entity_tick(&mut self) {
         let occ = std::mem::take(&mut self.occupants);
         let mut seen: Vec<(i32, i32, i32)> = Vec::new();
-        for o in &occ {
+        for o in occ.iter().filter(|o| o.collides) {
             let lo = [
                 o.bb.min[0] + 0.001,
                 o.bb.min[1] + 0.001,
@@ -1227,8 +1285,11 @@ impl ServerWorld {
             }
             let id = self.block(x, y, z);
             match id {
-                STONE_PRESSURE_PLATE | WOODEN_PRESSURE_PLATE => {
-                    if self.meta(x, y, z) == 0 {
+                STONE_PRESSURE_PLATE
+                | WOODEN_PRESSURE_PLATE
+                | LIGHT_WEIGHTED_PRESSURE_PLATE
+                | HEAVY_WEIGHTED_PRESSURE_PLATE => {
+                    if plate_power(id, self.meta(x, y, z) as i32) == 0 {
                         self.plate_update(id, x, y, z, 0);
                     }
                 }
@@ -1738,11 +1799,30 @@ fn repeater_delay(m: i32) -> i32 {
     [1, 2, 3, 4][((m & 12) >> 2) as usize] * 2
 }
 
+/// `BlockBasePressurePlate.getPowerFromMeta`
+pub fn plate_power(id: u8, meta: i32) -> i32 {
+    match id {
+        LIGHT_WEIGHTED_PRESSURE_PLATE | HEAVY_WEIGHTED_PRESSURE_PLATE => meta,
+        _ => {
+            if meta == 1 {
+                15
+            } else {
+                0
+            }
+        }
+    }
+}
+
 /// `Block.getMobilityFlag`: 0 pushed, 1 destroyed, 2 immovable.
 pub fn mobility(id: u8) -> i32 {
     use block::Material as M;
     match id {
-        STONE_PRESSURE_PLATE | WOODEN_PRESSURE_PLATE | WOODEN_DOOR | IRON_DOOR => 1,
+        STONE_PRESSURE_PLATE
+        | WOODEN_PRESSURE_PLATE
+        | LIGHT_WEIGHTED_PRESSURE_PLATE
+        | HEAVY_WEIGHTED_PRESSURE_PLATE
+        | WOODEN_DOOR
+        | IRON_DOOR => 1,
         RAIL | GOLDEN_RAIL | DETECTOR_RAIL => 0,
         _ => match block::material(id) {
             M::Water

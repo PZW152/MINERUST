@@ -510,6 +510,20 @@ impl Atlas {
             let t = extra(jar, n)?;
             names.insert(n, t);
         }
+        // BlockPane.getTopSprite / BlockStainedGlassPane.getTopSprite
+        for meta in 0..16u8 {
+            for id in [
+                block::GLASS_PANE,
+                block::STAINED_GLASS_PANE,
+                block::IRON_BARS,
+            ] {
+                let n = block::pane_top_texture(id, meta);
+                if !names.contains_key(n) {
+                    let t = extra(jar, n)?;
+                    names.insert(n, t);
+                }
+            }
+        }
         // BlockBrewingStand.iconBrewingStandBase
         let t = extra(jar, "brewing_stand_base")?;
         names.insert("brewing_stand_base", t);

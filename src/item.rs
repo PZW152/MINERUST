@@ -698,6 +698,8 @@ pub fn hardness(id: u8) -> f32 {
         | LEVER
         | STONE_PRESSURE_PLATE
         | WOODEN_PRESSURE_PLATE
+        | LIGHT_WEIGHTED_PRESSURE_PLATE
+        | HEAVY_WEIGHTED_PRESSURE_PLATE
         | STONE_BUTTON
         | WOODEN_BUTTON
         | SOUL_SAND
@@ -717,7 +719,7 @@ pub fn hardness(id: u8) -> f32 {
         STANDING_SIGN | WALL_SIGN => 1.0,
         ENCHANTING_TABLE => 5.0,
         ANVIL => 5.0,
-        GLOWSTONE | GLASS_PANE => 0.3,
+        GLOWSTONE | GLASS_PANE | STAINED_GLASS_PANE => 0.3,
         LIT_PUMPKIN => 1.0,
         END_PORTAL_FRAME => -1.0,
         CARPET => 0.1,
@@ -1045,7 +1047,7 @@ pub fn drops(id: u8, meta: i32, r: &mut JavaRandom) -> Vec<Stack> {
         BOOKSHELF => vec![Stack::new(340, 0, 3)],
         GLOWSTONE => vec![Stack::new(348, 0, 2 + r.next_int_n(3) as u32)],
         FARMLAND => one(DIRT as ItemId, 0),
-        GLASS_PANE | END_PORTAL_FRAME => Vec::new(),
+        GLASS_PANE | STAINED_GLASS_PANE | END_PORTAL_FRAME => Vec::new(),
         WHEAT | CARROTS | POTATOES => {
             // BlockCrops.getDrops (fortune 0)
             let mut v = Vec::new();
@@ -1074,6 +1076,8 @@ pub fn drops(id: u8, meta: i32, r: &mut JavaRandom) -> Vec<Stack> {
         | WOODEN_BUTTON
         | STONE_PRESSURE_PLATE
         | WOODEN_PRESSURE_PLATE
+        | LIGHT_WEIGHTED_PRESSURE_PLATE
+        | HEAVY_WEIGHTED_PRESSURE_PLATE
         | TRIPWIRE_HOOK
         | LADDER
         | FENCE

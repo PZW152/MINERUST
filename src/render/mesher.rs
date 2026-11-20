@@ -638,6 +638,8 @@ fn mesh_block(cx: &Ctx, out: &mut Vec<Vertex>, id: u8, meta: i32, x: i32, y: i32
                     | block::ENCHANTING_TABLE
                     | block::STONE_PRESSURE_PLATE
                     | block::WOODEN_PRESSURE_PLATE
+                    | block::LIGHT_WEIGHTED_PRESSURE_PLATE
+                    | block::HEAVY_WEIGHTED_PRESSURE_PLATE
                     | block::STONE_BUTTON
                     | block::WOODEN_BUTTON
                     | block::CARPET
@@ -1406,21 +1408,15 @@ fn shaped(cx: &Ctx, out: &mut Vec<Vertex>, id: u8, meta: i32, x: i32, y: i32, z:
             let [n, s, w, e] = shapes::fence_links(&get, x, y, z);
             rb::Rb::new(cx, out, id, meta).render_block_fence(x, y, z, [w, e, n, s]);
         }
+        // BlockPane.getRenderType: 41 for glass, 18 for iron bars
         Shape::Pane => {
-            let list = shapes::pane(&get, id, x, y, z);
-            let edge = cx.rect(id, meta, 0);
-            let face = cx.rect(id, meta, 2);
-            let tex = |bi: usize, f: usize| {
-                let b = list[bi];
-                let thin_x = b[3] - b[0] < 0.25;
-                let main = if thin_x {
-                    f == 4 || f == 5
-                } else {
-                    f == 2 || f == 3
-                };
-                if main { face } else { edge }.map(|t| (t, false))
-            };
-            boxes(cx, out, x, y, z, &list, &tex, white);
+            let links = shapes::pane_links(&get, id, x, y, z);
+            let mut rb = rb::Rb::new(cx, out, id, meta);
+            if block::material(id) == block::Material::Glass {
+                rb.render_block_stained_glass_pane(x, y, z, links);
+            } else {
+                rb.render_block_pane(x, y, z, links);
+            }
         }
         Shape::Door => {
             let full = shapes::door_full_meta(&get, x, y, z, m);

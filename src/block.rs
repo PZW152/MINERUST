@@ -114,6 +114,9 @@ pub const UNLIT_REDSTONE_TORCH: u8 = 75;
 pub const REDSTONE_TORCH: u8 = 76;
 pub const STONE_BUTTON: u8 = 77;
 pub const JUKEBOX: u8 = 84;
+pub const LIGHT_WEIGHTED_PRESSURE_PLATE: u8 = 147;
+pub const HEAVY_WEIGHTED_PRESSURE_PLATE: u8 = 148;
+pub const STAINED_GLASS_PANE: u8 = 160;
 pub const FENCE: u8 = 85;
 pub const NETHERRACK: u8 = 87;
 pub const SOUL_SAND: u8 = 88;
@@ -674,6 +677,10 @@ fn build() -> [BlockInfo; 256] {
     t[CAKE as usize] = base(Shape::Boxes, M::Cake, false);
     t[BED as usize] = base(Shape::Bed, M::Cloth, false);
     t[GLASS_PANE as usize] = base(Shape::Pane, M::Glass, false);
+    // BlockStainedGlassPane: render pass 1
+    let mut stained_pane = base(Shape::Pane, M::Glass, false);
+    stained_pane.translucent = true;
+    t[STAINED_GLASS_PANE as usize] = stained_pane;
     t[IRON_BARS as usize] = base(Shape::Pane, M::Iron, false);
     t[WOODEN_DOOR as usize] = base(Shape::Door, M::Wood, false);
     t[IRON_DOOR as usize] = base(Shape::Door, M::Iron, false);
@@ -706,6 +713,9 @@ fn build() -> [BlockInfo; 256] {
         (TRIPWIRE_HOOK, M::Circuits),
         (FLOWER_POT, M::Circuits),
         (CARPET, M::Carpet),
+        // BlockPressurePlateWeighted: Material.iron
+        (LIGHT_WEIGHTED_PRESSURE_PLATE, M::Iron),
+        (HEAVY_WEIGHTED_PRESSURE_PLATE, M::Iron),
     ] {
         t[id as usize] = base(Shape::Boxes, m, false);
     }
@@ -886,6 +896,44 @@ pub fn opaque_cube(id: u8) -> bool {
         return !crate::render::mesher::rb::fancy();
     }
     info(id).opaque
+}
+
+/// `BlockPane.getTopSprite` / `BlockStainedGlassPane.getTopSprite`: the
+/// strip drawn on a pane's edges.
+pub fn pane_top_texture(id: u8, meta: u8) -> &'static str {
+    match id {
+        STAINED_GLASS_PANE => [
+            "glass_pane_top_white",
+            "glass_pane_top_orange",
+            "glass_pane_top_magenta",
+            "glass_pane_top_light_blue",
+            "glass_pane_top_yellow",
+            "glass_pane_top_lime",
+            "glass_pane_top_pink",
+            "glass_pane_top_gray",
+            "glass_pane_top_silver",
+            "glass_pane_top_cyan",
+            "glass_pane_top_purple",
+            "glass_pane_top_blue",
+            "glass_pane_top_brown",
+            "glass_pane_top_green",
+            "glass_pane_top_red",
+            "glass_pane_top_black",
+        ][(meta & 15) as usize],
+        GLASS_PANE => "glass_pane_top",
+        _ => "iron_bars",
+    }
+}
+
+/// The block face whose texture a flat block item shows: the double
+/// plant's top, a pane's glass (`BlockPane.getItemIconName`,
+/// `ItemCloth.getIconFromDamage` with side 2), else the bottom.
+pub fn item_icon_face(id: u8) -> usize {
+    match id {
+        DOUBLE_PLANT => 1,
+        GLASS_PANE | STAINED_GLASS_PANE => 2,
+        _ => 0,
+    }
 }
 
 pub fn texture_name(id: u8, meta: u8, face: usize) -> Option<&'static str> {
@@ -1446,13 +1494,31 @@ pub fn texture_name(id: u8, meta: u8, face: usize) -> Option<&'static str> {
         .copied()
         .unwrap_or("stonebrick"),
         IRON_BARS => "iron_bars",
-        GLASS_PANE => {
-            if face < 2 {
-                "glass_pane_top"
-            } else {
-                "glass"
-            }
-        }
+        // BlockPressurePlateWeighted: the gold and iron block textures
+        LIGHT_WEIGHTED_PRESSURE_PLATE => "gold_block",
+        HEAVY_WEIGHTED_PRESSURE_PLATE => "iron_block",
+        // BlockStainedGlassPane.func_150104_b / getIcon
+        // BlockStainedGlassPane.getIcon: the glass, whatever the side
+        STAINED_GLASS_PANE => [
+            "glass_white",
+            "glass_orange",
+            "glass_magenta",
+            "glass_light_blue",
+            "glass_yellow",
+            "glass_lime",
+            "glass_pink",
+            "glass_gray",
+            "glass_silver",
+            "glass_cyan",
+            "glass_purple",
+            "glass_blue",
+            "glass_brown",
+            "glass_green",
+            "glass_red",
+            "glass_black",
+        ][(meta & 15) as usize],
+        // BlockPane.getIcon: the glass (the edge is getTopSprite)
+        GLASS_PANE => "glass",
         NETHER_BRICK => "nether_brick",
         BREWING_STAND => "brewing_stand",
         CAULDRON => {

@@ -316,6 +316,8 @@ pub fn neighbour_changed(w: &mut ServerWorld, x: i32, y: i32, z: i32, src: u8) {
                 | block::WOODEN_BUTTON
                 | block::STONE_PRESSURE_PLATE
                 | block::WOODEN_PRESSURE_PLATE
+                | block::LIGHT_WEIGHTED_PRESSURE_PLATE
+                | block::HEAVY_WEIGHTED_PRESSURE_PLATE
                 | block::REDSTONE_WIRE
                 | block::POWERED_REPEATER
                 | block::UNPOWERED_REPEATER

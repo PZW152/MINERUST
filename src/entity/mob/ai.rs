@@ -705,6 +705,8 @@ fn blocks_movement_free(w: &mut ServerWorld, x: i32, y: i32, z: i32) -> bool {
         // BlockBasePressurePlate, BlockSign
         block::STONE_PRESSURE_PLATE
         | block::WOODEN_PRESSURE_PLATE
+        | block::LIGHT_WEIGHTED_PRESSURE_PLATE
+        | block::HEAVY_WEIGHTED_PRESSURE_PLATE
         | block::STANDING_SIGN
         | block::WALL_SIGN => true,
         // BlockDoor: open

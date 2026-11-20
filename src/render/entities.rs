@@ -361,7 +361,7 @@ fn item_block(
 
 fn sprite_rect(atlas: &Atlas, s: &Stack) -> Option<[f32; 4]> {
     if let Some(b) = s.block() {
-        let face = if b == block::DOUBLE_PLANT { 1 } else { 0 };
+        let face = block::item_icon_face(b);
         return atlas.tile(b, s.meta as u8, face);
     }
     let meta = if crate::item::tool(s.id).is_some() {
