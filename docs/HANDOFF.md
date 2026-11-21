@@ -336,6 +336,10 @@ MINERUST_BENCH=10 minerust --seed 12345 --no-save --size 1920 1080 --distance 16
   `world.rand`。這種呼叫要設 `w.tick_rand_foreign = true`，tick 程式裡原版用 `world.rand` 的地方要經過
   `with_world_rand(r, ..)`。2026-11-14 到 11-20 之間岩漿流動的嘶嘶聲直接抽 `r`，把生成亂數打亂，`--compare-pop` 三個種子都不一致，
   直到 2026-11-20 才發現：**改到 tick、液體、方塊更新時一定要跑 `--compare-pop`**（`cargo test` 不包含它）。
+- **伺服器送來、每刻變化的動畫值不能直接配客戶端的 partial。** 兩個 20 Hz 時鐘相位不同，`prev + (cur - prev) * partial`
+  會前後跳（2026-11-13 的掉落物、2026-11-21 的死亡倒地與生物年齡都是這個原因）。原版在客戶端自己每刻推進這些值；
+  這裡的做法是伺服器的值先暫存，在客戶端 tick 才推進（`game.rs` 的 `MobAnim`），或像掉落物一樣改用伺服器時鐘的
+  partial（`server_partial`）。驗證方法：每幀記錄插值後的值，數「往回走」的次數，應為 0。
 - **使用者說某處「和原版不一樣」時**，先查原版原始碼確認原版確實不是這樣（例：1.7.10 拉桿本來就放不上 TNT）；
   再找有沒有繞過共用移植的手寫平行版本（2026-11-19/20 的燃燒傷害、腳步聲、頭轉 180 度都是這個原因）。
   稽核舊程式時，grep 原版的 `dropBlockAsItem`、`playSoundEffect`、`super.` 呼叫，確認每一個都有移植。

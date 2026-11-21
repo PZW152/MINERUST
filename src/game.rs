@@ -434,6 +434,9 @@ pub struct Game {
     dying: std::collections::HashSet<u32>,
     next_step: f32,
     mobs: Vec<crate::sim::MobView>,
+    /// The latest server values of the mobs' per-tick animation counters,
+    /// taken over one client tick at a time (see `merge_mobs`).
+    mob_net: std::collections::HashMap<u32, MobAnim>,
     arrows: Vec<crate::sim::ArrowView>,
     /// Primed TNT: position, previous position, fuse.
     tnt: Vec<([f64; 3], [f64; 3], i32)>,
@@ -754,6 +757,7 @@ impl Game {
             dying: Default::default(),
             next_step: 1.0,
             mobs: Vec::new(),
+            mob_net: Default::default(),
             arrows: Vec::new(),
             tnt: Vec::new(),
             fireballs: Vec::new(),
@@ -3801,8 +3805,21 @@ impl Game {
     fn merge_mobs(&mut self, list: Vec<crate::sim::MobView>) {
         let mut old: std::collections::HashMap<u32, crate::sim::MobView> =
             self.mobs.drain(..).map(|m| (m.id, m)).collect();
+        self.mob_net.clear();
         for mut v in list {
             let old_v = old.remove(&v.id);
+            // The animation counters (swing progress, creeper fuse, chicken
+            // wings, slime squish, squid, sheep eating, golem attack, age)
+            // are updated on the client's own ticks in the original; here
+            // they come from the server, so they are held and advanced one
+            // client tick at a time, keeping `prev + (cur - prev) * partial`
+            // on the client's clock.
+            self.mob_net.insert(v.id, MobAnim::of(&v));
+            if let Some(o) = &old_v {
+                if v.kind != crate::entity::mob::Kind::EnderDragon {
+                    MobAnim::keep(&mut v, o);
+                }
+            }
             if v.kind == crate::entity::mob::Kind::EnderDragon {
                 // EntityDragon moves by its own interpolation: server frames
                 self.mobs.push(v);
@@ -3835,6 +3852,13 @@ impl Game {
                     v.limb_swing = o.limb_swing;
                     v.limb_amount = o.limb_amount;
                     v.prev_limb_amount = o.prev_limb_amount;
+                    // EntityLivingBase.onDeathUpdate runs on the client too: once
+                    // the mob is dying the client counts deathTime on its own
+                    // ticks, so rotateCorpse's deathTime + partial stays on one
+                    // clock (the server's count arrives out of phase)
+                    if o.death_time > 0 {
+                        v.death_time = o.death_time;
+                    }
                 }
                 None => {
                     // handleSpawnMob: setPositionAndRotation at the packet's place
@@ -3883,6 +3907,13 @@ impl Game {
         for m in &mut self.mobs {
             if m.kind == crate::entity::mob::Kind::EnderDragon {
                 continue;
+            }
+            // onDeathUpdate: ++deathTime while dying (the body goes at 20)
+            if m.death_time > 0 && m.death_time < 20 {
+                m.death_time += 1;
+            }
+            if let Some(n) = self.mob_net.get(&m.id) {
+                n.advance(m);
             }
             m.prev = m.pos;
             m.prev_body_yaw = m.body_yaw;
@@ -6600,5 +6631,63 @@ pub(crate) fn update_body(m: &mut crate::sim::MobView, dx: f64, dz: f64) {
         if b * b > 2500.0 {
             m.body_yaw += b * 0.2;
         }
+    }
+}
+
+/// A mob's per-tick animation counters as the server last sent them.
+#[derive(Clone, Copy)]
+struct MobAnim {
+    swing: f32,
+    fuse: i32,
+    wing: f32,
+    squish: f32,
+    sq: [f32; 4],
+    eat_timer: i32,
+    attack_timer: i32,
+}
+
+impl MobAnim {
+    fn of(v: &crate::sim::MobView) -> MobAnim {
+        MobAnim {
+            swing: v.swing,
+            fuse: v.fuse,
+            wing: v.wing,
+            squish: v.squish[1],
+            sq: v.sq[1],
+            eat_timer: v.eat_timer,
+            attack_timer: v.attack_timer,
+        }
+    }
+
+    /// A new snapshot keeps the client's own counters.
+    fn keep(v: &mut crate::sim::MobView, o: &crate::sim::MobView) {
+        v.swing = o.swing;
+        v.prev_swing = o.prev_swing;
+        v.fuse = o.fuse;
+        v.prev_fuse = o.prev_fuse;
+        v.wing = o.wing;
+        v.prev_wing = o.prev_wing;
+        v.squish = o.squish;
+        v.sq = o.sq;
+        v.eat_timer = o.eat_timer;
+        v.attack_timer = o.attack_timer;
+        v.ticks = o.ticks;
+    }
+
+    /// One client tick: the previous values become the current ones and
+    /// the latest server values become current.
+    fn advance(&self, m: &mut crate::sim::MobView) {
+        m.prev_swing = m.swing;
+        m.swing = self.swing;
+        m.prev_fuse = m.fuse;
+        m.fuse = self.fuse;
+        m.prev_wing = m.wing;
+        m.wing = self.wing;
+        m.squish = [m.squish[1], self.squish];
+        m.sq = [m.sq[1], self.sq];
+        m.eat_timer = self.eat_timer;
+        m.attack_timer = self.attack_timer;
+        // Entity.onUpdate: ++ticksExisted on the client's own tick
+        m.ticks += 1;
     }
 }
