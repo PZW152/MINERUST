@@ -80,6 +80,7 @@ pub fn can_provide_power(id: u8) -> bool {
             | POWERED_REPEATER
             | UNPOWERED_COMPARATOR
             | POWERED_COMPARATOR
+            | DAYLIGHT_DETECTOR
             | REDSTONE_BLOCK
             | TRIPWIRE_HOOK
             | DETECTOR_RAIL
@@ -164,6 +165,8 @@ impl ServerWorld {
             }
             // BlockPressurePlateWeighted.getPowerFromMeta
             LIGHT_WEIGHTED_PRESSURE_PLATE | HEAVY_WEIGHTED_PRESSURE_PLATE => m as i32,
+            // BlockDaylightDetector.isProvidingWeakPower: the metadata
+            DAYLIGHT_DETECTOR => m as i32,
             // BlockRedstoneDiode.isProvidingWeakPower with the tile's output
             UNPOWERED_COMPARATOR | POWERED_COMPARATOR => {
                 let d = m & 3;
@@ -556,6 +559,10 @@ impl ServerWorld {
                 }
             }
             UNPOWERED_REPEATER | POWERED_REPEATER => self.repeater_neighbours(x, y, z),
+            // BlockContainer.onBlockAdded: the tile entity
+            DAYLIGHT_DETECTOR => {
+                self.daylight_detectors.insert([x, y, z]);
+            }
             // BlockRedstoneComparator.onBlockAdded: updateNeighbors, a new tile entity
             UNPOWERED_COMPARATOR | POWERED_COMPARATOR => {
                 self.repeater_neighbours(x, y, z);
@@ -618,6 +625,9 @@ impl ServerWorld {
             }
             UNPOWERED_REPEATER | POWERED_REPEATER => {
                 self.repeater_neighbours_dir(x, y, z, old_meta & 3);
+            }
+            DAYLIGHT_DETECTOR => {
+                self.daylight_detectors.remove(&[x, y, z]);
             }
             // BlockRedstoneComparator.breakBlock: the tile entity goes, then updateNeighbors
             UNPOWERED_COMPARATOR | POWERED_COMPARATOR => {

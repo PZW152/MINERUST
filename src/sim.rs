@@ -1537,6 +1537,7 @@ impl Sim {
         }
         let mut play = std::mem::replace(&mut self.play, Play::new(GameMode::Survival));
         play.tick(&mut self.world);
+        self.tick_daylight_detectors();
         // EntityFallingBlock.fall: attackEntityFrom(anvil / fallingBlock) on
         // every entity in the block's box
         for (bb, amount, anvil) in std::mem::take(&mut play.falling_hits) {
@@ -5631,6 +5632,28 @@ mod tests {
             }
             _ => panic!(),
         }
+    }
+
+    /// TileEntityDaylightDetector: every 20 ticks the sky light scaled by
+    /// the sun's angle; 15 at noon under open sky, 0 at midnight.
+    #[test]
+    fn daylight_detector_follows_the_sun() {
+        let (mut sim, x, y, z) = redstone_sim();
+        let feet = [x as f64 + 9.5, y as f64, z as f64 + 9.5];
+        let step = |sim: &mut Sim, n: usize| {
+            for _ in 0..n {
+                sim.step(&[Command::Player(feet, [0.0, 0.0], false)], &mut Vec::new());
+            }
+        };
+        let p = [x + 3, y, z + 3];
+        sim.world
+            .set_block(p[0], p[1], p[2], block::DAYLIGHT_DETECTOR, 0, 3);
+        step(&mut sim, 45);
+        assert_eq!(sim.world.meta(p[0], p[1], p[2]), 15, "noon, open sky");
+        assert_eq!(sim.world.weak_power(p[0], p[1], p[2], 2), 15);
+        sim.world_time = 18000;
+        step(&mut sim, 45);
+        assert_eq!(sim.world.meta(p[0], p[1], p[2]), 0, "midnight");
     }
 
     /// BlockRedstoneComparator reads Container.calcRedstoneFromInventory

@@ -9,6 +9,7 @@
 
 ## 2026-11-21
 
+- Daylight sensors: BlockDaylightDetector and its tile entity (every 20 ticks the sky light scaled by the sun's angle, power from the metadata, none in the Nether, saved as DLDetector)
 - `02854fa` Redstone comparators: BlockRedstoneComparator and TileEntityComparator (compare and subtract, reading containers through Container.calcRedstoneFromInventory, double chests, cakes, cauldrons, end portal frames, container minecarts on detector rails, through a solid block), renderBlockRedstoneComparator, saved OutputSignal; containers wake comparators when their slots change; repeaters are now locked by comparators and prioritise behind them as in isRedstoneRepeaterBlockID; droppers face away from the player when placed; shotcompare `comparator` scene
 
 ## 2026-11-20

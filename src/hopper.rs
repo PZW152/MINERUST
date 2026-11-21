@@ -536,6 +536,25 @@ impl Play {
         for (p, v) in w.comparators.iter() {
             self.tiles.insert(*p, Tile::Comparator { output: *v });
         }
+        // TileEntityDaylightDetector the same way
+        let loaded: Vec<Pos> = self
+            .tiles
+            .iter()
+            .filter(|(_, t)| matches!(t, Tile::Daylight))
+            .map(|(p, _)| *p)
+            .collect();
+        for p in loaded {
+            if w.peek_block(p[0], p[1], p[2]) != block::DAYLIGHT_DETECTOR {
+                if w.chunk_exists(p[0] >> 4, p[2] >> 4) {
+                    self.tiles.remove(&p);
+                }
+            } else {
+                w.daylight_detectors.insert(p);
+            }
+        }
+        for p in w.daylight_detectors.iter() {
+            self.tiles.insert(*p, Tile::Daylight);
+        }
     }
 
     /// `Container.calcRedstoneFromInventory` of every container for the

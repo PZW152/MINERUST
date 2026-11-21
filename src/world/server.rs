@@ -601,6 +601,8 @@ pub struct ServerWorld {
     pub occupants: Vec<super::redstone::Occupant>,
     /// `TileEntityComparator.outputSignal` by position.
     pub comparators: std::collections::BTreeMap<[i32; 3], i32>,
+    /// `TileEntityDaylightDetector` positions.
+    pub daylight_detectors: std::collections::BTreeSet<[i32; 3]>,
     /// `Container.calcRedstoneFromInventory` of the container tile entities
     /// (a chest as `BlockChest.getInventory` sees it), kept by `Play`.
     pub container_signal: std::collections::HashMap<[i32; 3], i32>,
@@ -664,6 +666,7 @@ impl ServerWorld {
             particles: Vec::new(),
             occupants: Vec::new(),
             comparators: Default::default(),
+            daylight_detectors: Default::default(),
             container_signal: Default::default(),
             ticking_now: Vec::new(),
         }

@@ -118,6 +118,7 @@ pub const LIGHT_WEIGHTED_PRESSURE_PLATE: u8 = 147;
 pub const HEAVY_WEIGHTED_PRESSURE_PLATE: u8 = 148;
 pub const STAINED_GLASS_PANE: u8 = 160;
 pub const HOPPER: u8 = 154;
+pub const DAYLIGHT_DETECTOR: u8 = 151;
 pub const UNPOWERED_COMPARATOR: u8 = 149;
 pub const POWERED_COMPARATOR: u8 = 150;
 pub const DROPPER: u8 = 158;
@@ -726,6 +727,8 @@ fn build() -> [BlockInfo; 256] {
         (CARPET, M::Carpet),
         // BlockPressurePlateWeighted: Material.iron
         (LIGHT_WEIGHTED_PRESSURE_PLATE, M::Iron),
+        // BlockDaylightDetector: Material.wood, 0.375 high
+        (DAYLIGHT_DETECTOR, M::Wood),
         (HEAVY_WEIGHTED_PRESSURE_PLATE, M::Iron),
     ] {
         t[id as usize] = base(Shape::Boxes, m, false);
@@ -1243,6 +1246,14 @@ pub fn texture_name(id: u8, meta: u8, face: usize) -> Option<&'static str> {
         ][((meta & 7) as usize).min(5)],
         SPONGE => "sponge",
         LAPIS_BLOCK => "lapis_block",
+        // BlockDaylightDetector.getIcon
+        DAYLIGHT_DETECTOR => {
+            if face == 1 {
+                "daylight_detector_top"
+            } else {
+                "daylight_detector_side"
+            }
+        }
         // BlockHopper.getIcon
         HOPPER => {
             if face == 1 {

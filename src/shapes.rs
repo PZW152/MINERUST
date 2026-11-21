@@ -519,6 +519,7 @@ pub fn static_boxes(id: u8, meta: u8) -> Vec<Bx> {
     match id {
         block::FARMLAND => vec![[0.0, 0.0, 0.0, 1.0, 0.9375, 1.0]],
         block::ENCHANTING_TABLE => vec![[0.0, 0.0, 0.0, 1.0, 0.75, 1.0]],
+        block::DAYLIGHT_DETECTOR => vec![[0.0, 0.0, 0.0, 1.0, 0.375, 1.0]],
         // BlockBasePressurePlate.setBlockBoundsFromMeta: pressed when powered
         block::STONE_PRESSURE_PLATE
         | block::WOODEN_PRESSURE_PLATE

@@ -693,6 +693,7 @@ pub fn hardness(id: u8) -> f32 {
         LAPIS_BLOCK | GOLD_BLOCK | END_STONE | WOODEN_DOOR | LIT_REDSTONE_ORE => 3.0,
         DISPENSER | DROPPER => 3.5,
         HOPPER => 3.0,
+        DAYLIGHT_DETECTOR => 0.2,
         NOTEBLOCK | WOOL | SANDSTONE_STAIRS | QUARTZ_BLOCK => 0.8,
         RAIL | GOLDEN_RAIL | DETECTOR_RAIL => 0.7,
         PISTON
@@ -1082,6 +1083,7 @@ pub fn drops(id: u8, meta: i32, r: &mut JavaRandom) -> Vec<Stack> {
         | WOODEN_PRESSURE_PLATE
         | LIGHT_WEIGHTED_PRESSURE_PLATE
         | HEAVY_WEIGHTED_PRESSURE_PLATE
+        | DAYLIGHT_DETECTOR
         | TRIPWIRE_HOOK
         | LADDER
         | FENCE

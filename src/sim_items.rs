@@ -205,3 +205,40 @@ impl Sim {
         }
     }
 }
+
+impl Sim {
+    /// `TileEntityDaylightDetector.updateEntity`: every 20 ticks,
+    /// `BlockDaylightDetector.updateOutputState` (no sky in the Nether).
+    pub(super) fn tick_daylight_detectors(&mut self) {
+        if self.world.total_time % 20 != 0 || self.dim == -1 {
+            return;
+        }
+        let ps: Vec<[i32; 3]> = self.world.daylight_detectors.iter().copied().collect();
+        for [x, y, z] in ps {
+            if !self.world.chunk_exists(x >> 4, z >> 4)
+                || self.world.block(x, y, z) != block::DAYLIGHT_DETECTOR
+            {
+                continue;
+            }
+            let m = self.world.meta(x, y, z) as i32;
+            let sky = self.world.saved_light(true, x, y, z) - self.world.skylight_subtracted;
+            // getCelestialAngleRadians(1.0F); the End's provider gives 0
+            let mut a = if self.dim == 1 {
+                0.0
+            } else {
+                super::celestial_angle(self.world_time, 1.0) * std::f32::consts::PI * 2.0
+            };
+            if a < std::f32::consts::PI {
+                a += (0.0 - a) * 0.2;
+            } else {
+                a += (std::f32::consts::PI * 2.0 - a) * 0.2;
+            }
+            // Math.round(float)
+            let v = ((sky as f32 * math::cos(a)) + 0.5).floor() as i32;
+            let v = v.clamp(0, 15);
+            if m != v {
+                self.world.set_meta(x, y, z, v as _, 3);
+            }
+        }
+    }
+}

@@ -33,6 +33,9 @@ pub enum Tile {
     /// `TileEntityComparator.outputSignal` (the live value is
     /// `ServerWorld::comparators`; this copy is what gets saved).
     Comparator { output: i32 },
+    /// `TileEntityDaylightDetector` (no data; the live set is
+    /// `ServerWorld::daylight_detectors`).
+    Daylight,
     /// `TileEntityHopper`
     Hopper {
         slots: [Option<Stack>; 5],
@@ -755,7 +758,10 @@ impl Play {
                 Tile::Dispenser { slots, .. } => slots.to_vec(),
                 Tile::Hopper { slots, .. } => slots.to_vec(),
                 Tile::Brewing { slots, .. } => slots.to_vec(),
-                Tile::Spawner { .. } | Tile::Sign { .. } | Tile::Comparator { .. } => Vec::new(),
+                Tile::Spawner { .. }
+                | Tile::Sign { .. }
+                | Tile::Comparator { .. }
+                | Tile::Daylight => Vec::new(),
             };
             for s in slots.into_iter().flatten() {
                 let mut rnd = std::mem::replace(&mut w.rand, JavaRandom::new(0));
@@ -2401,6 +2407,7 @@ impl Play {
                     Tile::Comparator { output } => {
                         ("Comparator", vec![("OutputSignal", Nbt::Int(*output))])
                     }
+                    Tile::Daylight => ("DLDetector", vec![]),
                     Tile::Hopper { slots, cooldown } => (
                         "Hopper",
                         vec![
@@ -2498,6 +2505,7 @@ impl Play {
                     dropper: id == "Dropper",
                 }
             }
+            "DLDetector" => Tile::Daylight,
             "Comparator" => Tile::Comparator {
                 output: t.int("OutputSignal").unwrap_or(0) as i32,
             },
@@ -2772,6 +2780,7 @@ impl Play {
                     format!("H,{},{},{},{},{}", p[0], p[1], p[2], cooldown, enc(slots))
                 }
                 Tile::Comparator { output } => format!("K,{},{},{},{}", p[0], p[1], p[2], output),
+                Tile::Daylight => format!("L,{},{},{}", p[0], p[1], p[2]),
                 Tile::Spawner { mob } => format!("S,{},{},{},{}", p[0], p[1], p[2], mob),
                 Tile::Sign { text, .. } => {
                     format!("G,{},{},{},{}", p[0], p[1], p[2], text.join("\u{1f}"))
@@ -2878,6 +2887,11 @@ impl Play {
                         dropper: f[0] == "R",
                     },
                 );
+            }
+            "L" => {
+                let f: Vec<&str> = line.splitn(4, ',').collect();
+                self.tiles
+                    .insert(pos(f[1], f[2], f[3].trim())?, Tile::Daylight);
             }
             "K" => {
                 let f: Vec<&str> = line.splitn(5, ',').collect();
