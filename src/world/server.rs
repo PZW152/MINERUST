@@ -802,33 +802,27 @@ impl ServerWorld {
 
     /// Unloads a chunk: to its file when the world has a save directory,
     /// otherwise into the compressed in-memory store.
-    pub fn unload_chunk(&mut self, cx: i32, cz: i32) {
+    pub fn unload_chunk(&mut self, cx: i32, cz: i32) -> std::io::Result<()> {
+        let key = (cx, cz);
+        let Some(chunk) = self.chunks.get(&key) else {
+            return Ok(());
+        };
         if self.anvil {
             if let Some(dir) = self.save_dir.clone() {
-                if self.chunks.contains_key(&(cx, cz)) {
-                    if let Err(e) = self.write_anvil_chunk(&dir, cx, cz, None) {
-                        eprintln!("failed to save chunk {cx},{cz}: {e}");
-                        return;
-                    }
-                    self.chunks.remove(&(cx, cz));
-                    return;
-                }
+                self.write_anvil_chunk(&dir, cx, cz, None)?;
+                self.chunks.remove(&key);
+                return Ok(());
             }
         }
-        if let Some(c) = self.chunks.remove(&(cx, cz)) {
-            let bytes = c.to_bytes();
-            match &self.save_dir {
-                Some(dir) => {
-                    if let Err(e) = crate::world::save::write_chunk(dir, cx, cz, &bytes) {
-                        eprintln!("failed to save chunk {cx},{cz}: {e}");
-                        self.stash.insert((cx, cz), bytes);
-                    }
-                }
-                None => {
-                    self.stash.insert((cx, cz), bytes);
-                }
+        let bytes = chunk.to_bytes();
+        match &self.save_dir {
+            Some(dir) => crate::world::save::write_chunk(dir, cx, cz, &bytes)?,
+            None => {
+                self.stash.insert(key, bytes);
             }
         }
+        self.chunks.remove(&key);
+        Ok(())
     }
 
     /// Writes a loaded chunk to its region file. The tile entity and entity

@@ -310,7 +310,7 @@ pub fn read_region_chunk(dir: &Path, cx: i32, cz: i32) -> Option<Nbt> {
     read_nbt(&raw).ok()
 }
 
-/// `RegionFile.write`: stores a chunk (zlib), reusing or appending sectors.
+/// Stores a zlib-compressed chunk, reusing unreferenced sectors or appending.
 pub fn write_region_chunk(dir: &Path, cx: i32, cz: i32, root: &Nbt, time: u32) -> io::Result<()> {
     let data = compress_chunk(root)?;
     write_region_batch(dir, &[(cx, cz, data)], time, false)
@@ -324,9 +324,9 @@ pub fn compress_chunk(root: &Nbt) -> io::Result<Vec<u8>> {
 }
 
 /// Writes compressed chunks into their region files: each file is opened
-/// once, its header read and written once. `sync` flushes each file to
-/// the disk at the end (a whole-world save); `RegionFile` itself never
-/// does, so single chunk writes do not either.
+/// once, its header read and written once. Existing sectors stay live until
+/// the new header is written. With `sync`, flush the data before publishing
+/// the header, then flush the header too.
 pub fn write_region_batch(
     dir: &Path,
     chunks: &[(i32, i32, Vec<u8>)],
@@ -335,6 +335,12 @@ pub fn write_region_batch(
 ) -> io::Result<()> {
     let mut by_region: BTreeMap<PathBuf, Vec<usize>> = BTreeMap::new();
     for (k, c) in chunks.iter().enumerate() {
+        if (c.2.len() + 5).div_ceil(4096) >= 256 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "chunk too large for a region",
+            ));
+        }
         by_region
             .entry(region_path(dir, c.0, c.1))
             .or_default()
@@ -378,32 +384,28 @@ pub fn write_region_batch(
         for k in list {
             let (cx, cz, data) = &chunks[k];
             let need = (data.len() + 5).div_ceil(4096);
-            if need >= 256 {
+            let i = ((cx & 31) + (cz & 31) * 32) as usize;
+            // The on-disk header still points to the old payloads. Reserve
+            // those sectors even when writing a replacement for one of them.
+            let mut at = 2;
+            let mut free = 0;
+            for &taken in &used[2..] {
+                if taken {
+                    at += free + 1;
+                    free = 0;
+                } else {
+                    free += 1;
+                    if free == need {
+                        break;
+                    }
+                }
+            }
+            if at > 0xFF_FF_FF {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
-                    "chunk too large for a region",
+                    "region sector offset exceeds 24 bits",
                 ));
             }
-            let i = ((cx & 31) + (cz & 31) * 32) as usize;
-            // its own old sectors are free for it
-            let (old, old_n) = span(&header, i);
-            for s in old..old + old_n {
-                if s >= 2 && s < used.len() {
-                    used[s] = false;
-                }
-            }
-            let free = |at: usize, used: &[bool]| {
-                (at..at + need).all(|s| !used.get(s).copied().unwrap_or(false))
-            };
-            let at = if old >= 2 && need <= old_n {
-                old
-            } else {
-                let mut s = 2;
-                while !free(s, &used) {
-                    s += 1;
-                }
-                s
-            };
             if used.len() < at + need {
                 used.resize(at + need, false);
             }
@@ -422,6 +424,9 @@ pub fn write_region_batch(
             header[i * 4 + 2] = at as u8;
             header[i * 4 + 3] = need as u8;
             header[4096 + i * 4..4096 + i * 4 + 4].copy_from_slice(&time.to_be_bytes());
+        }
+        if sync {
+            f.sync_data()?;
         }
         f.seek(SeekFrom::Start(0))?;
         f.write_all(&header)?;
@@ -661,5 +666,42 @@ mod tests {
         assert!(region_has(&dir, 0, 0));
         assert!(!region_has(&dir, 1, 0));
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn failed_region_batch_recovery() {
+        let dir =
+            std::env::temp_dir().join(format!("minerust-region-retry-{}", std::process::id()));
+        let original = compound(vec![("value", Nbt::Int(1))]);
+        let replacement = compound(vec![("value", Nbt::Int(2))]);
+        write_region_chunk(&dir, 0, 0, &original, 5).unwrap();
+        let data = compress_chunk(&replacement).unwrap();
+        let oversized = vec![0; 255 * 4096];
+        assert_eq!(
+            write_region_batch(&dir, &[(0, 0, data), (1, 0, oversized)], 6, true)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::InvalidData
+        );
+        assert_eq!(read_region_chunk(&dir, 0, 0), Some(original.clone()));
+        assert!(!region_has(&dir, 1, 0));
+
+        let path = region_path(&dir, 0, 0);
+        let previous_region = fs::read(&path).unwrap();
+        let old_offset = u32::from_be_bytes([
+            0,
+            previous_region[0],
+            previous_region[1],
+            previous_region[2],
+        ]) as usize
+            * 4096;
+        write_region_chunk(&dir, 0, 0, &replacement, 7).unwrap();
+        assert_eq!(read_region_chunk(&dir, 0, 0), Some(replacement));
+        let updated_region = fs::read(path).unwrap();
+        assert_eq!(
+            &updated_region[old_offset..old_offset + 4096],
+            &previous_region[old_offset..old_offset + 4096]
+        );
+        fs::remove_dir_all(dir).unwrap();
     }
 }

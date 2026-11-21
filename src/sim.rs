@@ -1458,8 +1458,15 @@ impl Sim {
             .collect();
         far.sort();
         for key in far {
-            self.world.unload_chunk(key.0, key.1);
-            self.unsaved.remove(&key);
+            match self.world.unload_chunk(key.0, key.1) {
+                Ok(()) => {
+                    self.unsaved.remove(&key);
+                }
+                Err(e) => {
+                    self.unsaved.insert(key);
+                    eprintln!("failed to save chunk {},{}: {e}", key.0, key.1);
+                }
+            }
         }
     }
 
@@ -2032,7 +2039,7 @@ impl Sim {
         let Some(dir) = world.save_dir.clone() else {
             return Ok(());
         };
-        let mut keys: std::collections::BTreeSet<(i32, i32)> = std::mem::take(unsaved);
+        let mut keys = unsaved.clone();
         keys.extend(touched.iter().copied());
         for p in play.tiles.keys() {
             keys.insert((p[0] >> 4, p[2] >> 4));
@@ -2097,6 +2104,7 @@ impl Sim {
             all.extend(part?);
         }
         anvil::write_region_batch(&dir, &all, (world.total_time / 20) as u32, true)?;
+        unsaved.clear();
         if n > 64 {
             println!(
                 "Saved {n} chunks of dimension {dim} in {:.2} s",
@@ -2135,6 +2143,8 @@ impl Sim {
             let mut tmp = Play::new(GameMode::Survival);
             tmp.tiles = p.tiles.clone();
             tmp.items = p.items.clone();
+            tmp.falling = p.falling.clone();
+            tmp.vehicles = p.vehicles.clone();
             Self::save_anvil_world(&mut p.world, &tmp, &p.mobs, &mut p.unsaved, &touched)?;
         }
         let mut root = self
@@ -2801,12 +2811,11 @@ impl Sim {
             vehicles: std::mem::replace(&mut self.play.vehicles, next.vehicles),
             teleport_rand: std::mem::replace(&mut self.teleport_rand, next.teleport_rand),
         };
-        // Unloaded chunks of the old dimension go to disk now.
-        if let Some(d) = old.world.save_dir.clone() {
-            for key in std::mem::take(&mut old.unsaved) {
-                if let Some(c) = old.world.chunks.get(&key) {
-                    let _ = save::write_chunk(&d, key.0, key.1, &c.to_bytes());
-                }
+        // Flush native-format chunks now. The Anvil save handles parked
+        // dimensions together with their entity and tile-entity lists.
+        if !old.world.anvil {
+            if let Err(e) = Self::save_legacy_chunks(&old.world, &mut old.unsaved) {
+                eprintln!("failed to save dimension {from}: {e}");
             }
         }
         self.parked.push(old);
@@ -3109,6 +3118,22 @@ impl Sim {
         self.world.rand = rnd;
     }
 
+    fn save_legacy_chunks(
+        world: &ServerWorld,
+        unsaved: &mut std::collections::BTreeSet<(i32, i32)>,
+    ) -> std::io::Result<()> {
+        let Some(dir) = &world.save_dir else {
+            return Ok(());
+        };
+        for &(cx, cz) in unsaved.iter() {
+            if let Some(chunk) = world.chunks.get(&(cx, cz)) {
+                save::write_chunk(dir, cx, cz, &chunk.to_bytes())?;
+            }
+        }
+        unsaved.clear();
+        Ok(())
+    }
+
     /// Writes the level file and every chunk changed since the last save.
     pub fn save(&mut self) -> std::io::Result<()> {
         let Some(base) = self.base_dir.clone() else {
@@ -3116,25 +3141,22 @@ impl Sim {
         };
         // ServerConfigurationManager.writePlayerData → saveStatFile
         self.stats_file.save_stat_file()?;
+        // Shutdown can apply commands and save before a tick reports changes.
+        self.unsaved.extend(self.world.dirty.keys().copied());
+        for p in &mut self.parked {
+            p.unsaved.extend(p.world.dirty.keys().copied());
+        }
         if self.world.anvil {
             return self.save_anvil();
         }
         // every dimension but the overworld keeps its own data folder
         let wdir = self.world.save_dir.clone().unwrap_or(base.clone());
-        for key in std::mem::take(&mut self.unsaved) {
-            if let Some(c) = self.world.chunks.get(&key) {
-                save::write_chunk(&wdir, key.0, key.1, &c.to_bytes())?;
-            }
-        }
+        Self::save_legacy_chunks(&self.world, &mut self.unsaved)?;
         for p in &mut self.parked {
             let Some(d) = p.world.save_dir.clone() else {
                 continue;
             };
-            for key in std::mem::take(&mut p.unsaved) {
-                if let Some(c) = p.world.chunks.get(&key) {
-                    save::write_chunk(&d, key.0, key.1, &c.to_bytes())?;
-                }
-            }
+            Self::save_legacy_chunks(&p.world, &mut p.unsaved)?;
             let data = d.join("data");
             std::fs::create_dir_all(&data)?;
             if let Some(st) = &p.world.structures {
@@ -4679,6 +4701,84 @@ mod tests {
         );
         let _ = hash_before;
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn failed_world_save_recovery() {
+        use std::fs;
+        for (anvil, subdir) in [(false, "chunks"), (true, "region")] {
+            let dir = std::env::temp_dir().join(format!(
+                "minerust-save-retry-{}-{subdir}",
+                std::process::id()
+            ));
+            fs::create_dir_all(&dir).unwrap();
+            let cfg = SimConfig {
+                seed: 77,
+                view: 2,
+                save_dir: Some(dir.clone()),
+                start_time: 0,
+                freeze_time: true,
+                mode: GameMode::Creative,
+            };
+            let (mut sim, _) = Sim::new(&cfg);
+            sim.world.anvil = anvil;
+            for x in [0, 16] {
+                sim.world.load_chunk(x >> 4, 0);
+                sim.world.set_block(x, 200, 0, block::STONE, 0, 2);
+                sim.unsaved.insert((x >> 4, 0));
+            }
+            let blocked = dir.join(subdir);
+            fs::write(&blocked, b"blocks chunk writes").unwrap();
+            assert!(sim.save().is_err());
+            assert!(sim.unsaved.contains(&(0, 0)));
+            assert!(sim.unsaved.contains(&(1, 0)));
+
+            sim.centre = (100, 100);
+            sim.unload_far();
+            assert!(sim.world.chunk_exists(0, 0));
+            assert!(sim.world.chunk_exists(1, 0));
+            assert!(sim.unsaved.contains(&(0, 0)));
+
+            fs::remove_file(blocked).unwrap();
+            // This change happened after the last tick had reported changes.
+            sim.world.load_chunk(2, 0);
+            sim.world.set_block(32, 200, 0, block::STONE, 0, 2);
+            assert!(!sim.unsaved.contains(&(2, 0)));
+            sim.save().unwrap();
+            assert!(sim.unsaved.is_empty());
+            let (mut restored, _) = Sim::new(&cfg);
+            for x in [0, 16, 32] {
+                restored.world.load_chunk(x >> 4, 0);
+                assert_eq!(restored.world.block(x, 200, 0), block::STONE);
+            }
+
+            sim.world.set_block(0, 200, 0, block::COBBLESTONE, 0, 2);
+            sim.unsaved.insert((0, 0));
+            if anvil {
+                sim.play
+                    .falling
+                    .push(crate::entity::falling::FallingBlock::new(
+                        1,
+                        [0.5, 201.0, 0.5],
+                        block::SAND,
+                        0,
+                    ));
+            }
+            sim.travel(1, &mut Vec::new());
+            sim.save().unwrap();
+            let (mut restored, _) = Sim::new(&cfg);
+            let mut overworld = restored.take_world(0).world;
+            overworld.load_chunk(0, 0);
+            assert_eq!(overworld.block(0, 200, 0), block::COBBLESTONE);
+            if anvil {
+                assert!(!save::chunk_path(&dir, 0, 0).exists());
+                let (_, _, _, entities) = overworld.anvil_loaded.pop().unwrap();
+                assert!(entities
+                    .iter()
+                    .any(|tag| tag.string("id") == Some("FallingSand")));
+            }
+            fs::remove_dir_all(dir).unwrap();
+        }
     }
 
     /// Survival loop: dig with a pickaxe, the drop is picked up, placing
@@ -7989,7 +8089,7 @@ mod tests {
             // unloading writes the rest to disk
             let keys: Vec<(i32, i32)> = sim.world.chunks.keys().copied().collect();
             for k in keys {
-                sim.world.unload_chunk(k.0, k.1);
+                sim.world.unload_chunk(k.0, k.1).unwrap();
             }
         }
         let (mut sim, _) = Sim::new(&cfg);
