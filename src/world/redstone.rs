@@ -54,6 +54,9 @@ pub struct Occupant {
     pub minecart: bool,
     /// An `EntityArrow` (wooden buttons)
     pub arrow: bool,
+    /// A container minecart: `Container.calcRedstoneFromInventory` of it
+    /// (detector rails under comparators).
+    pub inventory: Option<i32>,
     /// Calls `doBlockCollisions` (`func_145775_I`) as it moves, so it
     /// presses plates and buttons itself; `EntityThrowable`s do not, but
     /// are still counted by a weighted plate's `getEntitiesWithinAABB`.
@@ -75,6 +78,8 @@ pub fn can_provide_power(id: u8) -> bool {
             | HEAVY_WEIGHTED_PRESSURE_PLATE
             | UNPOWERED_REPEATER
             | POWERED_REPEATER
+            | UNPOWERED_COMPARATOR
+            | POWERED_COMPARATOR
             | REDSTONE_BLOCK
             | TRIPWIRE_HOOK
             | DETECTOR_RAIL
@@ -90,6 +95,7 @@ pub fn tick_family(id: u8) -> u8 {
     match id {
         UNLIT_REDSTONE_TORCH => REDSTONE_TORCH,
         POWERED_REPEATER => UNPOWERED_REPEATER,
+        POWERED_COMPARATOR => UNPOWERED_COMPARATOR,
         LIT_REDSTONE_LAMP => REDSTONE_LAMP,
         _ => id,
     }
@@ -158,6 +164,19 @@ impl ServerWorld {
             }
             // BlockPressurePlateWeighted.getPowerFromMeta
             LIGHT_WEIGHTED_PRESSURE_PLATE | HEAVY_WEIGHTED_PRESSURE_PLATE => m as i32,
+            // BlockRedstoneDiode.isProvidingWeakPower with the tile's output
+            UNPOWERED_COMPARATOR | POWERED_COMPARATOR => {
+                let d = m & 3;
+                let facing = (d == 0 && side == 3)
+                    || (d == 1 && side == 4)
+                    || (d == 2 && side == 2)
+                    || (d == 3 && side == 5);
+                if (id == POWERED_COMPARATOR || m & 8 != 0) && facing {
+                    self.comparator_output(x, y, z)
+                } else {
+                    0
+                }
+            }
             POWERED_REPEATER => {
                 let d = m & 3;
                 if (d == 0 && side == 3)
@@ -256,6 +275,7 @@ impl ServerWorld {
                 }
             }
             POWERED_REPEATER => self.weak_power(x, y, z, side),
+            UNPOWERED_COMPARATOR | POWERED_COMPARATOR => self.weak_power(x, y, z, side),
             TRIPWIRE_HOOK => {
                 let f = m & 3;
                 if m & 8 == 0 {
@@ -536,6 +556,11 @@ impl ServerWorld {
                 }
             }
             UNPOWERED_REPEATER | POWERED_REPEATER => self.repeater_neighbours(x, y, z),
+            // BlockRedstoneComparator.onBlockAdded: updateNeighbors, a new tile entity
+            UNPOWERED_COMPARATOR | POWERED_COMPARATOR => {
+                self.repeater_neighbours(x, y, z);
+                self.comparators.insert([x, y, z], 0);
+            }
             REDSTONE_LAMP | LIT_REDSTONE_LAMP => self.lamp_check(id, x, y, z),
             TNT => {
                 if self.indirectly_powered(x, y, z) {
@@ -594,6 +619,11 @@ impl ServerWorld {
             UNPOWERED_REPEATER | POWERED_REPEATER => {
                 self.repeater_neighbours_dir(x, y, z, old_meta & 3);
             }
+            // BlockRedstoneComparator.breakBlock: the tile entity goes, then updateNeighbors
+            UNPOWERED_COMPARATOR | POWERED_COMPARATOR => {
+                self.comparators.remove(&[x, y, z]);
+                self.repeater_neighbours_dir(x, y, z, old_meta & 3);
+            }
             _ => {}
         }
     }
@@ -617,6 +647,23 @@ impl ServerWorld {
                 let sig = self.torch_signal(x, y, z);
                 if on == sig {
                     self.schedule_update(x, y, z, id, 2);
+                }
+            }
+            UNPOWERED_COMPARATOR | POWERED_COMPARATOR => {
+                if !self.solid_top_surface(x, y - 1, z) {
+                    self.drop_block(x, y, z, 404, 0);
+                    for (a, b, c) in [
+                        (x + 1, y, z),
+                        (x - 1, y, z),
+                        (x, y, z + 1),
+                        (x, y, z - 1),
+                        (x, y - 1, z),
+                        (x, y + 1, z),
+                    ] {
+                        self.notify_neighbours(a, b, c, id);
+                    }
+                } else {
+                    self.comparator_check(id, x, y, z);
                 }
             }
             UNPOWERED_REPEATER | POWERED_REPEATER => {
@@ -765,6 +812,7 @@ impl ServerWorld {
                     self.set_block(x, y, z, REDSTONE_TORCH, m, 3);
                 }
             }
+            UNPOWERED_COMPARATOR | POWERED_COMPARATOR => self.comparator_tick(id, x, y, z),
             UNPOWERED_REPEATER | POWERED_REPEATER => {
                 let m = self.meta(x, y, z);
                 if !self.repeater_locked(x, y, z, m) {
@@ -900,7 +948,8 @@ impl ServerWorld {
 
     fn repeater_side(&mut self, x: i32, y: i32, z: i32, side: usize) -> i32 {
         let id = self.block(x, y, z);
-        if is_repeater(id) {
+        // BlockRedstoneRepeater.canPowerSide: isRedstoneRepeaterBlockID
+        if is_diode(id) {
             self.strong_power(x, y, z, side)
         } else {
             0
@@ -932,8 +981,7 @@ impl ServerWorld {
         if (powered && !input || !powered && input) && !self.tick_this_tick(x, y, z, id) {
             let d = (m & 3) as usize;
             let behind = self.block(x - DX[d], y, z - DZ[d]);
-            let prio = if is_repeater(behind) && (self.meta(x - DX[d], y, z - DZ[d]) & 3) != (m & 3)
-            {
+            let prio = if is_diode(behind) && (self.meta(x - DX[d], y, z - DZ[d]) & 3) != (m & 3) {
                 -3
             } else if powered {
                 -2
@@ -1897,4 +1945,219 @@ fn pushable(w: &ServerWorld, id: u8, x: i32, y: i32, z: i32, destroy_ok: bool) -
             | PISTON_EXTENSION
             | END_PORTAL
     )
+}
+
+// ------------------------------------------------------------ comparators
+
+/// `BlockRedstoneDiode.isRedstoneRepeaterBlockID`: repeaters and comparators.
+pub fn is_diode(id: u8) -> bool {
+    is_repeater(id) || id == UNPOWERED_COMPARATOR || id == POWERED_COMPARATOR
+}
+
+/// `Container.calcRedstoneFromInventory` over a container's slots.
+pub fn calc_redstone_from_inventory(slots: &[Option<crate::item::Stack>]) -> i32 {
+    if slots.is_empty() {
+        return 0;
+    }
+    let mut n = 0;
+    let mut f = 0.0f32;
+    for s in slots.iter().flatten() {
+        // getInventoryStackLimit is 64 for every container here
+        f += s.count as f32 / crate::item::max_stack(s.id).min(64) as f32;
+        n += 1;
+    }
+    f /= slots.len() as f32;
+    crate::util::math::floor_float(f * 14.0) + if n > 0 { 1 } else { 0 }
+}
+
+impl ServerWorld {
+    /// `BlockRedstoneComparator.isPowered`
+    fn comparator_powered(id: u8, m: i32) -> bool {
+        id == POWERED_COMPARATOR || m & 8 != 0
+    }
+
+    /// `TileEntityComparator.getOutputSignal`
+    pub fn comparator_output(&self, x: i32, y: i32, z: i32) -> i32 {
+        self.comparators.get(&[x, y, z]).copied().unwrap_or(0)
+    }
+
+    /// `Block.getComparatorInputOverride` of the block at `x, y, z`.
+    fn comparator_input_override(&mut self, id: u8, x: i32, y: i32, z: i32) -> i32 {
+        let m = self.meta(x, y, z);
+        match id {
+            // BlockCake: (7 - bites) * 2
+            CAKE => (7 - m) * 2,
+            // BlockCauldron: the water level
+            CAULDRON => m,
+            // BlockEndPortalFrame: an eye gives 15
+            END_PORTAL_FRAME => {
+                if m & 4 != 0 {
+                    15
+                } else {
+                    0
+                }
+            }
+            // BlockRailDetector: the first container minecart on it
+            DETECTOR_RAIL => {
+                if m & 8 == 0 {
+                    return 0;
+                }
+                let f = 0.125f32 as f64;
+                let area = Aabb6 {
+                    min: [x as f64 + f, y as f64, z as f64 + f],
+                    max: [(x + 1) as f64 - f, (y + 1) as f64 - f, (z + 1) as f64 - f],
+                };
+                self.occupants
+                    .iter()
+                    .find(|o| o.inventory.is_some() && o.bb.intersects(&area))
+                    .and_then(|o| o.inventory)
+                    .unwrap_or(0)
+            }
+            // containers: Container.calcRedstoneFromInventory, kept by Play
+            _ => self.container_signal.get(&[x, y, z]).copied().unwrap_or(0),
+        }
+    }
+
+    /// `BlockRedstoneComparator.getInputStrength`: the diode's input, or the
+    /// comparator input of the block behind (or of the one behind a solid
+    /// block there).
+    fn comparator_input(&mut self, x: i32, y: i32, z: i32, m: i32) -> i32 {
+        let mut v = self.repeater_input(x, y, z, m);
+        let d = (m & 3) as usize;
+        let (mut nx, mut nz) = (x + DX[d], z + DZ[d]);
+        let b = self.block(nx, y, nz);
+        if super::server::has_comparator_input_override(b) {
+            v = self.comparator_input_override(b, nx, y, nz);
+        } else if v < 15 && block::info(b).normal_cube() {
+            nx += DX[d];
+            nz += DZ[d];
+            let b = self.block(nx, y, nz);
+            if super::server::has_comparator_input_override(b) {
+                v = self.comparator_input_override(b, nx, y, nz);
+            }
+        }
+        v
+    }
+
+    /// `BlockRedstoneDiode.getInputSignalFromSides` for a comparator: any
+    /// power provider on the sides (`canPowerSide` is `canProvidePower`).
+    fn comparator_sides(&mut self, x: i32, y: i32, z: i32, m: i32) -> i32 {
+        let side = |w: &mut ServerWorld, x: i32, y: i32, z: i32, s: usize| -> i32 {
+            let id = w.block(x, y, z);
+            if !can_provide_power(id) {
+                0
+            } else if id == REDSTONE_WIRE {
+                w.meta(x, y, z) as i32
+            } else {
+                w.strong_power(x, y, z, s)
+            }
+        };
+        match m & 3 {
+            0 | 2 => side(self, x - 1, y, z, 4).max(side(self, x + 1, y, z, 5)),
+            _ => side(self, x, y, z + 1, 3).max(side(self, x, y, z - 1, 2)),
+        }
+    }
+
+    /// `getOutputStrength`: compare or subtract.
+    fn comparator_strength(&mut self, x: i32, y: i32, z: i32, m: i32) -> i32 {
+        let i = self.comparator_input(x, y, z, m);
+        if m & 4 != 4 {
+            i
+        } else {
+            (i - self.comparator_sides(x, y, z, m)).max(0)
+        }
+    }
+
+    /// `isGettingInput`
+    fn comparator_getting_input(&mut self, x: i32, y: i32, z: i32, m: i32) -> bool {
+        let i = self.comparator_input(x, y, z, m);
+        if i >= 15 {
+            return true;
+        }
+        if i == 0 {
+            return false;
+        }
+        let s = self.comparator_sides(x, y, z, m);
+        s == 0 || i >= s
+    }
+
+    /// `BlockRedstoneDiode.func_149912_i`: a diode in front facing elsewhere.
+    fn diode_prioritised(&mut self, x: i32, y: i32, z: i32, m: i32) -> bool {
+        let d = (m & 3) as usize;
+        let (fx, fz) = (x - DX[d], z - DZ[d]);
+        is_diode(self.block(fx, y, fz)) && (self.meta(fx, y, fz) & 3) != (m & 3)
+    }
+
+    /// `BlockRedstoneComparator.func_149897_b` (from onNeighborBlockChange).
+    fn comparator_check(&mut self, id: u8, x: i32, y: i32, z: i32) {
+        if self.tick_this_tick(x, y, z, id) {
+            return;
+        }
+        let m = self.meta(x, y, z) as i32;
+        let out = self.comparator_strength(x, y, z, m);
+        let old = self.comparator_output(x, y, z);
+        let powered = Self::comparator_powered(id, m);
+        if out != old || powered != self.comparator_getting_input(x, y, z, m) {
+            let prio = if self.diode_prioritised(x, y, z, m) {
+                -1
+            } else {
+                0
+            };
+            self.schedule_priority(x, y, z, id, 2, prio);
+        }
+    }
+
+    /// `updateOutputState`
+    pub fn comparator_update(&mut self, x: i32, y: i32, z: i32) {
+        let id = self.block(x, y, z);
+        let m = self.meta(x, y, z) as i32;
+        let out = self.comparator_strength(x, y, z, m);
+        let old = self.comparator_output(x, y, z);
+        self.comparators.insert([x, y, z], out);
+        if old != out || m & 4 != 4 {
+            let input = self.comparator_getting_input(x, y, z, m);
+            let powered = Self::comparator_powered(id, m);
+            if powered && !input {
+                self.set_meta(x, y, z, (m & !8) as _, 2);
+            } else if !powered && input {
+                self.set_meta(x, y, z, (m | 8) as _, 2);
+            }
+            self.repeater_neighbours_dir(x, y, z, m & 3);
+        }
+    }
+
+    /// `BlockRedstoneComparator.updateTick`
+    fn comparator_tick(&mut self, id: u8, x: i32, y: i32, z: i32) {
+        if id == POWERED_COMPARATOR {
+            let m = self.meta(x, y, z) as i32;
+            self.set_block(x, y, z, UNPOWERED_COMPARATOR, (m | 8) as _, 4);
+        }
+        self.comparator_update(x, y, z);
+    }
+
+    /// `BlockRedstoneComparator.onBlockActivated`: compare <-> subtract.
+    pub fn comparator_toggle(&mut self, x: i32, y: i32, z: i32) {
+        let id = self.block(x, y, z);
+        let m = self.meta(x, y, z) as i32;
+        let powered = id == POWERED_COMPARATOR || m & 8 != 0;
+        let subtract = m & 4 != 4;
+        let mut v = if subtract { 4 } else { 0 };
+        v |= if powered { 8 } else { 0 };
+        self.redstone_effects.push(Effect::Sound(
+            "random.click",
+            [x as f64 + 0.5, y as f64 + 0.5, z as f64 + 0.5],
+            0.3,
+            if subtract { 0.55 } else { 0.5 },
+        ));
+        self.set_meta(x, y, z, (v | m & 3) as _, 2);
+        self.comparator_update(x, y, z);
+    }
+
+    /// `BlockRedstoneDiode.onBlockPlacedBy` for a comparator.
+    pub fn comparator_placed(&mut self, x: i32, y: i32, z: i32) {
+        let m = self.meta(x, y, z) as i32;
+        if self.comparator_getting_input(x, y, z, m) {
+            self.schedule_update(x, y, z, UNPOWERED_COMPARATOR, 1);
+        }
+    }
 }

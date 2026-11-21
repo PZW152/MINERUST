@@ -118,6 +118,8 @@ pub const LIGHT_WEIGHTED_PRESSURE_PLATE: u8 = 147;
 pub const HEAVY_WEIGHTED_PRESSURE_PLATE: u8 = 148;
 pub const STAINED_GLASS_PANE: u8 = 160;
 pub const HOPPER: u8 = 154;
+pub const UNPOWERED_COMPARATOR: u8 = 149;
+pub const POWERED_COMPARATOR: u8 = 150;
 pub const DROPPER: u8 = 158;
 pub const FENCE: u8 = 85;
 pub const NETHERRACK: u8 = 87;
@@ -715,6 +717,8 @@ fn build() -> [BlockInfo; 256] {
         (WOODEN_BUTTON, M::Circuits),
         (UNPOWERED_REPEATER, M::Circuits),
         (POWERED_REPEATER, M::Circuits),
+        (UNPOWERED_COMPARATOR, M::Circuits),
+        (POWERED_COMPARATOR, M::Circuits),
         (CAULDRON, M::Iron),
         (END_PORTAL_FRAME, M::Rock),
         (TRIPWIRE_HOOK, M::Circuits),
@@ -728,6 +732,8 @@ fn build() -> [BlockInfo; 256] {
     }
     t[END_PORTAL_FRAME as usize].light_value = 1;
     t[POWERED_REPEATER as usize].light_value = 9;
+    // setLightLevel(0.625F)
+    t[POWERED_COMPARATOR as usize].light_value = 9;
     t[UNLIT_REDSTONE_TORCH as usize] = base(Shape::Torch, M::Circuits, false);
     t[REDSTONE_TORCH as usize] = base(Shape::Torch, M::Circuits, false);
     t[REDSTONE_TORCH as usize].light_value = 7;
@@ -1482,6 +1488,17 @@ pub fn texture_name(id: u8, meta: u8, face: usize) -> Option<&'static str> {
         SOUL_SAND => "soul_sand",
         GLOWSTONE => "glowstone",
         // BlockRedstoneDiode.getIcon: the bottom is the torch
+        // BlockRedstoneComparator.getIcon: lit when powered (block or bit 8)
+        UNPOWERED_COMPARATOR | POWERED_COMPARATOR => {
+            let on = id == POWERED_COMPARATOR || meta & 8 != 0;
+            match (face, on) {
+                (0, true) => "redstone_torch_on",
+                (0, false) => "redstone_torch_off",
+                (1, true) => "comparator_on",
+                (1, false) => "comparator_off",
+                _ => "stone_slab_top",
+            }
+        }
         UNPOWERED_REPEATER | POWERED_REPEATER if face == 0 => {
             if id == POWERED_REPEATER {
                 "redstone_torch_on"

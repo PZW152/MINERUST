@@ -333,6 +333,8 @@ impl Piece {
             block::TRIPWIRE_HOOK
                 | block::UNPOWERED_REPEATER
                 | block::POWERED_REPEATER
+                | block::UNPOWERED_COMPARATOR
+                | block::POWERED_COMPARATOR
                 | block::PUMPKIN
                 | block::LIT_PUMPKIN
                 | block::COCOA

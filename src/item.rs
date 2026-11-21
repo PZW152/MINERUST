@@ -583,6 +583,7 @@ pub fn display_name(s: &Stack) -> String {
             GLOWSTONE => "Glowstone".into(),
             LIT_PUMPKIN => "Jack o'Lantern".into(),
             UNPOWERED_REPEATER | POWERED_REPEATER => "Redstone Repeater".into(),
+            UNPOWERED_COMPARATOR | POWERED_COMPARATOR => "Redstone Comparator".into(),
             STONEBRICK => [
                 "Stone Bricks",
                 "Mossy Stone Bricks",
@@ -1033,6 +1034,8 @@ pub fn drops(id: u8, meta: i32, r: &mut JavaRandom) -> Vec<Stack> {
         LIT_REDSTONE_ORE => vec![Stack::new(REDSTONE, 0, 4 + r.next_int_n(2) as u32)],
         UNLIT_REDSTONE_TORCH | REDSTONE_TORCH => one(REDSTONE_TORCH as ItemId, 0),
         UNPOWERED_REPEATER | POWERED_REPEATER => one(356, 0),
+        // BlockRedstoneComparator.getItemDropped
+        UNPOWERED_COMPARATOR | POWERED_COMPARATOR => one(404, 0),
         CAULDRON => one(380, 0),
         // BlockBrewingStand.getItemDropped
         BREWING_STAND => one(379, 0),

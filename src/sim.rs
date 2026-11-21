@@ -1572,6 +1572,7 @@ impl Sim {
                     minecart: false,
                     arrow: false,
                     collides: true,
+                    inventory: None,
                 });
             }
             for m in &self.mobs.list {
@@ -1585,6 +1586,7 @@ impl Sim {
                         minecart: false,
                         arrow: false,
                         collides: true,
+                        inventory: None,
                     });
                 }
             }
@@ -1599,6 +1601,7 @@ impl Sim {
                     minecart: false,
                     arrow: false,
                     collides: true,
+                    inventory: None,
                 });
             }
             for a in &self.mobs.arrows {
@@ -1611,6 +1614,7 @@ impl Sim {
                     minecart: false,
                     arrow: true,
                     collides: true,
+                    inventory: None,
                 });
             }
             for t in &self.mobs.tnt {
@@ -1623,6 +1627,7 @@ impl Sim {
                     minecart: false,
                     arrow: false,
                     collides: true,
+                    inventory: None,
                 });
             }
             for b in &play.vehicles {
@@ -1636,6 +1641,20 @@ impl Sim {
                     minecart: matches!(b.v, crate::entity::vehicle::Vehicle::Cart(_)),
                     arrow: false,
                     collides: true,
+                    inventory: match &b.v {
+                        crate::entity::vehicle::Vehicle::Cart(c)
+                            if matches!(
+                                c.kind,
+                                crate::entity::minecart::CartKind::Chest
+                                    | crate::entity::minecart::CartKind::Hopper
+                            ) =>
+                        {
+                            Some(crate::world::redstone::calc_redstone_from_inventory(
+                                &c.slots,
+                            ))
+                        }
+                        _ => None,
+                    },
                 });
             }
             // EntityThrowable moves without doBlockCollisions
@@ -1649,6 +1668,7 @@ impl Sim {
                     minecart: false,
                     arrow: false,
                     collides: false,
+                    inventory: None,
                 });
             }
             for f in &play.falling {
@@ -1662,6 +1682,7 @@ impl Sim {
                     minecart: false,
                     arrow: false,
                     collides: true,
+                    inventory: None,
                 });
             }
             if let Some(h) = &self.fish_hook {
@@ -1674,6 +1695,7 @@ impl Sim {
                     minecart: false,
                     arrow: false,
                     collides: true,
+                    inventory: None,
                 });
             }
             self.world.occupants = occ;
@@ -5609,6 +5631,104 @@ mod tests {
             }
             _ => panic!(),
         }
+    }
+
+    /// BlockRedstoneComparator reads Container.calcRedstoneFromInventory
+    /// of the chest behind it, follows its changes, subtracts a side input
+    /// in subtract mode, and reads a cake's bites.
+    #[test]
+    fn comparators_read_containers() {
+        use crate::item::Stack;
+        use crate::play::Tile;
+        let (mut sim, x, y, z) = redstone_sim();
+        let feet = [x as f64 + 9.5, y as f64, z as f64 + 9.5];
+        let step = |sim: &mut Sim, n: usize| {
+            for _ in 0..n {
+                sim.step(&[Command::Player(feet, [0.0, 0.0], false)], &mut Vec::new());
+            }
+        };
+        // chest at x, comparator at x + 1 facing +x (direction 1 takes input from x - 1)
+        let (ch, cp) = ([x, y, z], [x + 1, y, z]);
+        sim.world.set_block(ch[0], ch[1], ch[2], block::CHEST, 2, 3);
+        sim.play.tiles.insert(ch, Tile::Chest { slots: [None; 27] });
+        sim.world
+            .set_block(cp[0], cp[1], cp[2], block::UNPOWERED_COMPARATOR, 1, 3);
+        step(&mut sim, 6);
+        assert_eq!(
+            sim.world.comparator_output(cp[0], cp[1], cp[2]),
+            0,
+            "empty chest"
+        );
+        if let Some(Tile::Chest { slots }) = sim.play.tiles.get_mut(&ch) {
+            slots[0] = Some(Stack::new(4, 0, 1));
+        }
+        step(&mut sim, 6);
+        assert_eq!(
+            sim.world.comparator_output(cp[0], cp[1], cp[2]),
+            1,
+            "one item"
+        );
+        assert_eq!(
+            sim.world.weak_power(cp[0], cp[1], cp[2], 4),
+            1,
+            "powers forward"
+        );
+        if let Some(Tile::Chest { slots }) = sim.play.tiles.get_mut(&ch) {
+            for s in slots.iter_mut() {
+                *s = Some(Stack::new(4, 0, 64));
+            }
+        }
+        step(&mut sim, 6);
+        assert_eq!(sim.world.comparator_output(cp[0], cp[1], cp[2]), 15, "full");
+        // subtract mode with a redstone block (15) at the side
+        sim.world.comparator_toggle(cp[0], cp[1], cp[2]);
+        assert_eq!(sim.world.meta(cp[0], cp[1], cp[2]) & 4, 4, "subtract mode");
+        if let Some(Tile::Chest { slots }) = sim.play.tiles.get_mut(&ch) {
+            *slots = [None; 27];
+            slots[0] = Some(Stack::new(4, 0, 64));
+        }
+        // a redstone block right beside it gives no strong power: nothing is
+        // taken away (getInputSignalFromSide uses isBlockProvidingPowerTo)
+        sim.world
+            .set_block(cp[0], cp[1], cp[2] - 1, block::REDSTONE_BLOCK, 0, 3);
+        step(&mut sim, 8);
+        assert_eq!(
+            sim.world.comparator_output(cp[0], cp[1], cp[2]),
+            1,
+            "a block does not subtract"
+        );
+        // a powered wire does: 64/64 of one of 27 slots gives
+        // floor(1/27 * 14) + 1 = 1, minus the wire's 15 at the side
+        sim.world
+            .set_block(cp[0], cp[1], cp[2] - 1, block::REDSTONE_WIRE, 0, 3);
+        sim.world
+            .set_block(cp[0], cp[1], cp[2] - 2, block::REDSTONE_BLOCK, 0, 3);
+        step(&mut sim, 8);
+        assert_eq!(
+            sim.world.comparator_output(cp[0], cp[1], cp[2]),
+            0,
+            "subtracted"
+        );
+        // a cake behind another comparator: 7 bites left -> 14, one eaten -> 12
+        let (ck, c2) = ([x + 4, y, z + 4], [x + 5, y, z + 4]);
+        sim.world.set_block(ck[0], ck[1], ck[2], block::CAKE, 0, 3);
+        sim.world
+            .set_block(c2[0], c2[1], c2[2], block::UNPOWERED_COMPARATOR, 1, 3);
+        // as a player places it: onBlockPlacedBy schedules the first update
+        sim.world.comparator_placed(c2[0], c2[1], c2[2]);
+        step(&mut sim, 6);
+        assert_eq!(
+            sim.world.comparator_output(c2[0], c2[1], c2[2]),
+            14,
+            "whole cake"
+        );
+        sim.world.set_meta(ck[0], ck[1], ck[2], 1, 3);
+        step(&mut sim, 6);
+        assert_eq!(
+            sim.world.comparator_output(c2[0], c2[1], c2[2]),
+            12,
+            "one slice gone"
+        );
     }
 
     /// ItemInWorldManager: a creative player breaks bedrock at once; a

@@ -1477,6 +1477,9 @@ fn shaped(cx: &Ctx, out: &mut Vec<Vertex>, id: u8, meta: i32, x: i32, y: i32, z:
             block::UNPOWERED_REPEATER | block::POWERED_REPEATER => {
                 rb::Rb::new(cx, out, id, meta).render_block_repeater(x, y, z);
             }
+            block::UNPOWERED_COMPARATOR | block::POWERED_COMPARATOR => {
+                rb::Rb::new(cx, out, id, meta).render_block_redstone_comparator(x, y, z);
+            }
             _ => {
                 let list = shapes::static_boxes(id, m);
                 boxes(cx, out, x, y, z, &list, &|_, f| plain(f), white);

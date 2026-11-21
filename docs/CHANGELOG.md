@@ -9,7 +9,13 @@
 
 ## 2026-11-20
 
-- Creative players break bedrock and other unbreakable blocks again, as ItemInWorldManager does (the hardness check refused them since 5be2c2f)
+## 2026-11-21
+
+- Redstone comparators: BlockRedstoneComparator and TileEntityComparator (compare and subtract, reading containers through Container.calcRedstoneFromInventory, double chests, cakes, cauldrons, end portal frames, container minecarts on detector rails, through a solid block), renderBlockRedstoneComparator, saved OutputSignal; containers wake comparators when their slots change; repeaters are now locked by comparators and prioritise behind them as in isRedstoneRepeaterBlockID; droppers face away from the player when placed; shotcompare `comparator` scene
+
+## 2026-11-20
+
+- `25f0b84` Creative players break bedrock and other unbreakable blocks again, as ItemInWorldManager does (the hardness check refused them since 5be2c2f)
 - `db1b5cb` Mobs outside the view frustum are not built (RenderGlobal.renderEntities' isBoundingBoxInFrustum, the dragon excepted): frame building 0.57 -> 0.34 ms at distance 16, about 930 -> 1,050 fps; all 12 shotcompare scenes re-run, no regressions
 - `4a3579c` World generation matches 1.7.10 again: lava springs placed during decoration hissed with the generator's random instead of world.rand (since 7fd9193), shifting every later ore, silverfish stone, emerald and lake; --compare-pop is 0 differences on three seeds again
 - `63889bb` Hoppers move items (TileEntityHopper: pull from above or pick up items, push into the faced container, sided furnace and brewing-stand slots, double chests, chest and hopper minecarts, 8-tick cooldown, off while powered); droppers push into containers; dispensers get every Bootstrap behaviour (projectiles, spawn eggs, fire charges, boats, buckets, flint and steel, bone meal, TNT), smoke, the 1.7.10 drop height and the tile's own random; pistons no longer push signs, brewing stands or enchanting tables; shotcompare `hopper` scene

@@ -438,7 +438,10 @@ impl<'a, 'b> Rb<'a, 'b> {
                 }
             }
             // BlockRedstoneDiode.shouldSideBeRendered
-            block::UNPOWERED_REPEATER | block::POWERED_REPEATER => side != 0 && side != 1,
+            block::UNPOWERED_REPEATER
+            | block::POWERED_REPEATER
+            | block::UNPOWERED_COMPARATOR
+            | block::POWERED_COMPARATOR => side != 0 && side != 1,
             // BlockFenceGate.shouldSideBeRendered
             block::FENCE_GATE => true,
             // BlockWall.shouldSideBeRendered: only the bottom is culled
@@ -6074,6 +6077,71 @@ impl<'a, 'b> Rb<'a, 'b> {
             self.render_standard(x, y, z);
         }
         self.overrideBlockTexture = None;
+        true
+    }
+}
+
+impl<'a, 'b> Rb<'a, 'b> {
+    /// `renderBlockRedstoneComparator`
+    pub fn render_block_redstone_comparator(&mut self, x: i32, y: i32, z: i32) -> bool {
+        // setRenderBoundsFromBlock: BlockRedstoneDiode's bounds
+        self.set_render_bounds(0.0, 0.0, 0.0, 1.0, 0.125f32 as f64, 1.0);
+        let b = self.mixed(x, y, z);
+        self.set_color_brightness(1.0, b);
+        let var6 = self.meta;
+        let var7 = var6 & 3;
+        let mut var8 = 0.0;
+        let mut var10 = -0.1875;
+        let mut var12 = 0.0;
+        let mut var14 = 0.0;
+        let mut var16 = 0.0;
+        // isInCompareMode: the front torch is lit
+        let var18 = if var6 & 4 == 4 {
+            Icon::new(self.atlas().named("redstone_torch_on"))
+        } else {
+            var10 -= 0.1875;
+            Icon::new(self.atlas().named("redstone_torch_off"))
+        };
+        match var7 {
+            0 => {
+                var12 = -0.3125;
+                var16 = 1.0;
+            }
+            1 => {
+                var8 = 0.3125;
+                var14 = -1.0;
+            }
+            2 => {
+                var12 = 0.3125;
+                var16 = -1.0;
+            }
+            _ => {
+                var8 = -0.3125;
+                var14 = 1.0;
+            }
+        }
+        let (fx, fy, fz) = (x as f64, y as f64, z as f64);
+        let ty = fy - 0.1875f32 as f64;
+        self.render_torch_at_angle(
+            fx + 0.25 * var14 + 0.1875 * var16,
+            ty,
+            fz + 0.25 * var16 + 0.1875 * var14,
+            0.0,
+            0.0,
+            var6,
+        );
+        self.render_torch_at_angle(
+            fx + 0.25 * var14 + -0.1875 * var16,
+            ty,
+            fz + 0.25 * var16 + -0.1875 * var14,
+            0.0,
+            0.0,
+            var6,
+        );
+        self.overrideBlockTexture = Some(var18);
+        self.render_torch_at_angle(fx + var8, fy + var10, fz + var12, 0.0, 0.0, var6);
+        self.overrideBlockTexture = None;
+        self.render_block_redstone_diode_metadata(x, y, z, var7);
         true
     }
 }

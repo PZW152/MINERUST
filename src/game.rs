@@ -3580,6 +3580,8 @@ impl Game {
                     | block::WOODEN_BUTTON
                     | block::UNPOWERED_REPEATER
                     | block::POWERED_REPEATER
+                    | block::UNPOWERED_COMPARATOR
+                    | block::POWERED_COMPARATOR
                     | block::NOTEBLOCK
                     | block::WOODEN_DOOR
                     | block::TRAPDOOR

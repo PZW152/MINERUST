@@ -509,3 +509,78 @@ impl Play {
         }
     }
 }
+
+impl Play {
+    /// Keeps `Tile::Comparator` (saved) and `ServerWorld::comparators`
+    /// (live) together: loaded tiles reach the world, the world's values
+    /// reach the tiles, tiles of comparators that are gone are dropped.
+    pub fn sync_comparators(&mut self, w: &mut ServerWorld) {
+        let loaded: Vec<(Pos, i32)> = self
+            .tiles
+            .iter()
+            .filter_map(|(p, t)| match t {
+                Tile::Comparator { output } => Some((*p, *output)),
+                _ => None,
+            })
+            .collect();
+        for (p, out) in loaded {
+            let here = crate::world::server::is_comparator(w.peek_block(p[0], p[1], p[2]));
+            if !here {
+                if w.chunk_exists(p[0] >> 4, p[2] >> 4) {
+                    self.tiles.remove(&p);
+                }
+            } else {
+                w.comparators.entry(p).or_insert(out);
+            }
+        }
+        for (p, v) in w.comparators.iter() {
+            self.tiles.insert(*p, Tile::Comparator { output: *v });
+        }
+    }
+
+    /// `Container.calcRedstoneFromInventory` of every container for the
+    /// comparators, and `World.func_147453_f` around a container whose own
+    /// slots changed (as `TileEntity.markDirty` does, so a change in one
+    /// half of a double chest wakes only that half's comparators).
+    pub fn container_signals(&mut self, w: &mut ServerWorld) {
+        w.container_signal.clear();
+        let ps: Vec<Pos> = self
+            .tiles
+            .iter()
+            .filter(|(_, t)| {
+                matches!(
+                    t,
+                    Tile::Chest { .. }
+                        | Tile::Furnace { .. }
+                        | Tile::Dispenser { .. }
+                        | Tile::Hopper { .. }
+                        | Tile::Brewing { .. }
+                )
+            })
+            .map(|(p, _)| *p)
+            .collect();
+        for p in ps {
+            let own = self.inv_slots(&InvRef::Tiles(vec![p]));
+            let id = w.peek_block(p[0], p[1], p[2]);
+            let inv = if id == block::CHEST {
+                self.chest_inventory(w, p)
+            } else {
+                Some(InvRef::Tiles(vec![p]))
+            };
+            let v = inv.map_or(0, |i| {
+                crate::world::redstone::calc_redstone_from_inventory(&self.inv_slots(&i))
+            });
+            w.container_signal.insert(p, v);
+            let changed = match self.slot_snap.get(&p) {
+                Some(old) => *old != own,
+                None => false,
+            };
+            self.slot_snap.insert(p, own);
+            if changed {
+                w.update_neighbors_about_output(p[0], p[1], p[2], id);
+            }
+        }
+        self.slot_snap
+            .retain(|p, _| w.container_signal.contains_key(p));
+    }
+}

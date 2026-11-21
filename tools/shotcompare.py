@@ -114,6 +114,14 @@ SCENES = {
         "-246 96 134 154 0", "-244 96 134 154 2", "-242 96 134 154 3", "-240 96 134 154 4",
         "-238 96 134 154 5", "-245 96 137 158 2", "-242 96 137 23 2", "-239 96 137 158 1",
     ])),
+    # renderBlockRedstoneComparator: compare and subtract mode, each facing, and
+    # two lit by the cake behind them (placed after the comparators).
+    "comparator": dict(seed=12345, time=6000, pos=(-242.5, 98.5, 131.5), look=(0.0, 55.0), setblock=";".join(
+        [f"{x} 95 {z} 1" for x in range(-247, -237) for z in range(132, 139)] + [
+        "-246 96 134 149 0", "-244 96 134 149 1", "-242 96 134 149 2", "-240 96 134 149 3",
+        "-246 96 136 149 4", "-244 96 136 149 5",
+        "-241 96 137 149 0", "-241 96 138 92 0", "-239 96 137 149 4", "-239 96 138 92 0",
+    ])),
 }
 
 

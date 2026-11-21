@@ -321,6 +321,8 @@ pub fn neighbour_changed(w: &mut ServerWorld, x: i32, y: i32, z: i32, src: u8) {
                 | block::REDSTONE_WIRE
                 | block::POWERED_REPEATER
                 | block::UNPOWERED_REPEATER
+                | block::POWERED_COMPARATOR
+                | block::UNPOWERED_COMPARATOR
                 | block::REDSTONE_BLOCK
                 | block::DETECTOR_RAIL
                 | block::TRIPWIRE_HOOK

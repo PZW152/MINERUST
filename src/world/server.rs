@@ -599,6 +599,11 @@ pub struct ServerWorld {
     pub particles: Vec<(&'static str, [f64; 3], [f64; 3])>,
     /// Bounding boxes of the entities this tick (pressure plates, tripwire).
     pub occupants: Vec<super::redstone::Occupant>,
+    /// `TileEntityComparator.outputSignal` by position.
+    pub comparators: std::collections::BTreeMap<[i32; 3], i32>,
+    /// `Container.calcRedstoneFromInventory` of the container tile entities
+    /// (a chest as `BlockChest.getInventory` sees it), kept by `Play`.
+    pub container_signal: std::collections::HashMap<[i32; 3], i32>,
     /// Scheduled updates being run this tick (`pendingTickListEntriesThisTick`).
     ticking_now: Vec<(i32, i32, i32, u8)>,
 }
@@ -658,6 +663,8 @@ impl ServerWorld {
             pushes: Vec::new(),
             particles: Vec::new(),
             occupants: Vec::new(),
+            comparators: Default::default(),
+            container_signal: Default::default(),
             ticking_now: Vec::new(),
         }
     }

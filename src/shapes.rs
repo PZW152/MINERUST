@@ -530,7 +530,10 @@ pub fn static_boxes(id: u8, meta: u8) -> Vec<Bx> {
         block::STONE_BUTTON | block::WOODEN_BUTTON => vec![button(meta)],
         block::LEVER => vec![lever(meta)],
         block::TRIPWIRE_HOOK => vec![tripwire_hook(meta)],
-        block::UNPOWERED_REPEATER | block::POWERED_REPEATER => {
+        block::UNPOWERED_REPEATER
+        | block::POWERED_REPEATER
+        | block::UNPOWERED_COMPARATOR
+        | block::POWERED_COMPARATOR => {
             vec![[0.0, 0.0, 0.0, 1.0, 0.125, 1.0]]
         }
         block::END_PORTAL_FRAME => {
@@ -599,9 +602,10 @@ pub fn collision(get: Get, id: u8, meta: u8, x: i32, y: i32, z: i32, out: &mut V
                 out.push(b);
             }
             block::FARMLAND => out.push(FULL),
-            block::UNPOWERED_REPEATER | block::POWERED_REPEATER => {
-                out.push([0.0, 0.0, 0.0, 1.0, 0.125, 1.0])
-            }
+            block::UNPOWERED_REPEATER
+            | block::POWERED_REPEATER
+            | block::UNPOWERED_COMPARATOR
+            | block::POWERED_COMPARATOR => out.push([0.0, 0.0, 0.0, 1.0, 0.125, 1.0]),
             block::PORTAL | block::END_PORTAL => {}
             block::END_PORTAL_FRAME | block::TRAPDOOR | block::PISTON_HEAD | block::DRAGON_EGG => {
                 out.extend(static_boxes(id, meta))

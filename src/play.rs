@@ -30,6 +30,9 @@ pub enum Tile {
         slots: [Option<Stack>; 9],
         dropper: bool,
     },
+    /// `TileEntityComparator.outputSignal` (the live value is
+    /// `ServerWorld::comparators`; this copy is what gets saved).
+    Comparator { output: i32 },
     /// `TileEntityHopper`
     Hopper {
         slots: [Option<Stack>; 5],
@@ -244,6 +247,9 @@ pub struct Play {
     /// `EntityPlayer.rand`
     pub prand: JavaRandom,
     pub tiles: BTreeMap<Pos, Tile>,
+    /// The container slots last seen, to tell when a container changed
+    /// (`TileEntity.markDirty` -> `World.func_147453_f`).
+    pub(crate) slot_snap: std::collections::HashMap<Pos, Vec<Option<Stack>>>,
     /// Feet position and yaw of the player.
     pub player: ([f64; 3], f32),
     pub inv_dirty: bool,
@@ -509,6 +515,7 @@ impl Play {
             alive: true,
             prand: JavaRandom::new(0x706C6179),
             tiles: BTreeMap::new(),
+            slot_snap: Default::default(),
             player: ([0.0; 3], 0.0),
             inv_dirty: true,
             drag: Drag::default(),
@@ -748,7 +755,7 @@ impl Play {
                 Tile::Dispenser { slots, .. } => slots.to_vec(),
                 Tile::Hopper { slots, .. } => slots.to_vec(),
                 Tile::Brewing { slots, .. } => slots.to_vec(),
-                Tile::Spawner { .. } | Tile::Sign { .. } => Vec::new(),
+                Tile::Spawner { .. } | Tile::Sign { .. } | Tile::Comparator { .. } => Vec::new(),
             };
             for s in slots.into_iter().flatten() {
                 let mut rnd = std::mem::replace(&mut w.rand, JavaRandom::new(0));
@@ -958,6 +965,11 @@ impl Play {
                 }
                 block::STONE_BUTTON | block::WOODEN_BUTTON => {
                     w.press_button(tid, target[0], target[1], target[2]);
+                    return true;
+                }
+                block::UNPOWERED_COMPARATOR | block::POWERED_COMPARATOR => {
+                    // BlockRedstoneComparator.onBlockActivated
+                    w.comparator_toggle(target[0], target[1], target[2]);
                     return true;
                 }
                 block::UNPOWERED_REPEATER | block::POWERED_REPEATER => {
@@ -1194,6 +1206,8 @@ impl Play {
         let id = match held.id {
             331 => block::REDSTONE_WIRE,
             356 => block::UNPOWERED_REPEATER,
+            // ItemReed(Blocks.unpowered_comparator)
+            404 => block::UNPOWERED_COMPARATOR,
             // ItemReed for the brewing stand, the cauldron and the cake
             379 => block::BREWING_STAND,
             380 => block::CAULDRON,
@@ -1428,7 +1442,7 @@ impl Play {
                 }
                 meta = 0;
             }
-            block::UNPOWERED_REPEATER => {
+            block::UNPOWERED_REPEATER | block::UNPOWERED_COMPARATOR => {
                 if !w.solid_top_surface(p[0], p[1] - 1, p[2]) {
                     return false;
                 }
@@ -1551,10 +1565,11 @@ impl Play {
             w.set_block(p[0], p[1], p[2], id, meta, 3);
             match id {
                 // onBlockPlacedBy runs after the facing chosen in onBlockAdded.
-                block::DISPENSER => {
+                block::DISPENSER | block::DROPPER => {
                     w.set_meta(p[0], p[1], p[2], meta, 2);
                 }
                 block::UNPOWERED_REPEATER => w.repeater_placed(p[0], p[1], p[2]),
+                block::UNPOWERED_COMPARATOR => w.comparator_placed(p[0], p[1], p[2]),
                 _ => {}
             }
         }
@@ -2128,6 +2143,8 @@ impl Play {
     pub fn tick(&mut self, w: &mut ServerWorld) {
         // TileEntityHopper.updateEntity
         self.tick_hoppers(w);
+        self.sync_comparators(w);
+        self.container_signals(w);
         // TileEntityBrewingStand.updateEntity
         let keys: Vec<Pos> = self.tiles.keys().copied().collect();
         for p in &keys {
@@ -2381,6 +2398,9 @@ impl Play {
                         if *dropper { "Dropper" } else { "Trap" },
                         vec![("Items", items(slots))],
                     ),
+                    Tile::Comparator { output } => {
+                        ("Comparator", vec![("OutputSignal", Nbt::Int(*output))])
+                    }
                     Tile::Hopper { slots, cooldown } => (
                         "Hopper",
                         vec![
@@ -2478,6 +2498,9 @@ impl Play {
                     dropper: id == "Dropper",
                 }
             }
+            "Comparator" => Tile::Comparator {
+                output: t.int("OutputSignal").unwrap_or(0) as i32,
+            },
             "Hopper" => {
                 let v = fill(5);
                 let mut a = [None; 5];
@@ -2748,6 +2771,7 @@ impl Play {
                 Tile::Hopper { slots, cooldown } => {
                     format!("H,{},{},{},{},{}", p[0], p[1], p[2], cooldown, enc(slots))
                 }
+                Tile::Comparator { output } => format!("K,{},{},{},{}", p[0], p[1], p[2], output),
                 Tile::Spawner { mob } => format!("S,{},{},{},{}", p[0], p[1], p[2], mob),
                 Tile::Sign { text, .. } => {
                     format!("G,{},{},{},{}", p[0], p[1], p[2], text.join("\u{1f}"))
@@ -2852,6 +2876,15 @@ impl Play {
                     Tile::Dispenser {
                         slots,
                         dropper: f[0] == "R",
+                    },
+                );
+            }
+            "K" => {
+                let f: Vec<&str> = line.splitn(5, ',').collect();
+                self.tiles.insert(
+                    pos(f[1], f[2], f[3])?,
+                    Tile::Comparator {
+                        output: f.get(4)?.parse().ok()?,
                     },
                 );
             }
