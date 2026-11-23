@@ -37,6 +37,14 @@ pub const TORCH: u8 = 50;
 pub const FIRE: u8 = 51;
 pub const MOB_SPAWNER: u8 = 52;
 pub const CHEST: u8 = 54;
+pub const ENDER_CHEST: u8 = 130;
+pub const TRAPPED_CHEST: u8 = 146;
+
+/// `BlockChest` (plain or trapped: `field_149956_a` 0 or 1); a double
+/// chest pairs only halves of the same kind.
+pub fn is_chest(id: u8) -> bool {
+    id == CHEST || id == TRAPPED_CHEST
+}
 pub const DIAMOND_ORE: u8 = 56;
 pub const CRAFTING_TABLE: u8 = 58;
 pub const FARMLAND: u8 = 60;
@@ -569,6 +577,11 @@ fn build() -> [BlockInfo; 256] {
     wood_slab.light_opacity = 255;
     t[WOODEN_SLAB as usize] = wood_slab;
     t[CHEST as usize] = base(Shape::Chest, M::Wood, false);
+    t[TRAPPED_CHEST as usize] = base(Shape::Chest, M::Wood, false);
+    // BlockEnderChest: Material.rock, setLightLevel(0.5F)
+    let mut ender = base(Shape::Chest, M::Rock, false);
+    ender.light_value = 7;
+    t[ENDER_CHEST as usize] = ender;
 
     for (id, m) in [
         (SPONGE, M::Sponge),
@@ -790,7 +803,7 @@ pub fn collision_box(id: u8, meta: u8) -> Option<[f32; 6]> {
         } else {
             [0.125, 0.0, 0.0, 0.875, 1.0, 1.0]
         }),
-        CHEST => Some([0.0625, 0.0, 0.0625, 0.9375, 0.875, 0.9375]),
+        CHEST | TRAPPED_CHEST | ENDER_CHEST => Some([0.0625, 0.0, 0.0625, 0.9375, 0.875, 0.9375]),
         SOUL_SAND => Some([0.0, 0.0, 0.0, 1.0, 0.875, 1.0]),
         STONE_SLAB | WOODEN_SLAB => {
             if meta & 8 != 0 {
@@ -997,7 +1010,9 @@ pub fn texture_name(id: u8, meta: u8, face: usize) -> Option<&'static str> {
             }
         }
         COBBLESTONE => "cobblestone",
-        CHEST => "planks_oak",
+        CHEST | TRAPPED_CHEST => "planks_oak",
+        // BlockEnderChest.registerBlockIcons: obsidian (break particles)
+        ENDER_CHEST => "obsidian",
         // BlockFenceGate.getIcon: the oak planks
         FENCE_GATE => "planks_oak",
         // BlockWall.getIcon

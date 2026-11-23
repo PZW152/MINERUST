@@ -685,7 +685,7 @@ fn background(ui: &mut Ui, view: &InvView, left: f32, top: f32, xs: f32, ys: f32
                 }
             }
         }
-        Open::Chest(_) | Open::Cart(_) => {
+        Open::Chest(_) | Open::Cart(_) | Open::Ender(_) => {
             let rows = view.tile_slots.len() / 9;
             ui.sheet(left, top, CHEST.0, CHEST.1, xs, rows as f32 * 18.0 + 17.0);
             ui.sheet(
@@ -762,6 +762,16 @@ fn foreground(ui: &mut Ui, view: &InvView, lang: &Lang, left: f32, top: f32, xs:
         Open::Cart(_) => {
             ui.text(
                 lang.get("container.minecart"),
+                left + 8.0,
+                top + 6.0,
+                fg,
+                false,
+            );
+        }
+        // InventoryEnderChest: "container.enderchest"
+        Open::Ender(_) => {
+            ui.text(
+                lang.get("container.enderchest"),
                 left + 8.0,
                 top + 6.0,
                 fg,

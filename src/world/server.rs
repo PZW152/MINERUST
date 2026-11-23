@@ -603,6 +603,8 @@ pub struct ServerWorld {
     pub comparators: std::collections::BTreeMap<[i32; 3], i32>,
     /// `TileEntityDaylightDetector` positions.
     pub daylight_detectors: std::collections::BTreeSet<[i32; 3]>,
+    /// Chest halves with the player's window open (`numPlayersUsing`).
+    pub chest_users: std::collections::BTreeSet<[i32; 3]>,
     /// `Container.calcRedstoneFromInventory` of the container tile entities
     /// (a chest as `BlockChest.getInventory` sees it), kept by `Play`.
     pub container_signal: std::collections::HashMap<[i32; 3], i32>,
@@ -667,6 +669,7 @@ impl ServerWorld {
             occupants: Vec::new(),
             comparators: Default::default(),
             daylight_detectors: Default::default(),
+            chest_users: Default::default(),
             container_signal: Default::default(),
             ticking_now: Vec::new(),
         }
@@ -2085,10 +2088,10 @@ impl ServerWorld {
                 self.set_meta(x, y, z, m, 2);
             }
             block::TRIPWIRE => super::tripwire::wire_added(self, x, y, z),
-            block::CHEST => {
+            block::CHEST | block::TRAPPED_CHEST => {
                 self.chest_init_meta(x, y, z);
                 for (dx, dz) in [(0, -1), (0, 1), (-1, 0), (1, 0)] {
-                    if self.block(x + dx, y, z + dz) == block::CHEST {
+                    if self.block(x + dx, y, z + dz) == id {
                         self.chest_init_meta(x + dx, y, z + dz);
                     }
                 }
@@ -2234,7 +2237,7 @@ impl ServerWorld {
         let s = self.block(x, y, z + 1);
         let w = self.block(x - 1, y, z);
         let e = self.block(x + 1, y, z);
-        let c = block::CHEST;
+        let c = self.block(x, y, z);
         let (fn_, fs, fw, fe) = (
             full(self, x, y, z - 1),
             full(self, x, y, z + 1),
@@ -2473,6 +2476,26 @@ impl ServerWorld {
             block::SNOW_LAYER => self.snow_can_place(x, y, z),
             block::CACTUS => replaceable && self.can_block_stay(id, x, y, z),
             block::REEDS => self.reed_can_place(x, y, z),
+            // BlockChest.canPlaceBlockAt: at most one neighbour of the same
+            // kind, and that one without a partner of its own
+            block::CHEST | block::TRAPPED_CHEST => {
+                let same = |w: &ServerWorld, x: i32, z: i32| w.peek_block(x, y, z) == id;
+                let mut n = 0;
+                for (dx, dz) in [(-1, 0), (1, 0), (0, -1), (0, 1)] {
+                    let (a, b) = (x + dx, z + dz);
+                    if same(self, a, b) {
+                        n += 1;
+                        if same(self, a - 1, b)
+                            || same(self, a + 1, b)
+                            || same(self, a, b - 1)
+                            || same(self, a, b + 1)
+                        {
+                            return false;
+                        }
+                    }
+                }
+                replaceable && n <= 1
+            }
             _ => replaceable,
         }
     }
@@ -3060,6 +3083,7 @@ pub fn has_comparator_input_override(id: u8) -> bool {
         id,
         117 | block::CAULDRON
             | block::CHEST
+            | block::TRAPPED_CHEST
             | 137
             | block::DISPENSER
             | block::DROPPER

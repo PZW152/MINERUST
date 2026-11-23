@@ -65,7 +65,9 @@ impl ClientChunk {
                     let list = match b {
                         block::ENCHANTING_TABLE => &mut self.tables,
                         block::STANDING_SIGN | block::WALL_SIGN => &mut self.signs,
-                        block::CHEST => &mut self.chests,
+                        block::CHEST | block::TRAPPED_CHEST | block::ENDER_CHEST => {
+                            &mut self.chests
+                        }
                         block::END_PORTAL => &mut self.portals,
                         _ => continue,
                     };
@@ -3592,6 +3594,8 @@ impl Game {
                     | block::FURNACE
                     | block::LIT_FURNACE
                     | block::CHEST
+                    | block::TRAPPED_CHEST
+                    | block::ENDER_CHEST
                     | block::ANVIL
                     | block::ENCHANTING_TABLE
                     | block::DISPENSER
@@ -4296,19 +4300,24 @@ impl Game {
     fn tick_chests(&mut self) {
         let users: Vec<[i32; 3]> = match &self.view.open {
             Open::Chest(ps) => ps.clone(),
+            Open::Ender(p) => vec![*p],
             _ => Vec::new(),
         };
         for p in &users {
             self.chest_lids.entry(*p).or_insert([0.0; 2]);
         }
-        let chest = |w: &ClientWorld, x: i32, y: i32, z: i32| w.peek_block(x, y, z) == block::CHEST;
         let mut sounds = Vec::new();
         let keys: Vec<[i32; 3]> = self.chest_lids.keys().copied().collect();
         for p in keys {
-            if !chest(&self.world, p[0], p[1], p[2]) {
+            let own = self.world.peek_block(p[0], p[1], p[2]);
+            if !block::is_chest(own) && own != block::ENDER_CHEST {
                 self.chest_lids.remove(&p);
                 continue;
             }
+            // the other half of a double chest: the same kind of chest
+            let chest = |w: &ClientWorld, x: i32, y: i32, z: i32| {
+                own != block::ENDER_CHEST && w.peek_block(x, y, z) == own
+            };
             let using = users.contains(&p);
             let x_neg = chest(&self.world, p[0] - 1, p[1], p[2]);
             let z_neg = chest(&self.world, p[0], p[1], p[2] - 1);
@@ -4524,19 +4533,22 @@ impl Game {
                 if d[0] * d[0] + d[1] * d[1] > rd * rd {
                     continue;
                 }
-                if w.peek_block(p[0], p[1], p[2]) != block::CHEST {
+                let own = w.peek_block(p[0], p[1], p[2]);
+                if !block::is_chest(own) && own != block::ENDER_CHEST {
                     continue;
                 }
-                let is = |x: i32, z: i32| w.peek_block(x, p[1], z) == block::CHEST;
+                let is =
+                    |x: i32, z: i32| own != block::ENDER_CHEST && w.peek_block(x, p[1], z) == own;
                 if is(p[0] - 1, p[2]) || is(p[0], p[2] - 1) {
                     continue;
                 }
                 let (x_pos, z_pos) = (is(p[0] + 1, p[2]), is(p[0], p[2] + 1));
                 let large = x_pos || z_pos;
-                let Some(t) = self
-                    .atlas
-                    .mob_tex(crate::render::chest::texture(false, large, xmas))
-                else {
+                let Some(t) = self.atlas.mob_tex(if own == block::ENDER_CHEST {
+                    "chest/ender"
+                } else {
+                    crate::render::chest::texture(own == block::TRAPPED_CHEST, large, xmas)
+                }) else {
                     continue;
                 };
                 let lid = self

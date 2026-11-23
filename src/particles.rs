@@ -980,6 +980,23 @@ impl Particles {
                         self.add(q);
                     }
                 }
+                block::ENDER_CHEST => {
+                    // BlockEnderChest.randomDisplayTick
+                    for _ in 0..3 {
+                        let _ = self.r.next_float();
+                        let py = y as f64 + self.r.next_float() as f64;
+                        let _ = self.r.next_float();
+                        let sx = (self.r.next_int_n(2) * 2 - 1) as f64;
+                        let sz = (self.r.next_int_n(2) * 2 - 1) as f64;
+                        let _ = self.r.next_float();
+                        let my = (self.r.next_float() as f64 - 0.5) * 0.125;
+                        let _ = self.r.next_float();
+                        let mz = self.r.next_float() as f64 * sz;
+                        let mx = self.r.next_float() as f64 * sx;
+                        let pos = [x as f64 + 0.5 + 0.25 * sx, py, z as f64 + 0.5 + 0.25 * sz];
+                        self.portal(pos, [mx, my, mz]);
+                    }
+                }
                 block::LIT_FURNACE => {
                     let f = (
                         x as f64 + 0.5,

@@ -62,7 +62,7 @@ impl Play {
         ];
         let id = w.peek_block(p[0], p[1], p[2]);
         let tile = match self.tiles.get(&p) {
-            Some(Tile::Chest { .. }) if id == block::CHEST => Some(self.chest_inventory(w, p)),
+            Some(Tile::Chest { .. }) if block::is_chest(id) => Some(self.chest_inventory(w, p)),
             Some(Tile::Chest { .. }) => Some(Some(InvRef::Tiles(vec![p]))),
             Some(
                 Tile::Furnace { .. }
@@ -113,7 +113,8 @@ impl Play {
     /// else the large chest with the north or west half first.
     fn chest_inventory(&self, w: &ServerWorld, p: Pos) -> Option<InvRef> {
         let normal = |x: i32, y: i32, z: i32| block::info(w.peek_block(x, y, z)).normal_cube();
-        let chest = |x: i32, y: i32, z: i32| w.peek_block(x, y, z) == block::CHEST;
+        let own = w.peek_block(p[0], p[1], p[2]);
+        let chest = |x: i32, y: i32, z: i32| w.peek_block(x, y, z) == own;
         if normal(p[0], p[1] + 1, p[2]) {
             return None;
         }
@@ -601,7 +602,7 @@ impl Play {
         for p in ps {
             let own = self.inv_slots(&InvRef::Tiles(vec![p]));
             let id = w.peek_block(p[0], p[1], p[2]);
-            let inv = if id == block::CHEST {
+            let inv = if block::is_chest(id) {
                 self.chest_inventory(w, p)
             } else {
                 Some(InvRef::Tiles(vec![p]))

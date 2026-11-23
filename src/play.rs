@@ -155,6 +155,8 @@ pub enum Open {
     Brewing(Pos),
     /// One or two chest halves; the first is the top half of the window.
     Chest(Vec<Pos>),
+    /// `InventoryEnderChest` through the ender chest at this place.
+    Ender(Pos),
     /// An `EntityMinecartChest` (`displayGUIChest`).
     Cart(u32),
     /// A dispenser or dropper (`TileEntityDispenser`).
@@ -175,7 +177,7 @@ pub fn window_of(o: &Open) -> Window {
         Open::Furnace(_) => Window::Furnace,
         Open::Brewing(_) => Window::Brewing,
         Open::Chest(ps) => Window::Chest(ps.len() * 3),
-        Open::Cart(_) => Window::Chest(3),
+        Open::Cart(_) | Open::Ender(_) => Window::Chest(3),
         Open::Dispenser(_) => Window::Dispenser,
         Open::Hopper(_) => Window::Hopper,
         Open::Enchant(_) => Window::Enchant,
@@ -272,6 +274,8 @@ pub struct Play {
     pub enchant_rand: JavaRandom,
     /// `ContainerRepair.inputSlots` and `repairedItemName`.
     pub repair_slots: [Option<Stack>; 2],
+    /// `EntityPlayer.theInventoryEnderChest`
+    pub ender: [Option<Stack>; 27],
     pub repair_name: String,
     /// `experienceLevel` of the player, kept here for the containers.
     pub xp_level: i32,
@@ -529,6 +533,7 @@ impl Play {
             sign_open: None,
             enchant_slot: [None],
             repair_slots: [None; 2],
+            ender: [None; 27],
             repair_name: String::new(),
             xp_level: 0,
             enchant_levels: [0; 3],
@@ -924,12 +929,21 @@ impl Play {
                     self.inv_dirty = true;
                     return true;
                 }
-                block::CHEST => {
+                block::ENDER_CHEST => {
+                    // BlockEnderChest.onBlockActivated: not under a normal cube
+                    if !block::info(w.block(target[0], target[1] + 1, target[2])).normal_cube() {
+                        self.open = Open::Ender(target);
+                        self.inv_dirty = true;
+                    }
+                    return true;
+                }
+                block::CHEST | block::TRAPPED_CHEST => {
                     // BlockChest.func_149951_m: the north/west half comes first.
+                    let cid = w.block(target[0], target[1], target[2]);
                     let mut halves = vec![target];
                     for (dx, dz) in [(-1, 0), (1, 0), (0, -1), (0, 1)] {
                         let q = [target[0] + dx, target[1], target[2] + dz];
-                        if w.block(q[0], q[1], q[2]) == block::CHEST {
+                        if w.block(q[0], q[1], q[2]) == cid {
                             if dx < 0 || dz < 0 {
                                 halves.insert(0, q);
                             } else {
@@ -1551,7 +1565,8 @@ impl Play {
                     return false;
                 }
             }
-            block::FURNACE | block::CHEST => meta = facing_meta(self.player.1),
+            block::FURNACE | block::ENDER_CHEST => meta = facing_meta(self.player.1),
+            block::CHEST | block::TRAPPED_CHEST => meta = facing_meta(self.player.1),
             // ItemAnvilBlock.getMetadata (damage << 2), then
             // BlockAnvil.onBlockPlacedBy
             block::ANVIL => {
@@ -1865,6 +1880,7 @@ impl Play {
             },
             Open::Enchant(_) => self.enchant_slot.to_vec(),
             Open::Anvil(_) => self.repair_slots.to_vec(),
+            Open::Ender(_) => self.ender.to_vec(),
             Open::Chest(ps) => {
                 let mut v = Vec::new();
                 for p in ps {
@@ -1914,6 +1930,7 @@ impl Play {
             }
             Open::Enchant(_) => copy(&mut self.enchant_slot, v),
             Open::Anvil(_) => copy(&mut self.repair_slots, v),
+            Open::Ender(_) => copy(&mut self.ender, v),
             Open::Chest(ps) => {
                 for (k, p) in ps.iter().enumerate() {
                     if let Some(Tile::Chest { slots }) = self.tiles.get_mut(p) {
@@ -2201,12 +2218,35 @@ impl Play {
         self.inv_dirty = true;
     }
 
+    /// `TileEntityChest.openInventory` / `closeInventory`: a chest whose
+    /// window opens or closes tells its neighbours and the block below
+    /// (a trapped chest's power changes with it).
+    fn sync_chest_users(&mut self, w: &mut ServerWorld) {
+        let now: std::collections::BTreeSet<Pos> = match &self.open {
+            Open::Chest(ps) => ps.iter().copied().collect(),
+            _ => Default::default(),
+        };
+        if now == w.chest_users {
+            return;
+        }
+        let changed: Vec<Pos> = now.symmetric_difference(&w.chest_users).copied().collect();
+        w.chest_users = now;
+        for p in changed {
+            let id = w.block(p[0], p[1], p[2]);
+            if block::is_chest(id) {
+                w.notify_neighbours(p[0], p[1], p[2], id);
+                w.notify_neighbours(p[0], p[1] - 1, p[2], id);
+            }
+        }
+    }
+
     /// Items, furnaces and pickup for one tick.
     pub fn tick(&mut self, w: &mut ServerWorld) {
         // TileEntityHopper.updateEntity
         self.tick_hoppers(w);
         self.sync_comparators(w);
         self.container_signals(w);
+        self.sync_chest_users(w);
         // TileEntityBrewingStand.updateEntity
         let keys: Vec<Pos> = self.tiles.keys().copied().collect();
         for p in &keys {

@@ -381,7 +381,7 @@ impl<'a> Ui<'a> {
     /// `FontRenderer.getStringWidth`
     /// `RenderItem.renderItemIntoGUI` for a block item in a 16x16 slot.
     pub fn block_icon(&mut self, id: u8, meta: i32, x: f32, y: f32) {
-        if id == block::CHEST {
+        if block::is_chest(id) || id == block::ENDER_CHEST {
             // renderItemIntoGUI's 3D block place, then type 22
             let mut m: Mat4 = render::translate(x - 2.0, y + 3.0, 0.0);
             m = render::mul(&m, &scale(10.0, 10.0, 10.0));
@@ -390,10 +390,11 @@ impl<'a> Ui<'a> {
             m = render::mul(&m, &render::rot_x(210.0));
             m = render::mul(&m, &render::rot_y(45.0));
             m = render::mul(&m, &render::rot_y(-90.0));
-            if let Some(t) = self
-                .atlas
-                .mob_tex(render::chest::texture(false, false, christmas()))
-            {
+            if let Some(t) = self.atlas.mob_tex(if id == block::ENDER_CHEST {
+                "chest/ender"
+            } else {
+                render::chest::texture(id == block::TRAPPED_CHEST, false, christmas())
+            }) {
                 let q = render::chest::gui_icon(t, &m);
                 for c in q.chunks(4) {
                     let mut c = [c[0], c[1], c[2], c[3]];

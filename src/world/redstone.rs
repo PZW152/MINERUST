@@ -72,6 +72,7 @@ pub fn can_provide_power(id: u8) -> bool {
         REDSTONE_WIRE
             | REDSTONE_TORCH
             | UNLIT_REDSTONE_TORCH
+            | TRAPPED_CHEST
             | LEVER
             | STONE_BUTTON
             | WOODEN_BUTTON
@@ -196,6 +197,8 @@ impl ServerWorld {
                 }
             }
             REDSTONE_BLOCK => 15,
+            // BlockChest (trapped).isProvidingWeakPower: numPlayersUsing
+            TRAPPED_CHEST => self.chest_users.contains(&[x, y, z]) as i32,
             TRIPWIRE_HOOK => {
                 if m & 8 != 0 {
                     15
@@ -228,6 +231,14 @@ impl ServerWorld {
             }
             REDSTONE_TORCH => {
                 if side == 0 {
+                    self.weak_power(x, y, z, side)
+                } else {
+                    0
+                }
+            }
+            // BlockChest.isProvidingStrongPower: upwards only
+            TRAPPED_CHEST => {
+                if side == 1 {
                     self.weak_power(x, y, z, side)
                 } else {
                     0

@@ -5,7 +5,8 @@ use super::mesher::Vertex;
 use super::model::{render, Draw, Part, Tex};
 use super::{mul, rot_y, translate, Mat4};
 
-pub const TEXTURES: [&str; 6] = [
+pub const TEXTURES: [&str; 7] = [
+    "chest/ender",
     "chest/normal",
     "chest/normal_double",
     "chest/trapped",

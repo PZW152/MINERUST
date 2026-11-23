@@ -2014,6 +2014,12 @@ impl Sim {
             {
                 self.bed_spawn = Some([x as i32, y as i32, z as i32]);
             }
+            // EntityPlayer.readEntityFromNBT: InventoryEnderChest.loadInventoryFromNBT
+            for (k, st) in crate::world::anvil::slots(p.list("EnderItems")) {
+                if (0..27).contains(&k) {
+                    self.play.ender[k as usize] = Some(st);
+                }
+            }
             for (k, st) in crate::world::anvil::slots(p.list("Inventory")) {
                 if (0..36).contains(&k) {
                     self.play.inv.main[k as usize] = Some(st);
@@ -2262,6 +2268,14 @@ impl Sim {
             }
         }
         player.set("Inventory", Nbt::List(10, inv));
+        let ender: Vec<Nbt> = self
+            .play
+            .ender
+            .iter()
+            .enumerate()
+            .filter_map(|(k, s)| s.map(|s| crate::world::anvil::item_nbt(Some(k as i8), &s)))
+            .collect();
+        player.set("EnderItems", Nbt::List(10, ender));
         player.set("SelectedItemSlot", Nbt::Int(self.play.inv.selected as i32));
         let mut ab = player
             .get("abilities")
@@ -7885,6 +7899,116 @@ mod tests {
             s.map_or(true, |m| m.potions.active(potion::MOVE_SLOWDOWN)),
             "Bane of Arthropods V slows"
         );
+    }
+
+    /// `BlockChest` (trapped) and `BlockEnderChest`.
+    #[test]
+    fn trapped_and_ender_chests() {
+        use crate::item::Stack;
+        let (mut sim, x, y, z) = redstone_sim();
+        arena(&mut sim, x, y, z);
+        let feet = [x as f64 + 0.5, (y + 1) as f64, z as f64 + 0.5];
+        let trapped = [x + 2, y + 1, z + 2];
+        let lamp = [x + 3, y + 1, z + 2];
+        sim.world.set_block(
+            trapped[0],
+            trapped[1],
+            trapped[2],
+            block::TRAPPED_CHEST,
+            2,
+            3,
+        );
+        sim.world
+            .set_block(lamp[0], lamp[1], lamp[2], block::REDSTONE_LAMP, 0, 3);
+        let sel = sim.play.inv.selected;
+        sim.play.inv.main[sel] = None;
+        let open = |sim: &mut Sim, p: [i32; 3]| {
+            sim.step(
+                &[
+                    Command::Player(feet, [0.0, 0.0], false),
+                    Command::Use {
+                        target: p,
+                        face: [0, 1, 0],
+                        sneaking: false,
+                        hit: [0.5, 1.0, 0.5],
+                    },
+                ],
+                &mut Vec::new(),
+            );
+        };
+        let step = |sim: &mut Sim, c: &[Command]| {
+            sim.step(c, &mut Vec::new());
+        };
+        open(&mut sim, trapped);
+        step(&mut sim, &[]);
+        assert!(matches!(sim.play.open, crate::play::Open::Chest(_)));
+        assert_eq!(
+            sim.world.weak_power(trapped[0], trapped[1], trapped[2], 4),
+            1
+        );
+        assert_eq!(
+            sim.world.block(lamp[0], lamp[1], lamp[2]),
+            block::LIT_REDSTONE_LAMP,
+            "the open trapped chest lights the lamp"
+        );
+        step(&mut sim, &[Command::CloseWindow]);
+        for _ in 0..6 {
+            step(&mut sim, &[]);
+        }
+        assert_eq!(
+            sim.world.weak_power(trapped[0], trapped[1], trapped[2], 4),
+            0
+        );
+        assert_eq!(
+            sim.world.block(lamp[0], lamp[1], lamp[2]),
+            block::REDSTONE_LAMP
+        );
+        // no third chest beside a pair, of the same kind
+        let pair = [x + 2, y + 1, z + 3];
+        assert!(sim
+            .world
+            .can_place_block_at(block::TRAPPED_CHEST, pair[0], pair[1], pair[2]));
+        sim.world
+            .set_block(pair[0], pair[1], pair[2], block::TRAPPED_CHEST, 2, 3);
+        assert!(!sim
+            .world
+            .can_place_block_at(block::TRAPPED_CHEST, x + 2, y + 1, z + 4));
+        assert!(!sim
+            .world
+            .can_place_block_at(block::TRAPPED_CHEST, x + 1, y + 1, z + 2));
+        assert!(sim
+            .world
+            .can_place_block_at(block::CHEST, x + 2, y + 1, z + 4));
+        // two ender chests share one inventory
+        let e1 = [x + 6, y + 1, z + 2];
+        let e2 = [x + 8, y + 1, z + 2];
+        sim.world
+            .set_block(e1[0], e1[1], e1[2], block::ENDER_CHEST, 2, 3);
+        sim.world
+            .set_block(e2[0], e2[1], e2[2], block::ENDER_CHEST, 2, 3);
+        open(&mut sim, e1);
+        assert!(matches!(sim.play.open, crate::play::Open::Ender(_)));
+        sim.play.ender[4] = Some(Stack::new(264, 0, 5));
+        step(&mut sim, &[Command::CloseWindow]);
+        open(&mut sim, e2);
+        assert_eq!(sim.play.tile_vec()[4].map(|s| s.count), Some(5));
+        step(&mut sim, &[Command::CloseWindow]);
+        // under a solid block it does not open
+        sim.world
+            .set_block(e2[0], e2[1] + 1, e2[2], block::STONE, 0, 3);
+        open(&mut sim, e2);
+        assert!(!matches!(sim.play.open, crate::play::Open::Ender(_)));
+        // eight obsidian when mined
+        let mut r = JavaRandom::new(1);
+        let d = crate::drops::drop_block_as_item_with_chance(block::ENDER_CHEST, 0, 1.0, 0, &mut r);
+        let n: i32 = d
+            .iter()
+            .map(|s| match s {
+                crate::drops::Spawn::Item(st, _) if st.id == 49 => st.count as i32,
+                _ => 0,
+            })
+            .sum();
+        assert_eq!(n, 8);
     }
 
     /// `ItemHangingEntity`, `EntityPainting`, `EntityItemFrame`.

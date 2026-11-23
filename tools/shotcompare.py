@@ -123,6 +123,14 @@ SCENES = {
         "-241 96 137 149 0", "-241 96 138 92 0", "-239 96 137 149 4", "-239 96 138 92 0",
         "-238 96 135 151", "-246 96 138 151",
     ])),
+    # TileEntityChestRenderer for plain and trapped chests (single and double)
+    # and TileEntityEnderChestRenderer, in several facings.
+    "chests": dict(seed=12345, time=6000, pos=(-242.5, 98.5, 131.5), look=(0.0, 45.0), setblock=";".join(
+        [f"{x} 95 {z} 1" for x in range(-248, -236) for z in range(132, 140)] + [
+        "-246 96 134 54 3", "-244 96 134 146 3", "-242 96 134 130 3", "-240 96 134 130 4",
+        "-246 96 137 146 2", "-245 96 137 146 2", "-242 96 137 54 5", "-242 96 138 54 5",
+        "-239 96 137 146 3", "-239 96 138 146 3",
+    ])),
     # RenderPainting and RenderItemFrame on a wall: four paintings, framed
     # items as sprites and a block in each rotation, and an empty frame.
     "hanging": dict(seed=12345, time=6000, pos=(-242.5, 97.0, 131.5), look=(0.0, 5.0), setblock=";".join(
