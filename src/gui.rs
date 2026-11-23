@@ -11,6 +11,51 @@ const BLOCKS: u8 = 0;
 const SHEET: u8 = 1;
 const PLAIN: u8 = 2;
 
+/// Shared projection for drawing and pointer input in an in-game screen.
+pub struct Viewport {
+    physical: (f32, f32),
+    pub size: (f32, f32),
+}
+
+impl Viewport {
+    pub fn new((w, h): (u32, u32), scale: u32) -> Self {
+        let (w, h) = (w.max(1), h.max(1));
+        Self {
+            physical: (w as f32, h as f32),
+            size: (w.div_ceil(scale) as f32, h.div_ceil(scale) as f32),
+        }
+    }
+
+    pub fn pointer(&self, (x, y): (f32, f32)) -> (f32, f32) {
+        (
+            x * self.size.0 / self.physical.0,
+            y * self.size.1 / self.physical.1,
+        )
+    }
+
+    pub fn physical_pointer(&self, (x, y): (f32, f32)) -> (f32, f32) {
+        (
+            x * self.physical.0 / self.size.0,
+            y * self.physical.1 / self.size.1,
+        )
+    }
+}
+
+#[cfg(test)]
+mod viewport_tests {
+    use super::Viewport;
+
+    #[test]
+    fn inventory_pointer_lines_up_at_odd_window_sizes() {
+        let viewport = Viewport::new((1099, 655), 2);
+        assert_eq!(viewport.size, (550.0, 328.0));
+        // A point just inside an edge after projection onto the window.
+        let pixel = (387.75, 323.8);
+        let (x, y) = viewport.pointer(pixel);
+        assert_eq!((x.floor() as i32, y.floor() as i32), (194, 162));
+    }
+}
+
 pub struct Ui<'a> {
     pub v: Vec<Vertex>,
     /// Vertex ranges of `v` drawn with the additive glint pipeline.

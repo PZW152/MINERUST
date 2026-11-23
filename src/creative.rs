@@ -94,7 +94,7 @@ pub struct Creative {
     pub tab: usize,
     scroll: f32,
     is_scrolling: bool,
-    was_clicking: bool,
+    pressed_tab: Option<usize>,
     pub search: TextField,
     clear_search: bool,
     items: Vec<Stack>,
@@ -118,7 +118,7 @@ impl Creative {
             tab: 0,
             scroll: 0.0,
             is_scrolling: false,
-            was_clicking: false,
+            pressed_tab: None,
             search,
             clear_search: false,
             items: Vec::new(),
@@ -196,25 +196,35 @@ impl Creative {
 
     /// `ContainerCreative.scrollTo`
     fn scroll_to(&mut self, f: f32) {
-        let rows = self.items.len() as i32 / 9 - 5 + 1;
-        let off = ((f * rows as f32) as f64 + 0.5) as i32;
-        let off = off.max(0);
-        for r in 0..5 {
-            for c in 0..9 {
-                let i = c + (r + off) * 9;
-                self.basic[(c + r * 9) as usize] = self.items.get(i as usize).copied();
-            }
+        let first = (f * self.scroll_rows() as f32).round() as usize * 9;
+        for (i, slot) in self.basic.iter_mut().enumerate() {
+            *slot = self.items.get(first + i).copied();
         }
     }
 
+    fn scroll_rows(&self) -> usize {
+        self.items.len().div_ceil(9).saturating_sub(5)
+    }
+
     fn needs_scroll_bars(&self) -> bool {
-        self.tab != INVENTORY_TAB && self.items.len() > 45
+        self.tab != INVENTORY_TAB && self.scroll_rows() > 0
+    }
+
+    fn scroll_pointer(&mut self, mouse_y: i32, top: i32) {
+        self.scroll = (((mouse_y - top - 18) as f32 - 7.5) / (112.0 - 15.0)).clamp(0.0, 1.0);
+        self.scroll_to(self.scroll);
+    }
+
+    pub fn cancel_pointer(&mut self) {
+        self.gui = GuiContainer::default();
+        self.pressed_tab = None;
+        self.is_scrolling = false;
     }
 
     /// `setCurrentCreativeTab`
     pub fn set_tab(&mut self, t: usize, ui: &Ui, lang: &Lang) {
         self.tab = t;
-        self.gui = GuiContainer::default();
+        self.cancel_pointer();
         self.items = if t == SEARCH_TAB || t == INVENTORY_TAB {
             Vec::new()
         } else {
@@ -274,6 +284,9 @@ impl Creative {
 
     /// `handleMouseClick`
     fn handle(&mut self, view: &mut InvView, c: Click) {
+        if c.slot == -1 {
+            return;
+        }
         self.clear_search = true;
         let slots = self.slots();
         let shift = c.mode == 1;
@@ -284,7 +297,7 @@ impl Creative {
         };
         let slot = (c.slot >= 0 && (c.slot as usize) < slots.len()).then_some(c.slot as usize);
         let inv = &mut view.inv;
-        if slot.is_none() && self.tab != INVENTORY_TAB && mode != 5 {
+        if c.slot == -999 && mode != 5 {
             if let Some(cur) = inv.cursor {
                 if c.button == 0 {
                     self.out.push(Out::Drop(cur));
@@ -319,9 +332,6 @@ impl Creative {
                     self.out.push(Out::Drop(t));
                 }
                 self.send_changes(&before, &ctx);
-            } else if mode == 4 && view.inv.cursor.is_some() {
-                self.out.push(Out::Drop(view.inv.cursor.unwrap()));
-                view.inv.cursor = None;
             } else {
                 let n = slot.map_or(c.slot, |i| i as i32);
                 let mut tile: [Option<Stack>; 0] = [];
@@ -453,8 +463,20 @@ impl Creative {
         keys: &Keys,
     ) {
         let layout = self.layout(dims.0, dims.1, dims.2);
-        if button == 0 && Self::tab_at(mouse.0 - layout.left, mouse.1 - layout.top).is_some() {
+        if self.pressed_tab.is_some() || self.is_scrolling {
             return;
+        }
+        if button == 0 {
+            let (x, y) = (mouse.0 - layout.left, mouse.1 - layout.top);
+            self.pressed_tab = Self::tab_at(x, y);
+            if self.pressed_tab.is_some() {
+                return;
+            }
+            if self.needs_scroll_bars() && (175..189).contains(&x) && (18..130).contains(&y) {
+                self.is_scrolling = true;
+                self.scroll_pointer(mouse.1, layout.top);
+                return;
+            }
         }
         let shown = self.shown(view);
         let mut gui = std::mem::take(&mut self.gui);
@@ -470,12 +492,16 @@ impl Creative {
 
     pub fn mouse_dragged(&mut self, view: &InvView, dims: (i32, i32, bool), mouse: (i32, i32)) {
         let layout = self.layout(dims.0, dims.1, dims.2);
+        if self.is_scrolling {
+            self.scroll_pointer(mouse.1, layout.top);
+            return;
+        }
         let shown = self.shown(view);
         let f = Self::frame(&shown, &layout, mouse, 0.0);
         self.gui.mouse_dragged(&f);
     }
 
-    /// `mouseMovedOrUp`: releasing over a tab selects it.
+    /// A tab changes only when the click starts and ends on that tab.
     #[allow(clippy::too_many_arguments)]
     pub fn mouse_released(
         &mut self,
@@ -490,10 +516,21 @@ impl Creative {
     ) {
         let layout = self.layout(dims.0, dims.1, dims.2);
         if button == 0 {
-            if let Some(t) = Self::tab_at(mouse.0 - layout.left, mouse.1 - layout.top) {
-                self.set_tab(t, ui, lang);
+            if self.is_scrolling {
+                self.scroll_pointer(mouse.1, layout.top);
+                self.is_scrolling = false;
                 return;
             }
+            if let Some(pressed) = self.pressed_tab.take() {
+                if Self::tab_at(mouse.0 - layout.left, mouse.1 - layout.top) == Some(pressed) {
+                    self.set_tab(pressed, ui, lang);
+                }
+                return;
+            }
+        }
+        if button == 0 && Self::tab_at(mouse.0 - layout.left, mouse.1 - layout.top).is_some() {
+            self.gui = GuiContainer::default();
+            return;
         }
         let shown = self.shown(view);
         let mut gui = std::mem::take(&mut self.gui);
@@ -512,9 +549,8 @@ impl Creative {
         if !self.needs_scroll_bars() {
             return;
         }
-        let rows = self.items.len() as i32 / 9 - 5 + 1;
         let d = if up { 1.0 } else { -1.0 };
-        self.scroll = ((self.scroll as f64 - d / rows as f64) as f32).clamp(0.0, 1.0);
+        self.scroll = (self.scroll - d / self.scroll_rows() as f32).clamp(0.0, 1.0);
         self.scroll_to(self.scroll);
     }
 
@@ -559,7 +595,9 @@ impl Creative {
         }
         // checkHotbarKeys
         if view.inv.cursor.is_none() {
-            if let Some(h) = self.gui.hovered {
+            if let Some(h) =
+                GuiContainer::slot_under_pointer(&Self::frame(&shown, &layout, mouse, 0.0))
+            {
                 if let Some(k) = keys.hotbar.iter().position(|&c| c == code) {
                     self.handle(
                         view,
@@ -601,34 +639,12 @@ impl Creative {
         view: &InvView,
         dims: (i32, i32, bool),
         mouse: (i32, i32),
-        mouse_down: bool,
         age: f32,
         lang: &Lang,
         effects: &[EffectLine],
     ) {
         let layout = self.layout(dims.0, dims.1, dims.2);
         let (left, top) = (layout.left, layout.top);
-        // the scroll bar drag
-        let (x0, y0) = (left + 175, top + 18);
-        let (x1, y1) = (x0 + 14, y0 + 112);
-        if !self.was_clicking
-            && mouse_down
-            && mouse.0 >= x0
-            && mouse.1 >= y0
-            && mouse.0 < x1
-            && mouse.1 < y1
-        {
-            self.is_scrolling = self.needs_scroll_bars();
-        }
-        if !mouse_down {
-            self.is_scrolling = false;
-        }
-        self.was_clicking = mouse_down;
-        if self.is_scrolling {
-            self.scroll = ((mouse.1 - y0) as f32 - 7.5) / ((y1 - y0) as f32 - 15.0);
-            self.scroll = self.scroll.clamp(0.0, 1.0);
-            self.scroll_to(self.scroll);
-        }
         crate::screens::dim_background(ui);
         // drawGuiContainerBackgroundLayer
         let (lf, tf) = (left as f32, top as f32);
@@ -792,7 +808,7 @@ mod tests {
             tab,
             scroll: 0.0,
             is_scrolling: false,
-            was_clicking: false,
+            pressed_tab: None,
             search: TextField::new(0.0, 0.0, 89.0, 9.0),
             clear_search: false,
             items: tab_items(tab),
@@ -859,5 +875,39 @@ mod tests {
         c.handle(&mut v, click(45, 0, 1));
         assert_eq!(v.inv.main[5], None);
         assert_eq!(c.out.len(), 45);
+    }
+
+    #[test]
+    fn inventory_creative_blank_space_keeps_cursor_stack() {
+        let mut c = screen(0);
+        let mut v = InvView::empty();
+        let stack = Stack::new(1, 0, 5);
+        v.inv.cursor = Some(stack);
+        for button in [0, 1] {
+            c.handle(&mut v, click(-1, button, 0));
+            assert_eq!(v.inv.cursor, Some(stack));
+            assert!(c.out.is_empty());
+        }
+    }
+
+    #[test]
+    fn inventory_creative_right_click_outside_drops_one_item_in_either_tab() {
+        for tab in [0, INVENTORY_TAB] {
+            let mut c = screen(tab);
+            let mut v = InvView::empty();
+            v.inv.cursor = Some(Stack::new(1, 0, 5));
+            c.handle(&mut v, click(-999, 1, 0));
+            assert_eq!(v.inv.cursor, Some(Stack::new(1, 0, 4)));
+            assert_eq!(c.out, [Out::Drop(Stack::new(1, 0, 1))]);
+        }
+    }
+
+    #[test]
+    fn inventory_creative_scroll_ends_on_last_populated_row() {
+        let mut c = screen(0);
+        c.items = (0..54).map(|meta| Stack::new(1, meta, 1)).collect();
+        c.scroll_to(1.0);
+        assert_eq!(c.basic[0], Some(c.items[9]));
+        assert_eq!(c.basic[44], Some(c.items[53]));
     }
 }

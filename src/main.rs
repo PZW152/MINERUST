@@ -1128,7 +1128,14 @@ impl ApplicationHandler for App {
             WindowEvent::Focused(f) => {
                 self.focused = f;
                 if !f {
-                    self.set_grab(false);
+                    self.shift = false;
+                    self.ctrl = false;
+                    if let Some(g) = &mut self.game {
+                        g.focus_lost();
+                    }
+                    if self.grabbed {
+                        self.set_grab(false);
+                    }
                 }
             }
             WindowEvent::CursorMoved { position, .. } => {

@@ -453,7 +453,7 @@ pub struct Game {
     pub screen: Screen,
     /// Mouse position in window pixels.
     pub mouse_px: (f32, f32),
-    gui_scale: f32,
+    gui_viewport: crate::gui::Viewport,
     pub left_down: bool,
     pub right_down: bool,
     dig: Option<Digging>,
@@ -638,6 +638,8 @@ impl Game {
             }
         }
         let _ = sim.commands.send(Command::Center(center.0, center.1));
+        let gui_viewport =
+            crate::gui::Viewport::new((renderer.extent.width, renderer.extent.height), 2);
         Game {
             renderer,
             world: ClientWorld::default(),
@@ -775,7 +777,7 @@ impl Game {
             mode,
             screen: Screen::Playing,
             mouse_px: (0.0, 0.0),
-            gui_scale: 2.0,
+            gui_viewport,
             left_down: false,
             right_down: false,
             dig: None,
@@ -3201,18 +3203,11 @@ impl Game {
     }
 
     fn gui_mouse(&self) -> (f32, f32) {
-        (
-            self.mouse_px.0 / self.gui_scale,
-            self.mouse_px.1 / self.gui_scale,
-        )
+        self.gui_viewport.pointer(self.mouse_px)
     }
 
     fn gui_size(&self) -> (f32, f32) {
-        let e = self.renderer.extent;
-        (
-            e.width as f32 / self.gui_scale,
-            e.height as f32 / self.gui_scale,
-        )
+        self.gui_viewport.size
     }
 
     /// The held stack as drawn: `EntityPlayer.getItemIcon` shows the cast
@@ -3902,10 +3897,8 @@ impl Game {
 
     /// The mouse in scaled GUI pixels (`Mouse.getX() * width / displayWidth`).
     fn gui_mouse_i(&self) -> (i32, i32) {
-        (
-            (self.mouse_px.0 / self.gui_scale).floor() as i32,
-            (self.mouse_px.1 / self.gui_scale).floor() as i32,
-        )
+        let (x, y) = self.gui_mouse();
+        (x.floor() as i32, y.floor() as i32)
     }
 
     fn container_keys(&self) -> crate::gui_container::Keys {
@@ -4040,6 +4033,15 @@ impl Game {
         }
         if self.screen == Screen::Window {
             self.with_container(|g, f, _, _| g.mouse_dragged(f));
+        }
+    }
+
+    pub fn focus_lost(&mut self) {
+        self.left_down = false;
+        self.right_down = false;
+        self.gui = Default::default();
+        if let Some(creative) = &mut self.creative {
+            creative.cancel_pointer();
         }
     }
 
@@ -5646,7 +5648,7 @@ impl Game {
             self.sections_built_mark = self.renderer.sections_built;
             self.fps_since = Instant::now();
         }
-        self.gui_scale = scale as f32;
+        self.gui_viewport = crate::gui::Viewport::new(window_size, scale);
 
         // --- Dropped items, crack overlay, hand ---
         let mut dynamic: Vec<crate::render::mesher::Vertex> = Vec::new();
@@ -6175,11 +6177,8 @@ impl Game {
 
         self.anvil_sync();
         let ui_atlas = self.atlas.clone();
-        let mut ui = crate::gui::Ui::new(
-            &ui_atlas,
-            (window_size.0 as f64 / scale as f64).ceil() as f32,
-            (window_size.1 as f64 / scale as f64).ceil() as f32,
-        );
+        let (w, h) = self.gui_size();
+        let mut ui = crate::gui::Ui::new(&ui_atlas, w, h);
         // updateCameraAndRender: no GuiIngame with hideGUI and no screen
         let hud_hidden = self.hide_gui && self.screen == Screen::Playing;
         // GuiIngame.renderGameOverlay begins with renderVignette (fancy
@@ -6409,7 +6408,7 @@ impl Game {
         if self.show_debug {
             self.debug_overlay(&mut ui, &g, eye);
         }
-        if let Some((x, y)) = std::env::var("MINERUST_MOUSE")
+        let m = if let Some(mouse) = std::env::var("MINERUST_MOUSE")
             .ok()
             .and_then(|v| {
                 v.split_once(',')
@@ -6417,12 +6416,11 @@ impl Game {
             })
             .and_then(|(a, b)| Some((a.ok()?, b.ok()?)))
         {
-            self.mouse_px = (x * scale as f32, y * scale as f32);
-        }
-        let m = (
-            self.mouse_px.0 / scale as f32,
-            self.mouse_px.1 / scale as f32,
-        );
+            self.mouse_px = self.gui_viewport.physical_pointer(mouse);
+            mouse
+        } else {
+            self.gui_mouse()
+        };
         match self.screen {
             Screen::Window if self.creative.is_some() => {
                 let lines = self.effect_lines();
@@ -6430,16 +6428,7 @@ impl Game {
                 let mouse = (m.0.floor() as i32, m.1.floor() as i32);
                 let age = self.ticks as f32 + partial;
                 let mut c = self.creative.take().unwrap();
-                c.draw(
-                    &mut ui,
-                    &self.view,
-                    dims,
-                    mouse,
-                    self.left_down,
-                    age,
-                    &self.lang,
-                    &lines,
-                );
+                c.draw(&mut ui, &self.view, dims, mouse, age, &self.lang, &lines);
                 self.creative = Some(c);
             }
             Screen::Window => {
@@ -6666,6 +6655,7 @@ impl Game {
 
     /// `GuiScreen.drawScreen` of the open menu.
     fn draw_menu(&mut self, ui: &mut crate::gui::Ui, partial: f32) {
+        let (mx, my) = self.gui_mouse();
         let (Some(menu), Some(shell)) = (self.menu.as_mut(), self.shell.as_mut()) else {
             return;
         };
@@ -6676,10 +6666,7 @@ impl Game {
             let mut ctx = Self::menu_ctx(shell, &self.lang, &mut sounds);
             menu.resize(ui, &mut ctx, size.0, size.1);
         }
-        menu.mouse = (
-            (self.mouse_px.0 / self.gui_scale).floor(),
-            (self.mouse_px.1 / self.gui_scale).floor(),
-        );
+        menu.mouse = (mx.floor(), my.floor());
         let mut ctx = Self::menu_ctx(shell, &self.lang, &mut sounds);
         menu.draw(ui, &mut ctx, partial);
         let a = menu.take_pending();
@@ -6697,15 +6684,13 @@ impl Game {
 
     fn menu_mouse(&mut self, button: u8, pressed: bool) -> Request {
         let (w, h) = self.menu_size;
+        let (mx, my) = self.gui_mouse();
         let a = {
             let (Some(menu), Some(shell)) = (self.menu.as_mut(), self.shell.as_mut()) else {
                 return Request::None;
             };
             let mut sounds = Vec::new();
-            menu.mouse = (
-                (self.mouse_px.0 / self.gui_scale).floor(),
-                (self.mouse_px.1 / self.gui_scale).floor(),
-            );
+            menu.mouse = (mx.floor(), my.floor());
             let ui = crate::gui::Ui::new(&self.atlas, w, h);
             let a = {
                 let mut ctx = Self::menu_ctx(shell, &self.lang, &mut sounds);

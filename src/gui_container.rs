@@ -34,8 +34,6 @@ pub struct Click {
 /// The per-screen state of `GuiContainer`.
 #[derive(Clone, Debug, Default)]
 pub struct GuiContainer {
-    /// `theSlot`: the slot under the mouse at the last draw.
-    pub hovered: Option<usize>,
     /// `lastClickSlot`, `lastClickTime`, `lastClickButton`
     last_slot: Option<Option<usize>>,
     last_time: u64,
@@ -44,7 +42,7 @@ pub struct GuiContainer {
     ignore_mouse_up: bool,
     shift_clicked: Option<Stack>,
     drag_splitting: bool,
-    drag_button: i32,
+    drag_from: (i32, i32),
     drag_limit: i32,
     drag_slots: Vec<usize>,
     drag_remnant: u32,
@@ -209,6 +207,11 @@ impl GuiContainer {
         slots.iter().position(|d| over(d, left, top, mx, my))
     }
 
+    pub fn slot_under_pointer(f: &Frame) -> Option<usize> {
+        let (slots, left, top, _, _) = Self::geometry(f);
+        Self::slot_at(&slots, left, top, f.mouse.0, f.mouse.1)
+    }
+
     /// `updateDragSplitting`
     fn update_drag(&mut self, view: &InvView, slots: &[SlotDef]) {
         let Some(cur) = view.inv.cursor else { return };
@@ -236,6 +239,9 @@ impl GuiContainer {
         keys: &Keys,
         send: &mut dyn FnMut(Click) -> InvView,
     ) {
+        if self.held.is_some() {
+            return;
+        }
         self.held = Some(button);
         let (slots, left, top, xs, ys) = Self::geometry(f);
         let (mx, my) = f.mouse;
@@ -275,9 +281,9 @@ impl GuiContainer {
                         });
                     }
                     self.ignore_mouse_up = true;
-                } else {
+                } else if !pick {
                     self.drag_splitting = true;
-                    self.drag_button = button;
+                    self.drag_from = f.mouse;
                     self.drag_slots.clear();
                     if button == 0 {
                         self.drag_limit = 0;
@@ -294,23 +300,35 @@ impl GuiContainer {
 
     /// `GuiContainer.mouseClickMove`
     pub fn mouse_dragged(&mut self, f: &Frame) {
-        if self.held.is_none() {
+        if !self.drag_splitting || self.drag_from == f.mouse {
             return;
         }
-        let (slots, left, top, _, _) = Self::geometry(f);
-        let (mx, my) = f.mouse;
-        let Some(i) = Self::slot_at(&slots, left, top, mx, my) else {
-            return;
-        };
+        let (from_x, from_y) = std::mem::replace(&mut self.drag_from, f.mouse);
         let Some(cur) = f.view.inv.cursor else { return };
-        if self.drag_splitting
-            && cur.count as usize > self.drag_slots.len()
-            && can_add(f.view, Some(&slots[i]), Some(&cur), true)
-            && slot_valid(&slots[i], &cur)
-            && can_drag_into(f, &slots[i])
-            && !self.drag_slots.contains(&i)
-        {
-            self.drag_slots.push(i);
+        let (slots, left, top, _, _) = Self::geometry(f);
+        let dx = i64::from(f.mouse.0) - i64::from(from_x);
+        let dy = i64::from(f.mouse.1) - i64::from(from_y);
+        let steps = dx.abs().max(dy.abs());
+        let before = self.drag_slots.len();
+        // Consecutive pointer events can span several slot widths.
+        for step in 0..=steps {
+            if cur.count as usize <= self.drag_slots.len() {
+                break;
+            }
+            let mx = from_x + (dx * step / steps) as i32;
+            let my = from_y + (dy * step / steps) as i32;
+            if let Some(i) = Self::slot_at(&slots, left, top, mx, my) {
+                let d = &slots[i];
+                if !self.drag_slots.contains(&i)
+                    && can_add(f.view, Some(d), Some(&cur), true)
+                    && slot_valid(d, &cur)
+                    && can_drag_into(f, d)
+                {
+                    self.drag_slots.push(i);
+                }
+            }
+        }
+        if self.drag_slots.len() != before {
             self.update_drag(f.view, &slots);
         }
     }
@@ -324,6 +342,9 @@ impl GuiContainer {
         keys: &Keys,
         send: &mut dyn FnMut(Click) -> InvView,
     ) {
+        if self.held != Some(button) {
+            return;
+        }
         self.held = None;
         let (slots, left, top, xs, ys) = Self::geometry(f);
         let (mx, my) = f.mouse;
@@ -342,7 +363,7 @@ impl GuiContainer {
                 slots[i].inv != container::Inv::Result
             }
         });
-        if self.double_click && hit.is_some() && button == 0 && mergeable {
+        if self.double_click && self.last_slot == Some(hit) && button == 0 && mergeable {
             let h = hit.unwrap();
             if shift {
                 if let Some(sc) = self.shift_clicked {
@@ -369,12 +390,6 @@ impl GuiContainer {
             self.double_click = false;
             self.last_time = 0;
         } else {
-            if self.drag_splitting && self.drag_button != button {
-                self.drag_splitting = false;
-                self.drag_slots.clear();
-                self.ignore_mouse_up = true;
-                return;
-            }
             if self.ignore_mouse_up {
                 self.ignore_mouse_up = false;
                 return;
@@ -436,10 +451,11 @@ impl GuiContainer {
         if code == 1 || code == keys.inventory {
             return true;
         }
-        let (slots, ..) = Self::geometry(f);
+        let (slots, left, top, _, _) = Self::geometry(f);
+        let hovered = Self::slot_at(&slots, left, top, f.mouse.0, f.mouse.1);
         // checkHotbarKeys
         if f.view.inv.cursor.is_none() {
-            if let Some(h) = self.hovered {
+            if let Some(h) = hovered {
                 if let Some(k) = keys.hotbar.iter().position(|&c| c == code) {
                     send(Click {
                         slot: h as i32,
@@ -450,7 +466,7 @@ impl GuiContainer {
                 }
             }
         }
-        if let Some(h) = self.hovered {
+        if let Some(h) = hovered {
             if slot_stack(f.view, &slots[h]).is_some() {
                 if code == keys.pick {
                     send(Click {
@@ -510,19 +526,16 @@ impl GuiContainer {
             ui.player_model(px, py, 30.0, px - mx, py - 50.0 - my, f.age, &view.inv);
         }
         // the slots
-        self.hovered = None;
+        let hovered = Self::slot_at(&slots, left, top, f.mouse.0, f.mouse.1);
         let cursor = view.inv.cursor;
         for (i, d) in slots.iter().enumerate() {
             let (x, y) = (lf + d.x as f32, tf + d.y as f32);
             let mut st = slot_stack(view, d);
             let mut highlight = false;
             let mut label: Option<String> = None;
-            let mut skip = false;
-            if self.drag_splitting && self.drag_slots.contains(&i) {
+            if self.drag_splitting && self.drag_slots.len() > 1 && self.drag_slots.contains(&i) {
                 if let Some(c) = cursor {
-                    if self.drag_slots.len() == 1 {
-                        skip = true;
-                    } else if can_add(view, Some(d), Some(&c), true) && can_drag_into(f, d) {
+                    if can_add(view, Some(d), Some(&c), true) && can_drag_into(f, d) {
                         let mut s = c;
                         highlight = true;
                         let have = st.map_or(0, |s| s.count);
@@ -544,28 +557,25 @@ impl GuiContainer {
                     }
                 }
             }
-            if !skip {
-                if st.is_none() {
-                    if let SlotKind::Armor(t) = d.kind {
-                        // ItemArmor.getBackgroundIcon
-                        let n = [
-                            "empty_armor_slot_helmet",
-                            "empty_armor_slot_chestplate",
-                            "empty_armor_slot_leggings",
-                            "empty_armor_slot_boots",
-                        ][t];
-                        ui.named_icon(n, x, y);
-                    }
-                }
-                if highlight {
-                    ui.rect(x, y, 16.0, 16.0, 0xFFFFFF, 0x80 as f32 / 255.0);
-                }
-                if let Some(s) = st {
-                    draw_stack_with(ui, &s, x, y, label.as_deref());
+            if st.is_none() {
+                if let SlotKind::Armor(t) = d.kind {
+                    // ItemArmor.getBackgroundIcon
+                    let n = [
+                        "empty_armor_slot_helmet",
+                        "empty_armor_slot_chestplate",
+                        "empty_armor_slot_leggings",
+                        "empty_armor_slot_boots",
+                    ][t];
+                    ui.named_icon(n, x, y);
                 }
             }
-            if over(d, left, top, f.mouse.0, f.mouse.1) {
-                self.hovered = Some(i);
+            if highlight {
+                ui.rect(x, y, 16.0, 16.0, 0xFFFFFF, 0x80 as f32 / 255.0);
+            }
+            if let Some(s) = st {
+                draw_stack_with(ui, &s, x, y, label.as_deref());
+            }
+            if hovered == Some(i) {
                 ui.rect(x, y, 16.0, 16.0, 0xFFFFFF, 0x80 as f32 / 255.0);
             }
         }
@@ -586,7 +596,7 @@ impl GuiContainer {
             }
             let (mx, my) = (f.mouse.0 as f32, f.mouse.1 as f32);
             draw_stack_with(ui, &s, mx - 8.0, my - 8.0, label.as_deref());
-        } else if let Some(h) = self.hovered {
+        } else if let Some(h) = hovered {
             if let Some(st) = slot_stack(view, &slots[h]) {
                 let lines = tooltip(&st);
                 crate::screens::hovering_text(ui, &lines, f.mouse.0, f.mouse.1);
@@ -897,5 +907,100 @@ impl BookAnim {
         let d = ((self.flip_t - self.flip) * 0.4).clamp(-0.2, 0.2);
         self.flip_a += (d - self.flip_a) * 0.9;
         self.flip += self.flip_a;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const KEYS: Keys = Keys {
+        inventory: 18,
+        drop: 16,
+        pick: -98,
+        hotbar: [2, 3, 4, 5, 6, 7, 8, 9, 10],
+    };
+
+    fn hotbar_frame(view: &InvView, index: usize) -> Frame<'_> {
+        let w = 400;
+        let h = 300;
+        let (left, top) = origin(&view.open, w, h, false);
+        let slot = Window::Player.slots()[36 + index];
+        Frame {
+            layout: None,
+            view,
+            w,
+            h,
+            effects: false,
+            mouse: (left + slot.x + 8, top + slot.y + 8),
+            age: 0.0,
+            ench: None,
+        }
+    }
+
+    #[test]
+    fn inventory_hotbar_key_uses_current_pointer_between_frames() {
+        let mut gui = GuiContainer::default();
+        let view = InvView::empty();
+        let frame = hotbar_frame(&view, 1);
+        let mut clicks = Vec::new();
+        gui.key_typed(&frame, 2, false, &KEYS, &mut |click| {
+            clicks.push(click);
+            view.clone()
+        });
+        assert_eq!(
+            clicks,
+            [Click {
+                slot: 37,
+                button: 0,
+                mode: 2
+            }]
+        );
+    }
+
+    #[test]
+    fn inventory_unrelated_release_leaves_the_held_stack_alone() {
+        let mut gui = GuiContainer::default();
+        let mut view = InvView::empty();
+        view.inv.cursor = Some(Stack::new(1, 0, 4));
+        let mut frame = hotbar_frame(&view, 0);
+        let mut clicks = Vec::new();
+        let mut send = |click| {
+            clicks.push(click);
+            view.clone()
+        };
+        gui.mouse_clicked(&frame, 0, false, 500, &KEYS, &mut send);
+        gui.mouse_released(&frame, 1, false, &KEYS, &mut send);
+        frame.mouse = (-1, -1);
+        gui.mouse_released(&frame, 0, false, &KEYS, &mut send);
+        assert_eq!(
+            clicks,
+            [Click {
+                slot: -999,
+                button: 0,
+                mode: 0
+            }]
+        );
+    }
+
+    #[test]
+    fn inventory_fast_drag_includes_crossed_slots() {
+        let mut gui = GuiContainer::default();
+        let mut view = InvView::empty();
+        view.inv.cursor = Some(Stack::new(1, 0, 30));
+        let mut clicks = Vec::new();
+        let mut send = |click| {
+            clicks.push(click);
+            view.clone()
+        };
+        let start = hotbar_frame(&view, 0);
+        let end = hotbar_frame(&view, 2);
+        gui.mouse_clicked(&start, 0, false, 500, &KEYS, &mut send);
+        gui.mouse_dragged(&end);
+        gui.mouse_released(&end, 0, false, &KEYS, &mut send);
+        assert_eq!(
+            clicks.iter().map(|c| c.slot).collect::<Vec<_>>(),
+            [-999, 36, 37, 38, -999]
+        );
     }
 }
