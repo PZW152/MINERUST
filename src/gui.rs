@@ -13,7 +13,7 @@ const PLAIN: u8 = 2;
 
 /// Shared projection for drawing and pointer input in an in-game screen.
 pub struct Viewport {
-    physical: (f32, f32),
+    scale: f32,
     pub size: (f32, f32),
 }
 
@@ -21,39 +21,56 @@ impl Viewport {
     pub fn new((w, h): (u32, u32), scale: u32) -> Self {
         let (w, h) = (w.max(1), h.max(1));
         Self {
-            physical: (w as f32, h as f32),
+            scale: scale as f32,
             size: (w.div_ceil(scale) as f32, h.div_ceil(scale) as f32),
         }
     }
 
     pub fn pointer(&self, (x, y): (f32, f32)) -> (f32, f32) {
-        (
-            x * self.size.0 / self.physical.0,
-            y * self.size.1 / self.physical.1,
-        )
+        // Vulkan positions are in whole GUI pixels. The rounded-up layout
+        // size only centers the controls and does not stretch those pixels.
+        (x / self.scale, y / self.scale)
     }
 
     pub fn physical_pointer(&self, (x, y): (f32, f32)) -> (f32, f32) {
-        (
-            x * self.physical.0 / self.size.0,
-            y * self.physical.1 / self.size.1,
-        )
+        (x * self.scale, y * self.scale)
     }
 }
 
 #[cfg(test)]
-mod viewport_tests {
-    use super::Viewport;
+mod tests {
+    use super::{glint_spans, Viewport};
 
     #[test]
     fn inventory_pointer_lines_up_at_odd_window_sizes() {
         let viewport = Viewport::new((1099, 655), 2);
         assert_eq!(viewport.size, (550.0, 328.0));
-        // A point just inside an edge after projection onto the window.
-        let pixel = (387.75, 323.8);
-        let (x, y) = viewport.pointer(pixel);
-        assert_eq!((x.floor() as i32, y.floor() as i32), (194, 162));
+        let (x, y) = viewport.pointer((387.75, 323.8));
+        assert_eq!((x.floor() as i32, y.floor() as i32), (193, 161));
+        assert_eq!(viewport.physical_pointer((194.0, 162.0)), (388.0, 324.0));
     }
+
+    #[test]
+    fn glint_spans_preserve_transparent_gaps() {
+        let mask = [true, true, false, true, false, false, true, true];
+        assert_eq!(glint_spans(&mask).collect::<Vec<_>>(), [0..2, 3..4, 6..8]);
+        assert_eq!(glint_spans(&[true; 16]).collect::<Vec<_>>(), [0..16]);
+        assert!(glint_spans(&[false; 16]).next().is_none());
+    }
+}
+
+fn glint_spans(row: &[bool]) -> impl Iterator<Item = std::ops::Range<usize>> + '_ {
+    let mut x = 0;
+    std::iter::from_fn(move || {
+        while x < row.len() && !row[x] {
+            x += 1;
+        }
+        let start = x;
+        while x < row.len() && row[x] {
+            x += 1;
+        }
+        (start < x).then_some(start..x)
+    })
 }
 
 pub struct Ui<'a> {
@@ -334,8 +351,7 @@ impl<'a> Ui<'a> {
         }
         // RenderItem.renderItemIntoGUI: one quad per render pass
         let passes = self.atlas.stack_passes(s);
-        let masks: Vec<[f32; 4]> = passes.iter().map(|p| p.0).collect();
-        for (t, c) in passes {
+        for &(t, c) in &passes {
             let col = [
                 (c[0] * 255.0) as u8,
                 (c[1] * 255.0) as u8,
@@ -350,16 +366,16 @@ impl<'a> Ui<'a> {
             );
         }
         if s.has_effect() {
-            self.glint(x, y, &masks);
+            self.glint(x, y, passes.into_iter().map(|(rect, _)| rect));
         }
     }
 
     /// `RenderItem.renderGlint` over an item drawn at `(x, y)`: two passes
     /// of the scrolling glint texture over a 20x20 square, added where the
     /// item's passes left depth (`glDepthFunc(GL_EQUAL)`), i.e. their
-    /// pixels that passed the alpha test. Drawn as one quad per such GUI
-    /// pixel with the passes' exact texture coordinates.
-    pub fn glint(&mut self, x: f32, y: f32, masks: &[[f32; 4]]) {
+    /// pixels that passed the alpha test. Adjacent covered pixels in a row
+    /// share a quad because their texture coordinates vary linearly.
+    fn glint(&mut self, x: f32, y: f32, masks: impl Iterator<Item = [f32; 4]>) {
         let size = crate::render::atlas::ATLAS_SIZE as f32;
         let img = &self.atlas.mips[0];
         let mut on = [[false; 16]; 16];
@@ -391,19 +407,12 @@ impl<'a> Ui<'a> {
                 [(s + dx + dy * k) * 0.00390625, dy * 0.00390625]
             };
             for (j, row) in on.iter().enumerate() {
-                for (i, &cell) in row.iter().enumerate() {
-                    if !cell {
-                        continue;
-                    }
-                    let (a, b) = (x + i as f32, y + j as f32);
+                let b = y + j as f32;
+                for span in glint_spans(row) {
+                    let (a, end) = (x + span.start as f32, x + span.end as f32);
                     self.quad(
-                        [[a, b], [a, b + 1.0], [a + 1.0, b + 1.0], [a + 1.0, b]],
-                        [
-                            uv(a, b),
-                            uv(a, b + 1.0),
-                            uv(a + 1.0, b + 1.0),
-                            uv(a + 1.0, b),
-                        ],
+                        [[a, b], [a, b + 1.0], [end, b + 1.0], [end, b]],
+                        [uv(a, b), uv(a, b + 1.0), uv(end, b + 1.0), uv(end, b)],
                         color,
                         4,
                     );

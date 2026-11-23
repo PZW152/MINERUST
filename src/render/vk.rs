@@ -407,7 +407,7 @@ pub struct Frame<'a> {
     pub crosshair: bool,
 }
 
-const UI_BUF_SIZE: u64 = 1 << 20;
+const UI_BUF_INITIAL_SIZE: u64 = 128 << 10;
 /// Camera-relative entity, crack, hand and weather quads.
 const WORLD_BUF_SIZE: u64 = 16 << 20;
 
@@ -486,6 +486,7 @@ struct PerFrame {
     ui_buf: vk::Buffer,
     ui_mem: vk::DeviceMemory,
     ui_ptr: *mut u8,
+    ui_size: u64,
     /// Dynamic world geometry: items, then crack overlay, then the hand.
     world_buf: vk::Buffer,
     world_mem: vk::DeviceMemory,
@@ -1303,11 +1304,14 @@ impl Renderer {
                     .device
                     .map_memory(dyn2_mem, 0, DYN_SIZE, vk::MemoryMapFlags::empty())
                     .unwrap() as *mut u8;
-                let (ui_buf, ui_mem) =
-                    r.create_buffer(UI_BUF_SIZE, vk::BufferUsageFlags::VERTEX_BUFFER, host);
+                let (ui_buf, ui_mem) = r.create_buffer(
+                    UI_BUF_INITIAL_SIZE,
+                    vk::BufferUsageFlags::VERTEX_BUFFER,
+                    host,
+                );
                 let ui_ptr = r
                     .device
-                    .map_memory(ui_mem, 0, UI_BUF_SIZE, vk::MemoryMapFlags::empty())
+                    .map_memory(ui_mem, 0, UI_BUF_INITIAL_SIZE, vk::MemoryMapFlags::empty())
                     .unwrap() as *mut u8;
                 let (world_buf, world_mem) =
                     r.create_buffer(WORLD_BUF_SIZE, vk::BufferUsageFlags::VERTEX_BUFFER, host);
@@ -1412,6 +1416,7 @@ impl Renderer {
                     ui_buf,
                     ui_mem,
                     ui_ptr,
+                    ui_size: UI_BUF_INITIAL_SIZE,
                     world_buf,
                     world_mem,
                     world_ptr,
@@ -2312,6 +2317,30 @@ impl Renderer {
         });
     }
 
+    /// Called after the frame's previous submission has completed.
+    fn ensure_ui_capacity(&mut self, frame: usize, required: u64) {
+        if required <= self.frames[frame].ui_size {
+            return;
+        }
+        let size = required.next_power_of_two();
+        let flags = vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT;
+        let (buffer, memory) = self.create_buffer(size, vk::BufferUsageFlags::VERTEX_BUFFER, flags);
+        let f = &mut self.frames[frame];
+        unsafe {
+            let ptr = self
+                .device
+                .map_memory(memory, 0, size, vk::MemoryMapFlags::empty())
+                .unwrap() as *mut u8;
+            self.device.unmap_memory(f.ui_mem);
+            self.device.destroy_buffer(f.ui_buf, None);
+            self.device.free_memory(f.ui_mem, None);
+            f.ui_buf = buffer;
+            f.ui_mem = memory;
+            f.ui_ptr = ptr;
+            f.ui_size = size;
+        }
+    }
+
     /// Renders one frame. Returns false if nothing was presented.
     pub fn render(&mut self, frame: &Frame, window_size: (u32, u32)) -> bool {
         unsafe {
@@ -2370,6 +2399,8 @@ impl Renderer {
             self.device
                 .wait_for_fences(&[fence], true, u64::MAX)
                 .unwrap();
+            let ui_bytes = std::mem::size_of_val(frame.ui);
+            self.ensure_ui_capacity(fi, ui_bytes as u64);
             let image_index = match self.swap_loader.acquire_next_image(
                 self.swapchain,
                 u64::MAX,
@@ -2998,15 +3029,12 @@ impl Renderer {
                 dev.cmd_draw_indexed(cmd, (n_hand / 4) as u32 * 6, 1, 0, 0, 0);
             }
             // GUI: positions are in scaled GUI pixels with the origin top-left.
-            let ui_count = frame
-                .ui
-                .len()
-                .min(UI_BUF_SIZE as usize / std::mem::size_of::<Vertex>());
+            let ui_count = frame.ui.len();
             if ui_count > 0 {
                 std::ptr::copy_nonoverlapping(
                     frame.ui.as_ptr() as *const u8,
                     self.frames[fi].ui_ptr,
-                    ui_count * std::mem::size_of::<Vertex>(),
+                    ui_bytes,
                 );
                 dev.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, self.pipe_gui);
                 push(
