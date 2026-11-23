@@ -131,6 +131,15 @@ SCENES = {
         "-246 96 137 146 2", "-245 96 137 146 2", "-242 96 137 54 5", "-242 96 138 54 5",
         "-239 96 137 146 3", "-239 96 138 146 3",
     ])),
+    # BlockPumpkin.onBlockAdded: a snow golem and an iron golem built from
+    # blocks (RenderSnowMan with its pumpkin, RenderIronGolem); they move.
+    "golems": dict(seed=12345, time=6000, pos=(-242.5, 97.0, 131.5), look=(0.0, 15.0), setblock=";".join(
+        [f"{x} 95 {z} 1" for x in range(-250, -234) for z in range(131, 142)] +
+        [f"{x} {y} {z} 20" for x in (-251, -234) for y in (96, 97) for z in range(131, 142)] +
+        [f"{x} {y} {z} 20" for x in range(-250, -234) for y in (96, 97) for z in (130, 142)] + [
+        "-245 96 136 80", "-245 97 136 80", "-245 98 136 86 0",
+        "-239 96 136 42", "-239 97 136 42", "-240 97 136 42", "-238 97 136 42", "-239 98 136 91 0",
+    ])),
     # RenderPainting and RenderItemFrame on a wall: four paintings, framed
     # items as sprites and a block in each rotation, and an empty frame.
     "hanging": dict(seed=12345, time=6000, pos=(-242.5, 97.0, 131.5), look=(0.0, 5.0), setblock=";".join(

@@ -42,6 +42,8 @@ pub struct Particle {
 
 #[derive(Clone, Copy, PartialEq)]
 enum Kind {
+    /// `EntitySnowShovelFX`
+    SnowShovel,
     Plain,
     Smoke,
     Flame,
@@ -276,6 +278,24 @@ impl Particles {
         p.max_age =
             ((8.0 / (self.r.next_float() as f64 * 0.8 + 0.2)) * if big { 2.5 } else { 1.0 }) as i32;
         p.kind = Kind::Smoke;
+        p.sprite = Sprite::Index(7);
+        self.add(p);
+    }
+
+    /// `"snowshovel"` (`EntitySnowShovelFX`)
+    pub fn snow_shovel(&mut self, pos: [f64; 3], m: [f64; 3]) {
+        let mut p = self.base(pos);
+        p.motion = [
+            p.motion[0] * 0.1 + m[0],
+            p.motion[1] * 0.1 + m[1],
+            p.motion[2] * 0.1 + m[2],
+        ];
+        let c = 1.0 - (crate::util::math::math_random() * 0.3) as f32;
+        p.color = [c, c, c, 1.0];
+        p.scale *= 0.75;
+        p.base_scale = p.scale;
+        p.max_age = (8.0 / (crate::util::math::math_random() * 0.8 + 0.2)) as i32;
+        p.kind = Kind::SnowShovel;
         p.sprite = Sprite::Index(7);
         self.add(p);
     }
@@ -704,6 +724,10 @@ impl Particles {
                         p.sprite = Sprite::Index(7 - p.age * 8 / p.max_age);
                         p.motion[1] += 0.004;
                     }
+                    Kind::SnowShovel => {
+                        p.sprite = Sprite::Index(7 - p.age * 8 / p.max_age);
+                        p.motion[1] -= 0.03;
+                    }
                     Kind::Explode => {
                         p.sprite = Sprite::Index(7 - p.age * 8 / p.max_age);
                         p.motion[1] += 0.004;
@@ -731,6 +755,7 @@ impl Particles {
                     Kind::Smoke | Kind::Explode | Kind::Reddust | Kind::Spell(_) => 0.96,
                     Kind::Flame => 0.96,
                     Kind::Lava => 0.999,
+                    Kind::SnowShovel => 0.99,
                     Kind::Crit => 0.7,
                     Kind::Note => 0.66,
                     Kind::Heart => 0.86,
@@ -837,7 +862,7 @@ impl Particles {
                 }
             }
             match p.kind {
-                Kind::Smoke | Kind::Explode => {
+                Kind::Smoke | Kind::Explode | Kind::SnowShovel => {
                     let mut f = (p.age as f32 + partial) / p.max_age as f32 * 32.0;
                     f = f.clamp(0.0, 1.0);
                     size = 0.1 * p.base_scale * f;

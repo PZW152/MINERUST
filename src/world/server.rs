@@ -605,6 +605,8 @@ pub struct ServerWorld {
     pub daylight_detectors: std::collections::BTreeSet<[i32; 3]>,
     /// Chest halves with the player's window open (`numPlayersUsing`).
     pub chest_users: std::collections::BTreeSet<[i32; 3]>,
+    /// `BlockPumpkin.onBlockAdded`: golems to spawn (iron or snow, feet).
+    pub golems: Vec<(bool, [f64; 3])>,
     /// `Container.calcRedstoneFromInventory` of the container tile entities
     /// (a chest as `BlockChest.getInventory` sees it), kept by `Play`.
     pub container_signal: std::collections::HashMap<[i32; 3], i32>,
@@ -670,6 +672,7 @@ impl ServerWorld {
             comparators: Default::default(),
             daylight_detectors: Default::default(),
             chest_users: Default::default(),
+            golems: Vec::new(),
             container_signal: Default::default(),
             ticking_now: Vec::new(),
         }
@@ -2088,6 +2091,7 @@ impl ServerWorld {
                 self.set_meta(x, y, z, m, 2);
             }
             block::TRIPWIRE => super::tripwire::wire_added(self, x, y, z),
+            block::PUMPKIN | block::LIT_PUMPKIN => self.pumpkin_added(x, y, z),
             block::CHEST | block::TRAPPED_CHEST => {
                 self.chest_init_meta(x, y, z);
                 for (dx, dz) in [(0, -1), (0, 1), (-1, 0), (1, 0)] {
@@ -2098,6 +2102,50 @@ impl ServerWorld {
             }
             _ => {
                 self.redstone_added(id, x, y, z);
+            }
+        }
+    }
+
+    /// `BlockPumpkin.onBlockAdded`: a pumpkin on two snow blocks makes a
+    /// snow golem; on a T of iron blocks (either way round) an iron golem.
+    fn pumpkin_added(&mut self, x: i32, y: i32, z: i32) {
+        let at = [x as f64 + 0.5, y as f64 - 1.95, z as f64 + 0.5];
+        let air = block::AIR;
+        if self.block(x, y - 1, z) == block::SNOW && self.block(x, y - 2, z) == block::SNOW {
+            for dy in 0..3 {
+                self.set_block(x, y - dy, z, air, 0, 2);
+            }
+            self.golems.push((false, at));
+            for dy in 0..3 {
+                self.notify_neighbours(x, y - dy, z, air);
+            }
+        } else if self.block(x, y - 1, z) == block::IRON_BLOCK
+            && self.block(x, y - 2, z) == block::IRON_BLOCK
+        {
+            let iron =
+                |w: &mut ServerWorld, x: i32, y: i32, z: i32| w.block(x, y, z) == block::IRON_BLOCK;
+            let ew = iron(self, x - 1, y - 1, z) && iron(self, x + 1, y - 1, z);
+            let ns = iron(self, x, y - 1, z - 1) && iron(self, x, y - 1, z + 1);
+            if !(ew || ns) {
+                return;
+            }
+            let arms = if ew {
+                [[x - 1, y - 1, z], [x + 1, y - 1, z]]
+            } else {
+                [[x, y - 1, z - 1], [x, y - 1, z + 1]]
+            };
+            for dy in 0..3 {
+                self.set_block(x, y - dy, z, air, 0, 2);
+            }
+            for a in arms {
+                self.set_block(a[0], a[1], a[2], air, 0, 2);
+            }
+            self.golems.push((true, at));
+            for dy in 0..3 {
+                self.notify_neighbours(x, y - dy, z, air);
+            }
+            for a in arms {
+                self.notify_neighbours(a[0], a[1], a[2], air);
             }
         }
     }

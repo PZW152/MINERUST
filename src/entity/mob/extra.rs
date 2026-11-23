@@ -573,3 +573,34 @@ pub fn village_golems(w: &mut ServerWorld, mobs: &mut Mobs) {
         }
     }
 }
+
+/// `EntitySnowman.onLivingUpdate` after the move: water hurts, a hot biome
+/// hurts, and snow is left behind where it is cold enough.
+pub fn snow_golem(m: &mut Mob, w: &mut ServerWorld) {
+    let x = math::floor_double(m.pos[0]);
+    let y = math::floor_double(m.pos[1]);
+    let z = math::floor_double(m.pos[2]);
+    if m.wet(w) {
+        // DamageSource.drown
+        m.hurt_src(1.0, false, false, true);
+    }
+    let temp = |w: &mut ServerWorld, x: i32, y: i32, z: i32| {
+        let b = w.biome(x, z);
+        b.float_temperature(&w.provider.terrain.noise, x, y, z)
+    };
+    if temp(w, x, y, z) > 1.0 {
+        // DamageSource.onFire
+        m.hurt_src(1.0, false, true, false);
+    }
+    for k in 0..4 {
+        let x = math::floor_double(m.pos[0] + ((k % 2 * 2 - 1) as f32 * 0.25) as f64);
+        let y = math::floor_double(m.pos[1]);
+        let z = math::floor_double(m.pos[2] + ((k / 2 % 2 * 2 - 1) as f32 * 0.25) as f64);
+        if w.material(x, y, z) == crate::block::Material::Air
+            && temp(w, x, y, z) < 0.8
+            && w.can_place_block_at(crate::block::SNOW_LAYER, x, y, z)
+        {
+            w.set_block(x, y, z, crate::block::SNOW_LAYER, 0, 3);
+        }
+    }
+}

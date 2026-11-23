@@ -7901,6 +7901,95 @@ mod tests {
         );
     }
 
+    /// `BlockPumpkin.onBlockAdded` and `EntitySnowman`.
+    #[test]
+    fn golems_from_pumpkins() {
+        use crate::entity::mob::Kind;
+        let (mut sim, x, y, z) = redstone_sim();
+        arena(&mut sim, x, y, z);
+        let feet = [x as f64 + 0.5, (y + 1) as f64, z as f64 + 0.5];
+        let step =
+            |sim: &mut Sim| sim.step(&[Command::Player(feet, [0.0, 0.0], false)], &mut Vec::new());
+        // snow, snow, pumpkin
+        let s = [x + 6, y + 1, z + 6];
+        sim.world.set_block(s[0], s[1], s[2], block::SNOW, 0, 3);
+        sim.world.set_block(s[0], s[1] + 1, s[2], block::SNOW, 0, 3);
+        sim.world
+            .set_block(s[0], s[1] + 2, s[2], block::PUMPKIN, 0, 3);
+        step(&mut sim);
+        let snowman = sim
+            .mobs
+            .list
+            .iter()
+            .find(|m| m.kind == Kind::SnowGolem)
+            .map(|m| (m.id, m.pos));
+        let (sid, sp) = snowman.expect("a snow golem");
+        assert!(
+            (sp[0] - (s[0] as f64 + 0.5)).abs() < 0.3 && (sp[2] - (s[2] as f64 + 0.5)).abs() < 0.3
+        );
+        for dy in 0..3 {
+            let b = sim.world.block(s[0], s[1] + dy, s[2]);
+            // (the golem may already have left snow at its feet)
+            assert!(
+                b == block::AIR || b == block::SNOW_LAYER,
+                "the blocks are used up"
+            );
+        }
+        // an iron T: pumpkin on top makes an iron golem; a lone column does not
+        let g = [x + 2, y + 1, z + 10];
+        sim.world
+            .set_block(g[0], g[1], g[2], block::IRON_BLOCK, 0, 3);
+        sim.world
+            .set_block(g[0], g[1] + 1, g[2], block::IRON_BLOCK, 0, 3);
+        sim.world
+            .set_block(g[0] - 1, g[1] + 1, g[2], block::IRON_BLOCK, 0, 3);
+        sim.world
+            .set_block(g[0] + 1, g[1] + 1, g[2], block::IRON_BLOCK, 0, 3);
+        sim.world
+            .set_block(g[0], g[1] + 2, g[2], block::LIT_PUMPKIN, 0, 3);
+        step(&mut sim);
+        let golem = sim
+            .mobs
+            .list
+            .iter()
+            .find(|m| m.kind == Kind::IronGolem)
+            .expect("an iron golem");
+        assert!(golem.player_made);
+        assert_eq!(sim.world.block(g[0] - 1, g[1] + 1, g[2]), block::AIR);
+        // the snow golem throws snowballs at a zombie in range
+        let mut r = JavaRandom::new(3);
+        let zp = [sp[0] + 6.0, (y + 1) as f64, sp[2]];
+        let zid = sim.mobs.spawn(Kind::Zombie, zp, 0.0, &mut r);
+        let mut thrown = false;
+        for _ in 0..200 {
+            step(&mut sim);
+            if sim
+                .mobs
+                .throwables
+                .iter()
+                .any(|t| matches!(t.thrower, crate::entity::arrow::Shooter::Mob(i) if i == sid))
+            {
+                thrown = true;
+                break;
+            }
+        }
+        assert!(thrown, "snowballs at the zombie");
+        let _ = zid;
+        // snow under its feet in a cold enough biome, or none in a warm one
+        let t = {
+            let b = sim.world.biome(s[0], s[2]);
+            b.float_temperature(&sim.world.provider.terrain.noise, s[0], s[1], s[2])
+        };
+        let snow = (-12..12)
+            .flat_map(|dx| (-12..12).map(move |dz| (dx, dz)))
+            .any(|(dx, dz)| sim.world.block(s[0] + dx, y + 1, s[2] + dz) == block::SNOW_LAYER);
+        if t < 0.8 {
+            assert!(snow, "a trail of snow");
+        } else {
+            assert!(!snow, "no snow where it is warm");
+        }
+    }
+
     /// `BlockChest` (trapped) and `BlockEnderChest`.
     #[test]
     fn trapped_and_ender_chests() {

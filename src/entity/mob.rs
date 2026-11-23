@@ -46,9 +46,11 @@ pub enum Kind {
     MagmaCube,
     EnderDragon,
     EnderCrystal,
+    /// `EntitySnowman`
+    SnowGolem,
 }
 
-pub const ALL_KINDS: [Kind; 27] = [
+pub const ALL_KINDS: [Kind; 28] = [
     Kind::Pig,
     Kind::Cow,
     Kind::Sheep,
@@ -76,6 +78,7 @@ pub const ALL_KINDS: [Kind; 27] = [
     Kind::MagmaCube,
     Kind::EnderDragon,
     Kind::EnderCrystal,
+    Kind::SnowGolem,
 ];
 
 impl Kind {
@@ -95,6 +98,7 @@ impl Kind {
             Kind::Wolf | Kind::Ocelot => (0.6, 0.8),
             Kind::Horse => (1.4, 1.6),
             Kind::IronGolem => (1.4, 2.9),
+            Kind::SnowGolem => (0.4, 1.8),
             Kind::Ghast => (4.0, 4.0),
             Kind::MagmaCube => (0.6, 0.6),
             Kind::EnderDragon => (16.0, 8.0),
@@ -118,6 +122,7 @@ impl Kind {
             Kind::Wolf => 8.0,
             Kind::Horse => 15.0,
             Kind::IronGolem => 100.0,
+            Kind::SnowGolem => 4.0,
             Kind::Ghast => 10.0,
             Kind::MagmaCube => 1.0,
             Kind::EnderDragon => 200.0,
@@ -139,6 +144,7 @@ impl Kind {
             Kind::Squid | Kind::Bat => 0.7,
             Kind::Horse => 0.225,
             Kind::IronGolem => 0.25,
+            Kind::SnowGolem => 0.2,
             Kind::PigZombie => 0.5,
             Kind::Blaze | Kind::Ghast | Kind::MagmaCube => 0.7,
             Kind::EnderDragon | Kind::EnderCrystal => 0.7,
@@ -243,6 +249,7 @@ impl Kind {
             Kind::Ocelot => "Ocelot",
             Kind::Horse => "Horse",
             Kind::IronGolem => "Iron Golem",
+            Kind::SnowGolem => "Snow Golem",
             Kind::Ghast => "Ghast",
             Kind::PigZombie => "Zombie Pigman",
             Kind::Blaze => "Blaze",
@@ -275,6 +282,7 @@ impl Kind {
             Kind::Ocelot => "Ozelot",
             Kind::Horse => "EntityHorse",
             Kind::IronGolem => "VillagerGolem",
+            Kind::SnowGolem => "SnowMan",
             Kind::Ghast => "Ghast",
             Kind::PigZombie => "PigZombie",
             Kind::Blaze => "Blaze",
@@ -832,6 +840,7 @@ impl Mob {
                     | Kind::Wolf
                     | Kind::Ocelot
                     | Kind::IronGolem
+                    | Kind::SnowGolem
             ),
             wing: 0.0,
             prev_wing: 0.0,
@@ -2578,6 +2587,13 @@ impl Mob {
                     living(r, &mut v, id);
                 }
             }
+            // EntitySnowman.dropFewItems: nextInt(16) snowballs
+            Kind::SnowGolem => {
+                let n = r.next_int_n(16);
+                for _ in 0..n {
+                    v.push(Stack::new(332, 0, 1));
+                }
+            }
             Kind::IronGolem => {
                 let n = r.next_int_n(3);
                 each(&mut v, block::RED_FLOWER as u16, 0, n);
@@ -3076,6 +3092,35 @@ impl Mobs {
     /// One tick for every mob in a loaded chunk.
     pub fn tick(&mut self, w: &mut ServerWorld, player: &PlayerInfo, out: &mut Outcome) {
         self.difficulty = player.difficulty;
+        // BlockPumpkin.onBlockAdded: spawnEntityInWorld, and the client's
+        // 120 particles over the blocks that were there
+        for (iron, p) in std::mem::take(&mut w.golems) {
+            let id = self.next_id;
+            self.next_id += 1;
+            let seed = self.rand.next_long();
+            let kind = if iron {
+                Kind::IronGolem
+            } else {
+                Kind::SnowGolem
+            };
+            let mut m = Mob::new(id, kind, p, 0.0, seed);
+            m.player_made = iron;
+            self.list.push(m);
+            let (bx, by, bz) = (p[0] - 0.5, p[1] + 1.95, p[2] - 0.5);
+            let (name, h) = if iron {
+                ("snowballpoof", 3.9)
+            } else {
+                ("snowshovel", 2.5)
+            };
+            for _ in 0..120 {
+                let q = [
+                    bx + w.rand.next_double(),
+                    by - 2.0 + w.rand.next_double() * h,
+                    bz + w.rand.next_double(),
+                ];
+                out.particles.push((name, q, [0.0; 3]));
+            }
+        }
         let day = w.skylight_subtracted < 4;
         let villagers: Vec<[f64; 3]> = self
             .list
@@ -3904,7 +3949,7 @@ impl Mobs {
                 || matches!(m.kind, Kind::EnderDragon | Kind::EnderCrystal)
                 || m.kind.animal()
                 || m.kind == Kind::Villager
-                || m.kind == Kind::IronGolem
+                || matches!(m.kind, Kind::IronGolem | Kind::SnowGolem)
                 || m.tamed
             {
                 return true;
@@ -4281,7 +4326,7 @@ pub fn hurt_sound(k: Kind) -> &'static str {
         Kind::Blaze => "mob.blaze.hit",
         Kind::MagmaCube => "mob.slime.small",
         Kind::EnderDragon => "mob.enderdragon.hit",
-        Kind::EnderCrystal => "",
+        Kind::EnderCrystal | Kind::SnowGolem => "",
     }
 }
 
@@ -4311,7 +4356,7 @@ pub fn death_sound(k: Kind) -> &'static str {
         Kind::Blaze => "mob.blaze.death",
         Kind::MagmaCube => "mob.slime.small",
         Kind::EnderDragon => "mob.enderdragon.end",
-        Kind::EnderCrystal => "",
+        Kind::EnderCrystal | Kind::SnowGolem => "",
     }
 }
 
@@ -4357,7 +4402,8 @@ pub fn idle_sound(k: Kind) -> Option<&'static str> {
         | Kind::Ocelot
         | Kind::IronGolem
         | Kind::MagmaCube
-        | Kind::EnderCrystal => return None,
+        | Kind::EnderCrystal
+        | Kind::SnowGolem => return None,
     })
 }
 
@@ -4864,6 +4910,9 @@ fn tick_mob(
     drain_moves(m, w, out);
     if matches!(m.kind, Kind::Slime | Kind::MagmaCube) {
         extra::slime_landed(m, was_on_ground, out);
+    }
+    if m.kind == Kind::SnowGolem {
+        extra::snow_golem(m, w);
     }
 }
 

@@ -2979,6 +2979,7 @@ impl Game {
                     self.particles.item_break(p, rect);
                 }
             }
+            "snowshovel" => self.particles.snow_shovel(p, m),
             "largeexplode" => self.particles.large_explode(p, 1.0),
             "hugeexplosion" => self.particles.huge_explosion(p),
             "explode" => self.particles.explode(p, m),

@@ -1567,6 +1567,31 @@ fn ranged_attack(m: &mut Mob, t: Target, v: &View, f: f32, cx: &mut Cx) {
             1.0,
             1.0 / (m.rand.next_float() * 0.4 + 0.8),
         ));
+    } else if m.kind == Kind::SnowGolem {
+        // EntitySnowman.attackEntityWithRangedAttack
+        let id = m.projectile_id();
+        let eye = m.pos[1] + m.kind.eye_height() as f64;
+        let mut p = crate::entity::throwable::Throwable::thrown(
+            id,
+            crate::entity::throwable::Kind::Snowball,
+            crate::entity::arrow::Shooter::Mob(m.id),
+            m.pos,
+            eye,
+            m.yaw,
+            m.pitch,
+        );
+        let dx = v.pos[0] - m.pos[0];
+        let dy = v.pos[1] + v.eye - 1.1f32 as f64 - p.e.pos[1];
+        let dz = v.pos[2] - m.pos[2];
+        let d = math::sqrt_double(dx * dx + dz * dz) * 0.2;
+        p.set_heading(dx, dy + d as f64, dz, 1.6, 12.0);
+        cx.out.sounds.push((
+            "random.bow",
+            m.pos,
+            1.0,
+            1.0 / (m.rand.next_float() * 0.4 + 0.8),
+        ));
+        cx.out.thrown.push(p);
     } else if t == Target::Player {
         // EntityWitch
         let id = m.projectile_id();
@@ -1619,6 +1644,7 @@ pub fn uses_tasks(k: Kind) -> bool {
             | Kind::Wolf
             | Kind::Ocelot
             | Kind::IronGolem
+            | Kind::SnowGolem
     )
 }
 
@@ -2071,6 +2097,9 @@ pub enum Pet {
         st: TargetState,
         search_status: i32,
         search_delay: i32,
+        /// `EntitySnowman`'s (0, true, false): the target must be seen and
+        /// need not be reachable
+        snow: bool,
     },
 }
 
@@ -2330,8 +2359,10 @@ impl Pet {
                 found,
                 search_status,
                 search_delay,
+                snow,
                 ..
             } => {
+                let snow = *snow;
                 let range = m.kind.follow_range() as f64;
                 let bb = expand(&m.bb, range, 4.0, range);
                 // IMob.mobSelector, and canAttackClass: no creepers
@@ -2342,7 +2373,14 @@ impl Pet {
                 let mut best: Option<(f64, u32)> = None;
                 for (id, pos) in ids {
                     let t = Target::Mob(id);
-                    if !is_suitable_target(m, Some(t), false, cx) {
+                    if !is_suitable_target(m, Some(t), snow, cx) {
+                        continue;
+                    }
+                    if snow {
+                        let d = m.dist2(pos);
+                        if best.map_or(true, |b| d < b.0) {
+                            best = Some((d, id));
+                        }
                         continue;
                     }
                     // nearbyOnly
@@ -2390,8 +2428,8 @@ impl Pet {
             Pet::Leap { .. } => !m.on_ground,
             Pet::OwnerHurtByTarget { st, .. }
             | Pet::OwnerHurtTarget { st, .. }
-            | Pet::TargetNonTamed { st, .. }
-            | Pet::GolemTarget { st, .. } => target_continue(m, false, st, cx),
+            | Pet::TargetNonTamed { st, .. } => target_continue(m, false, st, cx),
+            Pet::GolemTarget { st, snow, .. } => target_continue(m, *snow, st, cx),
             Pet::TemptScared { at, pitch, yaw, .. } => {
                 let p = cx.player;
                 if m.dist2(p.feet) < 36.0 {
@@ -2501,6 +2539,7 @@ impl Pet {
                 st,
                 search_status,
                 search_delay,
+                ..
             } => {
                 m.attack_target = *found;
                 *st = TargetState::default();
@@ -2940,6 +2979,23 @@ fn build_pet(m: &mut Mob) {
                     st: TargetState::default(),
                     search_status: 0,
                     search_delay: 0,
+                    snow: false,
+                }),
+            );
+        }
+        Kind::SnowGolem => {
+            t.add(1, arrow_attack(1.25, 20, 20, 10.0));
+            t.add(2, wander(1.0));
+            t.add(3, watch(Cls::Player, 6.0));
+            t.add(4, look_idle());
+            tt.add(
+                1,
+                Ai::Pet(Pet::GolemTarget {
+                    found: None,
+                    st: TargetState::default(),
+                    search_status: 0,
+                    search_delay: 0,
+                    snow: true,
                 }),
             );
         }

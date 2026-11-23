@@ -420,6 +420,7 @@ fn parts(mv: &MobView, a: &Anim, ticks: f32, layer: u8, partial: f32) -> Vec<Par
         }
         Kind::PigZombie => biped(a, false, true),
         Kind::EnderDragon | Kind::EnderCrystal => Vec::new(),
+        Kind::SnowGolem => snow_golem(a),
         Kind::Pig => {
             // RenderPig: the saddle pass is ModelPig(0.5F)
             let g = if layer == 1 { 0.5 } else { 0.0 };
@@ -733,6 +734,7 @@ pub fn texture(kind: Kind, variant: i32, layer: u8) -> &'static str {
             }
         }
         Kind::EnderCrystal => "endercrystal/endercrystal",
+        Kind::SnowGolem => "snowman",
         Kind::Creeper => "creeper/creeper",
         Kind::Spider => "spider/spider",
         Kind::CaveSpider => "spider/cave_spider",
@@ -749,7 +751,8 @@ pub fn texture(kind: Kind, variant: i32, layer: u8) -> &'static str {
     }
 }
 
-pub const TEXTURES: [&str; 27] = [
+pub const TEXTURES: [&str; 28] = [
+    "snowman",
     "../particle/particles",
     "explosion",
     "../misc/underwater",
@@ -1192,6 +1195,24 @@ pub fn mob(
                 out.extend_from_slice(q);
                 out.extend_from_slice(&[q[3], q[2], q[1], q[0]]);
             }
+        }
+    }
+    // RenderSnowMan.renderEquippedItems: a pumpkin on the head
+    if m.kind == Kind::SnowGolem {
+        let head = &snow_golem(&a)[2];
+        let mut b = part_matrix(&mat, head);
+        let k = 0.625;
+        b = mul(&b, &translate(0.0, -0.34375, 0.0));
+        b = mul(&b, &rot_y(90.0));
+        b = mul(&b, &super::entities::scale(k, -k, k));
+        // renderBlockAsItem: turned a quarter, then centred
+        b = mul(&b, &rot_y(90.0));
+        b = mul(&b, &translate(-0.5, -0.5, -0.5));
+        // scale(k, -k, k) mirrors the cube: turn its faces back round
+        let mut q = Vec::new();
+        block(&mut q, crate::block::PUMPKIN, 0, &b, light);
+        for f in q.chunks(4) {
+            out.extend_from_slice(&[f[3], f[2], f[1], f[0]]);
         }
     }
     // RenderEnderman.renderEquippedItems: the carried block
@@ -1905,4 +1926,27 @@ pub fn book_world(d: &mut Draw, m: &Mat4, time: f32, flip_a: f32, flip_b: f32, s
     for p in book_parts(time, flip_a, flip_b, spread) {
         render(d, m, &p);
     }
+}
+
+/// `ModelSnowMan` posed by `setRotationAngles`: body, bottom, head, arms.
+fn snow_golem(a: &Anim) -> Vec<Part> {
+    let d = 180.0 / PI;
+    let g = -0.5;
+    let head = Part::new([0.0, 4.0, 0.0])
+        .bx(0.0, 0.0, [-4.0, -8.0, -4.0], [8.0, 8.0, 8.0], g)
+        .r(a.head_pitch / d, a.head_yaw / d, 0.0);
+    let by = a.head_yaw / d * 0.25;
+    let (s, c) = (by.sin(), by.cos());
+    let body = Part::new([0.0, 13.0, 0.0])
+        .bx(0.0, 16.0, [-5.0, -10.0, -5.0], [10.0, 10.0, 10.0], g)
+        .r(0.0, by, 0.0);
+    let bottom =
+        Part::new([0.0, 24.0, 0.0]).bx(0.0, 36.0, [-6.0, -12.0, -6.0], [12.0, 12.0, 12.0], g);
+    let right = Part::new([c * 5.0, 6.0, -s * 5.0])
+        .bx(32.0, 0.0, [-1.0, 0.0, -1.0], [12.0, 2.0, 2.0], g)
+        .r(0.0, by, 1.0);
+    let left = Part::new([-c * 5.0, 6.0, s * 5.0])
+        .bx(32.0, 0.0, [-1.0, 0.0, -1.0], [12.0, 2.0, 2.0], g)
+        .r(0.0, PI + by, -1.0);
+    vec![body, bottom, head, right, left]
 }
