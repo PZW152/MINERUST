@@ -7,6 +7,10 @@
 2026-11-20 以前的長篇開發日誌（每次的驗證方式、量測數字、找到的原因）保存在 git 歷史裡：
 `git show c57b73a:docs/HANDOFF.md` 的第 9 節。
 
+## 2026-11-23
+
+- Jukeboxes play records: ItemRecord.onItemUse and BlockJukebox (insert, eject with the original offsets, break, comparator signal id - 2256 + 1, saved as RecordPlayer), the record streams from the jukebox with distance and pan following the listener, and "Now playing" shows
+
 ## 2026-11-21
 
 - Keep unsaved chunks available for retry and preserve existing Anvil chunk data until the region index points to the replacement

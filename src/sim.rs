@@ -252,6 +252,8 @@ pub enum Event {
     /// Snowballs, eggs, pearls and potions in flight: position, previous
     /// position, item and damage.
     Throwables(Vec<([f64; 3], [f64; 3], u16, i32)>),
+    /// `playAuxSFX(1005)`: a jukebox starts this record (item id) or stops (0).
+    Record([i32; 3], i32),
     /// The player's `EntityFishHook` (position, previous position).
     FishHook(Option<([f64; 3], [f64; 3])>),
     /// `EntityTrackerEntry` packets about vehicles: id and packet.
@@ -3448,6 +3450,7 @@ impl Sim {
                     Effect::Note(p, inst, pitch) => notes.push((p, inst, pitch)),
                     Effect::Tnt(p, fuse) => self.mobs.prime_tnt(p, fuse),
                     Effect::BoneMeal(p) => self.bone_meal_fx.push(p),
+                    Effect::Record(p, id) => events.push(Event::Record(p, id)),
                     Effect::Dispense(p, facing) => {
                         self.dispense_block(play, p, facing, &mut rnd, &mut sounds);
                     }
@@ -5732,6 +5735,60 @@ mod tests {
             }
             _ => panic!(),
         }
+    }
+
+    /// ItemRecord.onItemUse puts the record in (metadata 1, aux event 1005
+    /// with the item, comparator signal id - 2256 + 1); BlockJukebox's
+    /// activation ejects it (event 1005 with 0, the record as an item).
+    #[test]
+    fn jukebox_plays_and_ejects_records() {
+        use crate::item::Stack;
+        let (mut sim, x, y, z) = redstone_sim();
+        sim.play.mode = GameMode::Survival;
+        let feet = [x as f64 + 9.5, y as f64, z as f64 + 9.5];
+        let jb = [x + 2, y, z + 2];
+        sim.world
+            .set_block(jb[0], jb[1], jb[2], block::JUKEBOX, 0, 3);
+        let cp = [x + 3, y, z + 2];
+        sim.world
+            .set_block(cp[0], cp[1], cp[2], block::UNPOWERED_COMPARATOR, 1, 3);
+        let sel = sim.play.inv.selected;
+        sim.play.inv.main[sel] = Some(Stack::new(2257, 0, 1));
+        let use_it = |sim: &mut Sim| {
+            let mut ev = Vec::new();
+            sim.step(
+                &[Command::Use {
+                    target: jb,
+                    face: [0, 1, 0],
+                    sneaking: false,
+                    hit: [0.5, 1.0, 0.5],
+                }],
+                &mut ev,
+            );
+            ev
+        };
+        let ev = use_it(&mut sim);
+        assert_eq!(sim.world.meta(jb[0], jb[1], jb[2]), 1, "a record inside");
+        assert!(sim.play.inv.main[sel].is_none(), "the record left the hand");
+        assert!(ev
+            .iter()
+            .any(|e| matches!(e, Event::Record(p, 2257) if *p == jb)));
+        for _ in 0..8 {
+            sim.step(&[Command::Player(feet, [0.0, 0.0], false)], &mut Vec::new());
+        }
+        assert_eq!(
+            sim.world.comparator_output(cp[0], cp[1], cp[2]),
+            2,
+            "cat is record 2"
+        );
+        let items = sim.play.items.len();
+        let ev = use_it(&mut sim);
+        assert_eq!(sim.world.meta(jb[0], jb[1], jb[2]), 0, "empty again");
+        assert!(ev
+            .iter()
+            .any(|e| matches!(e, Event::Record(p, 0) if *p == jb)));
+        assert_eq!(sim.play.items.len(), items + 1, "the record pops out");
+        assert_eq!(sim.play.items.last().unwrap().stack.id, 2257);
     }
 
     /// TileEntityDaylightDetector: every 20 ticks the sky light scaled by

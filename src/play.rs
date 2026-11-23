@@ -33,6 +33,8 @@ pub enum Tile {
     /// `TileEntityComparator.outputSignal` (the live value is
     /// `ServerWorld::comparators`; this copy is what gets saved).
     Comparator { output: i32 },
+    /// `BlockJukebox$TileEntityJukebox`: the record in it.
+    Jukebox { record: Option<Stack> },
     /// `TileEntityDaylightDetector` (no data; the live set is
     /// `ServerWorld::daylight_detectors`).
     Daylight,
@@ -582,6 +584,32 @@ impl Play {
         }
     }
 
+    /// `BlockJukebox.removeRecord`: the record stops and pops out of the top.
+    pub fn eject_record(&mut self, w: &mut ServerWorld, p: Pos) {
+        let Some(Tile::Jukebox { record: Some(r) }) = self.tiles.get(&p).cloned() else {
+            return;
+        };
+        w.redstone_effects
+            .push(crate::world::redstone::Effect::Record(p, 0));
+        self.tiles.insert(p, Tile::Jukebox { record: None });
+        if w.block(p[0], p[1], p[2]) == block::JUKEBOX {
+            w.set_meta(p[0], p[1], p[2], 0, 2);
+        }
+        let f = 0.7f32;
+        let ox = (w.rand.next_float() * f) as f64 + ((1.0 - f) * 0.5) as f64;
+        let oy = (w.rand.next_float() * f) as f64 + ((1.0 - f) as f64 * 0.2 + 0.6);
+        let oz = (w.rand.next_float() * f) as f64 + ((1.0 - f) * 0.5) as f64;
+        let id = self.next_item;
+        self.next_item += 1;
+        let mut e = ItemEntity::new(
+            id,
+            r,
+            [p[0] as f64 + ox, p[1] as f64 + oy, p[2] as f64 + oz],
+        );
+        e.pickup_delay = 10;
+        self.spawn(e);
+    }
+
     pub(crate) fn spawn(&mut self, e: ItemEntity) {
         self.items.push(e);
     }
@@ -750,6 +778,10 @@ impl Play {
                 w.set_air(p[0] - dx, p[1], p[2] - dz);
             }
         }
+        // BlockJukebox.breakBlock: removeRecord
+        if id == block::JUKEBOX {
+            self.eject_record(w, p);
+        }
         // Container contents spill out.
         if let Some(t) = self.tiles.remove(&p) {
             let slots: Vec<Option<Stack>> = match t {
@@ -761,7 +793,8 @@ impl Play {
                 Tile::Spawner { .. }
                 | Tile::Sign { .. }
                 | Tile::Comparator { .. }
-                | Tile::Daylight => Vec::new(),
+                | Tile::Daylight
+                | Tile::Jukebox { .. } => Vec::new(),
             };
             for s in slots.into_iter().flatten() {
                 let mut rnd = std::mem::replace(&mut w.rand, JavaRandom::new(0));
@@ -972,6 +1005,29 @@ impl Play {
                 block::STONE_BUTTON | block::WOODEN_BUTTON => {
                     w.press_button(tid, target[0], target[1], target[2]);
                     return true;
+                }
+                // BlockJukebox.onBlockActivated, else ItemRecord.onItemUse
+                block::JUKEBOX => {
+                    if w.meta(target[0], target[1], target[2]) != 0 {
+                        self.eject_record(w, target);
+                        return true;
+                    }
+                    if let Some(s) = self.inv.held().filter(|s| (2256..=2267).contains(&s.id)) {
+                        self.tiles.insert(
+                            target,
+                            Tile::Jukebox {
+                                record: Some(Stack { count: 1, ..s }),
+                            },
+                        );
+                        w.set_meta(target[0], target[1], target[2], 1, 2);
+                        w.redstone_effects
+                            .push(crate::world::redstone::Effect::Record(target, s.id as i32));
+                        if self.mode == GameMode::Survival {
+                            self.inv.consume_held();
+                            self.inv_dirty = true;
+                        }
+                        return true;
+                    }
                 }
                 block::UNPOWERED_COMPARATOR | block::POWERED_COMPARATOR => {
                     // BlockRedstoneComparator.onBlockActivated
@@ -2408,6 +2464,17 @@ impl Play {
                         ("Comparator", vec![("OutputSignal", Nbt::Int(*output))])
                     }
                     Tile::Daylight => ("DLDetector", vec![]),
+                    // TileEntityJukebox.writeToNBT: Record and RecordItem
+                    Tile::Jukebox { record } => (
+                        "RecordPlayer",
+                        match record {
+                            Some(s) => vec![
+                                ("Record", Nbt::Int(s.id as i32)),
+                                ("RecordItem", item_nbt(None, s)),
+                            ],
+                            None => vec![],
+                        },
+                    ),
                     Tile::Hopper { slots, cooldown } => (
                         "Hopper",
                         vec![
@@ -2506,6 +2573,16 @@ impl Play {
                 }
             }
             "DLDetector" => Tile::Daylight,
+            "RecordPlayer" => Tile::Jukebox {
+                record: t
+                    .get("RecordItem")
+                    .and_then(crate::world::anvil::item_from_nbt)
+                    .or_else(|| {
+                        t.int("Record")
+                            .filter(|&r| r > 0)
+                            .map(|r| Stack::new(r as crate::item::ItemId, 0, 1))
+                    }),
+            },
             "Comparator" => Tile::Comparator {
                 output: t.int("OutputSignal").unwrap_or(0) as i32,
             },
@@ -2781,6 +2858,9 @@ impl Play {
                 }
                 Tile::Comparator { output } => format!("K,{},{},{},{}", p[0], p[1], p[2], output),
                 Tile::Daylight => format!("L,{},{},{}", p[0], p[1], p[2]),
+                Tile::Jukebox { record } => {
+                    format!("J,{},{},{},{}", p[0], p[1], p[2], enc(&[*record]))
+                }
                 Tile::Spawner { mob } => format!("S,{},{},{},{}", p[0], p[1], p[2], mob),
                 Tile::Sign { text, .. } => {
                     format!("G,{},{},{},{}", p[0], p[1], p[2], text.join("\u{1f}"))
@@ -2887,6 +2967,12 @@ impl Play {
                         dropper: f[0] == "R",
                     },
                 );
+            }
+            "J" => {
+                let f: Vec<&str> = line.splitn(5, ',').collect();
+                let s = dec(f.get(4)?, 1)?;
+                self.tiles
+                    .insert(pos(f[1], f[2], f[3])?, Tile::Jukebox { record: s[0] });
             }
             "L" => {
                 let f: Vec<&str> = line.splitn(4, ',').collect();

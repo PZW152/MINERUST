@@ -578,6 +578,26 @@ impl Play {
             })
             .map(|(p, _)| *p)
             .collect();
+        // BlockJukebox.getComparatorInputOverride: the record's number
+        let juke: Vec<(Pos, Option<Stack>)> = self
+            .tiles
+            .iter()
+            .filter_map(|(p, t)| match t {
+                Tile::Jukebox { record } => Some((*p, *record)),
+                _ => None,
+            })
+            .collect();
+        for (p, r) in juke {
+            let v = r.map_or(0, |s| s.id as i32 + 1 - 2256);
+            w.container_signal.insert(p, v);
+            let own = vec![r];
+            // a tile seen for the first time with a record in it changed too
+            let changed = self.slot_snap.get(&p).map_or(r.is_some(), |o| *o != own);
+            self.slot_snap.insert(p, own);
+            if changed {
+                w.update_neighbors_about_output(p[0], p[1], p[2], block::JUKEBOX);
+            }
+        }
         for p in ps {
             let own = self.inv_slots(&InvRef::Tiles(vec![p]));
             let id = w.peek_block(p[0], p[1], p[2]);

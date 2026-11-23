@@ -21,6 +21,9 @@ struct Voice {
     step: f64,
     gain: [f32; 2],
     stream: bool,
+    /// A jukebox's record: its block, the sound's position and volume
+    /// (`RenderGlobal.mapSoundPositions`); its gain follows the listener.
+    record: Option<([i32; 3], [f64; 3], f32)>,
 }
 
 #[derive(Default)]
@@ -231,6 +234,47 @@ impl Audio {
     pub fn set_listener(&mut self, pos: [f64; 3], yaw: f32) {
         self.listener = pos;
         self.yaw = yaw;
+        let (lp, ly) = (self.listener, self.yaw);
+        if let Ok(mut m) = self.mixer.lock() {
+            for v in m.voices.iter_mut() {
+                if let Some((_, p, vol)) = v.record {
+                    v.gain = positional_gain(lp, ly, p, vol).unwrap_or([0.0; 2]);
+                }
+            }
+        }
+    }
+
+    /// `RenderGlobal.playRecord`: stop the record playing at `block`, then
+    /// start `event` there (`PositionedSoundRecord.func_147675_a`: volume
+    /// 4, at the block's corner).
+    pub fn play_record(&mut self, event: Option<&str>, block: [i32; 3]) {
+        if let Ok(mut m) = self.mixer.lock() {
+            m.voices.retain(|v| v.record.map_or(true, |r| r.0 != block));
+        }
+        let Some(event) = event else { return };
+        let Some(list) = self.events.get(event) else {
+            return;
+        };
+        if list.is_empty() {
+            return;
+        }
+        let e = list[self.rand.next_int_n(list.len() as i32) as usize].clone();
+        let Some(clip) = self.clip(&e.name) else {
+            return;
+        };
+        let p = [block[0] as f64, block[1] as f64, block[2] as f64];
+        let gain = positional_gain(self.listener, self.yaw, p, 4.0).unwrap_or([0.0; 2]);
+        let step = clip.rate as f64 / self.out_rate as f64;
+        if let Ok(mut m) = self.mixer.lock() {
+            m.voices.push(Voice {
+                clip,
+                pos: 0.0,
+                step,
+                gain,
+                stream: true,
+                record: Some((block, p, 4.0)),
+            });
+        }
     }
 
     fn clip(&mut self, name: &str) -> Option<Clip> {
@@ -305,6 +349,7 @@ impl Audio {
                     step,
                     gain: [gain * l, gain * r],
                     stream: e.stream,
+                    record: None,
                 });
             }
         }
@@ -312,10 +357,9 @@ impl Audio {
 
     /// `MusicTicker`: a game track every 12000..24000 ticks.
     pub fn tick_music(&mut self) {
-        let playing = self
-            .mixer
-            .lock()
-            .map_or(true, |m| m.voices.iter().any(|v| v.stream));
+        let playing = self.mixer.lock().map_or(true, |m| {
+            m.voices.iter().any(|v| v.stream && v.record.is_none())
+        });
         if playing {
             return;
         }
@@ -325,6 +369,28 @@ impl Audio {
             self.music_timer = 12000 + self.rand.next_int_n(12000);
         }
     }
+}
+
+/// Linear attenuation over `16 * max(volume, 1)` blocks and the pan of
+/// `Audio::play`; `None` out of range.
+fn positional_gain(listener: [f64; 3], yaw: f32, p: [f64; 3], volume: f32) -> Option<[f32; 2]> {
+    let d = [p[0] - listener[0], p[1] - listener[1], p[2] - listener[2]];
+    let dist = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt() as f32;
+    let range = 16.0 * volume.max(1.0);
+    if dist > range {
+        return None;
+    }
+    let gain = volume.min(1.0) * (1.0 - dist / range);
+    let yr = yaw.to_radians();
+    let right = [-(yr.cos()) as f64, 0.0, -(yr.sin()) as f64];
+    let pan = if dist > 0.01 {
+        ((d[0] * right[0] + d[2] * right[2]) / dist as f64) as f32
+    } else {
+        0.0
+    };
+    let l = (1.0 - pan.max(0.0) * 0.7).max(0.0);
+    let r = (1.0 + pan.min(0.0) * 0.7).max(0.0);
+    Some([gain * l, gain * r])
 }
 
 fn open_output(mixer: Arc<Mutex<Mixer>>) -> Option<(cpal::Stream, u32)> {

@@ -1594,6 +1594,25 @@ impl Game {
                 Event::Falling(v) => self.falling = v,
                 Event::Throwables(v) => self.throwables = v,
                 Event::FishHook(v) => self.fish_hook = v,
+                // RenderGlobal.playAuxSFX(1005) -> playRecord
+                Event::Record(p, id) => {
+                    const NAMES: [&str; 12] = [
+                        "13", "cat", "blocks", "chirp", "far", "mall", "mellohi", "stal", "strad",
+                        "ward", "11", "wait",
+                    ];
+                    let name = (2256..=2267)
+                        .contains(&id)
+                        .then(|| NAMES[(id - 2256) as usize]);
+                    if let Some(n) = name {
+                        // GuiIngame.setRecordPlayingMessage
+                        let desc = self.lang.get(&format!("item.record.{n}.desc")).to_string();
+                        let text = self.lang.get("record.nowPlaying").replace("%s", &desc);
+                        self.record = Some((text, 60, true));
+                    }
+                    if let Some(a) = self.audio.as_mut() {
+                        a.play_record(name.map(|n| format!("records.{n}")).as_deref(), p);
+                    }
+                }
                 Event::Vehicles(v) => self.vehicle_packets(v),
                 Event::VehicleMeta(v) => self.vehicle_meta(v),
                 Event::VehicleStatus(v) => self.vehicle_status(v),

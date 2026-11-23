@@ -29,6 +29,9 @@ pub enum Effect {
     Tnt([f64; 3], i32),
     /// `playAuxSFX(2005)`: bone meal took on this block.
     BoneMeal([i32; 3]),
+    /// `playAuxSFX(1005, x, y, z, item)`: a jukebox starts the record with
+    /// this item id, or stops (0).
+    Record([i32; 3], i32),
 }
 
 /// An axis-aligned box in world space.
