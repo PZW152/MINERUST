@@ -76,7 +76,9 @@ fn fog_factor(d: f32) -> f32 {
 @fragment
 fn fs_terrain(i: TerrainOut) -> @location(0) vec4<f32> {
     let t = textureSample(tex, samp, i.uv);
-    if (t.a * i.color.a <= 0.1) {
+    // glAlphaFunc(GL_GREATER, 0.1), or 0.5 for the terrain's first pass
+    // (EntityRenderer.renderWorld), pushed in color.x
+    if (t.a * i.color.a <= max(0.1, pc.color.x)) {
         discard;
     }
     let lb = clamp(i.light.x, 0.0, 15.0);
@@ -2841,7 +2843,7 @@ impl Renderer {
                         let b = self.arena[bound as usize].buffer;
                         dev.cmd_bind_vertex_buffers(cmd, 0, &[b], &[0]);
                     }
-                    push([o[0], o[1], o[2], 0.0], [0.0; 4]);
+                    push([o[0], o[1], o[2], 0.0], [0.5, 0.0, 0.0, 0.0]);
                     dev.cmd_draw_indexed(cmd, s.opaque_quads * 6, 1, 0, s.first as i32, 0);
                 }
             }

@@ -198,7 +198,9 @@ pub struct Anim {
 
 /// Mip chain for one tile, as it is stored in the atlas.
 fn mip_chain(mut px: Vec<u8>, size: u32) -> Vec<Vec<u8>> {
-    let transparent = px.chunks(4).any(|p| p[3] == 0);
+    // generateMipmapData walks `data.length` (the number of levels),
+    // not the pixels: only the first few decide transparency
+    let transparent = px.chunks(4).take(MIP_LEVELS as usize).any(|p| p[3] == 0);
     let mut out = Vec::new();
     let mut s = size;
     for level in 0..MIP_LEVELS {
@@ -329,10 +331,10 @@ fn downsample(src: &[u8], s: u32, transparent: bool) -> Vec<u8> {
                 if a < 96 {
                     a = 0;
                 }
-                if cnt > 0.0 {
-                    for c in 0..3 {
-                        out[o + c] = ug(acc[c] / cnt);
-                    }
+                // blendColors: the opaque ones summed, then over all four
+                let _ = cnt;
+                for c in 0..3 {
+                    out[o + c] = ug(acc[c] / 4.0);
                 }
                 out[o + 3] = a;
             }
@@ -370,7 +372,9 @@ impl Builder {
                 self.used[(cy + a) * GRID + cx + b] = true;
             }
         }
-        let transparent = px.chunks(4).any(|p| p[3] == 0);
+        // generateMipmapData walks `data.length` (the number of levels),
+        // not the pixels: only the first few decide transparency
+        let transparent = px.chunks(4).take(MIP_LEVELS as usize).any(|p| p[3] == 0);
         let mut s = size;
         for level in 0..MIP_LEVELS {
             let aw = ATLAS_SIZE >> level;

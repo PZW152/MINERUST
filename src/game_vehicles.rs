@@ -348,7 +348,7 @@ impl Game {
     pub(super) fn draw_boats(&self, out: &mut Vec<Vertex>, eye: [f64; 3], partial: f32) {
         let boat_tex = self.atlas.mob_tex("boat");
         let cart_tex = self.atlas.mob_tex("minecart");
-        let sub = sim::skylight_subtracted(self.world_time);
+        let sub = super::client_skylight_subtracted();
         for c in &self.boats {
             let e = c.v.e();
             let tp = partial as f64;

@@ -472,6 +472,7 @@ pub struct Game {
     equipped: Option<Stack>,
     /// `ItemRenderer.equippedItemSlot`
     equipped_slot: usize,
+    auto_ticks: i32,
     death_sent: bool,
     jitter: JavaRandom,
     prev_feet: [f64; 3],
@@ -790,6 +791,7 @@ impl Game {
             prev_render_arm: [0.0; 2],
             equipped: None,
             equipped_slot: 0,
+            auto_ticks: 0,
             death_sent: false,
             jitter: JavaRandom::new(312871),
             prev_feet: [0.0; 3],
@@ -1182,8 +1184,7 @@ impl Game {
         if !self.world.chunks.contains_key(&(x >> 4, z >> 4)) {
             return 0.0;
         }
-        let sub =
-            sim::skylight_subtracted_weather(self.world_time, self.rain(1.0), self.weather.thunder);
+        let sub = client_skylight_subtracted();
         // getBlockLightValue_do(x, y, z, true)
         let at = |x: i32, y: i32, z: i32| -> i32 {
             if y < 0 {
@@ -2353,7 +2354,7 @@ impl Game {
             math::floor_double(p[1]),
             math::floor_double(p[2]),
         );
-        let sub = sim::skylight_subtracted(self.world_time);
+        let sub = client_skylight_subtracted();
         let level = (self.world.light(true, bx, by, bz) - sub)
             .max(self.world.light(false, bx, by, bz))
             .clamp(0, 15);
@@ -2552,6 +2553,44 @@ impl Game {
         }
         self.swing_f = self.swing as f32 / end as f32;
         self.prev_equip = self.equip;
+        // MINERUST_AUTOCLICK=tick:button,...  presses (and releases on the
+        // next tick) a mouse button, for checking the hand; with
+        // MINERUST_LOG_HAND the hand's state is printed every tick
+        if self.screen == Screen::Playing && self.loading == 2 {
+            if let Ok(list) = std::env::var("MINERUST_AUTOCLICK") {
+                self.auto_ticks += 1;
+                for part in list.split(',') {
+                    let f: Vec<i32> = part.split(':').filter_map(|x| x.parse().ok()).collect();
+                    if f.len() == 2 && f[0] == self.auto_ticks {
+                        let _ = self.mouse_button(f[1] as u8, true, false);
+                        if f[1] == 0 {
+                            self.left_down = true;
+                        } else {
+                            self.right_down = true;
+                        }
+                    }
+                    if f.len() == 2 && f[0] + 1 == self.auto_ticks {
+                        let _ = self.mouse_button(f[1] as u8, false, false);
+                        if f[1] == 0 {
+                            self.left_down = false;
+                        } else {
+                            self.right_down = false;
+                        }
+                    }
+                }
+            }
+            if std::env::var_os("MINERUST_LOG_HAND").is_some() {
+                eprintln!(
+                    "hand t{} equip {:.2} swing {} {} {:.3} held {:?}",
+                    self.auto_ticks,
+                    self.equip,
+                    self.swing,
+                    self.swinging,
+                    self.swing_f,
+                    self.view.inv.held().map(|s| (s.id, s.meta, s.count))
+                );
+            }
+        }
         // EntityPlayerSP.updateEntityActionState: the arm follows the view
         self.prev_render_arm = self.render_arm;
         self.render_arm[0] += (self.player.pitch - self.render_arm[0]) * 0.5;
@@ -6968,4 +7007,13 @@ impl MobAnim {
         // Entity.onUpdate: ++ticksExisted on the client's own tick
         m.ticks += 1;
     }
+}
+
+/// `WorldClient.skylightSubtracted`: only `calculateInitialSkylight` in the
+/// world's constructor sets it, when its time is still 0 and it is not
+/// raining, and nothing on the client updates it afterwards (WorldServer
+/// does its own). So `getLightBrightness` on the client (the vignette, the
+/// fog's dimming, a minecart's brightness) never sees the night.
+pub(crate) fn client_skylight_subtracted() -> i32 {
+    sim::skylight_subtracted_weather(0, 0.0, 0.0)
 }
