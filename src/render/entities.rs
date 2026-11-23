@@ -900,7 +900,9 @@ pub fn hand(
             // ItemBow.getItemIconForUseDuration
             let mut s = s;
             if let Some((Action::Bow, count, max)) = using {
-                let j = max - count as i32 + 1;
+                // getMaxItemUseDuration - getItemInUseCount (count here is
+                // itemInUseCount - partial + 1)
+                let j = max - (count - 1.0).ceil() as i32;
                 let frame = if j >= 18 {
                     2
                 } else if j > 13 {

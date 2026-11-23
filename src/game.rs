@@ -4896,8 +4896,8 @@ impl Game {
                     }
                     1 if self.target_mob.is_some() => {
                         let (id, _) = self.target_mob.unwrap();
+                        // interactWithEntitySendPacket: no swing
                         let _ = self.sim.commands.send(Command::Interact { id });
-                        self.swing_item();
                         self.right_delay = 4;
                     }
                     1 => self.use_item(),
@@ -5020,8 +5020,8 @@ impl Game {
             return Request::Release;
         }
         if lw == self.bind("key.drop") {
+            // EntityClientPlayerMP.dropOneItem: only the packet, no swing
             let _ = self.sim.commands.send(Command::DropHeld { all: ctrl });
-            self.swing_item();
             return Request::None;
         }
         if lw == self.bind("key.chat") {
