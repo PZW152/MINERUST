@@ -123,6 +123,13 @@ SCENES = {
         "-241 96 137 149 0", "-241 96 138 92 0", "-239 96 137 149 4", "-239 96 138 92 0",
         "-238 96 135 151", "-246 96 138 151",
     ])),
+    # Snow layers at night with a one-block trench, looked down on with the
+    # selection box (the user's report: dark sides and the outline).
+    "snowtrench": dict(seed=12345, time=18000, pos=(-241.5, 97.0, 129.5), look=(0.0, 45.0), hud=True, setblock=";".join(
+        [f"{x} 95 {z} 2" for x in range(-249, -235) for z in range(126, 142)] +
+        [f"{x} 96 {z} 78" for x in range(-249, -235) for z in range(126, 142) if not (x == -243 and z < 134)] +
+        [f"{x} {y} {z} 0" for x in range(-249, -235) for y in range(97, 101) for z in range(126, 142)]
+    )),
     # TileEntityChestRenderer for plain and trapped chests (single and double)
     # and TileEntityEnderChestRenderer, in several facings.
     "chests": dict(seed=12345, time=6000, pos=(-242.5, 98.5, 131.5), look=(0.0, 45.0), setblock=";".join(

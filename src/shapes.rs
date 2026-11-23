@@ -664,6 +664,9 @@ pub fn selection(get: Get, id: u8, meta: u8, x: i32, y: i32, z: i32) -> Bx {
     if id == block::BREWING_STAND {
         return [0.0, 0.0, 0.0, 1.0, 0.125, 1.0];
     }
+    if let Some(b) = selection_by_id(get, id, meta, x, y, z) {
+        return b;
+    }
     let b = block::info(id);
     match b.shape {
         block::Shape::Stairs => FULL,
@@ -701,7 +704,9 @@ pub fn selection(get: Get, id: u8, meta: u8, x: i32, y: i32, z: i32) -> Bx {
             }
         }
         block::Shape::Rail => {
-            let shape = if id == block::RAIL { meta } else { meta & 7 };
+            // BlockRailBase.setBlockBoundsBasedOnState looks at the whole
+            // metadata: a powered or detector rail going up while on is low
+            let shape = meta;
             if (2..=5).contains(&shape) {
                 [0.0, 0.0, 0.0, 1.0, 0.625, 1.0]
             } else {
@@ -726,9 +731,209 @@ pub fn selection(get: Get, id: u8, meta: u8, x: i32, y: i32, z: i32) -> Bx {
     }
 }
 
+/// `setBlockBoundsBasedOnState` / `getSelectedBoundingBoxFromPool` of the
+/// blocks whose selection box is not their collision box.
+fn selection_by_id(get: Get, id: u8, meta: u8, x: i32, y: i32, z: i32) -> Option<Bx> {
+    let m = meta as i32;
+    Some(match id {
+        // BlockSnow: two pixels per layer
+        block::SNOW_LAYER => [0.0, 0.0, 0.0, 1.0, (2 * (1 + (m & 7))) as f32 / 16.0, 1.0],
+        // BlockSapling, BlockTallGrass, BlockDeadBush: 0.4 wide, 0.8 high
+        block::SAPLING | block::TALLGRASS | block::DEADBUSH => {
+            [0.5 - 0.4, 0.0, 0.5 - 0.4, 0.5 + 0.4, 0.8, 0.5 + 0.4]
+        }
+        // BlockFlower (BlockBush's 0.2 * 3), BlockMushroom (0.2 * 2)
+        block::YELLOW_FLOWER | block::RED_FLOWER => [0.3, 0.0, 0.3, 0.7, 0.6, 0.7],
+        block::BROWN_MUSHROOM | block::RED_MUSHROOM => [0.3, 0.0, 0.3, 0.7, 0.4, 0.7],
+        // BlockCactus.getSelectedBoundingBoxFromPool: the full height
+        block::CACTUS => [0.0625, 0.0, 0.0625, 0.9375, 1.0, 0.9375],
+        block::REEDS => [0.125, 0.0, 0.125, 0.875, 1.0, 0.875],
+        // BlockSoulSand only shrinks its collision box
+        block::SOUL_SAND => FULL,
+        block::END_PORTAL => [0.0, 0.0, 0.0, 1.0, 0.0625, 1.0],
+        // BlockPistonBase: an extended piston is the part left behind
+        block::PISTON | block::STICKY_PISTON if m & 8 != 0 => match m & 7 {
+            0 => [0.0, 0.25, 0.0, 1.0, 1.0, 1.0],
+            1 => [0.0, 0.0, 0.0, 1.0, 0.75, 1.0],
+            2 => [0.0, 0.0, 0.25, 1.0, 1.0, 1.0],
+            3 => [0.0, 0.0, 0.0, 1.0, 1.0, 0.75],
+            4 => [0.25, 0.0, 0.0, 1.0, 1.0, 1.0],
+            5 => [0.0, 0.0, 0.0, 0.75, 1.0, 1.0],
+            _ => FULL,
+        },
+        // BlockPistonExtension: the head plate
+        block::PISTON_HEAD => match m & 7 {
+            0 => [0.0, 0.0, 0.0, 1.0, 0.25, 1.0],
+            1 => [0.0, 0.75, 0.0, 1.0, 1.0, 1.0],
+            2 => [0.0, 0.0, 0.0, 1.0, 1.0, 0.25],
+            3 => [0.0, 0.0, 0.75, 1.0, 1.0, 1.0],
+            4 => [0.0, 0.0, 0.0, 0.25, 1.0, 1.0],
+            _ => [0.75, 0.0, 0.0, 1.0, 1.0, 1.0],
+        },
+        // BlockPressurePlate.getPowerFromMeta: only 1 is pressed
+        block::STONE_PRESSURE_PLATE | block::WOODEN_PRESSURE_PLATE => {
+            let h = if m == 1 { 0.03125 } else { 0.0625 };
+            [0.0625, 0.0, 0.0625, 0.9375, h, 0.9375]
+        }
+        block::VINE => {
+            let (mut x0, mut y0, mut z0, mut x1, mut y1, mut z1) =
+                (1.0f32, 1.0f32, 1.0f32, 0.0f32, 0.0f32, 0.0f32);
+            let mut any = m > 0;
+            if m & 2 != 0 {
+                x1 = x1.max(0.0625);
+                (x0, y0, y1, z0, z1) = (0.0, 0.0, 1.0, 0.0, 1.0);
+                any = true;
+            }
+            if m & 8 != 0 {
+                x0 = x0.min(0.9375);
+                (x1, y0, y1, z0, z1) = (1.0, 0.0, 1.0, 0.0, 1.0);
+                any = true;
+            }
+            if m & 4 != 0 {
+                z1 = z1.max(0.0625);
+                (z0, x0, x1, y0, y1) = (0.0, 0.0, 1.0, 0.0, 1.0);
+                any = true;
+            }
+            if m & 1 != 0 {
+                z0 = z0.min(0.9375);
+                (z1, x0, x1, y0, y1) = (1.0, 0.0, 1.0, 0.0, 1.0);
+                any = true;
+            }
+            // BlockVine.canPlaceOn the block above
+            let above = get(x, y + 1, z).0;
+            let info = block::info(above);
+            if !any && info.normal_cube() && block::material(above).blocks_movement() {
+                y0 = y0.min(0.9375);
+                (y1, x0, x1, z0, z1) = (1.0, 0.0, 1.0, 0.0, 1.0);
+            }
+            if x0 > x1 {
+                // no face at all: the inverted box still draws the cube's edges
+                FULL
+            } else {
+                [x0, y0, z0, x1, y1, z1]
+            }
+        }
+        // BlockCocoa: direction and growth stage
+        block::COCOA => {
+            let stage = (m & 12) >> 2;
+            let w = (4 + stage * 2) as f32;
+            let h = (5 + stage * 2) as f32;
+            let hw = w / 2.0;
+            let y0 = (12.0 - h) / 16.0;
+            match m & 3 {
+                0 => [
+                    (8.0 - hw) / 16.0,
+                    y0,
+                    (15.0 - w) / 16.0,
+                    (8.0 + hw) / 16.0,
+                    0.75,
+                    0.9375,
+                ],
+                1 => [
+                    0.0625,
+                    y0,
+                    (8.0 - hw) / 16.0,
+                    (1.0 + w) / 16.0,
+                    0.75,
+                    (8.0 + hw) / 16.0,
+                ],
+                2 => [
+                    (8.0 - hw) / 16.0,
+                    y0,
+                    0.0625,
+                    (8.0 + hw) / 16.0,
+                    0.75,
+                    (1.0 + w) / 16.0,
+                ],
+                _ => [
+                    (15.0 - w) / 16.0,
+                    y0,
+                    (8.0 - hw) / 16.0,
+                    0.9375,
+                    0.75,
+                    (8.0 + hw) / 16.0,
+                ],
+            }
+        }
+        // BlockTripWireHook.setBlockBoundsBasedOnState
+        block::TRIPWIRE_HOOK => {
+            let f = 0.1875f32;
+            match m & 3 {
+                3 => [0.0, 0.2, 0.5 - f, f * 2.0, 0.8, 0.5 + f],
+                1 => [1.0 - f * 2.0, 0.2, 0.5 - f, 1.0, 0.8, 0.5 + f],
+                0 => [0.5 - f, 0.2, 0.0, 0.5 + f, 0.8, f * 2.0],
+                _ => [0.5 - f, 0.2, 1.0 - f * 2.0, 0.5 + f, 0.8, 1.0],
+            }
+        }
+        // BlockTripWire: on the ground, suspended, or suspended and attached
+        block::TRIPWIRE => {
+            if m & 2 == 0 {
+                [0.0, 0.0, 0.0, 1.0, 0.09375, 1.0]
+            } else if m & 4 == 0 {
+                [0.0, 0.0, 0.0, 1.0, 0.5, 1.0]
+            } else {
+                [0.0, 0.0625, 0.0, 1.0, 0.15625, 1.0]
+            }
+        }
+        _ => return None,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every block alone in the air against `tools/selection_1710.txt`
+    /// (RenderGlobal.drawSelectionBox in the real game).
+    #[test]
+    fn selection_boxes_match_the_game() {
+        let mut bad = Vec::new();
+        for l in include_str!("../tools/selection_1710.txt").lines() {
+            let v: Vec<f32> = l.split(' ').map(|t| t.parse().unwrap()).collect();
+            let (id, meta) = (v[0] as u8, v[1] as u8);
+            if !block::info(id).exists {
+                continue;
+            }
+            // whose bounds the harness cannot see: set by collisionRayTrace
+            // (torches) or addCollisionBoxesToList (brewing stand, end
+            // portal frame), or left over from the last call (metadata no
+            // ladder, button or vine uses)
+            let m = meta as i32;
+            let stale = match id {
+                50 | 75 | 76 | 117 | 120 => true,
+                65 => !(2..=5).contains(&m),
+                77 | 143 => !(1..=4).contains(&(m & 7)),
+                106 => m == 0,
+                29 | 33 => m & 8 != 0 && m & 7 > 5,
+                _ => false,
+            };
+            if stale {
+                continue;
+            }
+            let get = |x: i32, y: i32, z: i32| {
+                if x == 0 && y == 64 && z == 0 {
+                    (id, meta)
+                } else {
+                    (0u8, 0u8)
+                }
+            };
+            let b = selection(&get, id, meta, 0, 64, 0);
+            if (0..6).any(|k| (b[k] - v[k + 2]).abs() > 1e-4) {
+                bad.push(format!("{id}:{meta} ours {b:?} game {:?}", &v[2..]));
+            }
+        }
+        if std::env::var("SEL_ALL").is_ok() {
+            for b in &bad {
+                eprintln!("{b}");
+            }
+        }
+        assert!(
+            bad.is_empty(),
+            "{} differ, first: {:?}",
+            bad.len(),
+            bad.first()
+        );
+    }
 
     #[test]
     fn straight_stairs_have_two_boxes() {

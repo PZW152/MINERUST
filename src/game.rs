@@ -459,8 +459,9 @@ pub struct Game {
     dig: Option<Digging>,
     hit_delay: i32,
     right_delay: i32,
-    /// `swingProgressInt`, -1 when not swinging.
+    /// `swingProgressInt` and `isSwingInProgress`
     swing: i32,
+    swinging: bool,
     prev_swing_f: f32,
     swing_f: f32,
     equip: f32,
@@ -469,6 +470,8 @@ pub struct Game {
     render_arm: [f32; 2],
     prev_render_arm: [f32; 2],
     equipped: Option<Stack>,
+    /// `ItemRenderer.equippedItemSlot`
+    equipped_slot: usize,
     death_sent: bool,
     jitter: JavaRandom,
     prev_feet: [f64; 3],
@@ -779,12 +782,14 @@ impl Game {
             right_delay: 0,
             swing: -1,
             prev_swing_f: 0.0,
+            swinging: false,
             swing_f: 0.0,
             equip: 0.0,
             prev_equip: 0.0,
             render_arm: [0.0; 2],
             prev_render_arm: [0.0; 2],
             equipped: None,
+            equipped_slot: 0,
             death_sent: false,
             jitter: JavaRandom::new(312871),
             prev_feet: [0.0; 3],
@@ -2193,7 +2198,7 @@ impl Game {
             age: self.ticks as f32 + partial,
             head_yaw: yaw - body,
             head_pitch: pitch,
-            swing: self.prev_swing_f + (self.swing_f - self.prev_swing_f) * partial,
+            swing: self.swing_progress(partial),
             held_right: match (st, action) {
                 (Some(_), Some(crate::item_use::Action::Block)) => 3,
                 (Some(_), _) => 1,
@@ -2533,36 +2538,38 @@ impl Game {
         {
             self.use_item();
         }
+        // EntityLivingBase.updateArmSwingProgress
         self.prev_swing_f = self.swing_f;
-        if self.swing >= 0 {
+        let end = self.arm_swing_end();
+        if self.swinging {
             self.swing += 1;
-            if self.swing >= 6 {
-                self.swing = -1;
+            if self.swing >= end {
+                self.swing = 0;
+                self.swinging = false;
             }
-        }
-        self.swing_f = if self.swing >= 0 {
-            self.swing as f32 / 6.0
         } else {
-            0.0
-        };
-        if self.prev_swing_f > self.swing_f && self.swing < 0 {
-            self.prev_swing_f = 0.0;
+            self.swing = 0;
         }
+        self.swing_f = self.swing as f32 / end as f32;
         self.prev_equip = self.equip;
         // EntityPlayerSP.updateEntityActionState: the arm follows the view
         self.prev_render_arm = self.render_arm;
         self.render_arm[0] += (self.player.pitch - self.render_arm[0]) * 0.5;
         self.render_arm[1] += (self.player.yaw - self.render_arm[1]) * 0.5;
+        // ItemRenderer.updateEquippedItem: the same slot and the same item
         let held = self.view.inv.held();
-        let same = match (held, self.equipped) {
-            (Some(a), Some(b)) => a.id == b.id && a.meta == b.meta,
-            (None, None) => true,
-            _ => false,
-        };
+        let slot = self.view.inv.selected;
+        let same = slot == self.equipped_slot
+            && match (held, self.equipped) {
+                (Some(a), Some(b)) => a.id == b.id && a.meta == b.meta,
+                (None, None) => true,
+                _ => false,
+            };
         let target = if same { 1.0 } else { 0.0 };
         self.equip += (target - self.equip).clamp(-0.4, 0.4);
         if self.equip < 0.1 {
             self.equipped = held;
+            self.equipped_slot = slot;
         }
         if self.ticks % 40 == 0 {
             self.unload_far();
@@ -3229,7 +3236,7 @@ impl Game {
         }
         // the angler is the local player: posY is its eye height, and
         // RenderFish adds no getEyeHeight for it
-        let swing = self.prev_swing_f + (self.swing_f - self.prev_swing_f) * partial;
+        let swing = self.swing_progress(partial);
         let var21 = math::sin(math::sqrt_float(swing) * math::PI);
         let lerp = |a: [f32; 2]| a[0] + (a[1] - a[0]) * partial;
         let pitch = lerp(self.p_pitch);
@@ -3279,14 +3286,42 @@ impl Game {
         }
     }
 
-    /// `EntityLivingBase.swingItem`
+    /// `EntityLivingBase.swingItem`: a swing starts unless one is in its
+    /// first half.
     fn swing_item(&mut self) {
-        if self.swing < 0 || self.swing >= 3 {
+        if !self.swinging || self.swing >= self.arm_swing_end() / 2 || self.swing < 0 {
             self.swing = -1;
+            self.swinging = true;
         }
-        if self.swing == -1 {
-            self.swing = 0;
+    }
+
+    /// `EntityLivingBase.getArmSwingAnimationEnd`: 6 ticks, shorter with
+    /// Haste, longer with Mining Fatigue.
+    fn arm_swing_end(&self) -> i32 {
+        let amp = |p: i32| {
+            self.stats
+                .effects
+                .iter()
+                .find(|e| e.id == p)
+                .map(|e| e.amplifier)
+        };
+        if let Some(a) = amp(crate::potion::DIG_SPEED) {
+            6 - (1 + a)
+        } else if let Some(a) = amp(crate::potion::DIG_SLOWDOWN) {
+            6 + (1 + a) * 2
+        } else {
+            6
         }
+    }
+
+    /// `EntityLivingBase.getSwingProgress`: a restarted swing keeps going
+    /// forward instead of jumping back.
+    fn swing_progress(&self, partial: f32) -> f32 {
+        let mut d = self.swing_f - self.prev_swing_f;
+        if d < 0.0 {
+            d += 1.0;
+        }
+        self.prev_swing_f + d * partial
     }
 
     /// `PlayerControllerMP.clickBlock` / `onPlayerDamageBlock`, once per tick
@@ -3585,8 +3620,107 @@ impl Game {
     /// `sendUseItem` without a block in view.
     fn use_item_air(&mut self) {
         let _ = self.sim.commands.send(Command::UseAir);
-        if self.view.inv.held().is_some_and(|s| s.id == 346) {
+        self.use_item_air_effects();
+    }
+
+    /// What `sendUseItem` shows at once on the client.
+    fn use_item_air_effects(&mut self) {
+        let Some(s) = self.view.inv.held() else {
+            return;
+        };
+        if s.id == 346 {
+            // ItemFishingRod.onItemRightClick: swingItem
             self.swing_item();
+        }
+        // sendUseItem is true when onItemRightClick changed the stack:
+        // resetEquippedProgress2, the hand drops and comes back up
+        let survival = self.mode != GameMode::Creative;
+        let thrown = match s.id {
+            // snowball, egg, ender pearl, bottle o' enchanting, eye of ender
+            332 | 344 | 368 | 384 | 381 => survival,
+            // a splash potion
+            373 => s.meta & 16384 != 0 && survival,
+            _ => false,
+        };
+        if thrown {
+            self.equip = 0.0;
+        }
+    }
+
+    /// `Item.onItemUse` on the client, as far as its return value and the
+    /// stack it uses up go: (used, a stack used up).
+    fn client_item_use(&self, s: Stack, b: [i32; 3], n: [i32; 3]) -> (bool, bool) {
+        let w = &self.world;
+        let tid = w.peek_block(b[0], b[1], b[2]);
+        let tm = w.peek_meta(b[0], b[1], b[2]);
+        let up = n == [0, 1, 0];
+        let air_above = w.peek_block(b[0], b[1] + 1, b[2]) == block::AIR;
+        let at = [b[0] + n[0], b[1] + n[1], b[2] + n[2]];
+        let at_air = w.peek_block(at[0], at[1], at[2]) == block::AIR;
+        match s.id {
+            // ItemHoe: grass or dirt with air above, not from below
+            290..=294 => (
+                n != [0, -1, 0] && air_above && matches!(tid, block::GRASS | block::DIRT),
+                false,
+            ),
+            // ItemFlintAndSteel: always
+            259 => (true, false),
+            // ItemDye: bone meal on what grows, cocoa beans on jungle wood
+            351 if s.meta == 15 => {
+                let grows = match tid {
+                    block::SAPLING | block::GRASS | block::BROWN_MUSHROOM | block::RED_MUSHROOM => {
+                        true
+                    }
+                    block::WHEAT | block::CARROTS | block::POTATOES => tm < 7,
+                    block::PUMPKIN_STEM | block::MELON_STEM => tm < 7,
+                    block::COCOA => (tm & 12) >> 2 < 2,
+                    block::TALLGRASS => tm != 0,
+                    block::DOUBLE_PLANT => true,
+                    _ => false,
+                };
+                (grows, grows)
+            }
+            351 if s.meta == 3 => {
+                let ok = tid == block::LOG && tm & 3 == 3 && !up && n != [0, -1, 0] && at_air;
+                (ok, ok)
+            }
+            // ItemSeeds / ItemSeedFood: on the top of farmland (soul sand
+            // for nether wart) with air above
+            295 | 361 | 362 | 391 | 392 => {
+                let ok = up && tid == block::FARMLAND && air_above;
+                (ok, ok)
+            }
+            372 => {
+                let ok = up && tid == block::SOUL_SAND && air_above;
+                (ok, ok)
+            }
+            // items that place a block of their own
+            323 | 324 | 330 | 355 | 331 | 287 | 354 | 356 | 404 | 379 | 380 | 390 | 397 | 338 => {
+                (true, true)
+            }
+            // ItemHangingEntity: any side but the top and bottom
+            321 | 389 => {
+                let ok = n[1] == 0;
+                (ok, ok)
+            }
+            // ItemMinecart on a rail
+            328 | 342 | 343 | 407 | 408 => {
+                let ok = crate::entity::minecart::is_rail(tid);
+                (ok, ok)
+            }
+            // ItemMonsterPlacer, ItemFirework, ItemFireball: always
+            383 | 401 | 385 => (true, true),
+            // ItemEnderEye on an empty end portal frame
+            381 => {
+                let ok = tid == block::END_PORTAL_FRAME && tm & 4 == 0;
+                (ok, ok)
+            }
+            // ItemRecord into an empty jukebox
+            2256..=2267 => {
+                let ok = tid == block::JUKEBOX && tm == 0;
+                (ok, ok)
+            }
+            _ => (false, false),
         }
     }
 
@@ -3640,6 +3774,11 @@ impl Game {
                 if let Some(id) = s.block() {
                     // ItemBlock.func_150936_a: refused before any packet
                     let Some(p) = self.placement(id, s.meta as u8, b, n) else {
+                        // onPlayerRightClick is false: no swing; creative
+                        // still drops the hand, then sendUseItem
+                        if self.mode == GameMode::Creative {
+                            self.equip = 0.0;
+                        }
                         let _ = self.sim.commands.send(Command::UseAir);
                         return;
                     };
@@ -3696,7 +3835,30 @@ impl Game {
         if std::env::var_os("MINERUST_DEBUG_LATENCY").is_some() {
             self.latency = Some((Instant::now(), (b[0] >> 4, b[2] >> 4)));
         }
-        self.swing_item();
+        // Minecraft.rightClickMouse: swingItem only when onPlayerRightClick
+        // did something; the hand drops when the stack changed size, and
+        // always in creative
+        let (used, consumed) = if activates {
+            (true, false)
+        } else if place.is_some() {
+            (true, true)
+        } else if let Some(s) = held {
+            self.client_item_use(s, b, n)
+        } else {
+            (false, false)
+        };
+        if used {
+            self.swing_item();
+        }
+        let creative = self.mode == GameMode::Creative;
+        if held.is_some() && (creative || consumed) {
+            self.equip = 0.0;
+        }
+        if !used {
+            // sendUseItem with the held item (the server does it after the
+            // Use packet)
+            self.use_item_air_effects();
+        }
     }
 
     /// The mouse in scaled GUI pixels (`Mouse.getX() * width / displayWidth`).
@@ -5944,7 +6106,7 @@ impl Game {
                 self.world.light(false, lx, ly, lz),
             );
             let equip = self.prev_equip + (self.equip - self.prev_equip) * partial;
-            let swing = self.prev_swing_f + (self.swing_f - self.prev_swing_f) * partial;
+            let swing = self.swing_progress(partial);
             let using = self.using.map(|(st, n)| {
                 (
                     crate::item_use::action(st.id, st.meta),
