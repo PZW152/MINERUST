@@ -399,6 +399,9 @@ pub struct Frame<'a> {
     pub weather: &'a [Vertex],
     /// `RenderEndPortal` quads (camera-relative, at y + 0.75).
     pub end_portals: &'a [Vertex],
+    /// `RendererLivingEntity.renderLivingLabel`: the backing and faint
+    /// text drawn with the depth test off (camera-relative).
+    pub labels: &'a [Vertex],
     pub crosshair: bool,
 }
 
@@ -540,6 +543,7 @@ pub struct Renderer {
     pipe_gui: vk::Pipeline,
     pipe_crack: vk::Pipeline,
     pipe_hand: vk::Pipeline,
+    pipe_label: vk::Pipeline,
     ui_tex: (vk::Image, vk::DeviceMemory, vk::ImageView),
     stars: (vk::Buffer, vk::DeviceMemory, u32),
     cloud_mesh: Option<(vk::Buffer, vk::DeviceMemory, u32)>,
@@ -1059,7 +1063,7 @@ impl Renderer {
                         .dst_alpha_blend_factor(vk::BlendFactor::ZERO)
                         .alpha_blend_op(vk::BlendOp::ADD);
                 }
-                if kind == 2 || kind == 3 || kind == 5 || kind == 8 || kind == 9 {
+                if kind == 2 || kind == 3 || kind == 5 || kind == 8 || kind == 9 || kind == 15 {
                     att = att
                         .blend_enable(true)
                         .src_color_blend_factor(vk::BlendFactor::SRC_ALPHA)
@@ -1143,6 +1147,7 @@ impl Renderer {
             let pipe_crack = mk(c"vs_terrain", c"fs_crack", 10);
             let pipe_hand = mk(c"vs_terrain", c"fs_terrain", 11);
             let pipe_portal = mk(c"vs_portal", c"fs_portal", 12);
+            let pipe_label = mk(c"vs_terrain", c"fs_terrain", 15);
             device.destroy_shader_module(module, None);
 
             let sampler = device
@@ -1208,6 +1213,7 @@ impl Renderer {
                 pipe_cloud_color,
                 pipe_gui,
                 pipe_crack,
+                pipe_label,
                 pipe_hand,
                 ui_tex: (
                     vk::Image::null(),
@@ -2850,6 +2856,10 @@ impl Renderer {
                 .end_portals
                 .len()
                 .min(cap - n_dyn - n_crack - n_hand - n_weather);
+            let n_label = frame
+                .labels
+                .len()
+                .min(cap - n_dyn - n_crack - n_hand - n_weather - n_portal);
             let wptr = self.frames[fi].world_ptr;
             let wbuf = self.frames[fi].world_buf;
             std::ptr::copy_nonoverlapping(frame.dynamic.as_ptr() as *const u8, wptr, n_dyn * vsz);
@@ -2873,6 +2883,12 @@ impl Renderer {
                 frame.end_portals.as_ptr() as *const u8,
                 wptr.add(portal_at * vsz),
                 n_portal * vsz,
+            );
+            let label_at = portal_at + n_portal;
+            std::ptr::copy_nonoverlapping(
+                frame.labels.as_ptr() as *const u8,
+                wptr.add(label_at * vsz),
+                n_label * vsz,
             );
             if n_dyn >= 4 {
                 dev.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, self.pipe_opaque);
@@ -2947,6 +2963,12 @@ impl Renderer {
                 if !c.before_terrain {
                     draw_clouds(c);
                 }
+            }
+            if n_label >= 4 {
+                dev.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, self.pipe_label);
+                push([0.0; 4], [0.0; 4]);
+                dev.cmd_bind_vertex_buffers(cmd, 0, &[wbuf], &[(label_at * vsz) as u64]);
+                dev.cmd_draw_indexed(cmd, (n_label / 4) as u32 * 6, 1, 0, 0, 0);
             }
             // First-person hand: its own depth range (EntityRenderer.renderHand
             // clears the depth buffer first).
@@ -3295,6 +3317,7 @@ impl Drop for Renderer {
             self.device.destroy_pipeline(self.pipe_crack, None);
             self.device.destroy_pipeline(self.pipe_hand, None);
             self.device.destroy_pipeline(self.pipe_portal, None);
+            self.device.destroy_pipeline(self.pipe_label, None);
             self.device.destroy_buffer(self.stars.0, None);
             self.device.free_memory(self.stars.1, None);
             if let Some((b, m, _)) = self.cloud_mesh.take() {

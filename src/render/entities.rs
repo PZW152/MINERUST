@@ -993,3 +993,65 @@ pub fn render_item(out: &mut Vec<Vertex>, atlas: &Atlas, s: Stack, m: &Mat4, l: 
         }
     }
 }
+
+/// `RendererLivingEntity.renderLivingLabel` at `at` (camera-relative, the
+/// entity's height + 0.5 already added): a black backing at alpha 0.25 and
+/// the name at alpha 0x20 without the depth test into `faint`, then the
+/// name in white with it into `solid`. Both windings, at full brightness.
+pub fn living_label(
+    faint: &mut Vec<Vertex>,
+    solid: &mut Vec<Vertex>,
+    atlas: &Atlas,
+    name: &str,
+    at: [f32; 3],
+    view_yaw: f32,
+    view_pitch: f32,
+) {
+    use super::{mul, rot_x, rot_y, translate};
+    let s = 0.016_666_668f32 * 1.6;
+    let mut m = mul(&translate(at[0], at[1], at[2]), &rot_y(-view_yaw));
+    m = mul(&m, &rot_x(view_pitch));
+    let mut sc = super::IDENTITY;
+    sc[0] = -s;
+    sc[5] = -s;
+    sc[10] = s;
+    m = mul(&m, &sc);
+    let y = if name == "deadmau5" { -10.0 } else { 0.0 };
+    let half = (super::sign::width(atlas, name) / 2.0).floor();
+    let light = [240, 240, 0, 0];
+    let w = atlas.named("white");
+    let (u, v) = ((w[0] + w[2]) / 2.0, (w[1] + w[3]) / 2.0);
+    let corners = [
+        [-half - 1.0, -1.0 + y],
+        [-half - 1.0, 8.0 + y],
+        [half + 1.0, 8.0 + y],
+        [half + 1.0, -1.0 + y],
+    ];
+    let q: Vec<Vertex> = corners
+        .iter()
+        .map(|c| {
+            let o = super::transform(&m, [c[0], c[1], 0.0, 1.0]);
+            Vertex {
+                pos: [o[0], o[1], o[2]],
+                uv: [u, v],
+                color: [0, 0, 0, 64],
+                light,
+            }
+        })
+        .collect();
+    let both = |out: &mut Vec<Vertex>, q: &[Vertex]| {
+        for k in q.chunks(4) {
+            out.extend_from_slice(k);
+            out.extend_from_slice(&[k[3], k[2], k[1], k[0]]);
+        }
+    };
+    both(faint, &q);
+    let x = -half;
+    let mut t = Vec::new();
+    // 553648127 = 0x20FFFFFF
+    super::sign::text(&mut t, atlas, name, x, y, &m, [255, 255, 255, 32], light);
+    both(faint, &t);
+    t.clear();
+    super::sign::text(&mut t, atlas, name, x, y, &m, [255, 255, 255, 255], light);
+    both(solid, &t);
+}

@@ -143,7 +143,7 @@ impl Sim {
             // Bootstrap$6: ItemMonsterPlacer.spawnCreature in front
             383 => {
                 let at = [c[0] + dir[0], p[1] as f64 + 0.2f32 as f64, c[2] + dir[2]];
-                self.spawn_creature_with(s.meta, at, rnd);
+                self.spawn_creature_with(&s, at, rnd);
                 self.aux_sound(1000, p, sounds);
                 one_less(s)
             }

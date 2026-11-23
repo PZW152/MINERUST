@@ -430,6 +430,8 @@ pub struct Mob {
     /// The zombie's "Random spawn bonus" to knockback resistance.
     pub kb_resist: f64,
     pub persistent: bool,
+    /// `EntityLiving.getCustomNameTag` (data watcher 10); empty is none.
+    pub custom_name: String,
     // per-kind state
     /// Sheep fleece colour / villager profession / skeleton type.
     pub variant: i32,
@@ -796,6 +798,7 @@ impl Mob {
             prev_yaw: 0.0,
             kb_resist: 0.0,
             persistent: false,
+            custom_name: String::new(),
             variant: 0,
             sheared: false,
             fuse: 0,
@@ -3549,6 +3552,8 @@ impl Mobs {
     /// Right click on a mob (`EntityPlayer.interactWith` /
     /// `EntityLiving.interact`). Returns what the held stack turns into
     /// (`Some(None)` uses one up) and items that drop.
+    /// `ItemNameTag.itemInteractionForEntity`: only a renamed tag names
+    /// the mob, and a named mob never despawns (`func_110163_bv`).
     pub fn interact(
         &mut self,
         id: u32,
@@ -3727,8 +3732,13 @@ impl Mobs {
                 m.path.clear();
                 m.clear_ai_target();
                 m.target_mob = None;
-                None
+                // interact returns false, so the held item has its turn
+                match held {
+                    Some(s) if s.id == NAME_TAG => name_with_tag(m, s),
+                    _ => None,
+                }
             }
+            (_, Some(NAME_TAG)) => name_with_tag(m, held.unwrap()),
             _ => None,
         }
     }
@@ -3986,6 +3996,9 @@ impl Mobs {
             ("HealF", Nbt::Float(m.health)),
             ("Health", Nbt::Short(m.health.ceil() as i16)),
             ("PersistenceRequired", Nbt::Byte(m.persistent as i8)),
+            // EntityLiving.writeEntityToNBT
+            ("CustomName", Nbt::String(m.custom_name.clone())),
+            ("CustomNameVisible", Nbt::Byte(0)),
         ];
         // EntityAgeable.writeEntityToNBT, EntityAnimal.writeEntityToNBT
         if m.kind.animal() || m.kind == Kind::Villager {
@@ -4141,6 +4154,9 @@ impl Mobs {
             }
         }
         m.persistent = t.int("PersistenceRequired").unwrap_or(0) != 0;
+        if let Some(n) = t.string("CustomName") {
+            m.custom_name = n.to_string();
+        }
         m.can_pick_up_loot = t.int("CanPickUpLoot").unwrap_or(0) != 0;
         if t.int("IsVillager").unwrap_or(0) != 0 {
             m.zombie_villager = true;
@@ -5967,4 +5983,23 @@ fn add_random_enchantment(r: &mut JavaRandom, s: Stack, level: i32) -> Stack {
     let mut have = s.enchantments();
     have.extend(list);
     s.with_enchantments(&have)
+}
+
+/// `Items.name_tag`
+pub const NAME_TAG: u16 = 421;
+
+/// `ItemNameTag.itemInteractionForEntity`: the tag's display name goes on
+/// the mob, which then needs persistence; a tag never renamed does nothing.
+fn name_with_tag(m: &mut Mob, s: Stack) -> Option<Option<Stack>> {
+    let name = s.custom_name()?;
+    m.custom_name = name;
+    m.persistent = true;
+    Some(if s.count > 1 {
+        Some(Stack {
+            count: s.count - 1,
+            ..s
+        })
+    } else {
+        None
+    })
 }

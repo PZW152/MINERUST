@@ -377,6 +377,9 @@ pub struct MobView {
     /// Client side: `rotationYaw` and `newPosRotationIncrements`.
     pub yaw: f32,
     pub incs: i32,
+    /// `getCustomNameTag`, and whether the player rides it (no label then).
+    pub custom_name: String,
+    pub ridden: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -3100,6 +3103,10 @@ impl Sim {
             if let Some(m) = self.mobs.list.iter_mut().find(|m| m.id == id) {
                 m.persistent = true;
                 for p in parts {
+                    if let Some(n) = p.strip_prefix("name=") {
+                        m.custom_name = n.to_string();
+                        continue;
+                    }
                     match p {
                         "tamed" => m.tamed = true,
                         "sit" => {
@@ -3591,6 +3598,8 @@ impl Sim {
                 net_head: m.net.head,
                 yaw: m.yaw,
                 incs: 0,
+                custom_name: m.custom_name.clone(),
+                ridden: m.ridden_by_player,
                 bb: [
                     m.bb.min[0],
                     m.bb.min[1],
@@ -7808,6 +7817,45 @@ mod tests {
             s.map_or(true, |m| m.potions.active(potion::MOVE_SLOWDOWN)),
             "Bane of Arthropods V slows"
         );
+    }
+
+    #[test]
+    fn name_tags_name_mobs() {
+        use crate::entity::mob::{Kind, Mobs, Outcome};
+        let (mut sim, x, y, z) = redstone_sim();
+        arena(&mut sim, x, y, z);
+        let feet = [x as f64 + 0.5, (y + 1) as f64, z as f64 + 0.5];
+        let mut r = JavaRandom::new(5);
+        let cow = sim.mobs.spawn(
+            Kind::Cow,
+            [x as f64 + 3.5, (y + 1) as f64, z as f64 + 0.5],
+            0.0,
+            &mut r,
+        );
+        // a tag never renamed at the anvil does nothing
+        let plain = Some(crate::item::Stack::new(421, 0, 2));
+        let mut out = Outcome::default();
+        assert!(sim.mobs.interact(cow, plain, feet, &mut out).is_none());
+        let tag = crate::item::Stack::new(421, 0, 2).with_name(Some("Bessie"));
+        let left = sim.mobs.interact(cow, Some(tag), feet, &mut out);
+        assert_eq!(left.flatten().map(|s| s.count), Some(1), "one tag used");
+        let m = sim.mobs.list.iter().find(|m| m.id == cow).unwrap();
+        assert_eq!(m.custom_name, "Bessie");
+        assert!(m.persistent, "a named mob stays");
+        // the name survives a save
+        let t = Mobs::to_nbt(m);
+        let mut other = Mobs::default();
+        let id = other.from_nbt(&t).unwrap();
+        let back = other.list.iter().find(|m| m.id == id).unwrap();
+        assert_eq!(back.custom_name, "Bessie");
+        // and reaches the client
+        let mut ev = Vec::new();
+        sim.step(&[Command::Player(feet, [-90.0, 0.0], false)], &mut ev);
+        let named = ev.iter().any(|e| match e {
+            Event::Mobs(v, _) => v.iter().any(|v| v.id == cow && v.custom_name == "Bessie"),
+            _ => false,
+        });
+        assert!(named);
     }
 
     #[test]

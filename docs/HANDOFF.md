@@ -226,7 +226,7 @@ minerust --seed 12345 --no-save --size 854 480 --screenshot out.png 6
 | 聊天 | `--open chat`；`MINERUST_CHAT="/give Player stone;..."` 開局送出 |
 | 視窗點擊腳本 | `MINERUST_CLICKS="slot:button:mode,..."` |
 | 固定滑鼠位置 | `MINERUST_MOUSE="x,y"`（GUI 座標） |
-| 給物品、效果、召喚 | `--give id:meta:count,...`、`--effect id:秒:等級`、`--summon Cow,Zombie:baby,Zombie:villager,Item:id:數量`（距離 `MINERUST_SUMMON_DIST`） |
+| 給物品、效果、召喚 | `--give id:meta:count,...`、`--effect id:秒:等級`、`--summon Cow,Zombie:baby,Zombie:villager,Item:id:數量,Villager:name=Bessie`（`name=` 取名；距離 `MINERUST_SUMMON_DIST`） |
 | 放方塊 | `--setblock "x y z id [meta];..."`（絕對座標） |
 | 告示牌文字 | `MINERUST_SIGN="a|b|c|d"`，`MINERUST_SIGN_DONE=1` 直接關閉編輯器 |
 | 不等區塊載完就截圖 | `MINERUST_NOWAIT=1` |

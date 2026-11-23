@@ -5415,6 +5415,7 @@ impl Game {
         let mut dynamic: Vec<crate::render::mesher::Vertex> = Vec::new();
         let mut fish_line: Vec<[f32; 3]> = Vec::new();
         let mut translucent: Vec<crate::render::mesher::Vertex> = Vec::new();
+        let mut labels: Vec<crate::render::mesher::Vertex> = Vec::new();
         // RenderGlobal.renderEntities: isBoundingBoxInFrustum
         let planes = render::frustum_planes(&view_proj);
         for m in &self.mobs {
@@ -5471,6 +5472,27 @@ impl Game {
                 partial,
                 light,
             );
+            // RendererLivingEntity.passSpecialRender: a named mob under the
+            // crosshair, not ridden, within 64 blocks
+            if !m.custom_name.is_empty()
+                && !m.ridden
+                && !self.hide_gui
+                && self.target_mob.is_some_and(|t| t.0 == m.id)
+            {
+                let feet = self.player.pos;
+                let d = [p[0] - feet[0], p[1] - feet[1], p[2] - feet[2]];
+                if d[0] * d[0] + d[1] * d[1] + d[2] * d[2] < 64.0 * 64.0 {
+                    entities::living_label(
+                        &mut labels,
+                        &mut translucent,
+                        atlas,
+                        &m.custom_name,
+                        [rel[0], rel[1] + (m.bb[4] - m.bb[1]) as f32 + 0.5, rel[2]],
+                        self.view_yaw(),
+                        self.player.pitch,
+                    );
+                }
+            }
             // Render.doRenderShadowAndFire
             if m.fire {
                 entities::on_fire(
@@ -6254,6 +6276,7 @@ impl Game {
         }
         let frame = Frame {
             end_portals: &end_portals,
+            labels: &labels,
             crosshair: self.screen == Screen::Playing && !self.hide_gui && self.loading == 2,
             dynamic: &dynamic,
             crack: &crack,
@@ -6341,6 +6364,7 @@ pub fn draw_ui_only(
         hand: &[],
         weather: &[],
         end_portals: &[],
+        labels: &[],
         crosshair: false,
     };
     renderer.render(&frame, window_size);

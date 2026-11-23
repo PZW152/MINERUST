@@ -137,8 +137,8 @@ impl Sim {
 
     /// `ItemMonsterPlacer.spawnCreature`: the yaw comes from the world's
     /// random, then `onSpawnWithEgg` and `playLivingSound`.
-    /// (`setCustomNameTag` from a renamed egg waits for name tags.)
-    pub(super) fn spawn_creature(&mut self, egg: i32, pos: [f64; 3]) -> bool {
+    /// A renamed egg names the mob (`setCustomNameTag`).
+    pub(super) fn spawn_creature(&mut self, egg: &Stack, pos: [f64; 3]) -> bool {
         let mut rnd = std::mem::replace(&mut self.world.rand, JavaRandom::new(0));
         let ok = self.spawn_creature_with(egg, pos, &mut rnd);
         self.world.rand = rnd;
@@ -148,11 +148,11 @@ impl Sim {
     /// `spawn_creature` with the world's random lent out by the caller.
     pub(super) fn spawn_creature_with(
         &mut self,
-        egg: i32,
+        egg: &Stack,
         pos: [f64; 3],
         rnd: &mut JavaRandom,
     ) -> bool {
-        let Some(e) = crate::item_data::EGGS.iter().find(|e| e.0 == egg) else {
+        let Some(e) = crate::item_data::EGGS.iter().find(|e| e.0 == egg.meta) else {
             return false;
         };
         let Some(kind) = crate::entity::mob::Kind::from_id(e.1) else {
@@ -161,6 +161,9 @@ impl Sim {
         let yaw = math::wrap_angle_180(rnd.next_float() * 360.0);
         let id = self.mobs.spawn_in(&mut self.world, kind, pos, yaw, rnd);
         if let Some(m) = self.mobs.list.iter_mut().find(|m| m.id == id) {
+            if let Some(n) = egg.custom_name() {
+                m.custom_name = n;
+            }
             if let Some(s) = m.living_sound() {
                 self.pending_out.push(crate::entity::mob::Outcome {
                     sounds: vec![s],
@@ -199,7 +202,7 @@ impl Sim {
     }
 
     fn egg_spawned(&mut self, held: Stack, p: [f64; 3]) {
-        if self.spawn_creature(held.meta, p) && self.play.mode != GameMode::Creative {
+        if self.spawn_creature(&held, p) && self.play.mode != GameMode::Creative {
             self.play.inv.consume_held();
             self.play.inv_dirty = true;
         }
