@@ -9,6 +9,7 @@
 
 ## 2026-11-23
 
+- Launch hand-thrown projectiles and bow shots near the player's eyes instead of at their feet
 - Fix clipped potion icons, hotbars, and tooltips on crowded inventory screens by growing the GUI vertex buffer and batching neighboring glint pixels
 - Fix inventory pointer alignment at odd window sizes, use the current slot for shortcuts, include crossed slots in fast drags, and preserve held items during creative scrolling, tab clicks, and empty panel clicks
 - Distant terrain and the night vignette as in the game: the terrain's first pass cuts out at alpha 0.5 (EntityRenderer.renderWorld's glAlphaFunc), which removes the dark lines along grass edges and the bright far-off flowers; mipmaps follow TextureUtil.generateMipmapData (transparency judged by the first pixels only, transparent averages over all four); the client's skylightSubtracted stays at its value from the world's creation (WorldClient never updates it), so the vignette, the fog's dimming and minecart brightness no longer darken at night (shotcompare: above 7.1% -> 1.7%, snowtrench 9.9% -> 0.4%, the block scenes about 3% -> 1.5%)

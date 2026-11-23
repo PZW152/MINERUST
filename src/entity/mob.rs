@@ -4,6 +4,7 @@
 
 use super::path::{self, Opts, Pt, Size};
 use super::player::{colliding_boxes, Aabb};
+use super::server_player::ServerPlayer;
 use crate::block::{self, Material};
 use crate::item::Stack;
 use crate::java::JavaRandom;
@@ -2912,7 +2913,7 @@ impl Mobs {
             kind,
             super::arrow::Shooter::Player,
             feet,
-            feet[1] + 0.12f32 as f64,
+            feet[1] + f64::from(ServerPlayer::EYE_HEIGHT),
             yaw,
             pitch,
         );
@@ -3007,7 +3008,7 @@ impl Mobs {
     }
 
     /// `ItemBow.onPlayerStoppedUsing`: `new EntityArrow(world, player, f * 2)`
-    /// from the server-side player (whose `posY` is the feet, eye height 0.12).
+    /// from the server-side player's eye height above the reported feet.
     pub fn shoot_player_arrow(
         &mut self,
         feet: [f64; 3],
@@ -3022,7 +3023,7 @@ impl Mobs {
             id,
             super::arrow::Shooter::Player,
             feet,
-            feet[1] + 0.12f32 as f64,
+            feet[1] + f64::from(ServerPlayer::EYE_HEIGHT),
             yaw,
             pitch,
             v,

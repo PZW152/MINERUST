@@ -138,6 +138,9 @@ pub struct ServerPlayer {
 }
 
 impl ServerPlayer {
+    /// Eye height measured from the feet for server-side aiming and launches.
+    pub(super) const EYE_HEIGHT: f32 = 1.62;
+
     pub fn new() -> ServerPlayer {
         // EntityPlayer: maxHealth 20, movementSpeed 0.1, attackDamage 1
         let mut l = Living::new(Attributes::new(20.0, 0.10000000149011612, 1.0));
@@ -145,7 +148,7 @@ impl ServerPlayer {
         let mut e = Ent::new(0.6, 1.8, 0x706C61796572);
         // EntityPlayer: fireResistance = 20
         e.fire_resistance = 20;
-        e.y_offset = 1.62;
+        e.y_offset = Self::EYE_HEIGHT;
         e.portal_cooldown = 10;
         ServerPlayer {
             living: l,

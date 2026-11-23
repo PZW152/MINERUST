@@ -5673,6 +5673,39 @@ mod tests {
 
     /// ItemFood, ItemPotion and ItemBow through setItemInUse.
     #[test]
+    fn player_projectiles_launch_at_head_height() {
+        use crate::item::Stack;
+        let cfg = SimConfig {
+            seed: 12345,
+            view: 2,
+            save_dir: None,
+            start_time: 6000,
+            freeze_time: true,
+            mode: GameMode::Survival,
+        };
+        let (mut sim, _) = Sim::new(&cfg);
+        let feet = [8.5, 120.0, 8.5];
+        sim.apply(&Command::Player(feet, [0.0, 0.0], false));
+        let expected_y = feet[1] + 1.52;
+        for (id, meta) in [(373, 16421), (332, 0), (344, 0), (368, 0), (384, 0)] {
+            sim.play.inv.main[0] = Some(Stack::new(id, meta, 1));
+            sim.apply(&Command::UseAir);
+            let projectile = sim.mobs.throwables.pop().expect("item was thrown");
+            assert_eq!(projectile.kind.item(), (id, meta));
+            let y = projectile.e.pos[1];
+            assert!((y - expected_y).abs() < 1e-6, "item {id} launched at {y}");
+        }
+
+        sim.play.inv.main[0] = Some(Stack::new(261, 0, 1));
+        sim.play.inv.main[1] = Some(Stack::new(262, 0, 1));
+        sim.apply(&Command::UseAir);
+        sim.splayer.using.as_mut().expect("bow is drawn").2 -= 20;
+        sim.apply(&Command::StopUsing);
+        let y = sim.mobs.arrows.last().expect("arrow was fired").e.pos[1];
+        assert!((y - expected_y).abs() < 1e-6, "arrow launched at {y}");
+    }
+
+    #[test]
     fn eat_drink_and_shoot() {
         let (mut sim, x, y, z) = redstone_sim();
         // EntityPlayer.canEat: not in creative
@@ -6808,10 +6841,7 @@ mod tests {
         }
         sim.play.inv.selected = 0;
         sim.play.inv.main[0] = Some(crate::item::Stack::new(368, 0, 1));
-        // a little upwards at a wall five blocks ahead: thrown 0.12 above
-        // the floor, a level throw's random spread can dip into the
-        // platform at once
-        sim.play.pitch = -20.0;
+        // A level throw towards a wall five blocks ahead.
         for dx in -3..4 {
             for dy in 0..8 {
                 sim.world
@@ -6845,17 +6875,20 @@ mod tests {
         assert!((p[2] - feet[2]).abs() > 1.0, "moved along the throw");
         assert_eq!(sim.splayer.living.health, 15.0);
 
-        // Splash Potion of Harming (16396) at the feet
+        // Start the potion check back on the platform. The pearl can leave
+        // the player in mid-air, outside the splash's vertical reach.
         sim.splayer.living.hurt_resistant_time = 0;
         let before = sim.splayer.living.health;
         sim.play.inv.main[0] = Some(crate::item::Stack::new(373, 16396, 1));
-        sim.play.pitch = 90.0;
         sim.step(
-            &[Command::Player(p, [0.0, 90.0], false), Command::UseAir],
+            &[Command::Player(feet, [0.0, 90.0], false), Command::UseAir],
             &mut Vec::new(),
         );
         for _ in 0..10 {
-            sim.step(&[Command::Player(p, [0.0, 90.0], false)], &mut Vec::new());
+            sim.step(
+                &[Command::Player(feet, [0.0, 90.0], false)],
+                &mut Vec::new(),
+            );
         }
         assert!(sim.splayer.living.health < before, "harmed by the splash");
     }
