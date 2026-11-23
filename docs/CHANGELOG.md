@@ -9,6 +9,7 @@
 
 ## 2026-11-23
 
+- Pigs can be saddled and ridden: ItemSaddle, EntityPig.interact, EntityAIControlledByPlayer (steering, speed ramp, step-up jump, stick wear turning it back into a fishing rod), ItemCarrotOnAStick boost, sneaking off, the saddle layer (ModelPig 0.5), Saddle in NBT and the saddle drop
 - Jukeboxes play records: ItemRecord.onItemUse and BlockJukebox (insert, eject with the original offsets, break, comparator signal id - 2256 + 1, saved as RecordPlayer), the record streams from the jukebox with distance and pan following the listener, and "Now playing" shows
 
 ## 2026-11-21

@@ -35,6 +35,8 @@ mod dispense;
 mod fishing;
 #[path = "sim_items.rs"]
 mod items;
+#[path = "sim_riding.rs"]
+mod riding;
 #[path = "sim_vehicles.rs"]
 mod vehicles;
 
@@ -480,6 +482,8 @@ pub struct Sim {
     fish_hook: Option<crate::entity::fish_hook::FishHook>,
     /// `NetHandlerPlayClient.avRandomizer` for server particle packets
     av_rand: JavaRandom,
+    /// `EntityAIControlledByPlayer`: carrot-on-a-stick wear to apply.
+    stick_wear: i32,
     /// Stands in for each `TileEntityDispenser`'s own `new Random()`.
     tile_rand: JavaRandom,
     /// `Bootstrap$12.succeeded` / `Bootstrap$13.succeeded`: once false,
@@ -703,6 +707,7 @@ impl Sim {
                 (crate::util::math::math_random() * (1u64 << 48) as f64) as i64,
             ),
             flint_succeeded: true,
+            stick_wear: 0,
             dye_succeeded: true,
             weather: Weather::default(),
             dim: 0,
@@ -1373,6 +1378,10 @@ impl Sim {
                     }
                     self.play.inv_dirty = true;
                 }
+                // EntityPig.interact -> EntityPlayer.mountEntity
+                if let Some(mid) = out.mount.take() {
+                    self.mount_mob(mid);
+                }
                 self.pending_out.push(out);
             }
             Command::Give(s) => {
@@ -1772,6 +1781,7 @@ impl Sim {
         }
         self.world.rand = rnd;
         self.tick_mobs(&mut play, events);
+        self.tick_mob_rider(&mut play);
         self.tick_vehicles(&mut play, events);
         self.tick_fish_hook(&mut play);
         // World.updateEntities: tile entities after the entities.
@@ -2338,6 +2348,11 @@ impl Sim {
         // ItemMonsterPlacer
         if held.id == items::SPAWN_EGG {
             self.use_egg_air(held);
+            return;
+        }
+        // ItemCarrotOnAStick
+        if held.id == 398 {
+            self.carrot_on_a_stick(held);
             return;
         }
         // ItemFishingRod
@@ -3106,6 +3121,7 @@ impl Sim {
                             m.set_position(p[0], p[1], p[2]);
                         }
                         "villager" => m.zombie_villager = true,
+                        "saddle" => m.saddled = true,
                         "big" => m.set_slime_size(4),
                         "hang" => m.hanging = true,
                         v => {
@@ -3359,6 +3375,7 @@ impl Sim {
             armor_pieces: play.inv.armor.iter().flatten().count() as i32,
             held,
             looting: crate::enchant::level(crate::enchant::LOOTING, play.inv.held().as_ref()),
+            creative: play.mode == GameMode::Creative,
             // both are forgotten after 100 ticks (onEntityUpdate)
             last_attacked: self
                 .last_attacked
@@ -3402,6 +3419,7 @@ impl Sim {
             self.mobs.blast_targets = t;
         }
         self.mobs.tick(&mut self.world, &info, &mut out);
+        self.stick_wear += std::mem::take(&mut out.stick_wear);
         self.mobs_pick_up_loot(play);
         self.mobs.blast_targets.clear();
         self.apply_blasts(play, std::mem::take(&mut out.blasts));
@@ -3554,7 +3572,8 @@ impl Sim {
                     | (m.hanging as u32) << 3
                     | (m.is_child() as u32) << 4
                     | (m.zombie_villager as u32) << 5
-                    | ((m.conversion >= 0) as u32) << 6,
+                    | ((m.conversion >= 0) as u32) << 6
+                    | (m.saddled as u32) << 7,
                 carried: [m.carried, m.carried_meta],
                 attack_timer: m.attack_timer,
                 equipment: m.equipment,
@@ -5735,6 +5754,106 @@ mod tests {
             }
             _ => panic!(),
         }
+    }
+
+    /// ItemSaddle on a pig, EntityPig.interact mounts the player, the
+    /// carrot on a stick steers it (EntityAIControlledByPlayer) and boosts
+    /// it for 7 durability, and sneaking gets off.
+    #[test]
+    fn saddled_pigs_can_be_ridden() {
+        use crate::entity::mob::Kind;
+        use crate::item::Stack;
+        let (mut sim, x, y, z) = redstone_sim();
+        sim.play.mode = GameMode::Survival;
+        let feet = [x as f64 + 2.5, y as f64, z as f64 + 2.5];
+        let mut r = JavaRandom::new(3);
+        let pig = sim.mobs.spawn(
+            Kind::Pig,
+            [x as f64 + 3.5, y as f64, z as f64 + 2.5],
+            0.0,
+            &mut r,
+        );
+        // getAIMoveSpeed is whatever the last AI move set: let it walk once
+        // (EntityAITempt with a carrot), as a pig in the world has walked before
+        let sel = sim.play.inv.selected;
+        sim.play.inv.main[sel] = Some(Stack::new(391, 0, 1));
+        let far = [x as f64 + 8.5, y as f64, z as f64 + 2.5];
+        for _ in 0..60 {
+            sim.step(
+                &[Command::Player(far, [90.0, 20.0], false)],
+                &mut Vec::new(),
+            );
+        }
+        sim.play.inv.main[sel] = Some(Stack::new(329, 0, 1));
+        sim.step(
+            &[Command::Player(feet, [-90.0, 20.0], false)],
+            &mut Vec::new(),
+        );
+        sim.step(&[Command::Interact { id: pig }], &mut Vec::new());
+        let m = sim.mobs.list.iter().find(|m| m.id == pig).unwrap();
+        assert!(m.saddled, "saddled");
+        assert!(sim.play.inv.main[sel].is_none(), "the saddle is used");
+        let mut ev = Vec::new();
+        sim.step(&[Command::Interact { id: pig }], &mut ev);
+        assert!(
+            ev.iter()
+                .any(|e| matches!(e, Event::Mount(Some(i)) if *i == pig)),
+            "mounted"
+        );
+        // steer east (yaw -90) with a carrot on a stick
+        sim.play.inv.main[sel] = Some(Stack::new(398, 0, 1));
+        let start = sim.mobs.list.iter().find(|m| m.id == pig).unwrap().pos;
+        // until it has gone two blocks east (the platform ends at x + 12)
+        for _ in 0..300 {
+            sim.step(
+                &[Command::Player(feet, [-90.0, 20.0], false)],
+                &mut Vec::new(),
+            );
+            let m = sim.mobs.list.iter().find(|m| m.id == pig).unwrap();
+            if m.pos[0] - start[0] > 2.0 {
+                break;
+            }
+        }
+        let m = sim.mobs.list.iter().find(|m| m.id == pig).unwrap();
+        assert!(
+            m.pos[0] - start[0] > 2.0,
+            "it walked east: {:?} -> {:?}",
+            start,
+            m.pos
+        );
+        assert!((m.pos[2] - start[2]).abs() < 0.5, "straight ahead");
+        let pf = sim.play.player.0;
+        assert!(
+            (pf[0] - m.pos[0]).abs() < 1e-6 && (pf[1] - (m.pos[1] + 0.9 * 0.75 - 0.5)).abs() < 1e-3,
+            "the player sits on it"
+        );
+        // the boost costs 7
+        sim.step(&[Command::UseAir], &mut Vec::new());
+        assert_eq!(sim.play.inv.main[sel].unwrap().meta, 7, "boost wear");
+        // sneak off
+        let mut ev = Vec::new();
+        sim.step(
+            &[Command::Input {
+                strafe: 0.0,
+                forward: 0.0,
+                jump: false,
+                sneak: true,
+            }],
+            &mut ev,
+        );
+        sim.step(&[Command::Player(feet, [-90.0, 20.0], false)], &mut ev);
+        assert!(
+            ev.iter().any(|e| matches!(e, Event::Mount(None))),
+            "got off"
+        );
+        assert!(
+            !sim.mobs
+                .list
+                .iter()
+                .find(|m| m.id == pig)
+                .unwrap()
+                .ridden_by_player
+        );
     }
 
     /// ItemRecord.onItemUse puts the record in (metadata 1, aux event 1005

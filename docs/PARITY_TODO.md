@@ -24,7 +24,6 @@ AI：
 - [ ] 村民：交易、開門、回屋、繁殖、跟隨鐵魔像、`setLookingForHome`（都需要村莊資料 `VillageCollection`）
 - [ ] 鐵魔像：`DefendVillage`、`MoveThroughVillage`、`MoveTowardsRestriction`（需要村莊資料）；拿花（`setHoldingRose` 只有計時，沒有畫）
 - [ ] 狼的乞食歪頭與甩水動畫、被非玩家打時傷害減半；豹貓 `OcelotSit` 對床與「箱子有人在用」的判斷
-- [ ] 騎豬（`EntityAIControlledByPlayer`）
 - [ ] 終界使者、烈焰使者、惡魂、蝙蝠、魷魚的 `updateEntityActionState`（`extra.rs`、`nether.rs`）逐行對照原始碼
 - [ ] 蠹魚鑽進石頭與召喚同伴（`EntitySilverfish.updateEntityActionState`）
 - [ ] `EntityAITarget` 的 `nearbyOnly`（`canEasilyReach`）與家的範圍（`isWithinHomeDistance`）
@@ -89,7 +88,7 @@ AI：
 
 實體：
 - [ ] 畫、物品展示框、拴繩結、終界之眼、煙火、凋零怪與凋零頭、閃電實體、雪人、巨人
-- [ ] 騎乘：馬（跳躍、鞍、馬鎧、箱子、物品欄）、豬＋鞍＋胡蘿蔔釣竿；騎乘時玩家模型的坐姿（`ModelBiped.isRiding`）
+- [ ] 騎乘：馬（跳躍、鞍、馬鎧、箱子、物品欄）；騎乘時玩家模型的坐姿（`ModelBiped.isRiding`）
 - [ ] 礦車：漏斗礦車的吸取、指令方塊與生怪磚礦車、觸發鐵軌、`MovingSoundMinecart` 的連續音效、騎乘中生物的存檔（`Riding`）
 - [ ] 掉落物改為客戶端自行模擬（原版客戶端也跑 `EntityItem.onUpdate`，伺服器每 20 tick 校正）
 - [ ] 經驗來源：繁殖、村民交易

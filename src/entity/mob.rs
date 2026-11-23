@@ -473,6 +473,10 @@ pub struct Mob {
     bat_target: Option<[i32; 3]>,
     /// Tamed by the player, and sitting (wolves and ocelots).
     pub tamed: bool,
+    /// `EntityPig.getSaddled` (data watcher 16)
+    pub saddled: bool,
+    /// `riddenByEntity` is the player.
+    pub ridden_by_player: bool,
     /// `ridingEntity`: the minecart it sits in.
     pub riding: Option<u32>,
     pub sitting: bool,
@@ -592,6 +596,8 @@ pub struct PlayerInfo {
     /// `getLootingModifier` of the held stack, for kills by the player's
     /// arrows (`onDeath` asks the damage source's entity).
     pub looting: i32,
+    /// `capabilities.isCreativeMode`
+    pub creative: bool,
 }
 
 impl PlayerInfo {
@@ -850,6 +856,8 @@ impl Mob {
             hanging: kind == Kind::Bat,
             bat_target: None,
             tamed: false,
+            saddled: false,
+            ridden_by_player: false,
             riding: None,
             sitting: false,
             attack_timer: 0,
@@ -2170,6 +2178,15 @@ impl Mob {
 
     /// `getSoundVolume()` and `getSoundPitch()` for the hurt and death
     /// sounds, the pitch from this mob's random.
+    /// The pig's carrot-on-a-stick boost; false when it is not being
+    /// steered (`isControlledByPlayer`).
+    pub fn pig_boost(&mut self) -> bool {
+        let mut r = std::mem::replace(&mut self.rand, JavaRandom::new(0));
+        let ok = self.tasks.boost_controlled(&mut r);
+        self.rand = r;
+        ok
+    }
+
     /// `EntityLiving.playLivingSound`
     pub fn living_sound(&mut self) -> Option<(&'static str, [f64; 3], f32, f32)> {
         let s = idle_name(self)?;
@@ -2471,6 +2488,10 @@ impl Mob {
             Kind::Pig => {
                 let n = r.next_int_n(3) + 1 + r.next_int_n(1 + l);
                 each(&mut v, if burning { 320 } else { 319 }, 0, n);
+                // EntityPig.dropFewItems: the saddle
+                if self.saddled {
+                    v.push(Stack::new(329, 0, 1));
+                }
             }
             Kind::Cow | Kind::Mooshroom => {
                 let n = r.next_int_n(3) + r.next_int_n(1 + l);
@@ -2778,6 +2799,10 @@ pub struct Outcome {
     /// (`damageItem(n, player)`, applied by the caller with the player's
     /// random).
     pub wear: i32,
+    /// `EntityPig.interact`: the player mounts this mob.
+    pub mount: Option<u32>,
+    /// `EntityAIControlledByPlayer`: the carrot on a stick wears by this much.
+    pub stick_wear: i32,
 }
 
 /// `Entity.moveEntity` for a primed TNT box.
@@ -3681,6 +3706,21 @@ impl Mobs {
                 heart(m, out, true);
                 Some(one_less(held.unwrap()))
             }
+            // EntityPig.interact: a saddled pig takes the player on
+            (Kind::Pig, _) if m.saddled => {
+                out.mount = Some(m.id);
+                Some(held)
+            }
+            // ItemSaddle.itemInteractionForEntity
+            (Kind::Pig, Some(329)) => {
+                if !m.saddled && m.growing_age >= 0 {
+                    m.saddled = true;
+                    out.sounds.push(("mob.horse.leather", m.pos, 0.5, 1.0));
+                    Some(one_less(held.unwrap()))
+                } else {
+                    Some(held)
+                }
+            }
             (Kind::Wolf | Kind::Ocelot, _) if m.tamed => {
                 // aiSit.setSitting(!isSitting()); the path and the target go
                 m.sit_order = !m.sitting;
@@ -3755,7 +3795,7 @@ impl Mobs {
                 }
             }
             // the player is pushed too, and pushed back
-            if player.alive && pb.intersects(&r) {
+            if player.alive && pb.intersects(&r) && !self.list[i].ridden_by_player {
                 let a = self.list[i].pos;
                 if let Some((x, z)) = collision_push(a[0] - player.feet[0], a[2] - player.feet[2]) {
                     out.player_push[0] -= x;
@@ -3769,7 +3809,7 @@ impl Mobs {
         if player.alive {
             let r = reach(&pb);
             for m in self.list.iter_mut() {
-                if !takes_part(m) || !m.bb.intersects(&r) {
+                if !takes_part(m) || !m.bb.intersects(&r) || m.ridden_by_player {
                     continue;
                 }
                 let d = [player.feet[0] - m.pos[0], player.feet[2] - m.pos[2]];
@@ -3960,6 +4000,7 @@ impl Mobs {
                 v.push(("Sheared", Nbt::Byte(m.sheared as i8)));
             }
             Kind::Villager => v.push(("Profession", Nbt::Int(m.variant))),
+            Kind::Pig => v.push(("Saddle", Nbt::Byte(m.saddled as i8))),
             Kind::Skeleton => v.push(("SkeletonType", Nbt::Byte(m.variant as i8))),
             Kind::Slime | Kind::MagmaCube => v.push(("Size", Nbt::Int(m.variant - 1))),
             Kind::Enderman => {
@@ -4068,6 +4109,7 @@ impl Mobs {
                 m.variant = t.int("SkeletonType").unwrap_or(0) as i32;
                 m.set_position(at[0], at[1], at[2]);
             }
+            Kind::Pig => m.saddled = t.int("Saddle").unwrap_or(0) != 0,
             Kind::Enderman => {
                 m.carried = t.int("carried").unwrap_or(0) as u8;
                 m.carried_meta = t.int("carriedData").unwrap_or(0) as u8;

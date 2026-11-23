@@ -238,13 +238,18 @@ pub struct Anim {
 }
 
 fn quadruped(legh: f32, a: &Anim) -> Vec<Part> {
+    quadruped_inflated(legh, a, 0.0)
+}
+
+/// `ModelQuadruped(legh, inflate)`
+fn quadruped_inflated(legh: f32, a: &Anim, g: f32) -> Vec<Part> {
     let lh = legh;
     let mut v = vec![
-        Part::new([0.0, 18.0 - lh, -6.0]).bx(0.0, 0.0, [-4.0, -4.0, -8.0], [8.0, 8.0, 8.0], 0.0),
-        Part::new([0.0, 17.0 - lh, 2.0]).bx(28.0, 8.0, [-5.0, -10.0, -7.0], [10.0, 16.0, 8.0], 0.0),
+        Part::new([0.0, 18.0 - lh, -6.0]).bx(0.0, 0.0, [-4.0, -4.0, -8.0], [8.0, 8.0, 8.0], g),
+        Part::new([0.0, 17.0 - lh, 2.0]).bx(28.0, 8.0, [-5.0, -10.0, -7.0], [10.0, 16.0, 8.0], g),
     ];
     for (x, z) in [(-3.0, 7.0), (3.0, 7.0), (-3.0, -5.0), (3.0, -5.0)] {
-        v.push(Part::new([x, 24.0 - lh, z]).bx(0.0, 16.0, [-2.0, 0.0, -2.0], [4.0, lh, 4.0], 0.0));
+        v.push(Part::new([x, 24.0 - lh, z]).bx(0.0, 16.0, [-2.0, 0.0, -2.0], [4.0, lh, 4.0], g));
     }
     quad_angles(&mut v, a);
     v
@@ -416,10 +421,12 @@ fn parts(mv: &MobView, a: &Anim, ticks: f32, layer: u8, partial: f32) -> Vec<Par
         Kind::PigZombie => biped(a, false, true),
         Kind::EnderDragon | Kind::EnderCrystal => Vec::new(),
         Kind::Pig => {
-            let mut v = quadruped(6.0, a);
+            // RenderPig: the saddle pass is ModelPig(0.5F)
+            let g = if layer == 1 { 0.5 } else { 0.0 };
+            let mut v = quadruped_inflated(6.0, a, g);
             v[0] = v[0]
                 .clone()
-                .bx(16.0, 16.0, [-2.0, 0.0, -9.0], [4.0, 3.0, 1.0], 0.0);
+                .bx(16.0, 16.0, [-2.0, 0.0, -9.0], [4.0, 3.0, 1.0], g);
             v
         }
         Kind::Cow | Kind::Mooshroom => {
@@ -688,7 +695,13 @@ fn parts(mv: &MobView, a: &Anim, ticks: f32, layer: u8, partial: f32) -> Vec<Par
 /// Atlas key of the texture a mob is drawn with.
 pub fn texture(kind: Kind, variant: i32, layer: u8) -> &'static str {
     match kind {
-        Kind::Pig => "pig/pig",
+        Kind::Pig => {
+            if layer == 1 {
+                "pig/pig_saddle"
+            } else {
+                "pig/pig"
+            }
+        }
         Kind::Cow => "cow/cow",
         Kind::Mooshroom => "cow/mooshroom",
         Kind::Sheep => {
@@ -736,13 +749,14 @@ pub fn texture(kind: Kind, variant: i32, layer: u8) -> &'static str {
     }
 }
 
-pub const TEXTURES: [&str; 26] = [
+pub const TEXTURES: [&str; 27] = [
     "../particle/particles",
     "explosion",
     "../misc/underwater",
     "../environment/rain",
     "../environment/snow",
     "pig/pig",
+    "pig/pig_saddle",
     "cow/cow",
     "cow/mooshroom",
     "sheep/sheep",
@@ -1029,6 +1043,9 @@ pub fn mob(
     } else if newer {
         super::model2::layers(m)
     } else if m.kind == Kind::Sheep && !m.sheared {
+        &[0, 1]
+    } else if m.kind == Kind::Pig && m.flags & 128 != 0 {
+        // RenderPig.shouldRenderPass: the saddle
         &[0, 1]
     } else {
         &[0]

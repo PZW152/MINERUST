@@ -77,6 +77,15 @@ pub struct TargetState {
 #[derive(Clone, Debug)]
 pub enum Ai {
     Swimming,
+    /// `EntityAIControlledByPlayer` (the pig with a player holding a
+    /// carrot on a stick).
+    ControlledByPlayer {
+        max_speed: f32,
+        current_speed: f32,
+        boosted: bool,
+        boost_time: i32,
+        max_boost: i32,
+    },
     Panic {
         speed: f64,
         pos: [f64; 3],
@@ -829,6 +838,7 @@ impl Ai {
             Ai::WatchClosest { mutex, .. } => *mutex,
             Ai::RestrictSun | Ai::FollowParent { .. } => 0,
             Ai::EatGrass { .. } => 7,
+            Ai::ControlledByPlayer { .. } => 7,
             Ai::HurtByTarget { .. } | Ai::NearestAttackableTarget { .. } => 1,
         }
     }
@@ -836,6 +846,11 @@ impl Ai {
     fn should_execute(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
         match self {
             Ai::Pet(p) => p.should_execute(m, cx),
+            // isEntityAlive, ridden by a player, and boosted or canBeSteered
+            // (EntityPig: the rider holds a carrot on a stick)
+            Ai::ControlledByPlayer { boosted, .. } => {
+                m.health > 0.0 && m.ridden_by_player && (*boosted || cx.player.held == Some(398))
+            }
             Ai::Swimming => m.in_liquid(cx.w),
             Ai::Panic { pos, .. } => {
                 if m.revenge.is_none() && m.fire <= 0 {
@@ -1118,6 +1133,7 @@ impl Ai {
 
     fn start_executing(&mut self, m: &mut Mob, cx: &mut Cx) {
         match self {
+            Ai::ControlledByPlayer { current_speed, .. } => *current_speed = 0.0,
             Ai::Panic { speed, pos } | Ai::Wander { speed, pos } | Ai::FleeSun { speed, pos } => {
                 m.try_move_to_xyz(cx.w, pos[0], pos[1], pos[2], *speed);
             }
@@ -1195,6 +1211,14 @@ impl Ai {
 
     fn reset_task(&mut self, m: &mut Mob, _cx: &mut Cx) {
         match self {
+            Ai::ControlledByPlayer {
+                boosted,
+                current_speed,
+                ..
+            } => {
+                *boosted = false;
+                *current_speed = 0.0;
+            }
             Ai::Tempt {
                 delay, avoid_water, ..
             } => {
@@ -1230,6 +1254,21 @@ impl Ai {
     fn update_task(&mut self, m: &mut Mob, cx: &mut Cx) {
         match self {
             Ai::Pet(p) => p.update_task(m, cx),
+            Ai::ControlledByPlayer {
+                max_speed,
+                current_speed,
+                boosted,
+                boost_time,
+                max_boost,
+            } => controlled_by_player(
+                m,
+                cx,
+                *max_speed,
+                current_speed,
+                boosted,
+                boost_time,
+                *max_boost,
+            ),
             Ai::Swimming => {
                 if m.rand.next_float() < 0.8 {
                     m.jumping = true;
@@ -1770,6 +1809,16 @@ fn build(m: &mut Mob) {
         Kind::Pig => {
             t.add(0, Ai::Swimming);
             t.add(1, panic(1.25));
+            t.add(
+                2,
+                Ai::ControlledByPlayer {
+                    max_speed: 0.3,
+                    current_speed: 0.0,
+                    boosted: false,
+                    boost_time: 0,
+                    max_boost: 0,
+                },
+            );
             t.add(3, mate(1.0));
             t.add(4, tempt(1.2, 398));
             t.add(4, tempt(1.2, 391));
@@ -3167,4 +3216,155 @@ pub(super) fn old_update(m: &mut Mob, cx: &mut Cx) {
     }
     m.jumping = m.old_jump;
     m.target_player = m.attack_target == Some(Target::Player);
+}
+
+/// `EntityAIControlledByPlayer.updateTask`
+#[allow(clippy::too_many_arguments)]
+fn controlled_by_player(
+    m: &mut Mob,
+    cx: &mut Cx,
+    max_speed: f32,
+    current_speed: &mut f32,
+    boosted: &mut bool,
+    boost_time: &mut i32,
+    max_boost: i32,
+) {
+    let mut var3 = math::wrap_angle_180(cx.player.yaw - m.yaw) * 0.5;
+    var3 = var3.clamp(-5.0, 5.0);
+    m.yaw = math::wrap_angle_180(m.yaw + var3);
+    if *current_speed < max_speed {
+        *current_speed += (max_speed - *current_speed) * 0.01;
+    }
+    if *current_speed > max_speed {
+        *current_speed = max_speed;
+    }
+    let var4 = math::floor_double(m.pos[0]);
+    let var5 = math::floor_double(m.pos[1]);
+    let var6 = math::floor_double(m.pos[2]);
+    let mut var7 = *current_speed;
+    if *boosted {
+        let t = *boost_time;
+        *boost_time += 1;
+        if t > max_boost {
+            *boosted = false;
+        }
+        var7 +=
+            var7 * 1.15 * math::sin(*boost_time as f32 / max_boost as f32 * std::f32::consts::PI);
+    }
+    let mut var8 = 0.91f32;
+    if m.on_ground {
+        let b = cx.w.block(var4, var5 - 1, var6);
+        var8 = block::info(b).slipperiness * 0.91;
+    }
+    let var9 = 0.16277136f32 / (var8 * var8 * var8);
+    let var10 = math::sin(m.yaw * std::f32::consts::PI / 180.0);
+    let var11 = math::cos(m.yaw * std::f32::consts::PI / 180.0);
+    let var12 = m.ai_speed * var9;
+    let var13 = var12 / var7.max(1.0);
+    let var14 = var7 * var13;
+    let mut var15 = -(var14 * var10);
+    let mut var16 = var14 * var11;
+    let half = m.width() / 2.0;
+    if var15.abs() > var16.abs() {
+        if var15 < 0.0 {
+            var15 -= half;
+        }
+        if var15 > 0.0 {
+            var15 += half;
+        }
+        var16 = 0.0;
+    } else {
+        var15 = 0.0;
+        if var16 < 0.0 {
+            var16 -= half;
+        }
+        if var16 > 0.0 {
+            var16 += half;
+        }
+    }
+    let var17 = math::floor_double(m.pos[0] + var15 as f64);
+    let var18 = math::floor_double(m.pos[2] + var16 as f64);
+    // PathPoint(floor(width + 1), floor(height + rider.height + 1), ...)
+    let size = crate::entity::path::Size {
+        w: math::floor_float(m.width() + 1.0),
+        h: math::floor_float(m.height() + 1.8 + 1.0),
+    };
+    if var4 != var17 || var6 != var18 {
+        let stair_or_slab = |id: u8| {
+            let sh = block::info(id).shape;
+            sh == block::Shape::Stairs || sh == block::Shape::Slab
+        };
+        let b20 = cx.w.block(var4, var5, var6);
+        let var21 = !stair_or_slab(b20)
+            && (block::material(b20) != Material::Air
+                || !stair_or_slab(cx.w.block(var4, var5 - 1, var6)));
+        let opts = crate::entity::path::Opts {
+            doors: true,
+            avoid_water: false,
+            can_drown: false,
+        };
+        let feet = (var4, var5, var6);
+        let lava = m.in_material(cx.w, &m.bb, Material::Lava);
+        if var21
+            && crate::entity::path::stand_at(cx.w, var17, var5, var18, size, &opts, feet, lava) == 0
+            && crate::entity::path::stand_at(
+                cx.w,
+                var4,
+                var5 + 1,
+                var6,
+                crate::entity::path::Size { ..size },
+                &opts,
+                feet,
+                lava,
+            ) == 1
+            && crate::entity::path::stand_at(
+                cx.w,
+                var17,
+                var5 + 1,
+                var18,
+                crate::entity::path::Size { ..size },
+                &opts,
+                feet,
+                lava,
+            ) == 1
+        {
+            m.jumping = true;
+        }
+    }
+    if !cx.player.creative
+        && *current_speed >= max_speed * 0.5
+        && m.rand.next_float() < 0.006
+        && !*boosted
+        && cx.player.held == Some(398)
+    {
+        cx.out.stick_wear += 1;
+    }
+    let w: &ServerWorld = cx.w;
+    m.move_with_heading(w, 0.0, var7);
+}
+
+impl Tasks {
+    /// `EntityPig.getAIControlledByPlayer`: `isControlledByPlayer`, then
+    /// `boostSpeed` (`maxSpeedBoostTime = rand.nextInt(841) + 140`).
+    pub fn boost_controlled(&mut self, r: &mut JavaRandom) -> bool {
+        for e in self.entries.iter_mut() {
+            if let Ai::ControlledByPlayer {
+                max_speed,
+                current_speed,
+                boosted,
+                boost_time,
+                max_boost,
+            } = &mut e.ai
+            {
+                if *boosted || *current_speed <= *max_speed * 0.3 {
+                    return false;
+                }
+                *boosted = true;
+                *boost_time = 0;
+                *max_boost = r.next_int_n(841) + 140;
+                return true;
+            }
+        }
+        false
+    }
 }

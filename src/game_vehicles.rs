@@ -184,6 +184,17 @@ impl Game {
         match v {
             Some(id) => {
                 let first = self.riding.is_none();
+                // a mob (a saddled pig)
+                if self.mobs.iter().any(|m| m.id == id) && self.boats.iter().all(|c| c.v.id() != id)
+                {
+                    self.riding = Some(id);
+                    self.player.riding = true;
+                    if first {
+                        let key = self.lang.format("mount.onboard", &["LSHIFT".to_string()]);
+                        self.record = Some((key, 60, false));
+                    }
+                    return;
+                }
                 if let Some(c) = self.boats.iter_mut().find(|c| c.v.id() == id) {
                     if let Vehicle::Boat(b) = &mut c.v {
                         b.empty = false;
@@ -299,10 +310,15 @@ impl Game {
         let Some(id) = self.riding else {
             return;
         };
-        let Some(c) = self.boats.iter().find(|c| c.v.id() == id) else {
+        let r = if let Some(c) = self.boats.iter().find(|c| c.v.id() == id) {
+            c.v.rider_position(PLAYER_Y_OFFSET)
+        } else if let Some(m) = self.mobs.iter().find(|m| m.id == id) {
+            // Entity.getMountedYOffset: height * 0.75
+            let h = m.bb[4] - m.bb[1];
+            [m.pos[0], m.pos[1] + h * 0.75 + PLAYER_Y_OFFSET, m.pos[2]]
+        } else {
             return;
         };
-        let r = c.v.rider_position(PLAYER_Y_OFFSET);
         self.player.set_eye_position(r[0], r[1], r[2]);
         // EntityPlayer.updateRidden
         self.player.prev_camera_yaw = self.player.camera_yaw;
