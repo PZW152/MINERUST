@@ -3,6 +3,7 @@
 
 use super::base::Ent;
 use super::boat::Boat;
+use super::hanging::Hanging;
 use super::minecart::{CartKind, CartMeta, Minecart};
 use super::player::Aabb;
 use super::tracker::Tracker;
@@ -17,6 +18,8 @@ pub enum Vehicle {
     Cart(Minecart),
     /// `EntityXPOrb`, tracked the same way
     Orb(XpOrb),
+    /// `EntityPainting` and `EntityItemFrame`
+    Hang(Hanging),
 }
 
 /// The data watcher of either.
@@ -28,6 +31,11 @@ pub enum VMeta {
         damage: f32,
     },
     Cart(CartMeta),
+    /// `EntityItemFrame`: the item (2) and its rotation (3)
+    Frame {
+        item: Option<crate::item::Stack>,
+        rotation: i32,
+    },
     /// No data watcher entries of its own
     None,
 }
@@ -38,6 +46,7 @@ impl Vehicle {
             Vehicle::Boat(b) => b.id,
             Vehicle::Cart(c) => c.id,
             Vehicle::Orb(o) => o.id,
+            Vehicle::Hang(h) => h.id,
         }
     }
     pub fn e(&self) -> &Ent {
@@ -45,6 +54,7 @@ impl Vehicle {
             Vehicle::Boat(b) => &b.e,
             Vehicle::Cart(c) => &c.e,
             Vehicle::Orb(o) => &o.e,
+            Vehicle::Hang(h) => &h.e,
         }
     }
     pub fn e_mut(&mut self) -> &mut Ent {
@@ -52,6 +62,7 @@ impl Vehicle {
             Vehicle::Boat(b) => &mut b.e,
             Vehicle::Cart(c) => &mut c.e,
             Vehicle::Orb(o) => &mut o.e,
+            Vehicle::Hang(h) => &mut h.e,
         }
     }
     pub fn dead(&self) -> bool {
@@ -61,14 +72,14 @@ impl Vehicle {
         match self {
             Vehicle::Boat(b) => b.ridden,
             Vehicle::Cart(c) => c.ridden,
-            Vehicle::Orb(_) => false,
+            Vehicle::Orb(_) | Vehicle::Hang(_) => false,
         }
     }
     pub fn set_ridden(&mut self, v: bool) {
         match self {
             Vehicle::Boat(b) => b.ridden = v,
             Vehicle::Cart(c) => c.ridden = v,
-            Vehicle::Orb(_) => {}
+            Vehicle::Orb(_) | Vehicle::Hang(_) => {}
         }
     }
     pub fn velocity_changed(&mut self) -> &mut bool {
@@ -76,6 +87,7 @@ impl Vehicle {
             Vehicle::Boat(b) => &mut b.velocity_changed,
             Vehicle::Cart(c) => &mut c.velocity_changed,
             Vehicle::Orb(o) => &mut o.velocity_changed,
+            Vehicle::Hang(h) => &mut h.velocity_changed,
         }
     }
     /// `updateRiderPosition`
@@ -84,6 +96,7 @@ impl Vehicle {
             Vehicle::Boat(b) => b.rider_position(rider_y_offset),
             Vehicle::Cart(c) => c.rider_position(rider_y_offset),
             Vehicle::Orb(o) => o.e.pos,
+            Vehicle::Hang(h) => h.e.pos,
         }
     }
     /// `getBoundingBox`: solid to other entities (boats only).
@@ -102,6 +115,13 @@ impl Vehicle {
             },
             Vehicle::Cart(c) => VMeta::Cart(c.meta()),
             Vehicle::Orb(_) => VMeta::None,
+            Vehicle::Hang(h) => match h.art {
+                Some(_) => VMeta::None,
+                None => VMeta::Frame {
+                    item: h.item,
+                    rotation: h.rotation,
+                },
+            },
         }
     }
     pub fn set_meta(&mut self, m: VMeta) {
@@ -119,6 +139,10 @@ impl Vehicle {
                 b.damage = damage;
             }
             (Vehicle::Cart(c), VMeta::Cart(m)) => c.set_meta(m),
+            (Vehicle::Hang(h), VMeta::Frame { item, rotation }) => {
+                h.item = item;
+                h.rotation = rotation;
+            }
             _ => {}
         }
     }
@@ -128,6 +152,8 @@ impl Vehicle {
             Vehicle::Cart(c) => c.set_position_and_rotation2(p, yaw, pitch, inc),
             // the client calls XpOrb::set_position_and_rotation2 with its world
             Vehicle::Orb(o) => o.e.set_position(p[0], p[1], p[2]),
+            // never moves (tracked with no position updates)
+            Vehicle::Hang(_) => {}
         }
     }
     pub fn set_velocity(&mut self, v: [f64; 3]) {
@@ -135,6 +161,7 @@ impl Vehicle {
             Vehicle::Boat(b) => b.set_velocity(v),
             Vehicle::Cart(c) => c.set_velocity(v),
             Vehicle::Orb(o) => o.e.motion = v,
+            Vehicle::Hang(_) => {}
         }
     }
     /// `S0EPacketSpawnObject`'s type and data.
@@ -144,6 +171,7 @@ impl Vehicle {
             Vehicle::Cart(c) => (10, c.kind.type_id()),
             // S11PacketSpawnExperienceOrb
             Vehicle::Orb(o) => (2, o.value),
+            Vehicle::Hang(h) => h.spawn_data(),
         }
     }
     /// `NetHandlerPlayClient.handleSpawnObject`: the client's entity.
@@ -165,6 +193,9 @@ impl Vehicle {
                 p[1],
                 p[2],
                 seed,
+            ))),
+            71 | 1000 => Some(Vehicle::Hang(Hanging::from_spawn(
+                object, data, id, p, seed,
             ))),
             _ => None,
         }
@@ -189,6 +220,8 @@ impl Tracked {
         let t = match v {
             // EntityTracker: orbs 160 blocks, every 20 ticks
             Vehicle::Orb(_) => Tracker::new(v.e(), 160, 20, true, object, data),
+            // EntityTracker: hanging entities 160 blocks, no position updates
+            Vehicle::Hang(_) => Tracker::new(v.e(), 160, i32::MAX, false, object, data),
             _ => Tracker::new(v.e(), 80, 3, true, object, data),
         };
         let sent = v.meta();
@@ -218,6 +251,17 @@ impl Tracked {
             Vehicle::Boat(b) => {
                 let mut v = vec![("id", Nbt::String("Boat".into()))];
                 v.extend(b.e.nbt_fields(dim, b.id));
+                compound(v)
+            }
+            Vehicle::Hang(h) => {
+                let name = if h.art.is_some() {
+                    "Painting"
+                } else {
+                    "ItemFrame"
+                };
+                let mut v = vec![("id", Nbt::String(name.into()))];
+                v.extend(h.e.nbt_fields(dim, h.id));
+                h.nbt(&mut v);
                 compound(v)
             }
             Vehicle::Orb(o) => {
@@ -273,6 +317,11 @@ impl Tracked {
     pub fn from_nbt(t: &crate::world::anvil::Nbt, id: u32, seed: i64) -> Option<Tracked> {
         use crate::world::anvil::Nbt;
         let name = t.string("id")?;
+        // shouldSetPosAfterLoading: false, the tile places it
+        if name == "Painting" || name == "ItemFrame" {
+            let h = Hanging::from_nbt(t, name == "Painting", id, seed);
+            return Some(Tracked::new(Vehicle::Hang(h)));
+        }
         let mut v = if name == "Boat" {
             Vehicle::Boat(Boat::new(id, seed))
         } else if name == "XPOrb" {

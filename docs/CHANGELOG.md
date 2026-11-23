@@ -9,7 +9,8 @@
 
 ## 2026-11-23
 
-- Name tags: ItemNameTag.itemInteractionForEntity (only a renamed tag; the mob is named and kept from despawning; a tamed wolf or cat also toggles sitting), renamed spawn eggs name their mob (by hand and from dispensers), CustomName in NBT, and RendererLivingEntity.renderLivingLabel above the mob under the crosshair (backing and faint text through walls, then the white text)
+- Paintings and item frames: ItemHangingEntity, EntityHanging (setDirection, onValidSurface every 100 ticks, breaking by hits and explosions, drops), EntityPainting (a random art that fits, Motive), EntityItemFrame (put an item in, turn it, the first hit takes the item out, CustomName label of a renamed item), saved as Painting / ItemFrame, RenderPainting and RenderItemFrame; orbs can no longer be targeted (canBeCollidedWith); shotcompare `hanging` scene and `--hang`
+- `ef275be` Name tags: ItemNameTag.itemInteractionForEntity (only a renamed tag; the mob is named and kept from despawning; a tamed wolf or cat also toggles sitting), renamed spawn eggs name their mob (by hand and from dispensers), CustomName in NBT, and RendererLivingEntity.renderLivingLabel above the mob under the crosshair (backing and faint text through walls, then the white text)
 - `a75cb1e` Pigs can be saddled and ridden: ItemSaddle, EntityPig.interact, EntityAIControlledByPlayer (steering, speed ramp, step-up jump, stick wear turning it back into a fishing rod), ItemCarrotOnAStick boost, sneaking off, the saddle layer (ModelPig 0.5), Saddle in NBT and the saddle drop
 - `a3217ee` Jukeboxes play records: ItemRecord.onItemUse and BlockJukebox (insert, eject with the original offsets, break, comparator signal id - 2256 + 1, saved as RecordPlayer), the record streams from the jukebox with distance and pan following the listener, and "Now playing" shows
 

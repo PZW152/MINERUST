@@ -1197,7 +1197,30 @@ impl Sim {
                 self.play = play;
                 // ItemMonsterPlacer.onItemUse always returns true: no sendUseItem
                 let egg = self.play.inv.held().filter(|s| s.id == items::SPAWN_EGG);
-                if !used && egg.is_some() {
+                let hang = self.play.inv.held().filter(|s| {
+                    s.id == crate::entity::hanging::PAINTING
+                        || s.id == crate::entity::hanging::ITEM_FRAME
+                });
+                if let (false, Some(h)) = (used, hang) {
+                    // ItemHangingEntity.onItemUse: true on the four sides
+                    let side = match face {
+                        [0, -1, 0] => 0,
+                        [0, 1, 0] => 1,
+                        [0, 0, -1] => 2,
+                        [0, 0, 1] => 3,
+                        [-1, 0, 0] => 4,
+                        _ => 5,
+                    };
+                    if self.place_hanging(h.id, target, side)
+                        && self.play.mode != GameMode::Creative
+                    {
+                        self.play.inv.consume_held();
+                        self.play.inv_dirty = true;
+                    }
+                    if side < 2 {
+                        self.use_air();
+                    }
+                } else if !used && egg.is_some() {
                     self.use_egg_on(egg.unwrap(), target, face);
                 } else if !used {
                     // Minecraft.func_147121_ag: sendUseItem
@@ -2963,6 +2986,47 @@ impl Sim {
                 }
             }
         }
+        // --hang "x y z dir P Title" or "x y z dir F id[:meta] rotation", ';' apart
+        if let Ok(list) = std::env::var("MINERUST_HANG") {
+            use crate::entity::hanging::{art, Hanging, ART_COUNT};
+            for cmd in list.split(';') {
+                let t: Vec<&str> = cmd.split_whitespace().collect();
+                if t.len() < 5 {
+                    continue;
+                }
+                let p: Vec<i32> = t[..4].iter().filter_map(|v| v.parse().ok()).collect();
+                if p.len() < 4 {
+                    continue;
+                }
+                let id = self.alloc_vehicle_id();
+                let seed = self.mobs.rand.next_long();
+                let tile = [p[0], p[1], p[2]];
+                let h = if t[4] == "P" {
+                    let name = t.get(5).copied().unwrap_or("");
+                    let a = (0..ART_COUNT).find(|&a| art(a).0 == name).unwrap_or(0);
+                    let mut h = Hanging::new(id, tile, Some(a), seed);
+                    h.set_direction(p[3] & 3);
+                    h
+                } else {
+                    let mut h = Hanging::frame(id, tile, p[3] & 3, seed);
+                    if let Some(it) = t.get(5) {
+                        let mut f = it.split(':').filter_map(|v| v.parse::<i32>().ok());
+                        let item = f.next().unwrap_or(0);
+                        let meta = f.next().unwrap_or(0);
+                        if item > 0 {
+                            h.item = Some(crate::item::Stack::new(item as u16, meta, 1));
+                        }
+                    }
+                    h.rotation = t.get(6).and_then(|v| v.parse().ok()).unwrap_or(0) & 3;
+                    h
+                };
+                self.play
+                    .vehicles
+                    .push(crate::entity::vehicle::Tracked::new(
+                        crate::entity::vehicle::Vehicle::Hang(h),
+                    ));
+            }
+        }
         let Ok(list) = std::env::var("MINERUST_SUMMON") else {
             return;
         };
@@ -3324,6 +3388,10 @@ impl Sim {
                         Vehicle::Boat(boat) => broke = boat.attack(b.damage, false),
                         Vehicle::Cart(c) => c.attack(b.damage, false, true, false, &mut outs),
                         Vehicle::Orb(o) => o.attack(b.damage),
+                        Vehicle::Hang(_) => {
+                            self.break_hanging(play, i, false, false);
+                            continue;
+                        }
                     }
                     {
                         let e = play.vehicles[i].v.e_mut();
@@ -7817,6 +7885,146 @@ mod tests {
             s.map_or(true, |m| m.potions.active(potion::MOVE_SLOWDOWN)),
             "Bane of Arthropods V slows"
         );
+    }
+
+    /// `ItemHangingEntity`, `EntityPainting`, `EntityItemFrame`.
+    #[test]
+    fn paintings_and_item_frames() {
+        use crate::entity::hanging::Hanging;
+        use crate::entity::vehicle::Vehicle;
+        use crate::item::Stack;
+        let (mut sim, x, y, z) = redstone_sim();
+        arena(&mut sim, x, y, z);
+        sim.play.mode = GameMode::Survival;
+        let feet = [x as f64 + 0.5, (y + 1) as f64, z as f64 + 0.5];
+        for dx in -2..4 {
+            for dy in 1..5 {
+                sim.world
+                    .set_block(x + dx, y + dy, z + 6, block::STONE, 0, 3);
+            }
+        }
+        for dy in 1..4 {
+            sim.world
+                .set_block(x + 9, y + dy, z + 6, block::STONE, 0, 3);
+        }
+        let sel = sim.play.inv.selected;
+        let use_on = |sim: &mut Sim, target: [i32; 3]| {
+            sim.step(
+                &[Command::Use {
+                    target,
+                    face: [0, 0, -1],
+                    sneaking: false,
+                    hit: [0.5, 0.5, 0.0],
+                }],
+                &mut Vec::new(),
+            );
+        };
+        let hangs = |sim: &Sim| -> Vec<Hanging> {
+            sim.play
+                .vehicles
+                .iter()
+                .filter_map(|v| match &v.v {
+                    Vehicle::Hang(h) if !h.e.dead => Some(h.clone()),
+                    _ => None,
+                })
+                .collect()
+        };
+        // a painting on the north face: a random art that fits
+        sim.play.inv.main[sel] = Some(Stack::new(321, 0, 2));
+        use_on(&mut sim, [x, y + 2, z + 6]);
+        let h = hangs(&sim);
+        assert_eq!(h.len(), 1, "a painting hangs");
+        let painting = h[0].clone();
+        assert!(painting.art.is_some());
+        assert_eq!(painting.dir, 2);
+        assert_eq!(painting.tile, [x, y + 2, z + 6]);
+        assert!(painting.e.pos[2] < (z + 6) as f64, "in front of the wall");
+        assert_eq!(sim.play.inv.main[sel].map(|s| s.count), Some(1));
+        // an item frame on the lone column; on the top face nothing
+        sim.play.inv.main[sel] = Some(Stack::new(389, 0, 1));
+        sim.step(
+            &[Command::Use {
+                target: [x + 9, y + 3, z + 6],
+                face: [0, 1, 0],
+                sneaking: false,
+                hit: [0.5, 1.0, 0.5],
+            }],
+            &mut Vec::new(),
+        );
+        assert_eq!(hangs(&sim).len(), 1, "not on a top face");
+        use_on(&mut sim, [x + 9, y + 2, z + 6]);
+        let frame = hangs(&sim)
+            .into_iter()
+            .find(|h| h.art.is_none())
+            .expect("a frame");
+        assert!(sim.play.inv.main[sel].is_none());
+        // a diamond goes in, then turns
+        sim.play.inv.main[sel] = Some(Stack::new(264, 0, 3));
+        let poke = |sim: &mut Sim| {
+            sim.step(&[Command::Interact { id: frame.id }], &mut Vec::new());
+        };
+        poke(&mut sim);
+        poke(&mut sim);
+        let f = hangs(&sim).into_iter().find(|h| h.id == frame.id).unwrap();
+        assert_eq!(f.item.map(|s| (s.id, s.count)), Some((264, 1)));
+        assert_eq!(f.rotation, 1);
+        assert_eq!(sim.play.inv.main[sel].map(|s| s.count), Some(2));
+        // the save keeps it
+        let t = sim
+            .play
+            .vehicles
+            .iter()
+            .find(|v| v.v.id() == frame.id)
+            .unwrap()
+            .to_nbt(0);
+        let back = crate::entity::vehicle::Tracked::from_nbt(&t, 7, 1).unwrap();
+        match back.v {
+            Vehicle::Hang(b) => {
+                assert_eq!(b.item.map(|s| s.id), Some(264));
+                assert_eq!(b.rotation, 1);
+                assert_eq!(b.tile, f.tile);
+                assert_eq!(b.e.pos, f.e.pos);
+            }
+            _ => panic!("not a hanging entity"),
+        }
+        // the first hit takes the item out, the second breaks the frame
+        let items = |sim: &Sim| -> Vec<u16> { sim.play.items.iter().map(|i| i.stack.id).collect() };
+        let hit = |sim: &mut Sim, id: u32| {
+            sim.step(
+                &[
+                    Command::Player(feet, [0.0, 0.0], false),
+                    Command::Attack {
+                        id,
+                        crit: false,
+                        sprint: false,
+                    },
+                ],
+                &mut Vec::new(),
+            );
+        };
+        hit(&mut sim, frame.id);
+        assert!(items(&sim).contains(&264), "the diamond drops");
+        let f = hangs(&sim).into_iter().find(|h| h.id == frame.id).unwrap();
+        assert!(f.item.is_none(), "the frame stays");
+        hit(&mut sim, frame.id);
+        assert!(items(&sim).contains(&389), "the frame drops");
+        assert!(hangs(&sim).iter().all(|h| h.id != frame.id));
+        // the wall goes: within 100 ticks the painting falls
+        let p = painting.clone();
+        let w = p.width_pixels() / 16;
+        let h0 = p.height_pixels() / 16;
+        let x0 = crate::util::math::floor_double(p.e.pos[0] - p.width_pixels() as f64 / 32.0);
+        let y0 = crate::util::math::floor_double(p.e.pos[1] - p.height_pixels() as f64 / 32.0);
+        for i in 0..w.max(1) {
+            for j in 0..h0.max(1) {
+                sim.world.set_block(x0 + i, y0 + j, z + 6, block::AIR, 0, 3);
+            }
+        }
+        for _ in 0..102 {
+            sim.step(&[Command::Player(feet, [0.0, 0.0], false)], &mut Vec::new());
+        }
+        assert!(hangs(&sim).is_empty(), "the painting fell");
+        assert!(items(&sim).contains(&321), "and dropped");
     }
 
     #[test]

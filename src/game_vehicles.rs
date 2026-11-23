@@ -276,6 +276,8 @@ impl Game {
                         let mut out = Vec::new();
                         c.tick(&mut world, true, rider, &others, &mut fx, &mut out);
                     }
+                    // EntityHanging.onUpdate: the surface check is server-only
+                    Vehicle::Hang(_) => {}
                     Vehicle::Orb(o) => {
                         // the client player's posY is its eyes; getEyeHeight 0.12
                         let p = self.player.pos;
@@ -363,6 +365,7 @@ impl Game {
             match &c.v {
                 // drawn with the translucent entities
                 Vehicle::Orb(_) => {}
+                Vehicle::Hang(h) => self.draw_hanging(out, h, rel, yaw, light),
                 Vehicle::Boat(b) => {
                     if let Some(t) = boat_tex {
                         crate::render::vehicles::boat(
@@ -399,6 +402,86 @@ impl Game {
                                 o, atlas, id, meta, mat, l, brightness,
                             )
                         },
+                    );
+                }
+            }
+        }
+    }
+
+    /// `RenderPainting` and `RenderItemFrame` (the frame, then its item).
+    fn draw_hanging(
+        &self,
+        out: &mut Vec<Vertex>,
+        h: &crate::entity::hanging::Hanging,
+        rel: [f32; 3],
+        yaw: f32,
+        light: [u8; 4],
+    ) {
+        use crate::entity::hanging::{art, OFFSET_X, OFFSET_Z};
+        let p = h.e.pos;
+        match h.art {
+            Some(a) => {
+                let Some(t) = self
+                    .atlas
+                    .mob_tex("../painting/paintings_kristoffer_zetterstrand")
+                else {
+                    return;
+                };
+                // RenderPainting.setLightmap for each 16 x 16 piece
+                let lm = |cx: f32, cy: f32| {
+                    let (cx, cy) = (cx as f64 / 16.0, cy as f64 / 16.0);
+                    let mut x = math::floor_double(p[0]);
+                    let y = math::floor_double(p[1] + cy);
+                    let mut z = math::floor_double(p[2]);
+                    match h.dir {
+                        2 => x = math::floor_double(p[0] + cx),
+                        1 => z = math::floor_double(p[2] - cx),
+                        0 => x = math::floor_double(p[0] - cx),
+                        _ => z = math::floor_double(p[2] + cx),
+                    }
+                    let sky = self.world.light(true, x, y, z);
+                    let blk = self.world.light(false, x, y, z);
+                    [(blk << 4) as u8, (sky << 4) as u8, 0, 0]
+                };
+                crate::render::hanging::painting(out, t, rel, yaw, art(a), &lm);
+            }
+            None => {
+                let d = (h.dir & 3) as usize;
+                // the centre of the block in front of the wall
+                let c = [
+                    rel[0] + (h.tile[0] + OFFSET_X[d]) as f32 + 0.5 - p[0] as f32,
+                    rel[1] + h.tile[1] as f32 + 0.5 - p[1] as f32,
+                    rel[2] + (h.tile[2] + OFFSET_Z[d]) as f32 + 0.5 - p[2] as f32,
+                ];
+                let planks = self.atlas.named("planks_birch");
+                let bg = self.atlas.named("itemframe_background");
+                crate::render::hanging::frame(out, planks, bg, c, yaw, light);
+                if let Some(s) = h.item {
+                    use crate::render::{mul, rot_y, rot_z, translate};
+                    let mut m = translate(c[0], c[1], c[2]);
+                    m = mul(
+                        &m,
+                        &translate(
+                            -0.453125 * OFFSET_X[d] as f32,
+                            -0.18,
+                            -0.453125 * OFFSET_Z[d] as f32,
+                        ),
+                    );
+                    m = mul(&m, &rot_y(180.0 + yaw));
+                    m = mul(&m, &rot_z((-90 * h.rotation) as f32));
+                    match h.rotation {
+                        1 => m = mul(&m, &translate(-0.16, -0.16, 0.0)),
+                        2 => m = mul(&m, &translate(0.0, -0.32, 0.0)),
+                        3 => m = mul(&m, &translate(0.16, -0.16, 0.0)),
+                        _ => {}
+                    }
+                    crate::render::entities::framed_item(
+                        out,
+                        &self.atlas,
+                        s,
+                        &m,
+                        self.player.yaw,
+                        light,
                     );
                 }
             }

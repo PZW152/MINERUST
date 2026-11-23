@@ -693,6 +693,10 @@ fn parse_args() -> Options {
                 std::env::set_var("MINERUST_SETBLOCK", &args[i + 1]);
                 i += 1;
             }
+            "--hang" if i + 1 < args.len() => {
+                std::env::set_var("MINERUST_HANG", &args[i + 1]);
+                i += 1;
+            }
             "--summon" if i + 1 < args.len() => {
                 std::env::set_var("MINERUST_SUMMON", &args[i + 1]);
                 i += 1;

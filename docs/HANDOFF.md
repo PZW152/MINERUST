@@ -227,6 +227,7 @@ minerust --seed 12345 --no-save --size 854 480 --screenshot out.png 6
 | 視窗點擊腳本 | `MINERUST_CLICKS="slot:button:mode,..."` |
 | 固定滑鼠位置 | `MINERUST_MOUSE="x,y"`（GUI 座標） |
 | 給物品、效果、召喚 | `--give id:meta:count,...`、`--effect id:秒:等級`、`--summon Cow,Zombie:baby,Zombie:villager,Item:id:數量,Villager:name=Bessie`（`name=` 取名；距離 `MINERUST_SUMMON_DIST`） |
+| 畫與物品展示框 | `--hang "x y z 方向 P 畫名;x y z 方向 F 物品id[:meta] 轉向"`（方向 0 南 1 西 2 北 3 東；shotcompare 也有，真客戶端同樣擺上） |
 | 放方塊 | `--setblock "x y z id [meta];..."`（絕對座標） |
 | 告示牌文字 | `MINERUST_SIGN="a|b|c|d"`，`MINERUST_SIGN_DONE=1` 直接關閉編輯器 |
 | 不等區塊載完就截圖 | `MINERUST_NOWAIT=1` |

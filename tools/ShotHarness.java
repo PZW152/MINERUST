@@ -45,12 +45,14 @@ public class ShotHarness {
         final boolean debug = Arrays.asList(a).subList(9, sep).contains("--debug");
         int sb = Arrays.asList(a).subList(9, sep).indexOf("--setblock");
         final String setblock = sb < 0 ? "" : a[9 + sb + 1];
+        int hg = Arrays.asList(a).subList(9, sep).indexOf("--hang");
+        final String hang = hg < 0 ? "" : a[9 + hg + 1];
         String[] mcArgs = Arrays.copyOfRange(a, sep + 1, a.length);
 
         Thread driver = new Thread(new Runnable() {
             public void run() {
                 try {
-                    drive(out, seed, time, x, y, z, yaw, pitch, settle, hideGui, debug, setblock);
+                    drive(out, seed, time, x, y, z, yaw, pitch, settle, hideGui, debug, setblock, hang);
                 } catch (Throwable t) {
                     t.printStackTrace();
                     System.exit(2);
@@ -104,7 +106,7 @@ public class ShotHarness {
 
     static void drive(final File out, final long seed, final long time, final double x, final double y, final double z,
                       final float yaw, final float pitch, double settle, final boolean hideGui, final boolean debug,
-                      final String setblock) throws Exception {
+                      final String setblock, final String hang) throws Exception {
         // Title screen up: resources are loaded and the game loop runs.
         while ((mc = Minecraft.getMinecraft()) == null || mc.currentScreen == null) sleep(100);
         // Never take the user's mouse: entering the world calls setIngameFocus,
@@ -148,6 +150,27 @@ public class ShotHarness {
                     server.worldServers[0].setBlock(Integer.parseInt(t[0]), Integer.parseInt(t[1]), Integer.parseInt(t[2]),
                             net.minecraft.block.Block.getBlockById(Integer.parseInt(t[3])),
                             t.length > 4 ? Integer.parseInt(t[4]) : 0, 3);
+                }
+                // paintings and item frames: "x y z dir P Title" / "x y z dir F id[:meta] rotation"
+                for (String cmd : hang.split(";")) {
+                    String[] t = cmd.trim().split("\\s+");
+                    if (t.length < 5) continue;
+                    int hx = Integer.parseInt(t[0]), hy = Integer.parseInt(t[1]), hz = Integer.parseInt(t[2]);
+                    int dir = Integer.parseInt(t[3]) & 3;
+                    WorldServer w = server.worldServers[0];
+                    if (t[4].equals("P")) {
+                        w.spawnEntityInWorld(new net.minecraft.entity.item.EntityPainting(w, hx, hy, hz, dir, t.length > 5 ? t[5] : ""));
+                    } else {
+                        net.minecraft.entity.item.EntityItemFrame f = new net.minecraft.entity.item.EntityItemFrame(w, hx, hy, hz, dir);
+                        if (t.length > 5) {
+                            String[] im = t[5].split(":");
+                            int id = Integer.parseInt(im[0]);
+                            int meta = im.length > 1 ? Integer.parseInt(im[1]) : 0;
+                            if (id > 0) f.setDisplayedItem(new net.minecraft.item.ItemStack(net.minecraft.item.Item.getItemById(id), 1, meta));
+                        }
+                        if (t.length > 6) f.setItemRotation(Integer.parseInt(t[6]));
+                        w.spawnEntityInWorld(f);
+                    }
                 }
                 mc.gameSettings.hideGUI = hideGui;
                 mc.gameSettings.showDebugInfo = debug; // F3, like MINERUST --debug

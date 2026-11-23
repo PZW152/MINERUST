@@ -123,6 +123,16 @@ SCENES = {
         "-241 96 137 149 0", "-241 96 138 92 0", "-239 96 137 149 4", "-239 96 138 92 0",
         "-238 96 135 151", "-246 96 138 151",
     ])),
+    # RenderPainting and RenderItemFrame on a wall: four paintings, framed
+    # items as sprites and a block in each rotation, and an empty frame.
+    "hanging": dict(seed=12345, time=6000, pos=(-242.5, 97.0, 131.5), look=(0.0, 5.0), setblock=";".join(
+        [f"{x} 95 {z} 1" for x in range(-249, -235) for z in range(131, 138)] +
+        [f"{x} {y} 137 1" for x in range(-249, -235) for y in range(96, 102)]), hang=";".join([
+        "-247 98 137 2 P Kebab", "-245 98 137 2 P Pool", "-243 97 137 2 P Wanderer",
+        "-240 98 137 2 P Fighters",
+        "-247 96 137 2 F 264 0", "-245 96 137 2 F 1 1", "-243 96 137 2 F 276 2",
+        "-241 96 137 2 F 35:14 3", "-238 97 137 2 F 0",
+    ])),
 }
 
 
@@ -152,6 +162,7 @@ def run_vanilla(cp: str, classes: Path, scene: dict, png: Path, game: Path):
     yaw, pitch = scene["look"]
     flags = ([] if scene.get("hud") else ["--hide-gui"]) + (["--debug"] if scene.get("debug") else [])
     flags += ["--setblock", scene["setblock"]] if scene.get("setblock") else []
+    flags += ["--hang", scene["hang"]] if scene.get("hang") else []
     cmd = [JAVA8, "-Xmx2G", f"-Djava.library.path={MC_ROOT / 'versions/1.7.10/natives'}",
            "-cp", f"{classes};{cp}", "ShotHarness",
            str(png), str(scene["seed"]), str(scene["time"]), str(x), str(y), str(z), str(yaw), str(pitch), str(SETTLE),
@@ -171,6 +182,7 @@ def run_minerust(exe: Path, scene: dict, png: Path, game: Path):
     yaw, pitch = scene["look"]
     flags = ([] if scene.get("hud") else ["--hide-gui"]) + (["--debug"] if scene.get("debug") else [])
     flags += ["--setblock", scene["setblock"]] if scene.get("setblock") else []
+    flags += ["--hang", scene["hang"]] if scene.get("hang") else []
     cmd = [str(exe), "--seed", str(scene["seed"]), "--no-save", "--size", str(WIDTH), str(HEIGHT),
            "--time", str(scene["time"]), "--freeze-time", "--creative",
            "--pos", str(x), str(y), str(z), "--look", str(yaw), str(pitch), *flags,

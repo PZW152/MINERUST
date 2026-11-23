@@ -4976,7 +4976,10 @@ impl Game {
                 }
             }
             for c in &self.boats {
-                // canBeCollidedWith: !isDead; getCollisionBorderSize 0.1
+                // canBeCollidedWith: !isDead (not orbs); getCollisionBorderSize 0.1
+                if matches!(c.v, crate::entity::vehicle::Vehicle::Orb(_)) {
+                    continue;
+                }
                 let b = &c.v.e().bb;
                 let bb = crate::entity::player::Aabb {
                     min: [b.min[0] - 0.1, b.min[1] - 0.1, b.min[2] - 0.1],
@@ -5416,6 +5419,42 @@ impl Game {
         let mut fish_line: Vec<[f32; 3]> = Vec::new();
         let mut translucent: Vec<crate::render::mesher::Vertex> = Vec::new();
         let mut labels: Vec<crate::render::mesher::Vertex> = Vec::new();
+        if !self.hide_gui {
+            use crate::entity::hanging::{OFFSET_X, OFFSET_Z};
+            let pointed = self.target_mob.map(|t| t.0);
+            for c in &self.boats {
+                let crate::entity::vehicle::Vehicle::Hang(h) = &c.v else {
+                    continue;
+                };
+                if Some(h.id) != pointed {
+                    continue;
+                }
+                let Some(name) = h.item.and_then(|s| s.custom_name()) else {
+                    continue;
+                };
+                let p = h.e.pos;
+                let f = self.player.pos;
+                let d2 = (p[0] - f[0]).powi(2) + (p[1] - f[1]).powi(2) + (p[2] - f[2]).powi(2);
+                if d2 >= 64.0 * 64.0 {
+                    continue;
+                }
+                let k = (h.dir & 3) as usize;
+                let at = [
+                    (p[0] - eye[0]) as f32 + OFFSET_X[k] as f32 * 0.3,
+                    (p[1] - eye[1]) as f32 - 0.25 + h.e.height + 0.5,
+                    (p[2] - eye[2]) as f32 + OFFSET_Z[k] as f32 * 0.3,
+                ];
+                entities::living_label(
+                    &mut labels,
+                    &mut translucent,
+                    &self.atlas,
+                    &name,
+                    at,
+                    self.view_yaw(),
+                    self.player.pitch,
+                );
+            }
+        }
         // RenderGlobal.renderEntities: isBoundingBoxInFrustum
         let planes = render::frustum_planes(&view_proj);
         for m in &self.mobs {

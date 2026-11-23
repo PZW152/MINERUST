@@ -1055,3 +1055,81 @@ pub fn living_label(
     super::sign::text(&mut t, atlas, name, x, y, &m, [255, 255, 255, 255], light);
     both(solid, &t);
 }
+
+/// `RenderItemFrame.renderItem`: the frame's item through
+/// `RenderItem.doRender` with `renderInFrame` (a new `EntityItem`: age 0,
+/// no hover, partial 0, one item). `m` already holds the frame's turn.
+pub fn framed_item(
+    out: &mut Vec<Vertex>,
+    atlas: &Atlas,
+    s: Stack,
+    m: &Mat4,
+    view_yaw: f32,
+    l: [u8; 4],
+) {
+    let s = Stack { count: 1, ..s };
+    // sin(0) * 0.1 + 0.1
+    let base = mul(m, &translate(0.0, 0.1, 0.0));
+    match s.block().filter(|&b| is_3d(b)) {
+        Some(b) => {
+            let h = if block::info(b).shape == Shape::Slab {
+                0.5
+            } else {
+                1.0
+            };
+            let mut mm = mul(&base, &scale(1.25, 1.25, 1.25));
+            mm = mul(&mm, &translate(0.0, 0.05, 0.0));
+            mm = mul(&mm, &rot_y(-90.0));
+            mm = mul(&mm, &scale(0.25, 0.25, 0.25));
+            if !item_block(out, atlas, b, s.meta, &mm, l) {
+                mm = mul(&mm, &translate(-0.5, -0.5, -0.5));
+                block_cube(out, atlas, b, s.meta, &mm, l, h);
+            }
+        }
+        None => {
+            let passes: Vec<([f32; 4], [f32; 3])> = if s.block().is_some() {
+                match sprite_rect(atlas, &s) {
+                    Some(t) => vec![(t, s.block().map_or([1.0; 3], |b| tint_for(b, s.meta, 0)))],
+                    None => return,
+                }
+            } else {
+                atlas.stack_passes(&s)
+            };
+            let k = 0.5128205f32;
+            let outer = mul(&mul(&base, &scale(k, k, k)), &translate(0.0, -0.05, 0.0));
+            for (t, tint) in passes {
+                if crate::render::mesher::rb::fancy() {
+                    let step = 0.0625f32 + 0.021875;
+                    let mut mm = mul(&outer, &rot_y(180.0));
+                    mm = mul(&mm, &translate(-0.5, -0.25, -(step / 2.0)));
+                    mm = mul(&mm, &translate(0.0, 0.0, step));
+                    extruded(out, t, &mm, l, tint, 0.0625);
+                } else {
+                    // fast graphics: the flat sprite still turns to the camera
+                    let mm = mul(&outer, &rot_y(180.0 - view_yaw));
+                    let c = [
+                        (tint[0] * 255.0) as u8,
+                        (tint[1] * 255.0) as u8,
+                        (tint[2] * 255.0) as u8,
+                        255,
+                    ];
+                    let (u0, v0, u1, v1) = (t[0], t[1], t[2], t[3]);
+                    for (p, uv) in [
+                        ([-0.5f32, -0.25, 0.0], [u0, v1]),
+                        ([0.5, -0.25, 0.0], [u1, v1]),
+                        ([0.5, 0.75, 0.0], [u1, v0]),
+                        ([-0.5, 0.75, 0.0], [u0, v0]),
+                    ] {
+                        let o = transform(&mm, [p[0], p[1], p[2], 1.0]);
+                        out.push(Vertex {
+                            pos: [o[0], o[1], o[2]],
+                            uv,
+                            color: c,
+                            light: l,
+                        });
+                    }
+                }
+            }
+        }
+    }
+}

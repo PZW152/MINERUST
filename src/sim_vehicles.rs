@@ -324,6 +324,13 @@ impl Sim {
         let held = self.play.inv.held();
         match &mut self.play.vehicles[i].v {
             Vehicle::Orb(_) => {}
+            Vehicle::Hang(h) => {
+                // EntityItemFrame.interactFirst
+                if h.interact(held) && !creative {
+                    self.play.inv.consume_held();
+                    self.play.inv_dirty = true;
+                }
+            }
             Vehicle::Boat(_) => self.mount(id),
             Vehicle::Cart(c) => match c.kind {
                 CartKind::Empty => {
@@ -379,6 +386,11 @@ impl Sim {
             Vehicle::Cart(c) => c.attack(damage, creative, false, false, &mut outs),
             // canAttackWithItem: false
             Vehicle::Orb(_) => return false,
+            // EntityHanging.hitByEntity: attackEntityFrom(player, 0)
+            Vehicle::Hang(_) => {
+                self.break_hanging(play, i, true, creative);
+                return true;
+            }
         }
         if knockback > 0 {
             let r = std::f32::consts::PI;
@@ -403,6 +415,65 @@ impl Sim {
             }
         }
         self.cart_outs(play, i, outs);
+        true
+    }
+
+    /// `EntityHanging.attackEntityFrom`: an item frame drops its item
+    /// first; otherwise it dies and `onBroken` drops (none for a creative
+    /// player's hit).
+    pub(super) fn break_hanging(
+        &mut self,
+        play: &mut Play,
+        i: usize,
+        by_player: bool,
+        creative: bool,
+    ) {
+        let Vehicle::Hang(h) = &mut play.vehicles[i].v else {
+            return;
+        };
+        let pos = h.e.pos;
+        let drops = match h.attack() {
+            None => return,
+            // dropItemOrSelf(entity, false), then setDisplayedItem(null)
+            Some(false) => {
+                let d = h.broken_drops(by_player && creative, false);
+                h.item = None;
+                h.rotation = 0;
+                d
+            }
+            Some(true) => h.broken_drops(by_player && creative, true),
+        };
+        for s in drops {
+            Self::entity_drop(play, pos, s);
+        }
+    }
+
+    /// `ItemHangingEntity.onItemUse` on side `side` of `target`: true when
+    /// the item is used.
+    pub(super) fn place_hanging(&mut self, item: u16, target: [i32; 3], side: i32) -> bool {
+        use crate::entity::hanging::{Hanging, FACING_TO_DIRECTION, PAINTING};
+        if !(2..=5).contains(&side) {
+            return false;
+        }
+        let d = FACING_TO_DIRECTION[side as usize];
+        let id = self.alloc_vehicle_id();
+        let seed = self.mobs.rand.next_long();
+        let others: Vec<Aabb> = self
+            .play
+            .vehicles
+            .iter()
+            .filter(|o| !o.v.dead() && matches!(o.v, Vehicle::Hang(_)))
+            .map(|o| o.v.e().bb)
+            .collect();
+        let h = if item == PAINTING {
+            Hanging::painting(id, target, d, &self.world, &others, seed)
+        } else {
+            Hanging::frame(id, target, d, seed)
+        };
+        if !h.on_valid_surface(&self.world, &others) {
+            return false;
+        }
+        self.play.vehicles.push(Tracked::new(Vehicle::Hang(h)));
         true
     }
 
@@ -473,8 +544,8 @@ impl Sim {
             let pb = Self::player_box(feet);
             let near = crate::entity::base::Ent::expand(&pb, 0.2f32 as f64, 0.0, 0.2f32 as f64);
             for b in play.vehicles.iter_mut() {
-                // canBePushed: not orbs
-                if b.v.dead() || matches!(b.v, Vehicle::Orb(_)) {
+                // canBePushed: not orbs or hanging entities
+                if b.v.dead() || matches!(b.v, Vehicle::Orb(_) | Vehicle::Hang(_)) {
                     continue;
                 }
                 let own = self.riding == Some(b.v.id());
@@ -486,7 +557,7 @@ impl Sim {
                             .push_entity(feet, false, self.riding.is_some())
                             .1
                             .map(|p| p.0),
-                        Vehicle::Orb(_) => None,
+                        Vehicle::Orb(_) | Vehicle::Hang(_) => None,
                     };
                     if let Some(a) = push {
                         for k in 0..3 {
@@ -510,7 +581,7 @@ impl Sim {
                             let golem = m.kind == crate::entity::mob::Kind::IronGolem;
                             c.push_entity(m.pos, !golem, m.riding.is_some())
                         }
-                        Vehicle::Orb(_) => (false, None),
+                        Vehicle::Orb(_) | Vehicle::Hang(_) => (false, None),
                     };
                     if seat {
                         // var1.mountEntity(this)
@@ -557,7 +628,7 @@ impl Sim {
                 })
             };
             let boat = matches!(play.vehicles[i].v, Vehicle::Boat(_));
-            let orb = matches!(play.vehicles[i].v, Vehicle::Orb(_));
+            let orb = matches!(play.vehicles[i].v, Vehicle::Orb(_) | Vehicle::Hang(_));
             let others = if orb {
                 Vec::new()
             } else {
@@ -625,6 +696,26 @@ impl Sim {
                                 Self::entity_drop(play, pos, crate::item::Stack::new(333, 0, 1));
                             }
                             Out::Fall(d) => fell = Some(d),
+                        }
+                    }
+                }
+                Vehicle::Hang(_) => {
+                    let others: Vec<Aabb> = play
+                        .vehicles
+                        .iter()
+                        .filter(|o| {
+                            o.v.id() != id && !o.v.dead() && matches!(o.v, Vehicle::Hang(_))
+                        })
+                        .map(|o| o.v.e().bb)
+                        .collect();
+                    if let Vehicle::Hang(h) = &mut play.vehicles[i].v {
+                        // onBroken(null)
+                        if h.tick(&self.world, &others) {
+                            let pos = h.e.pos;
+                            let drops = h.broken_drops(false, true);
+                            for s in drops {
+                                Self::entity_drop(play, pos, s);
+                            }
                         }
                     }
                 }

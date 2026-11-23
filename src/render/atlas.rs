@@ -527,6 +527,9 @@ impl Atlas {
         // BlockHopper.hopperInsideIcon
         let t = extra(jar, "hopper_inside")?;
         names.insert("hopper_inside", t);
+        // RenderItemFrame.backgroundSprite
+        let t = extra(jar, "itemframe_background")?;
+        names.insert("itemframe_background", t);
         // BlockBrewingStand.iconBrewingStandBase
         let t = extra(jar, "brewing_stand_base")?;
         names.insert("brewing_stand_base", t);
@@ -607,6 +610,7 @@ impl Atlas {
             .chain(crate::render::vehicles::TEXTURES)
             .chain(crate::render::chest::TEXTURES)
             .chain(crate::render::sign::TEXTURES)
+            .chain(crate::render::hanging::TEXTURES)
             .chain([crate::render::model::BOOK_TEXTURE])
             .chain(crate::render::model::ARMOR_TEXTURES)
             .chain(["../misc/pumpkinblur", "../misc/vignette"])
