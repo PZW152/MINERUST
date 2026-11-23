@@ -123,6 +123,7 @@ impl Recipe {
             }
             Recipe::Special("RecipesMapCloning") => map_cloning(g).is_some(),
             Recipe::Special("RecipesArmorDyes") => armor_dyes(g).is_some(),
+            Recipe::Special("RecipeFireworks") => fireworks(g).is_some(),
             // The others read item NBT (dye colours, firework and book
             // data, map scale) that stacks do not carry yet.
             Recipe::Special(_) => false,
@@ -137,8 +138,100 @@ impl Recipe {
             }
             Recipe::Special("RecipesMapCloning") => map_cloning(g),
             Recipe::Special("RecipesArmorDyes") => armor_dyes(g),
+            Recipe::Special("RecipeFireworks") => fireworks(g),
             Recipe::Special(_) => None,
         }
+    }
+}
+
+/// `ItemDye.dyeColors`
+pub const DYE_COLORS: [i32; 16] = [
+    1973019, 11743532, 3887386, 5320730, 2437522, 8073150, 2651799, 11250603, 4408131, 14188952,
+    4312372, 14602026, 6719955, 12801229, 15435844, 15790320,
+];
+
+/// `RecipeFireworks`: a rocket (paper, one to three gunpowder, stars), a
+/// star (gunpowder, dyes, at most one shape item, diamond for a trail,
+/// glowstone for a twinkle), or a star with fade colours added.
+fn fireworks(g: &Grid) -> Option<Stack> {
+    use crate::world::anvil::Nbt;
+    let (mut paper, mut powder, mut dyes, mut stars, mut extras, mut shapes) = (0, 0, 0, 0, 0, 0);
+    for i in 0..g.len() {
+        let Some(s) = g.slot(i) else { continue };
+        match s.id {
+            289 => powder += 1,
+            402 => stars += 1,
+            351 => dyes += 1,
+            339 => paper += 1,
+            348 | 264 => extras += 1,
+            385 | 288 | 371 | 397 => shapes += 1,
+            _ => return None,
+        }
+    }
+    extras += dyes + shapes;
+    if powder > 3 || paper > 1 {
+        return None;
+    }
+    let dye_of = |s: &Stack| DYE_COLORS[(s.meta & 15) as usize];
+    if powder >= 1 && paper == 1 && extras == 0 {
+        let mut out = Stack::new(401, 0, 1);
+        if stars > 0 {
+            let mut list = Vec::new();
+            for i in 0..g.len() {
+                let Some(s) = g.slot(i) else { continue };
+                if s.id == 402 {
+                    if let Some(e) = s.tag.get().and_then(|t| t.get("Explosion").cloned()) {
+                        if matches!(e, Nbt::Compound(_)) {
+                            list.push(e);
+                        }
+                    }
+                }
+            }
+            let fw = Nbt::Compound(vec![
+                ("Explosions".into(), Nbt::List(10, list)),
+                ("Flight".into(), Nbt::Byte(powder as i8)),
+            ]);
+            out = out.edit_tag(|t| t.set("Fireworks", fw));
+        }
+        Some(out)
+    } else if powder == 1 && paper == 0 && stars == 0 && dyes > 0 && shapes <= 1 {
+        let mut colors = Vec::new();
+        let mut ex: Vec<(String, Nbt)> = Vec::new();
+        let mut shape = 0i8;
+        for i in 0..g.len() {
+            let Some(s) = g.slot(i) else { continue };
+            match s.id {
+                351 => colors.push(dye_of(&s)),
+                348 => ex.push(("Flicker".into(), Nbt::Byte(1))),
+                264 => ex.push(("Trail".into(), Nbt::Byte(1))),
+                385 => shape = 1,
+                288 => shape = 4,
+                371 => shape = 2,
+                397 => shape = 3,
+                _ => {}
+            }
+        }
+        ex.push(("Colors".into(), Nbt::IntArray(colors)));
+        ex.push(("Type".into(), Nbt::Byte(shape)));
+        let out = Stack::new(402, 0, 1).edit_tag(|t| t.set("Explosion", Nbt::Compound(ex)));
+        Some(out)
+    } else if powder == 0 && paper == 0 && stars == 1 && dyes > 0 && dyes == extras {
+        let mut fades = Vec::new();
+        let mut star = None;
+        for i in 0..g.len() {
+            let Some(s) = g.slot(i) else { continue };
+            if s.id == 351 {
+                fades.push(dye_of(&s));
+            } else if s.id == 402 {
+                star = Some(Stack { count: 1, ..s });
+            }
+        }
+        let star = star?;
+        let mut e = star.tag.get().and_then(|t| t.get("Explosion").cloned())?;
+        e.set("FadeColors", Nbt::IntArray(fades));
+        Some(star.edit_tag(|t| t.set("Explosion", e)))
+    } else {
+        None
     }
 }
 

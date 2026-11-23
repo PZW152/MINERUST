@@ -12,6 +12,7 @@ pub mod mob;
 pub mod path;
 pub mod player;
 pub mod raytrace;
+pub mod rocket;
 pub mod server_player;
 pub mod survival;
 pub mod throwable;

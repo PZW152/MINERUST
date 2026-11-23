@@ -323,7 +323,7 @@ impl Sim {
         let creative = self.play.mode == GameMode::Creative;
         let held = self.play.inv.held();
         match &mut self.play.vehicles[i].v {
-            Vehicle::Orb(_) => {}
+            Vehicle::Orb(_) | Vehicle::Rocket(_) => {}
             Vehicle::Hang(h) => {
                 // EntityItemFrame.interactFirst
                 if h.interact(held) && !creative {
@@ -385,7 +385,7 @@ impl Sim {
             Vehicle::Boat(b) => broke = b.attack(damage, creative),
             Vehicle::Cart(c) => c.attack(damage, creative, false, false, &mut outs),
             // canAttackWithItem: false
-            Vehicle::Orb(_) => return false,
+            Vehicle::Orb(_) | Vehicle::Rocket(_) => return false,
             // EntityHanging.hitByEntity: attackEntityFrom(player, 0)
             Vehicle::Hang(_) => {
                 self.break_hanging(play, i, true, creative);
@@ -545,7 +545,9 @@ impl Sim {
             let near = crate::entity::base::Ent::expand(&pb, 0.2f32 as f64, 0.0, 0.2f32 as f64);
             for b in play.vehicles.iter_mut() {
                 // canBePushed: not orbs or hanging entities
-                if b.v.dead() || matches!(b.v, Vehicle::Orb(_) | Vehicle::Hang(_)) {
+                if b.v.dead()
+                    || matches!(b.v, Vehicle::Orb(_) | Vehicle::Hang(_) | Vehicle::Rocket(_))
+                {
                     continue;
                 }
                 let own = self.riding == Some(b.v.id());
@@ -557,7 +559,7 @@ impl Sim {
                             .push_entity(feet, false, self.riding.is_some())
                             .1
                             .map(|p| p.0),
-                        Vehicle::Orb(_) | Vehicle::Hang(_) => None,
+                        Vehicle::Orb(_) | Vehicle::Hang(_) | Vehicle::Rocket(_) => None,
                     };
                     if let Some(a) = push {
                         for k in 0..3 {
@@ -581,7 +583,7 @@ impl Sim {
                             let golem = m.kind == crate::entity::mob::Kind::IronGolem;
                             c.push_entity(m.pos, !golem, m.riding.is_some())
                         }
-                        Vehicle::Orb(_) | Vehicle::Hang(_) => (false, None),
+                        Vehicle::Orb(_) | Vehicle::Hang(_) | Vehicle::Rocket(_) => (false, None),
                     };
                     if seat {
                         // var1.mountEntity(this)
@@ -628,7 +630,10 @@ impl Sim {
                 })
             };
             let boat = matches!(play.vehicles[i].v, Vehicle::Boat(_));
-            let orb = matches!(play.vehicles[i].v, Vehicle::Orb(_) | Vehicle::Hang(_));
+            let orb = matches!(
+                play.vehicles[i].v,
+                Vehicle::Orb(_) | Vehicle::Hang(_) | Vehicle::Rocket(_)
+            );
             let others = if orb {
                 Vec::new()
             } else {
@@ -697,6 +702,14 @@ impl Sim {
                             }
                             Out::Fall(d) => fell = Some(d),
                         }
+                    }
+                }
+                Vehicle::Rocket(r) => {
+                    let mut sparks = Vec::new();
+                    if r.tick(&self.world, false, &mut fx, &mut sparks) {
+                        // setEntityState(17): the client's makeFireworks
+                        self.vehicle_events
+                            .push(Event::Firework(r.e.pos, r.e.motion, r.item));
                     }
                 }
                 Vehicle::Hang(_) => {

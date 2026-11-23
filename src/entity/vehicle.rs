@@ -6,6 +6,7 @@ use super::boat::Boat;
 use super::hanging::Hanging;
 use super::minecart::{CartKind, CartMeta, Minecart};
 use super::player::Aabb;
+use super::rocket::Rocket;
 use super::tracker::Tracker;
 use super::xp_orb::XpOrb;
 
@@ -20,6 +21,8 @@ pub enum Vehicle {
     Orb(XpOrb),
     /// `EntityPainting` and `EntityItemFrame`
     Hang(Hanging),
+    /// `EntityFireworkRocket`
+    Rocket(Rocket),
 }
 
 /// The data watcher of either.
@@ -36,6 +39,8 @@ pub enum VMeta {
         item: Option<crate::item::Stack>,
         rotation: i32,
     },
+    /// `EntityFireworkRocket`: the firework item (8)
+    Rocket(Option<crate::item::Stack>),
     /// No data watcher entries of its own
     None,
 }
@@ -47,6 +52,7 @@ impl Vehicle {
             Vehicle::Cart(c) => c.id,
             Vehicle::Orb(o) => o.id,
             Vehicle::Hang(h) => h.id,
+            Vehicle::Rocket(r) => r.id,
         }
     }
     pub fn e(&self) -> &Ent {
@@ -55,6 +61,7 @@ impl Vehicle {
             Vehicle::Cart(c) => &c.e,
             Vehicle::Orb(o) => &o.e,
             Vehicle::Hang(h) => &h.e,
+            Vehicle::Rocket(r) => &r.e,
         }
     }
     pub fn e_mut(&mut self) -> &mut Ent {
@@ -63,6 +70,7 @@ impl Vehicle {
             Vehicle::Cart(c) => &mut c.e,
             Vehicle::Orb(o) => &mut o.e,
             Vehicle::Hang(h) => &mut h.e,
+            Vehicle::Rocket(r) => &mut r.e,
         }
     }
     pub fn dead(&self) -> bool {
@@ -72,14 +80,14 @@ impl Vehicle {
         match self {
             Vehicle::Boat(b) => b.ridden,
             Vehicle::Cart(c) => c.ridden,
-            Vehicle::Orb(_) | Vehicle::Hang(_) => false,
+            Vehicle::Orb(_) | Vehicle::Hang(_) | Vehicle::Rocket(_) => false,
         }
     }
     pub fn set_ridden(&mut self, v: bool) {
         match self {
             Vehicle::Boat(b) => b.ridden = v,
             Vehicle::Cart(c) => c.ridden = v,
-            Vehicle::Orb(_) | Vehicle::Hang(_) => {}
+            Vehicle::Orb(_) | Vehicle::Hang(_) | Vehicle::Rocket(_) => {}
         }
     }
     pub fn velocity_changed(&mut self) -> &mut bool {
@@ -88,6 +96,7 @@ impl Vehicle {
             Vehicle::Cart(c) => &mut c.velocity_changed,
             Vehicle::Orb(o) => &mut o.velocity_changed,
             Vehicle::Hang(h) => &mut h.velocity_changed,
+            Vehicle::Rocket(r) => &mut r.velocity_changed,
         }
     }
     /// `updateRiderPosition`
@@ -97,6 +106,7 @@ impl Vehicle {
             Vehicle::Cart(c) => c.rider_position(rider_y_offset),
             Vehicle::Orb(o) => o.e.pos,
             Vehicle::Hang(h) => h.e.pos,
+            Vehicle::Rocket(r) => r.e.pos,
         }
     }
     /// `getBoundingBox`: solid to other entities (boats only).
@@ -115,6 +125,7 @@ impl Vehicle {
             },
             Vehicle::Cart(c) => VMeta::Cart(c.meta()),
             Vehicle::Orb(_) => VMeta::None,
+            Vehicle::Rocket(r) => VMeta::Rocket(r.item),
             Vehicle::Hang(h) => match h.art {
                 Some(_) => VMeta::None,
                 None => VMeta::Frame {
@@ -139,6 +150,7 @@ impl Vehicle {
                 b.damage = damage;
             }
             (Vehicle::Cart(c), VMeta::Cart(m)) => c.set_meta(m),
+            (Vehicle::Rocket(r), VMeta::Rocket(item)) => r.item = item,
             (Vehicle::Hang(h), VMeta::Frame { item, rotation }) => {
                 h.item = item;
                 h.rotation = rotation;
@@ -154,6 +166,7 @@ impl Vehicle {
             Vehicle::Orb(o) => o.e.set_position(p[0], p[1], p[2]),
             // never moves (tracked with no position updates)
             Vehicle::Hang(_) => {}
+            Vehicle::Rocket(r) => r.e.set_position(p[0], p[1], p[2]),
         }
     }
     pub fn set_velocity(&mut self, v: [f64; 3]) {
@@ -162,6 +175,7 @@ impl Vehicle {
             Vehicle::Cart(c) => c.set_velocity(v),
             Vehicle::Orb(o) => o.e.motion = v,
             Vehicle::Hang(_) => {}
+            Vehicle::Rocket(r) => r.set_velocity(v),
         }
     }
     /// `S0EPacketSpawnObject`'s type and data.
@@ -172,6 +186,7 @@ impl Vehicle {
             // S11PacketSpawnExperienceOrb
             Vehicle::Orb(o) => (2, o.value),
             Vehicle::Hang(h) => h.spawn_data(),
+            Vehicle::Rocket(_) => (76, 0),
         }
     }
     /// `NetHandlerPlayClient.handleSpawnObject`: the client's entity.
@@ -197,6 +212,7 @@ impl Vehicle {
             71 | 1000 => Some(Vehicle::Hang(Hanging::from_spawn(
                 object, data, id, p, seed,
             ))),
+            76 => Some(Vehicle::Rocket(Rocket::at(id, p, seed))),
             _ => None,
         }
     }
@@ -222,6 +238,7 @@ impl Tracked {
             Vehicle::Orb(_) => Tracker::new(v.e(), 160, 20, true, object, data),
             // EntityTracker: hanging entities 160 blocks, no position updates
             Vehicle::Hang(_) => Tracker::new(v.e(), 160, i32::MAX, false, object, data),
+            Vehicle::Rocket(_) => Tracker::new(v.e(), 64, 10, true, object, data),
             _ => Tracker::new(v.e(), 80, 3, true, object, data),
         };
         let sent = v.meta();
@@ -251,6 +268,12 @@ impl Tracked {
             Vehicle::Boat(b) => {
                 let mut v = vec![("id", Nbt::String("Boat".into()))];
                 v.extend(b.e.nbt_fields(dim, b.id));
+                compound(v)
+            }
+            Vehicle::Rocket(r) => {
+                let mut v = vec![("id", Nbt::String("FireworksRocketEntity".into()))];
+                v.extend(r.e.nbt_fields(dim, r.id));
+                r.nbt(&mut v);
                 compound(v)
             }
             Vehicle::Hang(h) => {
@@ -322,7 +345,9 @@ impl Tracked {
             let h = Hanging::from_nbt(t, name == "Painting", id, seed);
             return Some(Tracked::new(Vehicle::Hang(h)));
         }
-        let mut v = if name == "Boat" {
+        let mut v = if name == "FireworksRocketEntity" {
+            Vehicle::Rocket(Rocket::from_nbt(t, id, seed))
+        } else if name == "Boat" {
             Vehicle::Boat(Boat::new(id, seed))
         } else if name == "XPOrb" {
             // new EntityXPOrb(world): 0.25 by 0.25 until loaded

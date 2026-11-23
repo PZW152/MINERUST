@@ -262,6 +262,9 @@ pub enum Event {
     Vehicles(Vec<(u32, crate::entity::tracker::Packet)>),
     /// `S1CPacketEntityMetadata` of vehicles.
     VehicleMeta(Vec<(u32, crate::entity::vehicle::VMeta)>),
+    /// `setEntityState(17)` of a firework rocket: where, its motion and the
+    /// firework item (`WorldClient.makeFireworks`).
+    Firework([f64; 3], [f64; 3], Option<crate::item::Stack>),
     /// `S19PacketEntityStatus` of vehicles (10: a TNT minecart ignites).
     VehicleStatus(Vec<(u32, i32)>),
     /// `S1BPacketEntityAttach` for the player: the vehicle, or none.
@@ -1201,7 +1204,31 @@ impl Sim {
                     s.id == crate::entity::hanging::PAINTING
                         || s.id == crate::entity::hanging::ITEM_FRAME
                 });
-                if let (false, Some(h)) = (used, hang) {
+                let rocket = self
+                    .play
+                    .inv
+                    .held()
+                    .filter(|s| s.id == crate::entity::rocket::FIREWORKS);
+                if let (false, Some(s)) = (used, rocket) {
+                    // ItemFirework.onItemUse: a rocket at the clicked point
+                    let at = [
+                        target[0] as f64 + hit[0] as f64,
+                        target[1] as f64 + hit[1] as f64,
+                        target[2] as f64 + hit[2] as f64,
+                    ];
+                    let id = self.alloc_vehicle_id();
+                    let seed = self.mobs.rand.next_long();
+                    let r = crate::entity::rocket::Rocket::new(id, at, Some(s), seed);
+                    self.play
+                        .vehicles
+                        .push(crate::entity::vehicle::Tracked::new(
+                            crate::entity::vehicle::Vehicle::Rocket(r),
+                        ));
+                    if self.play.mode != GameMode::Creative {
+                        self.play.inv.consume_held();
+                        self.play.inv_dirty = true;
+                    }
+                } else if let (false, Some(h)) = (used, hang) {
                     // ItemHangingEntity.onItemUse: true on the four sides
                     let side = match face {
                         [0, -1, 0] => 0,
@@ -3113,6 +3140,43 @@ impl Sim {
                 }
                 continue;
             }
+            // Fireworks:shape:colour[:fade]:life -- a rocket with one star
+            if name == "Fireworks" {
+                use crate::world::anvil::Nbt;
+                let v: Vec<i32> = parts.filter_map(|t| t.parse().ok()).collect();
+                let shape = v.first().copied().unwrap_or(0);
+                let col = v.get(1).copied().unwrap_or(11743532);
+                let mut ex = vec![
+                    ("Type".to_string(), Nbt::Byte(shape as i8)),
+                    ("Colors".to_string(), Nbt::IntArray(vec![col])),
+                ];
+                if let Some(&f) = v.get(2).filter(|&&f| f > 0) {
+                    ex.push(("FadeColors".to_string(), Nbt::IntArray(vec![f])));
+                }
+                let fw = Nbt::Compound(vec![
+                    ("Explosions".into(), Nbt::List(10, vec![Nbt::Compound(ex)])),
+                    ("Flight".into(), Nbt::Byte(1)),
+                ]);
+                let st = crate::item::Stack::new(401, 0, 1).edit_tag(|t| t.set("Fireworks", fw));
+                let dist: f64 = std::env::var("MINERUST_SUMMON_DIST")
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(10.0);
+                let x = feet[0] + fwd[0] * dist + side[0] * off;
+                let z = feet[2] + fwd[1] * dist + side[1] * off;
+                let id = self.alloc_vehicle_id();
+                let seed = self.mobs.rand.next_long();
+                let mut r = crate::entity::rocket::Rocket::new(id, [x, feet[1], z], Some(st), seed);
+                if let Some(&l) = v.get(3) {
+                    r.lifetime = l;
+                }
+                self.play
+                    .vehicles
+                    .push(crate::entity::vehicle::Tracked::new(
+                        crate::entity::vehicle::Vehicle::Rocket(r),
+                    ));
+                continue;
+            }
             if name == "XPOrb" {
                 let v: i32 = parts.next().and_then(|t| t.parse().ok()).unwrap_or(7);
                 let dist: f64 = std::env::var("MINERUST_SUMMON_DIST")
@@ -3406,6 +3470,8 @@ impl Sim {
                             self.break_hanging(play, i, false, false);
                             continue;
                         }
+                        // Entity.attackEntityFrom: no effect, the push still applies
+                        Vehicle::Rocket(_) => {}
                     }
                     {
                         let e = play.vehicles[i].v.e_mut();
@@ -7899,6 +7965,113 @@ mod tests {
             s.map_or(true, |m| m.potions.active(potion::MOVE_SLOWDOWN)),
             "Bane of Arthropods V slows"
         );
+    }
+
+    /// `RecipeFireworks`, `ItemFirework`, `EntityFireworkRocket`.
+    #[test]
+    fn fireworks_fly_and_burst() {
+        use crate::crafting::{find_matching, Grid};
+        use crate::item::Stack;
+        let craft = |cells: Vec<Option<Stack>>| {
+            find_matching(&Grid {
+                cells: &cells,
+                width: 3,
+            })
+        };
+        // a large-ball star: gunpowder, red and blue dye, a fire charge, a diamond
+        let mut c = vec![None; 9];
+        c[0] = Some(Stack::new(289, 0, 1));
+        c[1] = Some(Stack::new(351, 1, 1));
+        c[2] = Some(Stack::new(351, 4, 1));
+        c[3] = Some(Stack::new(385, 0, 1));
+        c[4] = Some(Stack::new(264, 0, 1));
+        let star = craft(c).expect("a firework star");
+        assert_eq!(star.id, 402);
+        let ex = crate::particles::Explosion::from_nbt(
+            star.tag.get().unwrap().get("Explosion").unwrap(),
+        );
+        assert_eq!(ex.shape, 1);
+        assert!(ex.trail && !ex.flicker);
+        assert_eq!(ex.colors, vec![11743532, 2437522]);
+        // a fade colour on top
+        let mut c = vec![None; 9];
+        c[0] = Some(star);
+        c[1] = Some(Stack::new(351, 11, 1));
+        let star = craft(c).expect("faded star");
+        let ex = crate::particles::Explosion::from_nbt(
+            star.tag.get().unwrap().get("Explosion").unwrap(),
+        );
+        assert_eq!(ex.fades, vec![14602026]);
+        // two gunpowder, paper and the star: Flight 2
+        let mut c = vec![None; 9];
+        c[0] = Some(Stack::new(289, 0, 1));
+        c[1] = Some(Stack::new(289, 0, 1));
+        c[2] = Some(Stack::new(339, 0, 1));
+        c[3] = Some(star);
+        let rocket = craft(c).expect("a rocket");
+        assert_eq!(rocket.id, 401);
+        let fw = rocket.tag.get().unwrap().get("Fireworks").cloned().unwrap();
+        assert_eq!(fw.int("Flight"), Some(2));
+        assert_eq!(
+            crate::particles::Explosion::of_rocket(Some(rocket)).len(),
+            1
+        );
+        // two paper: nothing
+        let mut c = vec![None; 9];
+        c[0] = Some(Stack::new(289, 0, 1));
+        c[1] = Some(Stack::new(339, 0, 1));
+        c[2] = Some(Stack::new(339, 0, 1));
+        assert!(craft(c).is_none());
+        // launched from the ground: it climbs, then goes off within 30..41 ticks
+        let (mut sim, x, y, z) = redstone_sim();
+        arena(&mut sim, x, y, z);
+        sim.play.mode = GameMode::Survival;
+        let feet = [x as f64 + 0.5, (y + 1) as f64, z as f64 + 0.5];
+        let sel = sim.play.inv.selected;
+        sim.play.inv.main[sel] = Some(Stack { count: 2, ..rocket });
+        let mut ev = Vec::new();
+        sim.step(
+            &[
+                Command::Player(feet, [0.0, 0.0], false),
+                Command::Use {
+                    target: [x + 3, y, z + 3],
+                    face: [0, 1, 0],
+                    sneaking: false,
+                    hit: [0.5, 1.0, 0.5],
+                },
+            ],
+            &mut ev,
+        );
+        assert_eq!(sim.play.inv.main[sel].map(|s| s.count), Some(1));
+        let rid = sim
+            .play
+            .vehicles
+            .iter()
+            .find(|v| matches!(v.v, crate::entity::vehicle::Vehicle::Rocket(_)))
+            .map(|v| v.v.id())
+            .expect("a rocket in the air");
+        let mut burst = None;
+        let mut top = 0.0f64;
+        for t in 0..60 {
+            let mut ev = Vec::new();
+            sim.step(&[Command::Player(feet, [0.0, 0.0], false)], &mut ev);
+            if let Some(v) = sim.play.vehicles.iter().find(|v| v.v.id() == rid) {
+                top = top.max(v.v.e().pos[1]);
+            }
+            for e in ev {
+                if let Event::Firework(p, _, item) = e {
+                    burst = Some((t, p, item));
+                }
+            }
+            if burst.is_some() {
+                break;
+            }
+        }
+        let (t, p, item) = burst.expect("it went off");
+        assert!((29..=42).contains(&t), "after {t} ticks");
+        assert!(p[1] > (y + 10) as f64, "high up ({})", p[1]);
+        assert_eq!(item.map(|s| s.id), Some(401));
+        assert!(top > (y + 5) as f64);
     }
 
     /// `BlockPumpkin.onBlockAdded` and `EntitySnowman`.

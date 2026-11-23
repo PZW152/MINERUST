@@ -399,6 +399,8 @@ pub struct Game {
     pickups: Vec<(ItemView, i32, Option<u32>)>,
     /// `EntityPickupFX` of experience orbs.
     orb_pickups: Vec<(crate::entity::xp_orb::XpOrb, i32)>,
+    /// `EntityFireworkStarterFX`s going off
+    fireworks: Vec<crate::particles::FireworkStarter>,
     /// Throwables: position, previous position, item, damage.
     throwables: Vec<([f64; 3], [f64; 3], u16, i32)>,
     /// The player's `EntityFishHook`: position and previous position.
@@ -734,6 +736,7 @@ impl Game {
             items: Vec::new(),
             pickups: Vec::new(),
             orb_pickups: Vec::new(),
+            fireworks: Vec::new(),
             lang: crate::lang::Lang::default(),
             using: None,
             falling: Vec::new(),
@@ -1618,6 +1621,12 @@ impl Game {
                 Event::Vehicles(v) => self.vehicle_packets(v),
                 Event::VehicleMeta(v) => self.vehicle_meta(v),
                 Event::VehicleStatus(v) => self.vehicle_status(v),
+                // EntityFireworkRocket.handleHealthUpdate(17): makeFireworks
+                Event::Firework(p, m, item) => {
+                    let e = crate::particles::Explosion::of_rocket(item);
+                    self.fireworks
+                        .push(crate::particles::FireworkStarter::new(p, m, e));
+                }
                 Event::Mount(v) => self.mounted(v),
                 Event::Destroyed(v) => self.destroyed_fx(v),
                 Event::Teleport(p) => {
@@ -2696,6 +2705,17 @@ impl Game {
 
     /// Per-tick particle spawning around the player.
     fn tick_particles(&mut self) {
+        // EntityFireworkStarterFX.onUpdate (an effect like the others)
+        {
+            let cam = self.player.pos;
+            let mut sounds = Vec::new();
+            let mut list = std::mem::take(&mut self.fireworks);
+            list.retain_mut(|f| f.tick(&mut self.particles, cam, &mut sounds));
+            self.fireworks = list;
+            for (n, p, v, pi) in sounds {
+                self.sound(&n, Some(p), v, pi);
+            }
+        }
         self.particles.tick(&self.world);
         self.tick_crit_emitters();
         // EntityPickupFX.onUpdate: three ticks
@@ -5564,6 +5584,7 @@ impl Game {
             let lf = |x: i32, y: i32, z: i32| (w.light(true, x, y, z), w.light(false, x, y, z));
             self.particles.render(
                 &mut dynamic,
+                &mut translucent,
                 &lf,
                 eye,
                 self.player.yaw,

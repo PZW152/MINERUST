@@ -278,6 +278,14 @@ impl Game {
                     }
                     // EntityHanging.onUpdate: the surface check is server-only
                     Vehicle::Hang(_) => {}
+                    // EntityFireworkRocket.onUpdate on the client: the sparks
+                    Vehicle::Rocket(r) => {
+                        let mut sparks = Vec::new();
+                        r.tick(&world, true, &mut fx, &mut sparks);
+                        for (p, m) in sparks {
+                            self.particles.spawned(|ps| ps.firework_spark(p, m));
+                        }
+                    }
                     Vehicle::Orb(o) => {
                         // the client player's posY is its eyes; getEyeHeight 0.12
                         let p = self.player.pos;
@@ -365,6 +373,31 @@ impl Game {
             match &c.v {
                 // drawn with the translucent entities
                 Vehicle::Orb(_) => {}
+                // RenderSnowball(Items.fireworks)
+                Vehicle::Rocket(_) => {
+                    let p = e.last_tick;
+                    let (lx, ly, lz) = (
+                        math::floor_double(p[0]),
+                        math::floor_double(p[1]),
+                        math::floor_double(p[2]),
+                    );
+                    let l = (
+                        self.world.light(true, lx, ly, lz),
+                        self.world.light(false, lx, ly, lz),
+                    );
+                    for (rect, col) in self.atlas.item_passes(401, 0) {
+                        crate::render::entities::billboard_lit(
+                            out,
+                            rect,
+                            rel,
+                            0.5,
+                            self.player.yaw,
+                            self.player.pitch,
+                            l,
+                            col,
+                        );
+                    }
+                }
                 Vehicle::Hang(h) => self.draw_hanging(out, h, rel, yaw, light),
                 Vehicle::Boat(b) => {
                     if let Some(t) = boat_tex {

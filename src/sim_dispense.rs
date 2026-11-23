@@ -147,9 +147,20 @@ impl Sim {
                 self.aux_sound(1000, p, sounds);
                 one_less(s)
             }
-            // Bootstrap$7: EntityFireworkRocket (not ported yet: the rocket is
-            // used up without flying)
+            // Bootstrap$7: an EntityFireworkRocket in front, 0.2 up
             401 => {
+                let at = [
+                    c[0] + FX[f] as f64,
+                    p[1] as f64 + 0.2f32 as f64,
+                    c[2] + FZ[f] as f64,
+                ];
+                let id = crate::entity::vehicle::VEHICLE_ID | play.next_item;
+                play.next_item += 1;
+                let seed = self.mobs.rand.next_long();
+                let r = crate::entity::rocket::Rocket::new(id, at, Some(s), seed);
+                play.vehicles.push(crate::entity::vehicle::Tracked::new(
+                    crate::entity::vehicle::Vehicle::Rocket(r),
+                ));
                 self.aux_sound(1002, p, sounds);
                 one_less(s)
             }

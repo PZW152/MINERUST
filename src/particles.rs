@@ -44,6 +44,14 @@ pub struct Particle {
 enum Kind {
     /// `EntitySnowShovelFX`
     SnowShovel,
+    /// `EntityFireworkSparkFX`: trail, twinkle, fade colour
+    Spark {
+        trail: bool,
+        twinkle: bool,
+        fade: Option<[f32; 3]>,
+    },
+    /// `EntityFireworkOverlayFX`: the flash of each explosion
+    FireOverlay,
     Plain,
     Smoke,
     Flame,
@@ -279,6 +287,28 @@ impl Particles {
             ((8.0 / (self.r.next_float() as f64 * 0.8 + 0.2)) * if big { 2.5 } else { 1.0 }) as i32;
         p.kind = Kind::Smoke;
         p.sprite = Sprite::Index(7);
+        self.add(p);
+    }
+
+    /// `EntityFireworkSparkFX(world, x, y, z, mx, my, mz)`
+    fn spark(&mut self, pos: [f64; 3], m: [f64; 3], trail: bool, twinkle: bool) -> Particle {
+        let mut p = self.base(pos);
+        p.motion = m;
+        p.scale *= 0.75;
+        p.base_scale = p.scale;
+        p.max_age = 48 + self.r.next_int_n(12);
+        p.kind = Kind::Spark {
+            trail,
+            twinkle,
+            fade: None,
+        };
+        p.sprite = Sprite::Index(167);
+        p
+    }
+
+    /// `"fireworksSpark"`: the rocket's trail
+    pub fn firework_spark(&mut self, pos: [f64; 3], m: [f64; 3]) {
+        let p = self.spark(pos, m, false, false);
         self.add(p);
     }
 
@@ -668,9 +698,47 @@ impl Particles {
         huge.retain(|h| h.1 > 0);
         self.huge = huge;
         let mut lists = std::mem::take(&mut self.list);
+        let mut trails: Vec<([f64; 3], [f32; 3], Option<[f32; 3]>, bool)> = Vec::new();
         for list in lists.iter_mut() {
             list.retain_mut(|p| {
                 p.prev = p.pos;
+                if let Kind::Spark {
+                    trail,
+                    twinkle,
+                    fade,
+                } = p.kind
+                {
+                    // EntityFireworkSparkFX.onUpdate
+                    let alive = p.age < p.max_age;
+                    p.age += 1;
+                    if p.age > p.max_age / 2 {
+                        p.color[3] = 1.0 - (p.age - p.max_age / 2) as f32 / p.max_age as f32;
+                        if let Some(f) = fade {
+                            for k in 0..3 {
+                                p.color[k] += (f[k] - p.color[k]) * 0.2;
+                            }
+                        }
+                    }
+                    p.sprite = Sprite::Index(160 + (7 - p.age * 8 / p.max_age));
+                    p.motion[1] -= 0.004;
+                    move_particle(p, w);
+                    for v in &mut p.motion {
+                        *v *= 0.91f32 as f64;
+                    }
+                    if p.on_ground {
+                        p.motion[0] *= 0.7f32 as f64;
+                        p.motion[2] *= 0.7f32 as f64;
+                    }
+                    if trail && p.age < p.max_age / 2 && (p.age + p.max_age) % 2 == 0 {
+                        trails.push((p.pos, [p.color[0], p.color[1], p.color[2]], fade, twinkle));
+                    }
+                    return alive;
+                }
+                if p.kind == Kind::FireOverlay {
+                    let alive = p.age < p.max_age;
+                    p.age += 1;
+                    return alive;
+                }
                 if p.kind == Kind::Wake {
                     // EntityFishWakeFX.onUpdate
                     p.motion[1] -= p.gravity as f64;
@@ -790,6 +858,16 @@ impl Particles {
             });
         }
         self.list = lists;
+        // EntityFireworkSparkFX: the trail's new sparks, half way through
+        for (pos, col, fade, twinkle) in trails {
+            let mut q = self.spark(pos, [0.0; 3], false, twinkle);
+            q.color = [col[0], col[1], col[2], 1.0];
+            q.age = q.max_age / 2;
+            if let Kind::Spark { fade: f, .. } = &mut q.kind {
+                *f = fade;
+            }
+            self.add(q);
+        }
     }
 
     /// Camera-facing quads (`EntityFX.renderParticle`), camera-relative.
@@ -797,6 +875,7 @@ impl Particles {
     pub fn render(
         &self,
         out: &mut Vec<Vertex>,
+        blend: &mut Vec<Vertex>,
         w: &dyn Fn(i32, i32, i32) -> (i32, i32),
         eye: [f64; 3],
         yaw: f32,
@@ -814,6 +893,12 @@ impl Particles {
         let rxy = rx * ps;
         let rxz = pc;
         for p in self.list.iter().flatten() {
+            // EntityFireworkSparkFX.renderParticle: twinkling sparks blink
+            if let Kind::Spark { twinkle: true, .. } = p.kind {
+                if !(p.age < p.max_age / 3 || (p.age + p.max_age) / 3 % 2 == 0) {
+                    continue;
+                }
+            }
             let t = partial as f64;
             let pos = [
                 p.prev[0] + (p.pos[0] - p.prev[0]) * t,
@@ -877,6 +962,25 @@ impl Particles {
                 }
                 _ => {}
             }
+            let mut alpha = p.color[3];
+            let (mut u0, mut v0, mut u1, mut v1) = (u0, v0, u1, v1);
+            if p.kind == Kind::FireOverlay {
+                // EntityFireworkOverlayFX.renderParticle: a growing flash
+                let Some(s) = sheet else { continue };
+                let k = 128.0 / s.size;
+                let (du, dv) = ((s.rect[2] - s.rect[0]) * k, (s.rect[3] - s.rect[1]) * k);
+                u0 = s.rect[0] + 0.25 * du;
+                u1 = s.rect[0] + 0.5 * du;
+                v0 = s.rect[1] + 0.125 * dv;
+                v1 = s.rect[1] + 0.375 * dv;
+                let a = p.age as f32 + partial - 1.0;
+                size = 7.1 * (a * 0.25 * std::f32::consts::PI).sin();
+                alpha = 0.6 - a * 0.25 * 0.5;
+                if alpha <= 0.0 {
+                    continue;
+                }
+            }
+            let blended = matches!(p.kind, Kind::Spark { .. } | Kind::FireOverlay);
             let (bx, by, bz) = (
                 math::floor_double(pos[0]),
                 math::floor_double(pos[1]),
@@ -888,12 +992,18 @@ impl Particles {
             } else {
                 blk
             };
+            // EntityFireworkSparkFX.getBrightnessForRender: 15728880
+            let (sky, blk) = if matches!(p.kind, Kind::Spark { .. }) {
+                (15, 15)
+            } else {
+                (sky, blk)
+            };
             let light = [(blk << 4) as u8, (sky << 4) as u8, 0, 0];
             let col = [
                 (p.color[0] * 255.0) as u8,
                 (p.color[1] * 255.0) as u8,
                 (p.color[2] * 255.0) as u8,
-                255,
+                (alpha.clamp(0.0, 1.0) * 255.0) as u8,
             ];
             let c = |a: f32, b: f32, cc: f32, d: f32, e: f32| {
                 [
@@ -950,6 +1060,7 @@ impl Particles {
                     light,
                 },
             ];
+            let out = if blended { &mut *blend } else { &mut *out };
             out.extend_from_slice(&q);
             out.extend_from_slice(&[q[3], q[2], q[1], q[0]]);
         }
@@ -1152,5 +1263,268 @@ mod tests {
         p.setting = 2;
         p.smoke(near, [0.0; 3], false);
         assert_eq!(p.count(), 1, "not spawned through the world: always made");
+    }
+}
+
+/// One explosion of a firework (`NBTTagCompound` "Explosion").
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Explosion {
+    pub shape: i32,
+    pub trail: bool,
+    pub flicker: bool,
+    pub colors: Vec<i32>,
+    pub fades: Vec<i32>,
+}
+
+impl Explosion {
+    pub fn from_nbt(t: &crate::world::anvil::Nbt) -> Explosion {
+        use crate::world::anvil::Nbt;
+        let ints = |k: &str| match t.get(k) {
+            Some(Nbt::IntArray(v)) => v.clone(),
+            _ => Vec::new(),
+        };
+        Explosion {
+            shape: t.int("Type").unwrap_or(0) as i32,
+            trail: t.int("Trail").unwrap_or(0) != 0,
+            flicker: t.int("Flicker").unwrap_or(0) != 0,
+            colors: ints("Colors"),
+            fades: ints("FadeColors"),
+        }
+    }
+
+    /// The "Explosions" of a rocket's "Fireworks" tag.
+    pub fn of_rocket(s: Option<crate::item::Stack>) -> Vec<Explosion> {
+        let Some(t) = s.and_then(|s| s.tag.get()) else {
+            return Vec::new();
+        };
+        match t.get("Fireworks") {
+            Some(f) => f
+                .list("Explosions")
+                .iter()
+                .map(Explosion::from_nbt)
+                .collect(),
+            None => Vec::new(),
+        }
+    }
+}
+
+/// `EntityFireworkStarterFX`: draws nothing, lets the explosions off two
+/// ticks apart and asks for the bangs.
+pub struct FireworkStarter {
+    pos: [f64; 3],
+    motion: [f64; 3],
+    explosions: Vec<Explosion>,
+    age: i32,
+    max_age: i32,
+    twinkle: bool,
+}
+
+impl FireworkStarter {
+    pub fn new(pos: [f64; 3], motion: [f64; 3], explosions: Vec<Explosion>) -> FireworkStarter {
+        let mut max_age = 8;
+        let mut twinkle = false;
+        if !explosions.is_empty() {
+            max_age = explosions.len() as i32 * 2 - 1;
+            if explosions.iter().any(|e| e.flicker) {
+                twinkle = true;
+                max_age += 15;
+            }
+        }
+        FireworkStarter {
+            pos,
+            motion,
+            explosions,
+            age: 0,
+            max_age,
+            twinkle,
+        }
+    }
+
+    /// One tick: false once done. Sounds come back as (name, pos, volume, pitch).
+    pub fn tick(
+        &mut self,
+        ps: &mut Particles,
+        camera: [f64; 3],
+        sounds: &mut Vec<(String, [f64; 3], f32, f32)>,
+    ) -> bool {
+        let d2 = (camera[0] - self.pos[0]).powi(2)
+            + (camera[1] - self.pos[1]).powi(2)
+            + (camera[2] - self.pos[2]).powi(2);
+        let far = d2 >= 256.0;
+        if self.age == 0 && !self.explosions.is_empty() {
+            let large = self.explosions.len() >= 3 || self.explosions.iter().any(|e| e.shape == 1);
+            let name = format!(
+                "fireworks.{}{}",
+                if large { "largeBlast" } else { "blast" },
+                if far { "_far" } else { "" }
+            );
+            let pitch = 0.95 + ps.r.next_float() * 0.1;
+            sounds.push((name, self.pos, 20.0, pitch));
+        }
+        if self.age % 2 == 0 && ((self.age / 2) as usize) < self.explosions.len() {
+            let e = self.explosions[(self.age / 2) as usize].clone();
+            match e.shape {
+                1 => self.ball(ps, 0.5, 4, &e),
+                2 => self.shaped(
+                    ps,
+                    0.5,
+                    &[
+                        [0.0, 1.0],
+                        [0.3455, 0.309],
+                        [0.9511, 0.309],
+                        [0.3795918367346939, -0.12653061224489795],
+                        [0.6122448979591837, -0.8040816326530612],
+                        [0.0, -0.35918367346938773],
+                    ],
+                    &e,
+                    false,
+                ),
+                3 => self.shaped(
+                    ps,
+                    0.5,
+                    &[
+                        [0.0, 0.2],
+                        [0.2, 0.2],
+                        [0.2, 0.6],
+                        [0.6, 0.6],
+                        [0.6, 0.2],
+                        [0.2, 0.2],
+                        [0.2, 0.0],
+                        [0.4, 0.0],
+                        [0.4, -0.6],
+                        [0.2, -0.6],
+                        [0.2, -0.4],
+                        [0.0, -0.4],
+                    ],
+                    &e,
+                    true,
+                ),
+                4 => self.burst(ps, &e),
+                _ => self.ball(ps, 0.25, 2, &e),
+            }
+            // EntityFireworkOverlayFX in the first colour
+            let c = e.colors.first().copied().unwrap_or(0);
+            let mut o = ps.base(self.pos);
+            o.max_age = 4;
+            o.color = [
+                ((c & 0xFF0000) >> 16) as f32 / 255.0,
+                ((c & 0xFF00) >> 8) as f32 / 255.0,
+                (c & 0xFF) as f32 / 255.0,
+                1.0,
+            ];
+            o.kind = Kind::FireOverlay;
+            ps.add(o);
+        }
+        self.age += 1;
+        if self.age > self.max_age {
+            if self.twinkle {
+                let name = if far {
+                    "fireworks.twinkle_far"
+                } else {
+                    "fireworks.twinkle"
+                };
+                let pitch = 0.9 + ps.r.next_float() * 0.15;
+                sounds.push((name.to_string(), self.pos, 20.0, pitch));
+            }
+            return false;
+        }
+        true
+    }
+
+    fn particle(&self, ps: &mut Particles, m: [f64; 3], e: &Explosion) {
+        let mut p = ps.spark(self.pos, m, e.trail, e.flicker);
+        if !e.colors.is_empty() {
+            let c = e.colors[ps.r.next_int_n(e.colors.len() as i32) as usize];
+            p.color = [
+                ((c & 0xFF0000) >> 16) as f32 / 255.0,
+                ((c & 0xFF00) >> 8) as f32 / 255.0,
+                (c & 0xFF) as f32 / 255.0,
+                1.0,
+            ];
+        }
+        if !e.fades.is_empty() {
+            let c = e.fades[ps.r.next_int_n(e.fades.len() as i32) as usize];
+            if let Kind::Spark { fade, .. } = &mut p.kind {
+                *fade = Some([
+                    ((c & 0xFF0000) >> 16) as f32 / 255.0,
+                    ((c & 0xFF00) >> 8) as f32 / 255.0,
+                    (c & 0xFF) as f32 / 255.0,
+                ]);
+            }
+        }
+        ps.add(p);
+    }
+
+    /// `createBall`
+    fn ball(&self, ps: &mut Particles, speed: f64, size: i32, e: &Explosion) {
+        let mut y = -size;
+        while y <= size {
+            let mut x = -size;
+            while x <= size {
+                let mut z = -size;
+                while z <= size {
+                    let dx = x as f64 + (ps.r.next_double() - ps.r.next_double()) * 0.5;
+                    let dy = y as f64 + (ps.r.next_double() - ps.r.next_double()) * 0.5;
+                    let dz = z as f64 + (ps.r.next_double() - ps.r.next_double()) * 0.5;
+                    let l = math::sqrt_double(dx * dx + dy * dy + dz * dz) as f64 / speed
+                        + ps.r.next_gaussian() * 0.05;
+                    self.particle(ps, [dx / l, dy / l, dz / l], e);
+                    if y != -size && y != size && x != -size && x != size {
+                        z += size * 2 - 1;
+                    }
+                    z += 1;
+                }
+                x += 1;
+            }
+            y += 1;
+        }
+    }
+
+    /// `createShaped`
+    fn shaped(
+        &self,
+        ps: &mut Particles,
+        speed: f64,
+        pts: &[[f64; 2]],
+        e: &Explosion,
+        creeper: bool,
+    ) {
+        let (x0, y0) = (pts[0][0], pts[0][1]);
+        self.particle(ps, [x0 * speed, y0 * speed, 0.0], e);
+        let a0 = ps.r.next_float() * std::f32::consts::PI;
+        let step = if creeper { 0.034 } else { 0.34 };
+        for k in 0..3 {
+            let a = a0 as f64 + (k as f32 * std::f32::consts::PI) as f64 * step;
+            let (mut px, mut py) = (x0, y0);
+            for q in &pts[1..] {
+                let mut t = 0.25;
+                while t <= 1.0 {
+                    let mut vx = (px + (q[0] - px) * t) * speed;
+                    let vy = (py + (q[1] - py) * t) * speed;
+                    let vz = vx * a.sin();
+                    vx *= a.cos();
+                    let mut s = -1.0;
+                    while s <= 1.0 {
+                        self.particle(ps, [vx * s, vy, vz * s], e);
+                        s += 2.0;
+                    }
+                    t += 0.25;
+                }
+                px = q[0];
+                py = q[1];
+            }
+        }
+    }
+
+    /// `createBurst`
+    fn burst(&self, ps: &mut Particles, e: &Explosion) {
+        let gx = ps.r.next_gaussian() * 0.05;
+        let gz = ps.r.next_gaussian() * 0.05;
+        for _ in 0..70 {
+            let mx = self.motion[0] * 0.5 + ps.r.next_gaussian() * 0.15 + gx;
+            let mz = self.motion[2] * 0.5 + ps.r.next_gaussian() * 0.15 + gz;
+            let my = self.motion[1] * 0.5 + ps.r.next_double() * 0.5;
+            self.particle(ps, [mx, my, mz], e);
+        }
     }
 }
