@@ -46,7 +46,6 @@ AI：
 - [ ] 生物裝備耗損到壞掉時保留數量 0 的物品堆（原版行為）
 - [ ] 實體依區塊分組（`Chunk.entityLists`），影響 `getEntitiesWithinAABB` 的順序與推擠的順序
 - [ ] 實體（生物、掉落物、箭、礦車）穿越傳送門（`Entity.travelToDimension`），目前只有玩家會傳送
-- [ ] 實體陰影（`Render.renderShadow`）、名牌（`renderLivingLabel`）
 
 ## 3. 方塊與世界
 

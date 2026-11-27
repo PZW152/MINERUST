@@ -3320,6 +3320,96 @@ impl Game {
         }
     }
 
+    /// `Render.renderShadow` (fancy graphics only): the shadow texture on
+    /// the tops of the full blocks under an entity at `p` (its interpolated
+    /// position), fading with height and with distance from the camera.
+    /// `sh` is `getShadowSize`.
+    pub(super) fn draw_shadow(
+        &self,
+        out: &mut Vec<crate::render::mesher::Vertex>,
+        p: [f64; 3],
+        sh: f64,
+        size: f32,
+        opaque: f32,
+        eye: [f64; 3],
+    ) {
+        if size <= 0.0 || !self.settings().fancy_graphics {
+            return;
+        }
+        let Some(tex) = self.atlas.mob_tex("../misc/shadow") else {
+            return;
+        };
+        // doRenderShadowAndFire: getDistanceToCamera
+        let d2 = (p[0] - eye[0]).powi(2) + (p[1] - eye[1]).powi(2) + (p[2] - eye[2]).powi(2);
+        let opacity = ((1.0 - d2 / 256.0) * opaque as f64) as f32;
+        if opacity <= 0.0 {
+            return;
+        }
+        let w = &self.world;
+        let sub = client_skylight_subtracted();
+        // World.getBlockLightValue (the client's skylightSubtracted)
+        let light = |x: i32, y: i32, z: i32| {
+            (w.light(true, x, y, z) - sub)
+                .max(w.light(false, x, y, z))
+                .clamp(0, 15)
+        };
+        let s = size as f64;
+        let (px, py, pz) = (p[0], p[1] + sh, p[2]);
+        let (x0, x1) = (math::floor_double(px - s), math::floor_double(px + s));
+        let (y0, y1) = (math::floor_double(py - s), math::floor_double(py));
+        let (z0, z1) = (math::floor_double(pz - s), math::floor_double(pz + s));
+        let r = tex.rect;
+        let k = 64.0 / tex.size; // shadow.png is 64 x 64
+        let uv = |u: f32, v: f32| [r[0] + (r[2] - r[0]) * u * k, r[1] + (r[3] - r[1]) * v * k];
+        for x in x0..=x1 {
+            for y in y0..=y1 {
+                for z in z0..=z1 {
+                    let id = w.peek_block(x, y - 1, z);
+                    if block::material(id) == block::Material::Air || light(x, y, z) <= 3 {
+                        continue;
+                    }
+                    // renderShadowOnBlock: renderAsNormalBlock only
+                    if !block::info(id).normal {
+                        continue;
+                    }
+                    let a = (opacity as f64 - (py - y as f64) / 2.0)
+                        * 0.5
+                        * self.light_table[light(x, y, z) as usize] as f64;
+                    if a < 0.0 {
+                        continue;
+                    }
+                    let a = a.min(1.0);
+                    let (bx0, bx1) = (x as f64, x as f64 + 1.0);
+                    let (bz0, bz1) = (z as f64, z as f64 + 1.0);
+                    let by = y as f64 + 0.015625;
+                    let u0 = ((px - bx0) / 2.0 / s + 0.5) as f32;
+                    let u1 = ((px - bx1) / 2.0 / s + 0.5) as f32;
+                    let v0 = ((pz - bz0) / 2.0 / s + 0.5) as f32;
+                    let v1 = ((pz - bz1) / 2.0 / s + 0.5) as f32;
+                    let c = [255, 255, 255, (a * 255.0) as u8];
+                    let vtx = |x: f64, z: f64, t: [f32; 2]| crate::render::mesher::Vertex {
+                        pos: [
+                            (x - eye[0]) as f32,
+                            (by - eye[1]) as f32,
+                            (z - eye[2]) as f32,
+                        ],
+                        uv: t,
+                        color: c,
+                        light: [240, 240, 0, 0],
+                    };
+                    let q = [
+                        vtx(bx0, bz0, uv(u0, v0)),
+                        vtx(bx0, bz1, uv(u0, v1)),
+                        vtx(bx1, bz1, uv(u1, v1)),
+                        vtx(bx1, bz0, uv(u1, v0)),
+                    ];
+                    out.extend_from_slice(&q);
+                    out.extend_from_slice(&[q[3], q[2], q[1], q[0]]);
+                }
+            }
+        }
+    }
+
     /// `EntityLivingBase.swingItem`: a swing starts unless one is in its
     /// first half.
     fn swing_item(&mut self) {
@@ -5768,7 +5858,31 @@ impl Game {
                     );
                 }
             }
-            // Render.doRenderShadowAndFire
+            // Render.doRenderShadowAndFire: the shadow first
+            {
+                use crate::entity::mob::Kind;
+                // RendererLivingEntity's shadowSize per renderer
+                let mut size = match m.kind {
+                    Kind::Pig | Kind::Sheep | Kind::Cow | Kind::Mooshroom | Kind::Squid => 0.7,
+                    Kind::Chicken => 0.3,
+                    Kind::Ocelot => 0.4,
+                    Kind::Horse => 0.75,
+                    Kind::Spider => 1.0,
+                    Kind::CaveSpider => 0.7,
+                    Kind::Silverfish => 0.3,
+                    Kind::Bat | Kind::Slime | Kind::MagmaCube => 0.25,
+                    // RenderVillager.preRenderCallback
+                    Kind::Villager if m.flags & 16 != 0 => 0.25,
+                    Kind::EnderCrystal => 0.0,
+                    _ => 0.5,
+                };
+                // EntityLiving.isChild halves it
+                if m.flags & 16 != 0 {
+                    size *= 0.5;
+                }
+                let height = m.bb[4] - m.bb[1];
+                self.draw_shadow(&mut translucent, p, height / 2.0, size, 1.0, eye);
+            }
             if m.fire {
                 entities::on_fire(
                     &mut dynamic,
@@ -5803,6 +5917,46 @@ impl Game {
         self.draw_tables(&mut dynamic, eye, partial);
         self.draw_player(&mut dynamic, partial);
         self.draw_orbs(&mut translucent, eye, partial);
+        // Render.doRenderShadowAndFire for the other entities: boats,
+        // minecarts, primed TNT and falling blocks (shadowSize 0.5,
+        // getShadowSize 0), experience orbs (0.15 at 0.75, 0.5 high)
+        {
+            use crate::entity::vehicle::Vehicle;
+            let mut shadows: Vec<([f64; 3], f64, f32, f32)> = Vec::new();
+            let tp = partial as f64;
+            for c in &self.boats {
+                let e = c.v.e();
+                let p = [
+                    e.last_tick[0] + (e.pos[0] - e.last_tick[0]) * tp,
+                    e.last_tick[1] + (e.pos[1] - e.last_tick[1]) * tp,
+                    e.last_tick[2] + (e.pos[2] - e.last_tick[2]) * tp,
+                ];
+                match &c.v {
+                    Vehicle::Boat(_) | Vehicle::Cart(_) => shadows.push((p, 0.0, 0.5, 1.0)),
+                    Vehicle::Orb(o) => shadows.push((p, o.e.height as f64 / 2.0, 0.15, 0.75)),
+                    _ => {}
+                }
+            }
+            for &(pos, prev, _) in &self.tnt {
+                let p = [
+                    prev[0] + (pos[0] - prev[0]) * tp,
+                    prev[1] + (pos[1] - prev[1]) * tp,
+                    prev[2] + (pos[2] - prev[2]) * tp,
+                ];
+                shadows.push((p, 0.0, 0.5, 1.0));
+            }
+            for f in &self.falling {
+                let p = [
+                    f.prev[0] + (f.pos[0] - f.prev[0]) * tp,
+                    f.prev[1] + (f.pos[1] - f.prev[1]) * tp,
+                    f.prev[2] + (f.pos[2] - f.prev[2]) * tp,
+                ];
+                shadows.push((p, 0.0, 0.5, 1.0));
+            }
+            for (p, sh, size, op) in shadows {
+                self.draw_shadow(&mut translucent, p, sh, size, op, eye);
+            }
+        }
         let sp = self.server_partial();
         if let Some(at) = self.atlas.mob_tex("arrow") {
             for a in &self.arrows {
@@ -6104,6 +6258,8 @@ impl Game {
                 self.player.yaw,
                 light,
             );
+            // RenderItem: shadowSize 0.15, shadowOpaque 0.75
+            self.draw_shadow(&mut translucent, p, 0.125, 0.15, 0.75, eye);
         }
         let mut crack: Vec<crate::render::mesher::Vertex> = Vec::new();
         if let Some(d) = self.dig {

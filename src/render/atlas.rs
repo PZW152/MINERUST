@@ -617,7 +617,7 @@ impl Atlas {
             .chain(crate::render::hanging::TEXTURES)
             .chain([crate::render::model::BOOK_TEXTURE])
             .chain(crate::render::model::ARMOR_TEXTURES)
-            .chain(["../misc/pumpkinblur", "../misc/vignette"])
+            .chain(["../misc/pumpkinblur", "../misc/vignette", "../misc/shadow"])
         {
             let path = match name.strip_prefix("../") {
                 Some(rest) => format!("assets/minecraft/textures/{rest}.png"),
