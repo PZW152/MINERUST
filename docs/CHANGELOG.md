@@ -9,7 +9,8 @@
 
 ## 2026-11-28
 
-- Entity shadows: Render.renderShadow with fancy graphics (shadow.png on the tops of full blocks under the entity, fading with height, light and camera distance) for every mob with its renderer's shadowSize (children halved, the baby villager's quirk), dropped items and experience orbs (0.15 at 0.75), boats, minecarts, primed TNT and falling blocks
+- Villager trading: EntityVillager's offers by profession (villagersSellingList / blacksmithSellingList, enchanted books and tools, adjustProbability, one new offer at a time, Collections.shuffle), MerchantRecipe(List) with canRecipeBeUsed and addToListWithCheck, ContainerMerchant / InventoryMerchant / SlotMerchantResult (both price orders, shift-click retrying, prices back on close), useRecipe (seven uses, wealth, the yes/no sounds), the restock 40 ticks after the last offer is used (more uses for spent offers, a new offer, Regeneration), EntityAITradePlayer and EntityAILookAtTradePlayer, Offers and Riches in NBT, and GuiMerchant (buttons, the offer's items and tooltips, the crosses on a spent offer)
+- `3af8b24` Entity shadows: Render.renderShadow with fancy graphics (shadow.png on the tops of full blocks under the entity, fading with height, light and camera distance) for every mob with its renderer's shadowSize (children halved, the baby villager's quirk), dropped items and experience orbs (0.15 at 0.75), boats, minecarts, primed TNT and falling blocks
 ## 2026-11-23
 
 - Launch hand-thrown projectiles and bow shots near the player's eyes instead of at their feet

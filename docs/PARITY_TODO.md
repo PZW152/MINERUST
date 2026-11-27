@@ -21,7 +21,7 @@
 
 AI：
 - [ ] 馬：還借用舊的 `animal()`。需要 `EntityAIRunAroundLikeCrazy`、`Panic`、`Mate`、`FollowParent`、`Wander`、`WatchClosest`、`LookIdle`
-- [ ] 村民：交易、開門、回屋、繁殖、跟隨鐵魔像、`setLookingForHome`（都需要村莊資料 `VillageCollection`）
+- [ ] 村民：開門、回屋、繁殖、跟隨鐵魔像、`setLookingForHome`、交易後的聲望與開心粒子（都需要村莊資料 `VillageCollection`；交易已完成）
 - [ ] 鐵魔像：`DefendVillage`、`MoveThroughVillage`、`MoveTowardsRestriction`（需要村莊資料）；拿花（`setHoldingRose` 只有計時，沒有畫）
 - [ ] 狼的乞食歪頭與甩水動畫、被非玩家打時傷害減半；豹貓 `OcelotSit` 對床與「箱子有人在用」的判斷
 - [ ] 終界使者、烈焰使者、惡魂、蝙蝠、魷魚的 `updateEntityActionState`（`extra.rs`、`nether.rs`）逐行對照原始碼
@@ -98,10 +98,10 @@ AI：
 - [ ] 騎乘：馬（跳躍、鞍、馬鎧、箱子、物品欄）；騎乘時玩家模型的坐姿（`ModelBiped.isRiding`）
 - [ ] 礦車：漏斗礦車的吸取、指令方塊與生怪磚礦車、觸發鐵軌、`MovingSoundMinecart` 的連續音效、騎乘中生物的存檔（`Riding`）
 - [ ] 掉落物改為客戶端自行模擬（原版客戶端也跑 `EntityItem.onUpdate`，伺服器每 20 tick 校正）
-- [ ] 經驗來源：繁殖、村民交易
+- [ ] 經驗來源：繁殖
 
 介面：
-- [ ] 信標、馬的物品欄、村民交易、書與羽毛筆
+- [ ] 信標、馬的物品欄、書與羽毛筆
 - [ ] 統計與成就：已有統計檔（`stats/<uuid>.json`，`src/stats.rs`）、成就樹、成就提示框（`GuiAchievement`）與
       「Taking Inventory」。待做：`StatList` 的一般統計、其餘 32 個成就的觸發點、`GuiStats`、`GuiAchievements`、
       `/achievement` 指令、成就的聊天公告

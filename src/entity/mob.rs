@@ -441,6 +441,13 @@ pub struct Mob {
     pub persistent: bool,
     /// `EntityLiving.getCustomNameTag` (data watcher 10); empty is none.
     pub custom_name: String,
+    /// `EntityVillager.buyingList`, `wealth`, `timeUntilReset`,
+    /// `needsInitilization`, and `buyingPlayer` being the player.
+    pub offers: Option<Vec<crate::merchant::Recipe>>,
+    pub wealth: i32,
+    pub reset_time: i32,
+    pub needs_init: bool,
+    pub customer: bool,
     // per-kind state
     /// Sheep fleece colour / villager profession / skeleton type.
     pub variant: i32,
@@ -808,6 +815,11 @@ impl Mob {
             kb_resist: 0.0,
             persistent: false,
             custom_name: String::new(),
+            offers: None,
+            wealth: 0,
+            reset_time: 0,
+            needs_init: false,
+            customer: false,
             variant: 0,
             sheared: false,
             fuse: 0,
@@ -2754,6 +2766,8 @@ pub struct Mobs {
     pub blast_targets: Vec<crate::world::explosion::Target>,
     next_id: u32,
     pub rand: JavaRandom,
+    /// `Collections.shuffle`'s own random (the villagers' trades)
+    pub shuffle_rand: JavaRandom,
     /// `World.difficultySetting` as of the last tick (0..3)
     pub difficulty: i32,
 }
@@ -2772,6 +2786,7 @@ impl Default for Mobs {
             next_id: 1,
             difficulty: 2,
             rand: JavaRandom::new(0x6D6F62),
+            shuffle_rand: JavaRandom::new(0x7368756666),
         }
     }
 }
@@ -3789,6 +3804,95 @@ impl Mobs {
         }
     }
 
+    /// `EntityVillager.interact`: anything but a spawn egg opens the trades
+    /// of a grown villager nobody else trades with.
+    pub fn villager_interact(&mut self, id: u32, held: Option<Stack>) -> bool {
+        let Some(m) = self.list.iter_mut().find(|m| m.id == id && m.health > 0.0) else {
+            return false;
+        };
+        if m.kind != Kind::Villager
+            || held.is_some_and(|s| s.id == 383)
+            || m.customer
+            || m.growing_age < 0
+        {
+            return false;
+        }
+        m.customer = true;
+        if m.offers.is_none() {
+            let mut r = std::mem::replace(&mut m.rand, JavaRandom::new(0));
+            crate::merchant::add_default(
+                &mut m.offers,
+                m.variant,
+                1,
+                &mut r,
+                &mut self.shuffle_rand,
+            );
+            m.rand = r;
+        }
+        true
+    }
+
+    /// `ContainerMerchant.onContainerClosed`: `setCustomer(null)`.
+    pub fn end_trade(&mut self, id: u32) {
+        if let Some(m) = self.list.iter_mut().find(|m| m.id == id) {
+            m.customer = false;
+        }
+    }
+
+    /// `EntityVillager.useRecipe` for the offer at `index`.
+    pub fn villager_traded(&mut self, id: u32, index: usize, out: &mut Outcome) {
+        let Some(m) = self.list.iter_mut().find(|m| m.id == id) else {
+            return;
+        };
+        let Some(list) = m.offers.as_mut() else {
+            return;
+        };
+        if index >= list.len() {
+            return;
+        }
+        list[index].uses += 1;
+        let r = list[index];
+        let last = *list.last().unwrap();
+        // livingSoundTime = -getTalkInterval
+        m.living_sound_time = -80;
+        let (v, pi) = m.sound_volume_pitch();
+        out.sounds.push(("mob.villager.yes", m.pos, v, pi));
+        if r.same_ids(&last) {
+            m.reset_time = 40;
+            m.needs_init = true;
+        }
+        if r.buy.id == 388 {
+            m.wealth += r.buy.count as i32;
+        }
+    }
+
+    /// `EntityVillager.verifySellingItem`: yes or no for what the result
+    /// slot now shows, at most once a second.
+    pub fn villager_verify(&mut self, id: u32, has: bool, out: &mut Outcome) {
+        let Some(m) = self.list.iter_mut().find(|m| m.id == id) else {
+            return;
+        };
+        if m.living_sound_time > -80 + 20 {
+            m.living_sound_time = -80;
+            let (v, pi) = m.sound_volume_pitch();
+            let s = if has {
+                "mob.villager.yes"
+            } else {
+                "mob.villager.no"
+            };
+            out.sounds.push((s, m.pos, v, pi));
+        }
+    }
+
+    /// `getRecipes` of the villager being traded with.
+    pub fn offers_of(&self, id: u32) -> Vec<crate::merchant::Recipe> {
+        self.list
+            .iter()
+            .find(|m| m.id == id)
+            .and_then(|m| m.offers.clone())
+            .unwrap_or_default()
+    }
+
     /// `EntityLivingBase.collideWithNearbyEntities` for every mob, and the
     /// player's own: each pushes what its box, widened 0.2 sideways,
     /// touches (`applyEntityCollision`, both ways). Bats push nothing and
@@ -4058,7 +4162,13 @@ impl Mobs {
                 v.push(("Color", Nbt::Byte(m.variant as i8)));
                 v.push(("Sheared", Nbt::Byte(m.sheared as i8)));
             }
-            Kind::Villager => v.push(("Profession", Nbt::Int(m.variant))),
+            Kind::Villager => {
+                v.push(("Profession", Nbt::Int(m.variant)));
+                v.push(("Riches", Nbt::Int(m.wealth)));
+                if let Some(o) = &m.offers {
+                    v.push(("Offers", crate::merchant::list_to_nbt(o)));
+                }
+            }
             Kind::Pig => v.push(("Saddle", Nbt::Byte(m.saddled as i8))),
             Kind::Skeleton => v.push(("SkeletonType", Nbt::Byte(m.variant as i8))),
             Kind::Slime | Kind::MagmaCube => v.push(("Size", Nbt::Int(m.variant - 1))),
@@ -4163,7 +4273,13 @@ impl Mobs {
                 m.variant = t.int("Color").unwrap_or(0) as i32;
                 m.sheared = t.int("Sheared").unwrap_or(0) != 0;
             }
-            Kind::Villager => m.variant = t.int("Profession").unwrap_or(0) as i32,
+            Kind::Villager => {
+                m.variant = t.int("Profession").unwrap_or(0) as i32;
+                m.wealth = t.int("Riches").unwrap_or(0) as i32;
+                if let Some(o) = t.get("Offers") {
+                    m.offers = Some(crate::merchant::list_from_nbt(o));
+                }
+            }
             Kind::Skeleton => {
                 m.variant = t.int("SkeletonType").unwrap_or(0) as i32;
                 m.set_position(at[0], at[1], at[2]);
@@ -4519,6 +4635,34 @@ fn tick_mob(
         m.conversion -= boost;
         if m.conversion <= 0 {
             m.convert_now = true;
+        }
+    }
+    // EntityVillager.updateAITick: after the last trade of the list, new
+    // offers (and more uses for the used-up ones) once nobody trades
+    if m.kind == Kind::Villager && !m.customer && m.reset_time > 0 {
+        m.reset_time -= 1;
+        if m.reset_time <= 0 {
+            if m.needs_init {
+                let mut r = std::mem::replace(&mut m.rand, JavaRandom::new(0));
+                if let Some(list) = m.offers.as_mut() {
+                    if list.len() > 1 {
+                        for rec in list.iter_mut() {
+                            if rec.disabled() {
+                                rec.max_uses += r.next_int_n(6) + r.next_int_n(6) + 2;
+                            }
+                        }
+                    }
+                }
+                let mut sr = JavaRandom::new(r.next_long() ^ 0x7368);
+                crate::merchant::add_default(&mut m.offers, m.variant, 1, &mut r, &mut sr);
+                m.rand = r;
+                m.needs_init = false;
+            }
+            m.potions.add_effect(crate::potion::Effect::new(
+                crate::potion::REGENERATION,
+                200,
+                0,
+            ));
         }
     }
     // EntityAgeable.onLivingUpdate

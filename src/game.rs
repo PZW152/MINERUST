@@ -707,6 +707,9 @@ impl Game {
                 enchant: [0; 3],
                 name_seed: 0,
                 repair_cost: 0,
+                offers: Vec::new(),
+                merchant_name: String::new(),
+                merchant_index: 0,
                 dropper: false,
             },
             gui: Default::default(),
@@ -4065,9 +4068,11 @@ impl Game {
                 .anvil
                 .as_ref()
                 .map_or(String::new(), |a| a.name.clone());
+            let offers = self.view.offers.clone();
             let mut ctx =
                 crate::container::Ctx::new(&mut self.view.inv, &mut tile, window, creative)
-                    .with_repair(&name, self.stats.xp_level);
+                    .with_repair(&name, self.stats.xp_level)
+                    .with_merchant(&offers, self.view.merchant_index);
             crate::container::slot_click(&mut ctx, &mut self.client_drag, c.slot, c.button, c.mode);
             let r = ctx.result();
             self.view.result = r;
@@ -4980,6 +4985,39 @@ impl Game {
                 let ui = crate::gui::Ui::new(&atlas, w, h);
                 if let Some(a) = self.anvil.as_mut() {
                     a.field.click(&ui, (m.0 as f32, m.1 as f32), button as u8);
+                }
+            }
+            // GuiMerchant.actionPerformed: the next and previous buttons
+            if pressed && button == 0 {
+                if let Open::Merchant(_) = self.view.open {
+                    let (w, h) = self.gui_size();
+                    if let Some(d) = crate::gui_container::merchant_button_at(
+                        &self.view,
+                        w as i32,
+                        h as i32,
+                        self.gui_mouse_i(),
+                    ) {
+                        let i = (self.view.merchant_index as i32 + d).max(0) as usize;
+                        self.view.merchant_index = i;
+                        // ContainerMerchant.setCurrentRecipeIndex on the client
+                        let creative = self.mode == GameMode::Creative;
+                        let offers = self.view.offers.clone();
+                        let mut tile = std::mem::take(&mut self.view.tile_slots);
+                        {
+                            let mut c = crate::container::Ctx::new(
+                                &mut self.view.inv,
+                                &mut tile,
+                                crate::container::Window::Merchant,
+                                creative,
+                            )
+                            .with_merchant(&offers, i);
+                            c.set_offer_index(i);
+                        }
+                        self.view.tile_slots = tile;
+                        let _ = self.sim.commands.send(Command::MerchantSelect(i));
+                        self.sound("random.click", None, 1.0, 1.0);
+                        return Request::None;
+                    }
                 }
             }
             // GuiEnchantment.mouseClicked: the three buttons

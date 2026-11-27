@@ -167,6 +167,8 @@ pub enum Open {
     Enchant(Pos),
     /// `ContainerRepair` at an anvil
     Anvil(Pos),
+    /// `ContainerMerchant` with the villager of this id
+    Merchant(u32),
 }
 
 /// The `Container` class an open window uses.
@@ -182,6 +184,7 @@ pub fn window_of(o: &Open) -> Window {
         Open::Hopper(_) => Window::Hopper,
         Open::Enchant(_) => Window::Enchant,
         Open::Anvil(_) => Window::Repair,
+        Open::Merchant(_) => Window::Merchant,
     }
 }
 
@@ -203,6 +206,12 @@ pub struct InvView {
     pub name_seed: i64,
     /// `ContainerRepair.maximumCost` (`S31` bar 0).
     pub repair_cost: i32,
+    /// `MC|TrList`: the villager's offers, and the window's title (its
+    /// custom name, empty for `entity.Villager.name`).
+    pub offers: Vec<crate::merchant::Recipe>,
+    pub merchant_name: String,
+    /// `GuiMerchant.selectedMerchantRecipe`
+    pub merchant_index: usize,
     /// The open dispenser window is a dropper's (`container.dropper`).
     pub dropper: bool,
 }
@@ -274,6 +283,14 @@ pub struct Play {
     pub enchant_rand: JavaRandom,
     /// `ContainerRepair.inputSlots` and `repairedItemName`.
     pub repair_slots: [Option<Stack>; 2],
+    /// `InventoryMerchant`: two prices and the goods, the selected offer,
+    /// the villager's offers as last read, and what the last click did
+    /// (`useRecipe` indexes, `verifySellingItem` results).
+    pub merchant_slots: [Option<Stack>; 3],
+    pub merchant_index: usize,
+    pub offers: Vec<crate::merchant::Recipe>,
+    pub merchant_name: String,
+    pub merchant_fx: (Vec<usize>, Vec<bool>),
     /// `EntityPlayer.theInventoryEnderChest`
     pub ender: [Option<Stack>; 27],
     pub repair_name: String,
@@ -496,6 +513,9 @@ impl InvView {
             enchant: [0; 3],
             name_seed: 0,
             repair_cost: 0,
+            offers: Vec::new(),
+            merchant_name: String::new(),
+            merchant_index: 0,
             dropper: false,
         }
     }
@@ -533,6 +553,11 @@ impl Play {
             sign_open: None,
             enchant_slot: [None],
             repair_slots: [None; 2],
+            merchant_slots: [None; 3],
+            merchant_index: 0,
+            offers: Vec::new(),
+            merchant_name: String::new(),
+            merchant_fx: (Vec::new(), Vec::new()),
             ender: [None; 27],
             repair_name: String::new(),
             xp_level: 0,
@@ -584,6 +609,13 @@ impl Play {
             enchant: self.enchant_levels,
             name_seed: self.name_seed,
             repair_cost,
+            offers: if matches!(self.open, Open::Merchant(_)) {
+                self.offers.clone()
+            } else {
+                Vec::new()
+            },
+            merchant_name: self.merchant_name.clone(),
+            merchant_index: self.merchant_index,
             dropper: matches!(&self.open, Open::Dispenser(p)
                 if matches!(self.tiles.get(p), Some(Tile::Dispenser { dropper: true, .. }))),
         }
@@ -1880,6 +1912,7 @@ impl Play {
             },
             Open::Enchant(_) => self.enchant_slot.to_vec(),
             Open::Anvil(_) => self.repair_slots.to_vec(),
+            Open::Merchant(_) => self.merchant_slots.to_vec(),
             Open::Ender(_) => self.ender.to_vec(),
             Open::Chest(ps) => {
                 let mut v = Vec::new();
@@ -1930,6 +1963,7 @@ impl Play {
             }
             Open::Enchant(_) => copy(&mut self.enchant_slot, v),
             Open::Anvil(_) => copy(&mut self.repair_slots, v),
+            Open::Merchant(_) => copy(&mut self.merchant_slots, v),
             Open::Ender(_) => copy(&mut self.ender, v),
             Open::Chest(ps) => {
                 for (k, p) in ps.iter().enumerate() {
@@ -1965,10 +1999,13 @@ impl Play {
         let mut drag = std::mem::take(&mut self.drag);
         let fx = {
             let mut c = Ctx::new(&mut self.inv, &mut tile, window, creative)
-                .with_repair(&self.repair_name, self.xp_level);
+                .with_repair(&self.repair_name, self.xp_level)
+                .with_merchant(&self.offers, self.merchant_index);
             container::slot_click(&mut c, &mut drag, slot, button, mode);
             c.fx
         };
+        self.merchant_fx.0.extend(fx.traded.iter().copied());
+        self.merchant_fx.1.extend(fx.verified.iter().copied());
         self.drag = drag;
         let enchant_before = self.enchant_slot[0];
         self.store_tile_vec(&tile);
@@ -2029,6 +2066,28 @@ impl Play {
             1.0,
             pitch,
         ));
+    }
+
+    /// `MC|TrSel`: `ContainerMerchant.setCurrentRecipeIndex`.
+    pub fn select_offer(&mut self, index: usize) {
+        if !matches!(self.open, Open::Merchant(_)) {
+            return;
+        }
+        self.merchant_index = index;
+        let mut inv = self.inv.clone();
+        let mut tile = self.merchant_slots.to_vec();
+        let creative = self.mode == GameMode::Creative;
+        let fx = {
+            let mut c = Ctx::new(&mut inv, &mut tile, Window::Merchant, creative)
+                .with_merchant(&self.offers, index);
+            c.set_offer_index(index);
+            c.fx
+        };
+        for k in 0..3 {
+            self.merchant_slots[k] = tile[k];
+        }
+        self.merchant_fx.1.extend(fx.verified);
+        self.inv_dirty = true;
     }
 
     /// `MC|ItemName`: `ContainerRepair.updateItemName` with the name
@@ -2165,6 +2224,14 @@ impl Play {
                 self.throw(s, &mut rnd);
             }
         }
+        // ContainerMerchant.onContainerClosed: the prices go back out
+        for k in 0..2 {
+            if let Some(s) = self.merchant_slots[k].take() {
+                self.throw(s, &mut rnd);
+            }
+        }
+        self.merchant_slots[2] = None;
+        self.merchant_index = 0;
         self.repair_name.clear();
         self.enchant_levels = [0; 3];
         w.rand = rnd;

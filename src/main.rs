@@ -31,6 +31,7 @@ mod item_use;
 mod java;
 mod lang;
 mod menu;
+mod merchant;
 mod panorama;
 mod particles;
 mod play;

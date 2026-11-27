@@ -39,6 +39,8 @@ pub enum SlotKind {
     Enchant,
     /// `ContainerRepair$2`: the anvil's output
     RepairOut,
+    /// `SlotMerchantResult`
+    MerchantOut,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -71,6 +73,8 @@ pub enum Window {
     Enchant,
     /// `ContainerRepair`: the two inputs are the tile slots.
     Repair,
+    /// `ContainerMerchant`: the two prices and the goods are the tile slots.
+    Merchant,
     /// `GuiContainerCreative$ContainerCreative`: the 45 item-list slots
     /// (the tile slots) and the hotbar.
     Creative,
@@ -228,6 +232,12 @@ impl Window {
                 v.push(slot(Inv::Tile, 0, SlotKind::Enchant, 25, 47));
                 player_slots(&mut v, 84);
             }
+            Window::Merchant => {
+                v.push(slot(Inv::Tile, 0, SlotKind::Plain, 36, 53));
+                v.push(slot(Inv::Tile, 1, SlotKind::Plain, 62, 53));
+                v.push(slot(Inv::Tile, 2, SlotKind::MerchantOut, 120, 53));
+                player_slots(&mut v, 84);
+            }
             Window::Repair => {
                 v.push(slot(Inv::Tile, 0, SlotKind::Plain, 27, 47));
                 v.push(slot(Inv::Tile, 1, SlotKind::Plain, 76, 47));
@@ -294,6 +304,11 @@ pub struct Effects {
     /// `ContainerRepair$2.onPickupFromSlot`: the anvil was used at this
     /// cost (`maximumCost`).
     pub repaired: Option<i32>,
+    /// `SlotMerchantResult.onPickupFromSlot`: `useRecipe` of this offer.
+    pub traded: Vec<usize>,
+    /// `InventoryMerchant.resetRecipeAndSlots` ends in
+    /// `verifySellingItem`: whether the goods slot holds something.
+    pub verified: Vec<bool>,
 }
 
 /// The drag-splitting state of a `Container`.
@@ -321,6 +336,10 @@ pub struct Ctx<'a> {
     repair_name: String,
     xp_level: i32,
     repair: crate::repair::Repair,
+    /// The villager's offers, `currentRecipeIndex` and `currentRecipe`.
+    offers: Vec<crate::merchant::Recipe>,
+    offer_index: usize,
+    current: Option<usize>,
 }
 
 impl<'a> Ctx<'a> {
@@ -343,6 +362,9 @@ impl<'a> Ctx<'a> {
             repair_name: String::new(),
             xp_level: 0,
             repair: Default::default(),
+            offers: Vec::new(),
+            offer_index: 0,
+            current: None,
         };
         c.inv.grid_size = window.grid_width().max(2);
         c.craft_changed();
@@ -359,6 +381,61 @@ impl<'a> Ctx<'a> {
         self.xp_level = xp_level;
         self.craft_changed();
         self
+    }
+
+    /// The villager's offers and the one chosen in the window
+    /// (`setCurrentRecipeIndex`).
+    pub fn with_merchant(mut self, offers: &[crate::merchant::Recipe], index: usize) -> Self {
+        self.offers = offers.to_vec();
+        self.offer_index = index;
+        // no resetRecipeAndSlots here: the goods slot is as it was left
+        if self.window == Window::Merchant {
+            self.current = self.find_offer();
+        }
+        self
+    }
+
+    /// The offer `resetRecipeAndSlots` would pick, without the slot change.
+    fn find_offer(&self) -> Option<usize> {
+        let mut a = self.tile.first().copied().flatten();
+        let mut b = self.tile.get(1).copied().flatten();
+        if a.is_none() {
+            a = b;
+            b = None;
+        }
+        let a = a?;
+        let ok = |k: Option<usize>| k.filter(|&k| !self.offers[k].disabled());
+        if let Some(k) = ok(crate::merchant::can_recipe_be_used(
+            &self.offers,
+            a,
+            b,
+            self.offer_index,
+        )) {
+            return Some(k);
+        }
+        let b = b?;
+        ok(crate::merchant::can_recipe_be_used(
+            &self.offers,
+            b,
+            Some(a),
+            self.offer_index,
+        ))
+    }
+
+    /// `InventoryMerchant.resetRecipeAndSlots`
+    fn merchant_reset(&mut self) {
+        self.current = self.find_offer();
+        let out = self.current.map(|k| self.offers[k].sell);
+        if let Some(t) = self.tile.get_mut(2) {
+            *t = out;
+        }
+        self.fx.verified.push(out.is_some());
+    }
+
+    /// `ContainerMerchant.setCurrentRecipeIndex`
+    pub fn set_offer_index(&mut self, index: usize) {
+        self.offer_index = index;
+        self.merchant_reset();
     }
 
     /// `ContainerRepair.maximumCost`
@@ -439,6 +516,11 @@ impl<'a> Ctx<'a> {
                 if self.window == Window::Repair {
                     self.craft_changed();
                 }
+                // InventoryMerchant.setInventorySlotContents: the two
+                // price slots reset the goods
+                if self.window == Window::Merchant && d.index < 2 {
+                    self.merchant_reset();
+                }
             }
         }
     }
@@ -464,7 +546,9 @@ impl<'a> Ctx<'a> {
         }
         // InventoryCraftResult and TileEntityBrewingStand hand out the
         // whole stack whatever is asked for.
-        let whole = d.inv == Inv::Result || self.window == Window::Brewing && d.inv == Inv::Tile;
+        let whole = d.inv == Inv::Result
+            || self.window == Window::Brewing && d.inv == Inv::Tile
+            || d.kind == SlotKind::MerchantOut;
         if whole || cur.count <= n {
             self.set(i, None);
             return Some(cur);
@@ -481,7 +565,10 @@ impl<'a> Ctx<'a> {
     fn valid(&self, i: usize, s: &Stack) -> bool {
         match self.slots[i].kind {
             SlotKind::Plain | SlotKind::Enchant => true,
-            SlotKind::CraftResult | SlotKind::FurnaceOut | SlotKind::RepairOut => false,
+            SlotKind::CraftResult
+            | SlotKind::FurnaceOut
+            | SlotKind::RepairOut
+            | SlotKind::MerchantOut => false,
             SlotKind::Armor(t) => match armor_type(s.id) {
                 Some(a) => a == t,
                 // pumpkins and skulls go on the head
@@ -585,6 +672,50 @@ impl<'a> Ctx<'a> {
                 }
             }
             SlotKind::FurnaceOut => self.on_crafting(i, s),
+            SlotKind::MerchantOut => {
+                // SlotMerchantResult.onPickupFromSlot: doTrade either way round
+                let Some(k) = self.current else { return };
+                let r = self.offers[k];
+                let a = self.tile[0];
+                let b = self.tile[1];
+                let take = |x: Option<Stack>,
+                            y: Option<Stack>|
+                 -> Option<(Option<Stack>, Option<Stack>)> {
+                    let x = x?;
+                    if x.id != r.buy.id {
+                        return None;
+                    }
+                    let less = |s: Stack, n: u32| {
+                        if s.count > n {
+                            Some(Stack {
+                                count: s.count - n,
+                                ..s
+                            })
+                        } else {
+                            None
+                        }
+                    };
+                    match (r.buy_b, y) {
+                        (Some(rb), Some(y)) if rb.id == y.id => {
+                            Some((less(x, r.buy.count), less(y, rb.count)))
+                        }
+                        (None, None) => Some((less(x, r.buy.count), None)),
+                        _ => None,
+                    }
+                };
+                let done = match take(a, b) {
+                    Some((na, nb)) => Some((na, nb)),
+                    None => take(b, a).map(|(nb, na)| (na, nb)),
+                };
+                if let Some((na, nb)) = done {
+                    self.offers[k].uses += 1;
+                    self.fx.traded.push(k);
+                    self.tile[0] = na;
+                    self.merchant_reset();
+                    self.tile[1] = nb;
+                    self.merchant_reset();
+                }
+            }
             SlotKind::RepairOut => {
                 // ContainerRepair$2.onPickupFromSlot; the level cost and the
                 // anvil's wear are the caller's
@@ -784,6 +915,22 @@ impl<'a> Ctx<'a> {
                     self.merge(&mut s, 5, 41, true)
                 } else {
                     self.merge(&mut s, 0, 5, false)
+                }
+            }
+            // ContainerMerchant.transferStackInSlot
+            Window::Merchant => {
+                if i == 2 {
+                    self.merge(&mut s, 3, 39, true)
+                } else if i != 0 && i != 1 {
+                    if (3..30).contains(&i) {
+                        self.merge(&mut s, 30, 39, false)
+                    } else if (30..39).contains(&i) {
+                        self.merge(&mut s, 3, 30, false)
+                    } else {
+                        true
+                    }
+                } else {
+                    self.merge(&mut s, 3, 39, false)
                 }
             }
             Window::Repair => {

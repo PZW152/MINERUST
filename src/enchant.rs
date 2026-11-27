@@ -67,6 +67,11 @@ const ENCHANTMENTS: [(i32, i32, Ench, Type); 24] = [
     (62, 2, Ench::FishingSpeed, Type::FishingRod),
 ];
 
+/// `Enchantment.enchantmentsBookList`: every enchantment, by id.
+pub fn all_ids() -> Vec<i32> {
+    ENCHANTMENTS.iter().map(|e| e.0).collect()
+}
+
 fn max_level(e: Ench) -> i32 {
     match e {
         Ench::Protection(_) => 4,

@@ -18,6 +18,77 @@ const CHEST: (f32, f32) = (768.0, 0.0);
 const BREWING: (f32, f32) = (256.0, 512.0);
 const DISPENSER: (f32, f32) = (1792.0, 512.0);
 const HOPPER: (f32, f32) = (1792.0, 768.0);
+const MERCHANT: (f32, f32) = (256.0, 1024.0);
+
+/// `GuiMerchant$MerchantButton`s: +1 for next, -1 for previous, when the
+/// mouse is on an enabled one.
+pub fn merchant_button_at(view: &InvView, w: i32, h: i32, mouse: (i32, i32)) -> Option<i32> {
+    let (left, top) = origin(&view.open, w, h, false);
+    let n = view.offers.len();
+    for (d, x, on) in [
+        (1, left + 120 + 27, view.merchant_index + 1 < n),
+        (-1, left + 36 - 19, view.merchant_index > 0),
+    ] {
+        let (dx, dy) = (mouse.0 - x, mouse.1 - (top + 24 - 1));
+        if on && dx >= 0 && dy >= 0 && dx < 12 && dy < 19 {
+            return Some(d);
+        }
+    }
+    None
+}
+
+/// `GuiMerchant.drawScreen` after the container: the two buttons and the
+/// chosen offer's items (with their tooltips).
+fn merchant_overlay(
+    ui: &mut Ui,
+    view: &InvView,
+    left: f32,
+    top: f32,
+    mouse: (i32, i32),
+    tooltip: &dyn Fn(&Stack) -> Vec<String>,
+) -> bool {
+    let n = view.offers.len();
+    for (fwd, x, on) in [
+        (true, left + 120.0 + 27.0, view.merchant_index + 1 < n),
+        (false, left + 36.0 - 19.0, view.merchant_index > 0),
+    ] {
+        let y = top + 24.0 - 1.0;
+        let over = mouse.0 as f32 >= x
+            && mouse.1 as f32 >= y
+            && (mouse.0 as f32) < x + 12.0
+            && (mouse.1 as f32) < y + 19.0;
+        let mut u = 176.0;
+        if !on {
+            u += 24.0;
+        } else if over {
+            u += 12.0;
+        }
+        let v = if fwd { 0.0 } else { 19.0 };
+        ui.sheet(x, y, MERCHANT.0 + u, MERCHANT.1 + v, 12.0, 19.0);
+    }
+    let Some(r) = view.offers.get(view.merchant_index) else {
+        return false;
+    };
+    let mut items = vec![(r.buy, 36.0)];
+    if let Some(b) = r.buy_b {
+        items.push((b, 62.0));
+    }
+    items.push((r.sell, 120.0));
+    let mut tip = None;
+    for (s, x) in items {
+        draw_stack_with(ui, &s, left + x, top + 24.0, None);
+        let (mx, my) = (mouse.0 as f32 - left - x, mouse.1 as f32 - top - 24.0);
+        if mx >= -1.0 && my >= -1.0 && mx < 17.0 && my < 17.0 {
+            tip = Some(s);
+        }
+    }
+    if let Some(s) = tip {
+        let lines = tooltip(&s);
+        crate::screens::hovering_text(ui, &lines, mouse.0, mouse.1);
+        return true;
+    }
+    false
+}
 
 /// One active effect as `InventoryEffectRenderer` draws it: status icon
 /// index, the name line and the duration line.
@@ -103,7 +174,10 @@ fn slot_limit(d: &SlotDef) -> u32 {
 fn slot_valid(d: &SlotDef, s: &Stack) -> bool {
     match d.kind {
         SlotKind::Plain | SlotKind::Enchant => true,
-        SlotKind::CraftResult | SlotKind::FurnaceOut | SlotKind::RepairOut => false,
+        SlotKind::CraftResult
+        | SlotKind::FurnaceOut
+        | SlotKind::RepairOut
+        | SlotKind::MerchantOut => false,
         SlotKind::Armor(t) => match container::armor_type(s.id) {
             Some(a) => a == t,
             None => (s.id == 86 || s.id == 397) && t == 0,
@@ -585,6 +659,13 @@ impl GuiContainer {
                 crate::gui_repair::foreground(ui, view, lang, lf, tf, e.creative, e.xp_level);
             }
         }
+        if own {
+            if let Open::Merchant(_) = view.open {
+                if merchant_overlay(ui, view, lf, tf, f.mouse, tooltip) {
+                    return;
+                }
+            }
+        }
         if let Some(c) = cursor {
             let mut s = c;
             let mut label = None;
@@ -641,6 +722,25 @@ fn background(ui: &mut Ui, view: &InvView, left: f32, top: f32, xs: f32, ys: f32
         Open::Hopper(_) => ui.sheet(left, top, HOPPER.0, HOPPER.1, xs, ys),
         Open::Enchant(_) => ui.sheet(left, top, ENCHANT.0, ENCHANT.1, xs, ys),
         Open::Anvil(_) => crate::gui_repair::background(ui, view, left, top),
+        // GuiMerchant.drawGuiContainerBackgroundLayer: the crosses over a
+        // used-up offer
+        Open::Merchant(_) => {
+            ui.sheet(left, top, MERCHANT.0, MERCHANT.1, xs, ys);
+            if let Some(r) = view.offers.get(view.merchant_index) {
+                if r.disabled() {
+                    for y in [21.0, 51.0] {
+                        ui.sheet(
+                            left + 83.0,
+                            top + y,
+                            MERCHANT.0 + 212.0,
+                            MERCHANT.1,
+                            28.0,
+                            21.0,
+                        );
+                    }
+                }
+            }
+        }
         Open::Furnace(_) => {
             ui.sheet(left, top, FURNACE.0, FURNACE.1, xs, ys);
             if let Some((burn, cook)) = view.furnace {
@@ -740,6 +840,15 @@ fn foreground(ui: &mut Ui, view: &InvView, lang: &Lang, left: f32, top: f32, xs:
         }
         // GuiRepair draws its own title and no inventory label
         Open::Anvil(_) => return,
+        // GuiMerchant: the villager's name (or its kind) centred
+        Open::Merchant(_) => {
+            let t = if view.merchant_name.is_empty() {
+                lang.get("entity.Villager.name").to_string()
+            } else {
+                view.merchant_name.clone()
+            };
+            centered(ui, &t);
+        }
         Open::Furnace(_) => centered(ui, lang.get("container.furnace")),
         Open::Brewing(_) => centered(ui, lang.get("container.brewing")),
         Open::Dispenser(_) => centered(

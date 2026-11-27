@@ -88,6 +88,8 @@ pub enum Command {
     EnchantItem(usize),
     /// `C17PacketCustomPayload` `MC|ItemName` (the anvil's text field)
     RenameItem(String),
+    /// `MC|TrSel`: the offer chosen in the merchant window
+    MerchantSelect(usize),
     /// `C12PacketUpdateSign`
     UpdateSign([i32; 3], [String; 4]),
     /// `C01PacketChatMessage`: chat text or a command.
@@ -1293,6 +1295,7 @@ impl Sim {
                 play.xp_level = self.splayer.xp_level;
                 let spent = play.window_click(&mut self.world, slot, button, mode);
                 self.play = play;
+                self.merchant_effects();
                 if spent != 0 {
                     // EntityPlayer.addExperienceLevel(-cost)
                     let p = &mut self.splayer;
@@ -1328,9 +1331,17 @@ impl Sim {
                 self.play.inv_dirty = true;
             }
             Command::CloseWindow => {
+                // ContainerMerchant.onContainerClosed: setCustomer(null)
+                if let crate::play::Open::Merchant(id) = self.play.open {
+                    self.mobs.end_trade(id);
+                }
                 let mut play = std::mem::replace(&mut self.play, Play::new(GameMode::Survival));
                 play.close(&mut self.world);
                 self.play = play;
+            }
+            Command::MerchantSelect(i) => {
+                self.play.select_offer(i);
+                self.merchant_effects();
             }
             Command::DropHeld { all } => {
                 let mut play = std::mem::replace(&mut self.play, Play::new(GameMode::Survival));
@@ -1403,6 +1414,22 @@ impl Sim {
             } => self.ride_input(strafe, forward, jump, sneak),
             Command::Attack { id, crit, sprint } => self.attack_mob(id, crit, sprint),
             Command::PlayerState { attackable } => self.player_attackable = attackable,
+            Command::Interact { id } if self.mobs.villager_interact(id, self.play.inv.held()) => {
+                // EntityVillager.interact: setCustomer, displayGUIMerchant
+                let name = self
+                    .mobs
+                    .list
+                    .iter()
+                    .find(|m| m.id == id)
+                    .map(|m| m.custom_name.clone())
+                    .unwrap_or_default();
+                self.play.open = crate::play::Open::Merchant(id);
+                self.play.offers = self.mobs.offers_of(id);
+                self.play.merchant_name = name;
+                self.play.merchant_slots = [None; 3];
+                self.play.merchant_index = 0;
+                self.play.inv_dirty = true;
+            }
             Command::Interact { id } => {
                 let mut out = crate::entity::mob::Outcome::default();
                 let held = self.play.inv.held();
@@ -1446,6 +1473,29 @@ impl Sim {
             Command::Shutdown => {}
             _ => {}
         }
+    }
+
+    /// The villager's side of a merchant window click: `useRecipe` for each
+    /// trade, `verifySellingItem` for each new goods slot, then the window
+    /// reads the offers again.
+    fn merchant_effects(&mut self) {
+        let (traded, verified) = std::mem::take(&mut self.play.merchant_fx);
+        let crate::play::Open::Merchant(id) = self.play.open else {
+            return;
+        };
+        if traded.is_empty() && verified.is_empty() {
+            return;
+        }
+        let mut out = crate::entity::mob::Outcome::default();
+        for has in verified {
+            self.mobs.villager_verify(id, has, &mut out);
+        }
+        for k in traded {
+            self.mobs.villager_traded(id, k, &mut out);
+        }
+        self.play.offers = self.mobs.offers_of(id);
+        self.play.inv_dirty = true;
+        self.pending_out.push(out);
     }
 
     /// Brings in missing chunks around the centre, nearest first.
@@ -1608,6 +1658,19 @@ impl Sim {
         }
         let mut play = std::mem::replace(&mut self.play, Play::new(GameMode::Survival));
         play.tick(&mut self.world);
+        // Container.canInteractWith for ContainerMerchant: the villager must
+        // still have the player as its customer
+        if let crate::play::Open::Merchant(id) = play.open {
+            let ok = self
+                .mobs
+                .list
+                .iter()
+                .any(|m| m.id == id && m.customer && m.health > 0.0 && !m.dead);
+            if !ok {
+                self.mobs.end_trade(id);
+                play.close(&mut self.world);
+            }
+        }
         self.tick_daylight_detectors();
         // EntityFallingBlock.fall: attackEntityFrom(anvil / fallingBlock) on
         // every entity in the block's box
@@ -7998,6 +8061,111 @@ mod tests {
             s.map_or(true, |m| m.potions.active(potion::MOVE_SLOWDOWN)),
             "Bane of Arthropods V slows"
         );
+    }
+
+    /// `EntityVillager.interact`, `ContainerMerchant`, `useRecipe`.
+    #[test]
+    fn villagers_trade() {
+        use crate::entity::mob::Kind;
+        use crate::item::Stack;
+        let (mut sim, x, y, z) = redstone_sim();
+        arena(&mut sim, x, y, z);
+        sim.play.mode = GameMode::Survival;
+        let feet = [x as f64 + 0.5, (y + 1) as f64, z as f64 + 0.5];
+        let mut r = JavaRandom::new(9);
+        let vid = sim.mobs.spawn(
+            Kind::Villager,
+            [x as f64 + 2.5, (y + 1) as f64, z as f64 + 0.5],
+            0.0,
+            &mut r,
+        );
+        if let Some(m) = sim.mobs.list.iter_mut().find(|m| m.id == vid) {
+            m.variant = 0;
+            m.growing_age = 0;
+        }
+        let step = |sim: &mut Sim, c: &[Command]| {
+            let mut v = vec![Command::Player(feet, [-90.0, 0.0], false)];
+            v.extend_from_slice(c);
+            sim.step(&v, &mut Vec::new());
+        };
+        step(&mut sim, &[Command::Interact { id: vid }]);
+        assert!(matches!(sim.play.open, crate::play::Open::Merchant(i) if i == vid));
+        let offer = sim.play.offers[0];
+        assert!(sim.mobs.list.iter().find(|m| m.id == vid).unwrap().customer);
+        // enough of the price in the hotbar's first slot
+        sim.play.inv.main[0] = Some(Stack {
+            count: 64,
+            ..offer.buy
+        });
+        if let Some(b) = offer.buy_b {
+            sim.play.inv.main[1] = Some(Stack { count: 64, ..b });
+        }
+        let click = |sim: &mut Sim, slot: i32, mode: i32| {
+            step(
+                sim,
+                &[Command::WindowClick {
+                    slot,
+                    button: 0,
+                    mode,
+                }],
+            );
+        };
+        // hotbar slot 0 is container slot 30; put it into price slot 0
+        click(&mut sim, 30, 0);
+        click(&mut sim, 0, 0);
+        if offer.buy_b.is_some() {
+            click(&mut sim, 31, 0);
+            click(&mut sim, 1, 0);
+        }
+        assert_eq!(
+            sim.play.merchant_slots[2].map(|s| s.id),
+            Some(offer.sell.id),
+            "the goods show"
+        );
+        // shift-click the goods into the inventory
+        click(&mut sim, 2, 1);
+        let have: u32 = sim
+            .play
+            .inv
+            .main
+            .iter()
+            .flatten()
+            .filter(|s| s.id == offer.sell.id && s.id != offer.buy.id)
+            .map(|s| s.count)
+            .sum();
+        if offer.sell.id != offer.buy.id {
+            assert!(have >= offer.sell.count, "the goods arrived");
+        }
+        // Container.retrySlotClick: shift-clicking trades again while the
+        // goods come back, until the offer is used up (7) or the price runs out
+        let uses = sim
+            .mobs
+            .list
+            .iter()
+            .find(|m| m.id == vid)
+            .unwrap()
+            .offers
+            .as_ref()
+            .unwrap()[0]
+            .uses;
+        let most = (64 / offer.buy.count) as i32;
+        assert_eq!(uses, most.min(7));
+        assert_eq!(
+            sim.play.merchant_slots[0].map_or(0, |s| s.count),
+            64 - offer.buy.count * uses as u32,
+            "the price was paid"
+        );
+        // closing gives the prices back and ends the trading
+        step(&mut sim, &[Command::CloseWindow]);
+        assert!(!sim.mobs.list.iter().find(|m| m.id == vid).unwrap().customer);
+        assert!(sim.play.merchant_slots.iter().all(|s| s.is_none()));
+        // the offers survive a save
+        let t =
+            crate::entity::mob::Mobs::to_nbt(sim.mobs.list.iter().find(|m| m.id == vid).unwrap());
+        let mut other = crate::entity::mob::Mobs::default();
+        let id = other.from_nbt(&t).unwrap();
+        let back = other.list.iter().find(|m| m.id == id).unwrap();
+        assert_eq!(back.offers.as_ref().unwrap()[0].uses, uses);
     }
 
     /// `RecipeFireworks`, `ItemFirework`, `EntityFireworkRocket`.

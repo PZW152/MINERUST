@@ -1886,6 +1886,8 @@ fn build(m: &mut Mob) {
         }
         Kind::Villager => {
             t.add(0, Ai::Swimming);
+            t.add(1, Ai::Pet(Pet::TradePlayer));
+            t.add(1, Ai::Pet(Pet::LookAtTradePlayer { look_time: 0 }));
             t.add(
                 1,
                 Ai::AvoidEntity {
@@ -2079,6 +2081,10 @@ pub enum Pet {
         pos: [f64; 3],
         target: Option<Target>,
     },
+    /// `EntityAITradePlayer`: stand still for the player trading
+    TradePlayer,
+    /// `EntityAILookAtTradePlayer`: watch the player trading
+    LookAtTradePlayer { look_time: i32 },
     /// `EntityAILookAtVillager`
     LookAtVillager {
         villager: Option<u32>,
@@ -2147,7 +2153,8 @@ fn can_sit_on(w: &mut ServerWorld, p: [i32; 3]) -> bool {
 impl Pet {
     fn mutex(&self) -> i32 {
         match self {
-            Pet::Sit | Pet::Leap { .. } | Pet::OcelotSit { .. } => 5,
+            Pet::Sit | Pet::Leap { .. } | Pet::OcelotSit { .. } | Pet::TradePlayer => 5,
+            Pet::LookAtTradePlayer { .. } => 2,
             Pet::FollowOwner { .. } | Pet::TemptScared { .. } => 3,
             Pet::OcelotAttack { .. } | Pet::LookAtVillager { .. } | Pet::Mate { .. } => 3,
             Pet::Beg { .. } => 2,
@@ -2157,6 +2164,15 @@ impl Pet {
 
     fn should_execute(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
         match self {
+            // isEntityAlive, not in water, on the ground, a customer within 4
+            Pet::TradePlayer => {
+                m.health > 0.0
+                    && !m.in_water
+                    && m.on_ground
+                    && m.customer
+                    && m.dist2(cx.player.feet) <= 16.0
+            }
+            Pet::LookAtTradePlayer { .. } => m.customer,
             Pet::Sit => {
                 if !m.tamed || m.in_water || !m.on_ground {
                     return false;
@@ -2412,6 +2428,11 @@ impl Pet {
 
     fn continue_executing(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
         match self {
+            Pet::TradePlayer => self.should_execute(m, cx),
+            // EntityAIWatchClosest.continueExecuting: alive, within 8, still looking
+            Pet::LookAtTradePlayer { look_time } => {
+                cx.player.alive && m.dist2(cx.player.feet) <= 64.0 && *look_time > 0
+            }
             Pet::FollowOwner { max, .. } => {
                 !m.no_path() && m.dist2(cx.player.feet) > (*max * *max) as f64 && !m.sitting
             }
@@ -2488,6 +2509,8 @@ impl Pet {
 
     fn start_executing(&mut self, m: &mut Mob, cx: &mut Cx) {
         match self {
+            Pet::TradePlayer => m.clear_path(),
+            Pet::LookAtTradePlayer { look_time } => *look_time = 40 + m.rand.next_int_n(40),
             Pet::Sit => {
                 m.clear_path();
                 m.sitting = true;
@@ -2587,6 +2610,9 @@ impl Pet {
 
     fn reset_task(&mut self, m: &mut Mob) {
         match self {
+            // setCustomer(null)
+            Pet::TradePlayer => m.customer = false,
+            Pet::LookAtTradePlayer { .. } => {}
             Pet::Sit | Pet::OcelotSit { .. } => m.sitting = false,
             Pet::FollowOwner { old_water, .. } => {
                 m.clear_path();
@@ -2619,6 +2645,12 @@ impl Pet {
 
     fn update_task(&mut self, m: &mut Mob, cx: &mut Cx) {
         match self {
+            Pet::TradePlayer => {}
+            Pet::LookAtTradePlayer { look_time } => {
+                let v = cx.view(Target::Player).unwrap();
+                m.look_at_entity(&v, 10.0, 40.0);
+                *look_time -= 1;
+            }
             Pet::FollowOwner { speed, recalc, .. } => {
                 let v = cx.view(Target::Player).unwrap();
                 m.look_at_entity(&v, 10.0, 40.0);
