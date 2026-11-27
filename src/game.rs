@@ -441,6 +441,11 @@ pub struct Game {
     /// The latest server values of the mobs' per-tick animation counters,
     /// taken over one client tick at a time (see `merge_mobs`).
     mob_net: std::collections::HashMap<u32, MobAnim>,
+    /// `EntityPlayerSP.horseJumpPowerCounter`, `horseJumpPower` and the
+    /// jump key as it was last tick.
+    horse_jump_counter: i32,
+    horse_jump_power: f32,
+    was_jumping: bool,
     arrows: Vec<crate::sim::ArrowView>,
     /// Primed TNT: position, previous position, fuse.
     tnt: Vec<([f64; 3], [f64; 3], i32)>,
@@ -772,6 +777,9 @@ impl Game {
             next_step: 1.0,
             mobs: Vec::new(),
             mob_net: Default::default(),
+            horse_jump_counter: 0,
+            horse_jump_power: 0.0,
+            was_jumping: false,
             arrows: Vec::new(),
             tnt: Vec::new(),
             fireballs: Vec::new(),
@@ -2512,6 +2520,36 @@ impl Game {
                     sneak: i.sneak,
                 });
             }
+            // EntityPlayerSP.onLivingUpdate: charging a horse's jump
+            let jump_now = self.screen == Screen::Playing && self.input.jump;
+            if self.riding_horse() {
+                if self.horse_jump_counter < 0 {
+                    self.horse_jump_counter += 1;
+                    if self.horse_jump_counter == 0 {
+                        self.horse_jump_power = 0.0;
+                    }
+                }
+                if self.was_jumping && !jump_now {
+                    // C0BPacketEntityAction(6, power * 100)
+                    self.horse_jump_counter = -10;
+                    let power = (self.horse_jump_power * 100.0) as i32;
+                    let _ = self.sim.commands.send(Command::HorseJump(power));
+                } else if !self.was_jumping && jump_now {
+                    self.horse_jump_counter = 0;
+                    self.horse_jump_power = 0.0;
+                } else if self.was_jumping {
+                    self.horse_jump_counter += 1;
+                    let c = self.horse_jump_counter;
+                    self.horse_jump_power = if c < 10 {
+                        c as f32 * 0.1
+                    } else {
+                        0.8 + 2.0 / (c - 9) as f32 * 0.1
+                    };
+                }
+            } else {
+                self.horse_jump_power = 0.0;
+            }
+            self.was_jumping = jump_now;
         }
         // EntityPlayer.onUpdate: the item in use (client side)
         if let Some((st, n)) = self.using {
@@ -6544,8 +6582,22 @@ impl Game {
             let under = eye_mat == Material::Water;
             let mut jitter = std::mem::replace(&mut self.jitter, JavaRandom::new(0));
             jitter.set_seed(self.ticks as i64 * 312871);
-            screens::survival_bars(&mut ui, &self.stats, self.ticks as u32, &mut jitter, under);
+            let mount = self.riding.and_then(|id| {
+                self.mobs.iter().find(|m| m.id == id).map(|m| (m.health, m.max_health))
+            });
+            screens::survival_bars(
+                &mut ui,
+                &self.stats,
+                self.ticks as u32,
+                &mut jitter,
+                under,
+                self.riding_horse(),
+                mount,
+            );
             self.jitter = jitter;
+        }
+        if self.riding_horse() {
+            screens::jump_bar(&mut ui, self.horse_jump_power);
         }
         // GuiIngame: the sleep fade
         if self.sleep_timer > 0 {
@@ -7168,6 +7220,8 @@ impl MobAnim {
         v.eat_timer = o.eat_timer;
         v.attack_timer = o.attack_timer;
         v.ticks = o.ticks;
+        v.hanim = o.hanim;
+        v.tail_counter = o.tail_counter;
     }
 
     /// One client tick: the previous values become the current ones and
@@ -7185,7 +7239,65 @@ impl MobAnim {
         m.attack_timer = self.attack_timer;
         // Entity.onUpdate: ++ticksExisted on the client's own tick
         m.ticks += 1;
+        if m.kind == crate::entity::mob::Kind::Horse {
+            horse_anim(m);
+        }
     }
+}
+
+impl Game {
+    /// `EntityPlayerSP.isRidingHorse`: on a saddled horse.
+    fn riding_horse(&self) -> bool {
+        self.riding.is_some_and(|id| {
+            self.mobs.iter().any(|m| {
+                m.id == id && m.kind == crate::entity::mob::Kind::Horse && m.horse_flags & 4 != 0
+            })
+        })
+    }
+}
+
+/// `EntityHorse.onUpdate` on the client: the tail wag, and the head lean
+/// (eating), rearing and mouth amounts easing toward the watched flags.
+fn horse_anim(m: &mut crate::sim::MobView) {
+    // onLivingUpdate: moveTail one time in 200 (the entity's own random)
+    let h = (m.id as u64)
+        .wrapping_mul(0x9E37_79B9_7F4A_7C15)
+        .wrapping_add(m.ticks as u64)
+        .wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    if (h >> 33) % 200 == 0 {
+        m.tail_counter = 1;
+    }
+    if m.tail_counter > 0 {
+        m.tail_counter += 1;
+        if m.tail_counter > 8 {
+            m.tail_counter = 0;
+        }
+    }
+    let [_, mut lean, _, mut rear, _, mut mouth] = m.hanim;
+    let prev_lean;
+    if m.horse_flags & 64 != 0 {
+        lean = 0.0;
+        prev_lean = 0.0;
+        rear = (rear + (1.0 - rear) * 0.4 + 0.05).min(1.0);
+    } else {
+        prev_lean = lean;
+        rear = (rear + (0.8 * rear * rear * rear - rear) * 0.6 - 0.05).max(0.0);
+    }
+    let prev_rear = m.hanim[3];
+    if m.horse_flags & 64 == 0 {
+        lean = if m.horse_flags & 32 != 0 {
+            (lean + (1.0 - lean) * 0.4 + 0.05).min(1.0)
+        } else {
+            (lean + (0.0 - lean) * 0.4 - 0.05).max(0.0)
+        };
+    }
+    let prev_mouth = mouth;
+    mouth = if m.horse_flags & 128 != 0 {
+        (mouth + (1.0 - mouth) * 0.7 + 0.05).min(1.0)
+    } else {
+        (mouth + (0.0 - mouth) * 0.7 - 0.05).max(0.0)
+    };
+    m.hanim = [prev_lean, lean, prev_rear, rear, prev_mouth, mouth];
 }
 
 /// `WorldClient.skylightSubtracted`: only `calculateInitialSkylight` in the

@@ -19,6 +19,7 @@ const BREWING: (f32, f32) = (256.0, 512.0);
 const DISPENSER: (f32, f32) = (1792.0, 512.0);
 const HOPPER: (f32, f32) = (1792.0, 768.0);
 const MERCHANT: (f32, f32) = (256.0, 1024.0);
+const HORSE: (f32, f32) = (0.0, 1024.0);
 
 /// `GuiMerchant$MerchantButton`s: +1 for next, -1 for previous, when the
 /// mouse is on an enabled one.
@@ -178,6 +179,8 @@ fn slot_valid(d: &SlotDef, s: &Stack) -> bool {
         | SlotKind::FurnaceOut
         | SlotKind::RepairOut
         | SlotKind::MerchantOut => false,
+        SlotKind::HorseSaddle => s.id == 329,
+        SlotKind::HorseArmor => crate::entity::mob::horse::is_armor(s.id),
         SlotKind::Armor(t) => match container::armor_type(s.id) {
             Some(a) => a == t,
             None => (s.id == 86 || s.id == 397) && t == 0,
@@ -722,6 +725,17 @@ fn background(ui: &mut Ui, view: &InvView, left: f32, top: f32, xs: f32, ys: f32
         Open::Hopper(_) => ui.sheet(left, top, HOPPER.0, HOPPER.1, xs, ys),
         Open::Enchant(_) => ui.sheet(left, top, ENCHANT.0, ENCHANT.1, xs, ys),
         Open::Anvil(_) => crate::gui_repair::background(ui, view, left, top),
+        // GuiScreenHorseInventory: the chest grid and the armour slot when
+        // there are such
+        Open::Horse(_, chest, armor) => {
+            ui.sheet(left, top, HORSE.0, HORSE.1, xs, ys);
+            if *chest {
+                ui.sheet(left + 79.0, top + 17.0, HORSE.0, HORSE.1 + ys, 90.0, 54.0);
+            }
+            if *armor {
+                ui.sheet(left + 7.0, top + 35.0, HORSE.0, HORSE.1 + ys + 54.0, 18.0, 18.0);
+            }
+        }
         // GuiMerchant.drawGuiContainerBackgroundLayer: the crosses over a
         // used-up offer
         Open::Merchant(_) => {
@@ -840,6 +854,14 @@ fn foreground(ui: &mut Ui, view: &InvView, lang: &Lang, left: f32, top: f32, xs:
         }
         // GuiRepair draws its own title and no inventory label
         Open::Anvil(_) => return,
+        // GuiScreenHorseInventory: the horse's name
+        Open::Horse(..) => {
+            let t = match view.merchant_name.strip_prefix('#') {
+                Some(k) => lang.get(k).to_string(),
+                None => view.merchant_name.clone(),
+            };
+            ui.text(&t, left + 8.0, top + 6.0, fg, false);
+        }
         // GuiMerchant: the villager's name (or its kind) centred
         Open::Merchant(_) => {
             let t = if view.merchant_name.is_empty() {

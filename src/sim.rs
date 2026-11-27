@@ -90,6 +90,8 @@ pub enum Command {
     RenameItem(String),
     /// `MC|TrSel`: the offer chosen in the merchant window
     MerchantSelect(usize),
+    /// `C0BPacketEntityAction` 6: the horse jump bar's power (0..100)
+    HorseJump(i32),
     /// `C12PacketUpdateSign`
     UpdateSign([i32; 3], [String; 4]),
     /// `C01PacketChatMessage`: chat text or a command.
@@ -385,6 +387,16 @@ pub struct MobView {
     /// `getCustomNameTag`, and whether the player rides it (no label then).
     pub custom_name: String,
     pub ridden: bool,
+    /// `EntityHorse`: data watcher 16 and 22, `getHorseSize`, the client's
+    /// head lean, rearing and mouth amounts (previous, current each) and
+    /// `tailCounter`.
+    pub horse_flags: u32,
+    pub horse_armor: i32,
+    pub horse_size: f32,
+    pub hanim: [f32; 6],
+    pub tail_counter: i32,
+    /// `getMaxHealth`, for the mount's hearts.
+    pub max_health: f32,
 }
 
 #[derive(Clone, Debug)]
@@ -1296,6 +1308,7 @@ impl Sim {
                 let spent = play.window_click(&mut self.world, slot, button, mode);
                 self.play = play;
                 self.merchant_effects();
+                self.horse_slots_back();
                 if spent != 0 {
                     // EntityPlayer.addExperienceLevel(-cost)
                     let p = &mut self.splayer;
@@ -1342,6 +1355,18 @@ impl Sim {
             Command::MerchantSelect(i) => {
                 self.play.select_offer(i);
                 self.merchant_effects();
+            }
+            Command::HorseJump(p) => {
+                if let Some(id) = self.riding {
+                    if let Some(m) = self
+                        .mobs
+                        .list
+                        .iter_mut()
+                        .find(|m| m.id == id && m.kind == crate::entity::mob::Kind::Horse)
+                    {
+                        m.set_jump_power(p);
+                    }
+                }
             }
             Command::DropHeld { all } => {
                 let mut play = std::mem::replace(&mut self.play, Play::new(GameMode::Survival));
@@ -1433,6 +1458,30 @@ impl Sim {
             Command::Interact { id } => {
                 let mut out = crate::entity::mob::Outcome::default();
                 let held = self.play.inv.held();
+                // EntityHorse.interact
+                use crate::entity::mob::horse::HorseAct;
+                let sneaking = self.motion_flags.1;
+                let act = self
+                    .mobs
+                    .list
+                    .iter_mut()
+                    .find(|m| m.id == id && m.kind == crate::entity::mob::Kind::Horse && m.health > 0.0)
+                    .map(|m| m.horse_interact(held, sneaking, &mut out));
+                if let Some(act) = act.filter(|a| *a != HorseAct::Pass) {
+                    match act {
+                        HorseAct::Gui => self.open_horse(id),
+                        HorseAct::Mount => self.mount_mob(id),
+                        HorseAct::Used => {
+                            if self.play.mode != GameMode::Creative {
+                                self.play.inv.consume_held();
+                                self.play.inv_dirty = true;
+                            }
+                        }
+                        _ => {}
+                    }
+                    self.pending_out.push(out);
+                    return;
+                }
                 let (feet, _) = self.play.player;
                 if let Some(mut next) = self.mobs.interact(id, held, feet, &mut out) {
                     let i = self.play.inv.selected;
@@ -1473,6 +1522,52 @@ impl Sim {
             Command::Shutdown => {}
             _ => {}
         }
+    }
+
+    /// `EntityHorse.openGUI` (`displayGUIHorse`): tamed, and not ridden by
+    /// someone else.
+    fn open_horse(&mut self, id: u32) {
+        let Some(m) = self.mobs.list.iter().find(|m| m.id == id) else {
+            return;
+        };
+        if !m.horse_tame() {
+            return;
+        }
+        self.play.open = crate::play::Open::Horse(id, m.horse_chested(), m.can_wear_armor());
+        self.play.horse_slots = m.horse_chest.clone();
+        // AnimalChest's name: getCommandSenderName ('#' marks a lang key)
+        self.play.merchant_name = if m.custom_name.is_empty() {
+            match m.horse_type() {
+                1 => "#entity.donkey.name",
+                2 => "#entity.mule.name",
+                3 => "#entity.zombiehorse.name",
+                4 => "#entity.skeletonhorse.name",
+                _ => "#entity.horse.name",
+            }
+            .to_string()
+        } else {
+            m.custom_name.clone()
+        };
+        self.play.inv_dirty = true;
+    }
+
+    /// A click in the horse's window lands in its `AnimalChest`:
+    /// `onInventoryChanged` (saddle and armour, with their sounds).
+    fn horse_slots_back(&mut self) {
+        let crate::play::Open::Horse(id, ..) = self.play.open else {
+            return;
+        };
+        let Some(m) = self.mobs.list.iter_mut().find(|m| m.id == id) else {
+            return;
+        };
+        if m.horse_chest == self.play.horse_slots {
+            return;
+        }
+        let (a, s) = (m.horse_armor, m.horse_saddled());
+        m.horse_chest = self.play.horse_slots.clone();
+        let mut out = crate::entity::mob::Outcome::default();
+        m.horse_inventory_changed(a, s, &mut out);
+        self.pending_out.push(out);
     }
 
     /// The villager's side of a merchant window click: `useRecipe` for each
@@ -1658,6 +1753,19 @@ impl Sim {
         }
         let mut play = std::mem::replace(&mut self.play, Play::new(GameMode::Survival));
         play.tick(&mut self.world);
+        // ContainerHorseInventory.canInteractWith: alive and within 8
+        if let crate::play::Open::Horse(id, ..) = play.open {
+            let feet = play.player.0;
+            let ok = self.mobs.list.iter().any(|m| {
+                let d = (m.pos[0] - feet[0]).powi(2)
+                    + (m.pos[1] - feet[1]).powi(2)
+                    + (m.pos[2] - feet[2]).powi(2);
+                m.id == id && m.health > 0.0 && !m.dead && d < 64.0
+            });
+            if !ok {
+                play.close(&mut self.world);
+            }
+        }
         // Container.canInteractWith for ContainerMerchant: the villager must
         // still have the player as its customer
         if let crate::play::Open::Merchant(id) = play.open {
@@ -3333,7 +3441,21 @@ impl Sim {
                             m.set_position(p[0], p[1], p[2]);
                         }
                         "villager" => m.zombie_villager = true,
-                        "saddle" => m.saddled = true,
+                        "saddle" => {
+                            m.saddled = true;
+                            if m.kind == crate::entity::mob::Kind::Horse {
+                                m.horse_flags |= 6;
+                                m.horse_chest[0] = Some(crate::item::Stack::new(329, 0, 1));
+                            }
+                        }
+                        "chest" => m.horse_flags |= 8,
+                        "iron" | "gold" | "diamond" => {
+                            m.horse_armor = match p {
+                                "iron" => 1,
+                                "gold" => 2,
+                                _ => 3,
+                            }
+                        }
                         "big" => m.set_slime_size(4),
                         "hang" => m.hanging = true,
                         v => {
@@ -3594,6 +3716,8 @@ impl Sim {
             held,
             looting: crate::enchant::level(crate::enchant::LOOTING, play.inv.held().as_ref()),
             creative: play.mode == GameMode::Creative,
+            ride_strafe: self.ride.strafe,
+            ride_forward: self.ride.forward,
             // both are forgotten after 100 ticks (onEntityUpdate)
             last_attacked: self
                 .last_attacked
@@ -3811,6 +3935,17 @@ impl Sim {
                 incs: 0,
                 custom_name: m.custom_name.clone(),
                 ridden: m.ridden_by_player,
+                horse_flags: m.horse_flags,
+                horse_armor: m.horse_armor,
+                // EntityHorse.getHorseSize
+                horse_size: if m.growing_age >= 0 {
+                    1.0
+                } else {
+                    0.5 + (-24000 - m.growing_age) as f32 / -24000.0 * 0.5
+                },
+                hanim: [0.0; 6],
+                tail_counter: 0,
+                max_health: m.max_health(),
                 bb: [
                     m.bb.min[0],
                     m.bb.min[1],
@@ -8064,6 +8199,78 @@ mod tests {
     }
 
     /// `EntityVillager.interact`, `ContainerMerchant`, `useRecipe`.
+    #[test]
+    fn horses_saddle_ride_and_jump() {
+        use crate::entity::mob::Kind;
+        use crate::item::Stack;
+        let (mut sim, x, y, z) = redstone_sim();
+        arena(&mut sim, x, y, z);
+        sim.play.mode = GameMode::Survival;
+        let feet = [x as f64 + 0.5, (y + 1) as f64, z as f64 + 0.5];
+        let mut r = JavaRandom::new(3);
+        let hid = sim.mobs.spawn(
+            Kind::Horse,
+            [x as f64 + 2.5, (y + 1) as f64, z as f64 + 0.5],
+            0.0,
+            &mut r,
+        );
+        if let Some(m) = sim.mobs.list.iter_mut().find(|m| m.id == hid) {
+            m.variant = 0;
+            m.growing_age = 0;
+        }
+        let step = |sim: &mut Sim, c: &[Command]| {
+            let mut v = vec![Command::Player(feet, [-90.0, 0.0], false)];
+            v.extend_from_slice(c);
+            sim.step(&v, &mut Vec::new());
+        };
+        let horse = |sim: &Sim| sim.mobs.list.iter().find(|m| m.id == hid).unwrap().clone();
+        // an untamed horse rears at a saddle
+        sim.play.inv.main[0] = Some(Stack::new(329, 0, 1));
+        step(&mut sim, &[Command::Interact { id: hid }]);
+        assert!(!matches!(sim.play.open, crate::play::Open::Horse(..)));
+        // tamed, the saddle opens its inventory; shift-click puts it on
+        if let Some(m) = sim.mobs.list.iter_mut().find(|m| m.id == hid) {
+            m.horse_flags |= crate::entity::mob::horse::TAME;
+            m.tamed = true;
+        }
+        step(&mut sim, &[Command::Interact { id: hid }]);
+        assert!(matches!(sim.play.open, crate::play::Open::Horse(i, false, true) if i == hid));
+        step(
+            &mut sim,
+            &[Command::WindowClick {
+                slot: 29,
+                button: 0,
+                mode: 1,
+            }],
+        );
+        assert!(sim.play.inv.main[0].is_none(), "the saddle left the hotbar");
+        step(&mut sim, &[Command::CloseWindow]);
+        assert!(horse(&sim).horse_saddled(), "saddled");
+        // an empty hand mounts it
+        step(&mut sim, &[Command::Interact { id: hid }]);
+        assert_eq!(sim.riding, Some(hid));
+        for _ in 0..20 {
+            step(&mut sim, &[]);
+        }
+        let y0 = horse(&sim).pos[1];
+        // a full jump: the horse leaves the ground and rears
+        step(&mut sim, &[Command::HorseJump(100)]);
+        let mut top = y0;
+        for _ in 0..15 {
+            step(&mut sim, &[]);
+            top = top.max(horse(&sim).pos[1]);
+        }
+        assert!(top > y0 + 1.0, "jumped from {y0} to {top}");
+        // the client sees the saddle and the rider
+        let mut ev = Vec::new();
+        sim.step(&[Command::Player(feet, [-90.0, 0.0], false)], &mut ev);
+        let seen = ev.iter().any(|e| match e {
+            Event::Mobs(v, _) => v.iter().any(|v| v.id == hid && v.horse_flags & 4 != 0 && v.ridden),
+            _ => false,
+        });
+        assert!(seen);
+    }
+
     #[test]
     fn villagers_trade() {
         use crate::entity::mob::Kind;

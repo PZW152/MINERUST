@@ -41,6 +41,10 @@ pub enum SlotKind {
     RepairOut,
     /// `SlotMerchantResult`
     MerchantOut,
+    /// `ContainerHorseInventory$1`: a saddle
+    HorseSaddle,
+    /// `ContainerHorseInventory$2`: horse armour
+    HorseArmor,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -75,6 +79,9 @@ pub enum Window {
     Repair,
     /// `ContainerMerchant`: the two prices and the goods are the tile slots.
     Merchant,
+    /// `ContainerHorseInventory`: saddle, armour (shown only when the
+    /// horse can wear it) and the donkey's or mule's 15 chest slots.
+    Horse { chest: bool, armor: bool },
     /// `GuiContainerCreative$ContainerCreative`: the 45 item-list slots
     /// (the tile slots) and the hotbar.
     Creative,
@@ -230,6 +237,26 @@ impl Window {
             }
             Window::Enchant => {
                 v.push(slot(Inv::Tile, 0, SlotKind::Enchant, 25, 47));
+                player_slots(&mut v, 84);
+            }
+            Window::Horse { chest, armor } => {
+                v.push(slot(Inv::Tile, 0, SlotKind::HorseSaddle, 8, 18));
+                // func_111238_b: a horse that wears no armour hides it
+                let (ax, ay) = if armor { (8, 36) } else { (-10000, -10000) };
+                v.push(slot(Inv::Tile, 1, SlotKind::HorseArmor, ax, ay));
+                if chest {
+                    for r in 0..3 {
+                        for c in 0..5 {
+                            v.push(slot(
+                                Inv::Tile,
+                                2 + c + r * 5,
+                                SlotKind::Plain,
+                                80 + c as i32 * 18,
+                                18 + r as i32 * 18,
+                            ));
+                        }
+                    }
+                }
                 player_slots(&mut v, 84);
             }
             Window::Merchant => {
@@ -569,6 +596,11 @@ impl<'a> Ctx<'a> {
             | SlotKind::FurnaceOut
             | SlotKind::RepairOut
             | SlotKind::MerchantOut => false,
+            SlotKind::HorseSaddle => s.id == 329 && !self.has(i),
+            SlotKind::HorseArmor => {
+                crate::entity::mob::horse::is_armor(s.id)
+                    && matches!(self.window, Window::Horse { armor: true, .. })
+            }
             SlotKind::Armor(t) => match armor_type(s.id) {
                 Some(a) => a == t,
                 // pumpkins and skulls go on the head
@@ -915,6 +947,21 @@ impl<'a> Ctx<'a> {
                     self.merge(&mut s, 5, 41, true)
                 } else {
                     self.merge(&mut s, 0, 5, false)
+                }
+            }
+            // ContainerHorseInventory.transferStackInSlot
+            Window::Horse { chest, .. } => {
+                let size = if chest { 17 } else { 2 };
+                if i < size {
+                    self.merge(&mut s, size, n, true)
+                } else if self.valid(1, &s) && !self.has(1) {
+                    self.merge(&mut s, 1, 2, false)
+                } else if self.valid(0, &s) {
+                    self.merge(&mut s, 0, 1, false)
+                } else if size <= 2 {
+                    false
+                } else {
+                    self.merge(&mut s, 2, size, false)
                 }
             }
             // ContainerMerchant.transferStackInSlot

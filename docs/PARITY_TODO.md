@@ -20,7 +20,7 @@
 ## 2. 生物
 
 AI：
-- [ ] 馬：還借用舊的 `animal()`。需要 `EntityAIRunAroundLikeCrazy`、`Panic`、`Mate`、`FollowParent`、`Wander`、`WatchClosest`、`LookIdle`
+- [ ] 馬：任務 AI 已完成；尚缺 `EntityAIRunAroundLikeCrazy` 以外的騎乘者行為（`func_110256_cu` 鬆開韁繩的特殊情況）、殭屍與骷髏馬的生成（只能用召喚）
 - [ ] 村民：開門、回屋、繁殖、跟隨鐵魔像、`setLookingForHome`、交易後的聲望與開心粒子（都需要村莊資料 `VillageCollection`；交易已完成）
 - [ ] 鐵魔像：`DefendVillage`、`MoveThroughVillage`、`MoveTowardsRestriction`（需要村莊資料）；拿花（`setHoldingRose` 只有計時，沒有畫）
 - [ ] 狼的乞食歪頭與甩水動畫、被非玩家打時傷害減半；豹貓 `OcelotSit` 對床與「箱子有人在用」的判斷
@@ -41,7 +41,7 @@ AI：
 - [ ] 藥水效果尚缺：隱形時不畫出生物、生物盔甲上的保護附魔（`applyArmorCalculations` 之後的 `getEnchantmentModifierDamage`）、
       吸收與生命提升、凋零骷髏與洞穴蜘蛛打其他生物時的效果
 - [ ] `getEyeHeight` 的各職業覆寫（狼 `height × 0.8` 等）
-- [ ] 狼、豹貓、馬的幼體模型（`isChild` 的畫法）
+- [ ] 狼、豹貓的幼體模型（`isChild` 的畫法；馬已完成）
 - [ ] 受傷時的 `limbSwingAmount = 1.5`；受傷鏡頭傾斜的方向（`attackedAtYaw`，目前只有傾斜沒有方向）
 - [ ] 生物裝備耗損到壞掉時保留數量 0 的物品堆（原版行為）
 - [ ] 實體依區塊分組（`Chunk.entityLists`），影響 `getEntitiesWithinAABB` 的順序與推擠的順序
@@ -95,13 +95,13 @@ AI：
 
 實體：
 - [ ] 拴繩結、終界之眼、凋零怪與凋零頭、閃電實體、巨人（雪人已完成；雪球打中怪物時，怪物還不會把雪人當成仇人，`setRevengeTarget` 只記得玩家）
-- [ ] 騎乘：馬（跳躍、鞍、馬鎧、箱子、物品欄）；騎乘時玩家模型的坐姿（`ModelBiped.isRiding`）
+- [ ] 騎乘：騎乘時玩家模型的坐姿（`ModelBiped.isRiding`）；馬的物品欄畫面裡的馬（`GuiScreenHorseInventory` 的 `func_147046_a`）；拴繩
 - [ ] 礦車：漏斗礦車的吸取、指令方塊與生怪磚礦車、觸發鐵軌、`MovingSoundMinecart` 的連續音效、騎乘中生物的存檔（`Riding`）
 - [ ] 掉落物改為客戶端自行模擬（原版客戶端也跑 `EntityItem.onUpdate`，伺服器每 20 tick 校正）
 - [ ] 經驗來源：繁殖
 
 介面：
-- [ ] 信標、馬的物品欄、書與羽毛筆
+- [ ] 信標、書與羽毛筆
 - [ ] 統計與成就：已有統計檔（`stats/<uuid>.json`，`src/stats.rs`）、成就樹、成就提示框（`GuiAchievement`）與
       「Taking Inventory」。待做：`StatList` 的一般統計、其餘 32 個成就的觸發點、`GuiStats`、`GuiAchievements`、
       `/achievement` 指令、成就的聊天公告

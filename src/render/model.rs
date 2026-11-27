@@ -1098,6 +1098,42 @@ pub fn mob(
             light: lt,
             tint: tint(col),
         };
+        // ModelHorse.render: a foal's legs, body and head scaled apart
+        if m.kind == Kind::Horse {
+            let f6 = m.horse_size;
+            let child = m.flags & 16 != 0;
+            let lean = m.hanim[0];
+            for (g, p) in super::model2::horse_groups(m, &a, partial) {
+                let pm = match g {
+                    1 if child => mul(
+                        &mul(&mat, &super::entities::scale(f6, 0.5 + f6 * 0.5, f6)),
+                        &translate(0.0, 0.95 * (1.0 - f6), 0.0),
+                    ),
+                    2 if child => mul(
+                        &mul(&mat, &super::entities::scale(f6, f6, f6)),
+                        &translate(0.0, 1.35 * (1.0 - f6), 0.0),
+                    ),
+                    3 if child => {
+                        let f8 = 0.5 + f6 * f6 * 0.5;
+                        let (ty, tz) = if lean <= 0.0 {
+                            (1.35 * (1.0 - f6), 0.0)
+                        } else {
+                            (
+                                0.9 * (1.0 - f6) * lean + 1.35 * (1.0 - f6) * (1.0 - lean),
+                                0.15 * (1.0 - f6) * lean,
+                            )
+                        };
+                        mul(
+                            &mul(&mat, &super::entities::scale(f8, f8, f8)),
+                            &translate(0.0, ty, tz),
+                        )
+                    }
+                    _ => mat,
+                };
+                render(&mut d, &pm, &p);
+            }
+            continue;
+        }
         // The young (ModelQuadruped.render / ModelChicken.render with
         // isChild): the head at full size, moved down and forward, the
         // rest at half size standing on the ground.

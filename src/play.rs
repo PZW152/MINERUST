@@ -169,6 +169,9 @@ pub enum Open {
     Anvil(Pos),
     /// `ContainerMerchant` with the villager of this id
     Merchant(u32),
+    /// `ContainerHorseInventory` of the horse with this id: whether it
+    /// carries a chest and can wear armour.
+    Horse(u32, bool, bool),
 }
 
 /// The `Container` class an open window uses.
@@ -185,6 +188,10 @@ pub fn window_of(o: &Open) -> Window {
         Open::Enchant(_) => Window::Enchant,
         Open::Anvil(_) => Window::Repair,
         Open::Merchant(_) => Window::Merchant,
+        Open::Horse(_, chest, armor) => Window::Horse {
+            chest: *chest,
+            armor: *armor,
+        },
     }
 }
 
@@ -291,6 +298,8 @@ pub struct Play {
     pub offers: Vec<crate::merchant::Recipe>,
     pub merchant_name: String,
     pub merchant_fx: (Vec<usize>, Vec<bool>),
+    /// `AnimalChest` of the horse whose window is open, as last read.
+    pub horse_slots: Vec<Option<Stack>>,
     /// `EntityPlayer.theInventoryEnderChest`
     pub ender: [Option<Stack>; 27],
     pub repair_name: String,
@@ -558,6 +567,7 @@ impl Play {
             offers: Vec::new(),
             merchant_name: String::new(),
             merchant_fx: (Vec::new(), Vec::new()),
+            horse_slots: Vec::new(),
             ender: [None; 27],
             repair_name: String::new(),
             xp_level: 0,
@@ -1913,6 +1923,7 @@ impl Play {
             Open::Enchant(_) => self.enchant_slot.to_vec(),
             Open::Anvil(_) => self.repair_slots.to_vec(),
             Open::Merchant(_) => self.merchant_slots.to_vec(),
+            Open::Horse(..) => self.horse_slots.clone(),
             Open::Ender(_) => self.ender.to_vec(),
             Open::Chest(ps) => {
                 let mut v = Vec::new();
@@ -1964,6 +1975,7 @@ impl Play {
             Open::Enchant(_) => copy(&mut self.enchant_slot, v),
             Open::Anvil(_) => copy(&mut self.repair_slots, v),
             Open::Merchant(_) => copy(&mut self.merchant_slots, v),
+            Open::Horse(..) => copy(&mut self.horse_slots, v),
             Open::Ender(_) => copy(&mut self.ender, v),
             Open::Chest(ps) => {
                 for (k, p) in ps.iter().enumerate() {

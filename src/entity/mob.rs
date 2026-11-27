@@ -14,6 +14,7 @@ use crate::world::server::ServerWorld;
 pub mod ai;
 mod end;
 mod extra;
+pub mod horse;
 mod nether;
 pub use extra::{village_golems, Other, Puff, Strike};
 pub use nether::Fireball;
@@ -444,6 +445,25 @@ pub struct Mob {
     /// `EntityVillager.buyingList`, `wealth`, `timeUntilReset`,
     /// `needsInitilization`, and `buyingPlayer` being the player.
     pub offers: Option<Vec<crate::merchant::Recipe>>,
+    /// `EntityHorse`: data watcher 16, `temper`, the jump strength
+    /// attribute, `horseChest` (saddle, armour, the chest's 15), the
+    /// eating / mouth / rearing / gallop counters, `jumpPower`,
+    /// `horseJumping`, `allowStandSliding`, the armour index (22), the
+    /// rearing amount (for the rider's seat), and the step height and
+    /// `jumpMovementFactor` moveEntityWithHeading sets.
+    pub horse_flags: u32,
+    pub temper: i32,
+    pub jump_strength: f64,
+    pub horse_chest: Vec<Option<Stack>>,
+    pub horse_counters: [i32; 4],
+    pub jump_power: f32,
+    pub horse_jumping: bool,
+    pub stand_sliding: bool,
+    pub horse_armor: i32,
+    pub rearing: f32,
+    pub prev_rearing: f32,
+    pub horse_step: f32,
+    pub jump_factor: f32,
     pub wealth: i32,
     pub reset_time: i32,
     pub needs_init: bool,
@@ -616,6 +636,9 @@ pub struct PlayerInfo {
     pub looting: i32,
     /// `capabilities.isCreativeMode`
     pub creative: bool,
+    /// The rider's `moveStrafing` and `moveForward` (on a horse).
+    pub ride_strafe: f32,
+    pub ride_forward: f32,
 }
 
 impl PlayerInfo {
@@ -816,6 +839,19 @@ impl Mob {
             persistent: false,
             custom_name: String::new(),
             offers: None,
+            horse_flags: 0,
+            temper: 0,
+            jump_strength: 0.7,
+            horse_chest: vec![None; 2],
+            horse_counters: [0; 4],
+            jump_power: 0.0,
+            horse_jumping: false,
+            stand_sliding: false,
+            horse_armor: 0,
+            rearing: 0.0,
+            prev_rearing: 0.0,
+            horse_step: 0.5,
+            jump_factor: 0.02,
             wealth: 0,
             reset_time: 0,
             needs_init: false,
@@ -951,6 +987,7 @@ impl Mob {
         match self.kind {
             Kind::Slime | Kind::MagmaCube => (self.variant * self.variant) as f32,
             Kind::Wolf if self.tamed => 20.0,
+            Kind::Horse => self.potions.attrs.max_health.value() as f32,
             _ => self.kind.max_health(),
         }
     }
@@ -1058,20 +1095,8 @@ impl Mob {
                 };
             }
             Kind::Villager => self.variant = world_rand.next_int_n(5),
-            Kind::Horse => {
-                // EntityHorse.onSpawnWithEgg: a donkey one time in ten,
-                // otherwise a horse of a random colour and markings.
-                let r = &mut self.rand;
-                if r.next_int_n(10) == 0 {
-                    self.variant = 1 << 16;
-                    self.health = 15.0;
-                } else {
-                    let colour = r.next_int_n(7);
-                    let marks = r.next_int_n(5);
-                    self.variant = colour | marks << 8;
-                    self.health = 15.0 + r.next_int_n(8) as f32 + r.next_int_n(9) as f32;
-                }
-            }
+            // EntityHorse.onSpawnWithEgg
+            Kind::Horse => self.spawn_horse(),
             _ => {}
         }
     }
@@ -1242,7 +1267,7 @@ impl Mob {
         e.fire = self.fire;
         e.immune_to_fire = self.kind.fireproof();
         e.in_web = self.in_web;
-        e.step_height = if self.kind == Kind::Horse { 1.0 } else { 0.5 };
+        e.step_height = if self.kind == Kind::Horse { self.horse_step } else { 0.5 };
         e.dist_walked_on_step = self.step_dist;
         e.next_step_distance = self.next_step;
         e.can_trigger_walking = !matches!(self.kind, Kind::Bat | Kind::Squid | Kind::Silverfish);
@@ -1756,7 +1781,8 @@ impl Mob {
             let f4 = if self.on_ground {
                 self.ai_speed * f3
             } else {
-                0.02
+                // jumpMovementFactor (a ridden horse sets its own)
+                self.jump_factor
             };
             self.move_flying(strafe, forward, f4);
             f2 = 0.91;
@@ -2400,6 +2426,10 @@ impl Mob {
                 self.drop_rare_drop(&mut v);
             }
         }
+        // EntityHorse.onDeath: dropChestItems
+        if self.kind == Kind::Horse {
+            v.extend(self.horse_chest_drops());
+        }
         v
     }
 
@@ -2836,6 +2866,8 @@ pub struct Outcome {
     pub wear: i32,
     /// `EntityPig.interact`: the player mounts this mob.
     pub mount: Option<u32>,
+    /// `EntityAIRunAroundLikeCrazy`: the horse throws its rider.
+    pub dismount: bool,
     /// `EntityAIControlledByPlayer`: the carrot on a stick wears by this much.
     pub stick_wear: i32,
 }
@@ -3161,7 +3193,7 @@ impl Mobs {
                 id: m.id,
                 kind: m.kind,
                 pos: m.pos,
-                tamed: m.tamed,
+                tamed: m.tamed || m.kind == Kind::Horse && m.horse_tame(),
                 bb: m.bb,
                 width: m.dims().0,
                 height: m.dims().1,
@@ -3209,6 +3241,16 @@ impl Mobs {
             c.growing_age = -24000;
             c.set_position(b.pos[0], b.pos[1], b.pos[2]);
             c.variant = b.variant;
+            // EntityHorse.createChild: type, colours, averaged attributes
+            if b.kind == Kind::Horse {
+                let pa = self.list.iter().find(|m| m.id == b.parents[0]).cloned();
+                let pb = self.list.iter().find(|m| m.id == b.parents[1]).cloned();
+                if let (Some(pa), Some(pb)) = (pa, pb) {
+                    let mut r = std::mem::replace(&mut c.rand, JavaRandom::new(0));
+                    c.horse_child_of(&pa, &pb, &mut r);
+                    c.rand = r;
+                }
+            }
             if b.tamed {
                 c.tamed = true;
             }
@@ -4204,6 +4246,7 @@ impl Mobs {
             Kind::Horse => {
                 v.push(("Type", Nbt::Int(m.variant >> 16)));
                 v.push(("Variant", Nbt::Int(m.variant & 0xFFFF)));
+                m.horse_nbt(&mut v);
             }
             Kind::IronGolem => v.push(("PlayerCreated", Nbt::Byte(m.player_made as i8))),
             Kind::PigZombie => v.push(("Anger", Nbt::Short(m.anger as i16))),
@@ -4305,6 +4348,7 @@ impl Mobs {
             Kind::Horse => {
                 m.variant = (t.int("Type").unwrap_or(0) as i32) << 16
                     | (t.int("Variant").unwrap_or(0) as i32 & 0xFFFF);
+                m.horse_from_nbt(t);
             }
             Kind::IronGolem => m.player_made = t.int("PlayerCreated").unwrap_or(0) != 0,
             Kind::PigZombie => m.anger = t.int("Anger").unwrap_or(0) as i32,
@@ -4845,7 +4889,18 @@ fn tick_mob(
     }
 
     // ---------------------------------------------------------------- AI
-    let tasked = ai::uses_tasks(m.kind);
+    if m.kind == Kind::Horse {
+        m.horse_update(w);
+    }
+    let blocked = m.kind == Kind::Horse && m.horse_blocked();
+    if blocked {
+        // EntityLivingBase.onLivingUpdate: isMovementBlocked
+        m.jumping = false;
+        m.move_strafe = 0.0;
+        m.move_forward = 0.0;
+    }
+    let tasked_kind = ai::uses_tasks(m.kind);
+    let tasked = tasked_kind && !blocked;
     if tasked {
         // EntityLiving.updateAITasks
         let mut cx = ai::Cx {
@@ -4876,7 +4931,7 @@ fn tick_mob(
         };
         ai::old_update(m, &mut cx);
     }
-    if !tasked && !old {
+    if !tasked_kind && !old {
         let pdist2 = m.dist2(player.feet);
         let sees_player = player.attackable
             && pdist2 < (m.kind.follow_range() as f64).powi(2)
@@ -5051,7 +5106,14 @@ fn tick_mob(
     m.move_forward *= 0.98;
     let (s, f) = (m.move_strafe, m.move_forward);
     let was_on_ground = m.on_ground;
-    m.move_with_heading(w, s, f);
+    if m.kind == Kind::Horse && m.ridden_by_player && m.horse_saddled() {
+        m.horse_ridden_move(w, player);
+    } else {
+        // EntityHorse.moveEntityWithHeading otherwise: step 0.5, 0.02
+        m.horse_step = 0.5;
+        m.jump_factor = 0.02;
+        m.move_with_heading(w, s, f);
+    }
     drain_moves(m, w, out);
     if matches!(m.kind, Kind::Slime | Kind::MagmaCube) {
         extra::slime_landed(m, was_on_ground, out);

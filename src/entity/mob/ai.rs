@@ -1644,6 +1644,7 @@ pub fn uses_tasks(k: Kind) -> bool {
             | Kind::Wolf
             | Kind::Ocelot
             | Kind::IronGolem
+            | Kind::Horse
             | Kind::SnowGolem
     )
 }
@@ -1884,6 +1885,23 @@ fn build(m: &mut Mob) {
             t.add(6, watch(player, 6.0));
             t.add(7, look_idle());
         }
+        // EntityHorse's constructor
+        Kind::Horse => {
+            t.add(0, Ai::Swimming);
+            t.add(1, panic(1.2));
+            t.add(
+                1,
+                Ai::Pet(Pet::RunAround {
+                    speed: 1.2,
+                    at: [0.0; 3],
+                }),
+            );
+            t.add(2, mate(1.0));
+            t.add(4, follow_parent(1.0));
+            t.add(6, wander(0.7));
+            t.add(7, watch(player, 6.0));
+            t.add(8, look_idle());
+        }
         Kind::Villager => {
             t.add(0, Ai::Swimming);
             t.add(1, Ai::Pet(Pet::TradePlayer));
@@ -2081,6 +2099,9 @@ pub enum Pet {
         pos: [f64; 3],
         target: Option<Target>,
     },
+    /// `EntityAIRunAroundLikeCrazy`: an untamed horse with a rider
+    /// bolts, and in the end tames to or throws the player.
+    RunAround { speed: f64, at: [f64; 3] },
     /// `EntityAITradePlayer`: stand still for the player trading
     TradePlayer,
     /// `EntityAILookAtTradePlayer`: watch the player trading
@@ -2154,6 +2175,7 @@ impl Pet {
     fn mutex(&self) -> i32 {
         match self {
             Pet::Sit | Pet::Leap { .. } | Pet::OcelotSit { .. } | Pet::TradePlayer => 5,
+            Pet::RunAround { .. } => 1,
             Pet::LookAtTradePlayer { .. } => 2,
             Pet::FollowOwner { .. } | Pet::TemptScared { .. } => 3,
             Pet::OcelotAttack { .. } | Pet::LookAtVillager { .. } | Pet::Mate { .. } => 3,
@@ -2164,6 +2186,19 @@ impl Pet {
 
     fn should_execute(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
         match self {
+            Pet::RunAround { at, .. } => {
+                if !m.horse_tame() && m.ridden_by_player {
+                    match m.random_target(cx.w, 5, 4, None) {
+                        Some(t) => {
+                            *at = t;
+                            true
+                        }
+                        None => false,
+                    }
+                } else {
+                    false
+                }
+            }
             // isEntityAlive, not in water, on the ground, a customer within 4
             Pet::TradePlayer => {
                 m.health > 0.0
@@ -2428,6 +2463,7 @@ impl Pet {
 
     fn continue_executing(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
         match self {
+            Pet::RunAround { .. } => !m.no_path() && m.ridden_by_player,
             Pet::TradePlayer => self.should_execute(m, cx),
             // EntityAIWatchClosest.continueExecuting: alive, within 8, still looking
             Pet::LookAtTradePlayer { look_time } => {
@@ -2510,6 +2546,9 @@ impl Pet {
     fn start_executing(&mut self, m: &mut Mob, cx: &mut Cx) {
         match self {
             Pet::TradePlayer => m.clear_path(),
+            Pet::RunAround { speed, at } => {
+                m.try_move_to_xyz(cx.w, at[0], at[1], at[2], *speed);
+            }
             Pet::LookAtTradePlayer { look_time } => *look_time = 40 + m.rand.next_int_n(40),
             Pet::Sit => {
                 m.clear_path();
@@ -2612,6 +2651,7 @@ impl Pet {
         match self {
             // setCustomer(null)
             Pet::TradePlayer => m.customer = false,
+            Pet::RunAround { .. } => {}
             Pet::LookAtTradePlayer { .. } => {}
             Pet::Sit | Pet::OcelotSit { .. } => m.sitting = false,
             Pet::FollowOwner { old_water, .. } => {
@@ -2646,6 +2686,25 @@ impl Pet {
     fn update_task(&mut self, m: &mut Mob, cx: &mut Cx) {
         match self {
             Pet::TradePlayer => {}
+            Pet::RunAround { .. } => {
+                if m.rand.next_int_n(50) == 0 {
+                    if m.ridden_by_player {
+                        let t = m.temper;
+                        if m.rand.next_int_n(100) < t {
+                            // setTamedBy, setEntityState(7): hearts
+                            m.horse_flags |= super::horse::TAME;
+                            horse_puffs(m, "heart", cx);
+                            return;
+                        }
+                        m.temper = (m.temper + 5).clamp(0, 100);
+                    }
+                    // riddenByEntity.mountEntity(null); rear; state 6: smoke
+                    m.ridden_by_player = false;
+                    cx.out.dismount = true;
+                    m.rear_with_sound(cx.out);
+                    horse_puffs(m, "smoke", cx);
+                }
+            }
             Pet::LookAtTradePlayer { look_time } => {
                 let v = cx.view(Target::Player).unwrap();
                 m.look_at_entity(&v, 10.0, 40.0);
@@ -2798,6 +2857,23 @@ fn can_mate_with(m: &Mob, o: &Other, cx: &Cx) -> bool {
         Kind::Wolf => m.tamed && o.tamed && !o.sitting && m.in_love > 0 && o.in_love,
         // EntityOcelot: both tamed
         Kind::Ocelot => m.tamed && o.tamed && m.in_love > 0 && o.in_love,
+        // EntityHorse.canMateWith: both canMate (tamed, grown, not a mule or
+        // undead, unridden, whole), a horse and a donkey or the same kind
+        Kind::Horse => {
+            let fertile = |t: i32| !matches!(t, 2 | 3 | 4);
+            let (a, b) = (m.horse_type(), o.variant >> 16);
+            m.in_love > 0
+                && o.in_love
+                && m.horse_tame()
+                && o.tamed
+                && !m.ridden_by_player
+                && m.growing_age >= 0
+                && o.growing_age >= 0
+                && fertile(a)
+                && fertile(b)
+                && m.health >= m.max_health()
+                && (a == b || a == 0 && b == 1 || a == 1 && b == 0)
+        }
         _ => m.in_love > 0 && o.in_love,
     }
 }
@@ -3454,5 +3530,23 @@ impl Tasks {
             }
         }
         false
+    }
+}
+
+/// `EntityHorse.spawnHorseParticles` (states 7 and 6)
+fn horse_puffs(m: &mut Mob, name: &'static str, cx: &mut Cx) {
+    let (w, h) = (m.width(), m.height());
+    for _ in 0..7 {
+        let v = [
+            m.rand.next_gaussian() * 0.02,
+            m.rand.next_gaussian() * 0.02,
+            m.rand.next_gaussian() * 0.02,
+        ];
+        let p = [
+            m.pos[0] + (m.rand.next_float() * w * 2.0 - w) as f64,
+            m.pos[1] + 0.5 + (m.rand.next_float() * h) as f64,
+            m.pos[2] + (m.rand.next_float() * w * 2.0 - w) as f64,
+        ];
+        cx.out.particles.push((name, p, v));
     }
 }

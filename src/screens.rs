@@ -294,8 +294,15 @@ pub fn survival_bars(
     tick: u32,
     jitter: &mut crate::java::JavaRandom,
     underwater: bool,
+    horse: bool,
+    mount: Option<(f32, f32)>,
 ) {
     let (w, h) = (ui.w, ui.h);
+    if horse {
+        // the jump bar stands in for the experience bar
+        render_icons(ui, s, tick, jitter, underwater, mount);
+        return;
+    }
     // Experience bar (GuiIngame.renderTooltip: the xp part).
     ui.icon(w / 2.0 - 91.0, h - 32.0 + 3.0, 0.0, 64.0, 182.0, 5.0);
     let filled = (s.xp * 183.0) as i32;
@@ -318,7 +325,17 @@ pub fn survival_bars(
         }
         ui.text(&t, x, y, 0x80FF20, false);
     }
-    render_icons(ui, s, tick, jitter, underwater);
+    render_icons(ui, s, tick, jitter, underwater, mount);
+}
+
+/// `GuiIngame.renderGameOverlay` while `isRidingHorse`: the jump bar.
+pub fn jump_bar(ui: &mut Ui, power: f32) {
+    let (w, h) = (ui.w, ui.h);
+    let filled = (power * 183.0) as i32;
+    ui.icon(w / 2.0 - 91.0, h - 32.0 + 3.0, 0.0, 84.0, 182.0, 5.0);
+    if filled > 0 {
+        ui.icon(w / 2.0 - 91.0, h - 32.0 + 3.0, 0.0, 89.0, filled as f32, 5.0);
+    }
 }
 
 /// `GuiIngame.renderIcons`: armour, health (with poison, wither,
@@ -329,6 +346,7 @@ fn render_icons(
     tick: u32,
     rand: &mut crate::java::JavaRandom,
     underwater: bool,
+    mount: Option<(f32, f32)>,
 ) {
     use crate::potion;
     use crate::util::math::ceiling_float_int;
@@ -418,7 +436,31 @@ fn render_icons(
         }
         i -= 1;
     }
-    for i in 0..10 {
+    // the ridden mob's hearts in place of the food bar ("mountHealth")
+    if let Some((mh, mmax)) = mount {
+        let health = mh.ceil() as i32;
+        let mut left_hearts = (((mmax + 0.5) as i32) / 2).min(30);
+        let mut y = top;
+        let mut base = 0;
+        let f = if flash { 1 } else { 0 };
+        while left_hearts > 0 {
+            let n = left_hearts.min(10);
+            left_hearts -= n;
+            for i in 0..n {
+                let x = right - i * 8 - 9;
+                icon(ui, x, y, 52 + f * 9, 9);
+                if i * 2 + 1 + base < health {
+                    icon(ui, x, y, 52 + 36, 9);
+                }
+                if i * 2 + 1 + base == health {
+                    icon(ui, x, y, 52 + 45, 9);
+                }
+            }
+            y -= 10;
+            base += 20;
+        }
+    }
+    for i in 0..if mount.is_some() { 0 } else { 10 } {
         let mut y = top;
         let mut u = 16;
         let mut bg = 0;

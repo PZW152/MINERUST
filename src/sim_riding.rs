@@ -72,7 +72,8 @@ impl Sim {
             self.vehicle_events.push(Event::Mount(None));
             return;
         }
-        if self.ride.sneak {
+        // EntityAIRunAroundLikeCrazy threw the rider: mountEntity(null)
+        if !m.ridden_by_player || self.ride.sneak {
             std::mem::swap(play, &mut self.play);
             self.dismount_mob();
             std::mem::swap(play, &mut self.play);
@@ -83,11 +84,23 @@ impl Sim {
         // setPosition(posX, posY + getMountedYOffset() + getYOffset(), posZ)
         let (w, h) = m.dims();
         let _ = w;
-        let feet = [
+        let mut feet = [
             m.pos[0],
             m.pos[1] + h as f64 * 0.75 + PLAYER_Y_OFFSET_MP,
             m.pos[2],
         ];
+        // EntityHorse.updateRiderPosition: rearing lifts the rider back
+        if m.kind == crate::entity::mob::Kind::Horse && m.prev_rearing > 0.0 {
+            let r = std::f32::consts::PI / 180.0;
+            let (s, c) = (
+                crate::util::math::sin(m.body_yaw * r),
+                crate::util::math::cos(m.body_yaw * r),
+            );
+            let (a, b) = (0.7 * m.prev_rearing, 0.15 * m.prev_rearing);
+            feet[0] += (a * s) as f64;
+            feet[1] += b as f64;
+            feet[2] -= (a * c) as f64;
+        }
         play.player.0 = feet;
         self.splayer.place(feet);
         if let Some(p) = &mut self.player {
