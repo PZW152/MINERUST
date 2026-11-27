@@ -488,7 +488,8 @@ impl Game {
                 ];
                 let planks = self.atlas.named("planks_birch");
                 let bg = self.atlas.named("itemframe_background");
-                crate::render::hanging::frame(out, planks, bg, c, yaw, light);
+                let map = h.item.filter(|s| s.id == 358);
+                crate::render::hanging::frame(out, planks, bg, c, yaw, light, map.is_some());
                 if let Some(s) = h.item {
                     use crate::render::{mul, rot_y, rot_z, translate};
                     let mut m = translate(c[0], c[1], c[2]);
@@ -508,14 +509,35 @@ impl Game {
                         3 => m = mul(&m, &translate(0.16, -0.16, 0.0)),
                         _ => {}
                     }
-                    crate::render::entities::framed_item(
-                        out,
-                        &self.atlas,
-                        s,
-                        &m,
-                        self.player.yaw,
-                        light,
-                    );
+                    if s.id == 358 {
+                        // RenderItemFrame.renderItem: the map flat on the frame
+                        if let Some(d) = self.map_draw(s.meta) {
+                            use crate::render::entities::scale;
+                            m = mul(&m, &rot_y(180.0));
+                            m = mul(&m, &rot_z(180.0));
+                            m = mul(&m, &scale(0.0078125, 0.0078125, 0.0078125));
+                            m = mul(
+                                &m,
+                                &match h.rotation {
+                                    1 => translate(-66.5, -84.5, -1.5),
+                                    2 => translate(-64.0, -82.0, -1.5),
+                                    3 => translate(-61.5, -84.5, -1.5),
+                                    _ => translate(-64.0, -87.0, -1.5),
+                                },
+                            );
+                            m = mul(&m, &translate(0.0, 0.0, -1.0));
+                            crate::render::entities::map_quads(out, &m, &d, true, light);
+                        }
+                    } else {
+                        crate::render::entities::framed_item(
+                            out,
+                            &self.atlas,
+                            s,
+                            &m,
+                            self.player.yaw,
+                            light,
+                        );
+                    }
                 }
             }
         }

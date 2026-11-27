@@ -506,7 +506,7 @@ pub struct TileUpdate {
     pub mips: Vec<Vec<u8>>,
 }
 
-const STAGE_SIZE: u64 = 1 << 16;
+const STAGE_SIZE: u64 = 1 << 20;
 
 const FRAMES: usize = 2;
 const DYN_SIZE: u64 = 4096;

@@ -792,6 +792,89 @@ fn model_box(
     );
 }
 
+/// A map to draw: its texture's rect, `map_background`, `map_icons` and
+/// the markers.
+pub struct MapDraw<'a> {
+    pub tex: [f32; 4],
+    pub background: [f32; 4],
+    pub icons: [f32; 4],
+    pub marks: &'a [crate::map::Mark],
+}
+
+/// A flat quad from (x0, y0) to (x1, y1) at depth z under `m`, seen from
+/// both sides; `uv` (u0, v0, u1, v1) over `t`, v0 at y0.
+fn flat(out: &mut Vec<Vertex>, m: &Mat4, r: [f32; 4], z: f32, t: [f32; 4], uv: [f32; 4], l: [u8; 4]) {
+    let (x0, y0, x1, y1) = (r[0], r[1], r[2], r[3]);
+    let u = |a: f32| t[0] + (t[2] - t[0]) * a;
+    let v = |a: f32| t[1] + (t[3] - t[1]) * a;
+    let pts = [
+        ([x0, y1], [u(uv[0]), v(uv[3])]),
+        ([x1, y1], [u(uv[2]), v(uv[3])]),
+        ([x1, y0], [u(uv[2]), v(uv[1])]),
+        ([x0, y0], [u(uv[0]), v(uv[1])]),
+    ];
+    for order in [[0usize, 1, 2, 3], [3, 2, 1, 0]] {
+        for k in order {
+            let (p, tc) = pts[k];
+            let o = transform(m, [p[0], p[1], z, 1.0]);
+            out.push(Vertex {
+                pos: [o[0], o[1], o[2]],
+                uv: tc,
+                color: [255; 4],
+                light: l,
+            });
+        }
+    }
+}
+
+/// `MapItemRenderer.Instance.render`: the map's texture over 128 x 128
+/// units, then the markers (only frames' in a frame).
+pub fn map_quads(out: &mut Vec<Vertex>, m: &Mat4, d: &MapDraw, in_frame: bool, l: [u8; 4]) {
+    flat(out, m, [0.0, 0.0, 128.0, 128.0], -0.01, d.tex, [0.0, 0.0, 1.0, 1.0], l);
+    let mut n = 0;
+    for mk in d.marks {
+        if in_frame && mk.icon != 1 {
+            continue;
+        }
+        let mut mm = mul(
+            m,
+            &translate(mk.x as f32 / 2.0 + 64.0, mk.z as f32 / 2.0 + 64.0, -0.02),
+        );
+        mm = mul(&mm, &rot_z(mk.rot as f32 * 360.0 / 16.0));
+        mm = mul(&mm, &scale(4.0, 4.0, 3.0));
+        mm = mul(&mm, &translate(-0.125, 0.125, 0.0));
+        let i = mk.icon as f32;
+        let (u0, v0) = ((i % 4.0) / 4.0, (i / 4.0).floor() / 4.0);
+        // the corner (-1, 1) takes (u0, v0)
+        flat(
+            out,
+            &mm,
+            [-1.0, 1.0, 1.0, -1.0],
+            n as f32 * 0.001,
+            d.icons,
+            [u0, v0, u0 + 0.25, v0 + 0.25],
+            l,
+        );
+        n += 1;
+    }
+}
+
+/// `RenderPlayer.renderFirstPersonArm` under `m`.
+fn first_person_arm(out: &mut Vec<Vertex>, atlas: &Atlas, m: &Mat4, l: [u8; 4], lights: [[f32; 3]; 2]) {
+    let mut m = mul(m, &translate(-5.0 / 16.0, 2.0 / 16.0, 0.0));
+    m = mul(&m, &rot_z(0.1f32.to_degrees()));
+    model_box(
+        out,
+        &m,
+        atlas.rects[atlas.skin as usize],
+        (40.0, 16.0),
+        [-3.0, -2.0, -2.0],
+        [4.0, 12.0, 4.0],
+        l,
+        Some(lights),
+    );
+}
+
 /// `ItemRenderer.renderItemInFirstPerson`, in view space (camera at the
 /// origin looking down -Z). `equip` is the interpolated equip progress and
 /// `swing` the swing progress (0..1). `view` is the player's pitch and yaw,
@@ -808,6 +891,7 @@ pub fn hand(
     using: Option<(crate::item_use::Action, f32, i32)>,
     view: (f32, f32),
     arm_lag: (f32, f32),
+    map: Option<&MapDraw>,
 ) {
     let lag = mul(&rot_x(arm_lag.0 * 0.1), &rot_y(arm_lag.1 * 0.1));
     let lights = {
@@ -825,6 +909,45 @@ pub fn hand(
     let pi = std::f32::consts::PI;
     let f13 = 0.8f32;
     let f5 = swing;
+    // the filled map: held in both hands, lower the further one looks up
+    if held.is_some_and(|s| s.id == 358) {
+        let f38 = (f5 * pi).sin();
+        let f46 = (f5.sqrt() * pi).sin();
+        let mut m = translate(-f46 * 0.4, (f5.sqrt() * pi * 2.0).sin() * 0.2, -f38 * 0.2);
+        let mut p = (1.0 - view.0 / 45.0 + 0.1).clamp(0.0, 1.0);
+        p = -(p * pi).cos() * 0.5 + 0.5;
+        m = mul(
+            &m,
+            &translate(0.0, -(1.0 - equip) * 1.2 - p * 0.5 + 0.04, -0.9 * f13),
+        );
+        m = mul(&m, &rot_y(90.0));
+        m = mul(&m, &rot_z(p * -85.0));
+        let m = mul(&lag, &m);
+        for i in 0..2 {
+            let k = (i * 2 - 1) as f32;
+            let mut a = mul(&m, &translate(0.0, -0.6, 1.1 * k));
+            a = mul(&a, &rot_x(-45.0 * k));
+            a = mul(&a, &rot_z(-90.0));
+            a = mul(&a, &rot_z(59.0));
+            a = mul(&a, &rot_y(-65.0 * k));
+            first_person_arm(out, atlas, &a, l, lights);
+        }
+        let g = (f5 * f5 * pi).sin();
+        let h = (f5.sqrt() * pi).sin();
+        let mut m = mul(&m, &rot_y(-g * 20.0));
+        m = mul(&m, &rot_z(-h * 20.0));
+        m = mul(&m, &rot_x(-h * 80.0));
+        m = mul(&m, &scale(0.38, 0.38, 0.38));
+        m = mul(&m, &rot_y(90.0));
+        m = mul(&m, &rot_z(180.0));
+        m = mul(&m, &translate(-1.0, -1.0, 0.0));
+        m = mul(&m, &scale(0.015625, 0.015625, 0.015625));
+        if let Some(d) = map {
+            flat(out, &m, [-7.0, -7.0, 135.0, 135.0], 0.0, d.background, [0.0, 0.0, 1.0, 1.0], l);
+            map_quads(out, &m, d, false, l);
+        }
+        return;
+    }
     match held {
         Some(s) => {
             let mut m;

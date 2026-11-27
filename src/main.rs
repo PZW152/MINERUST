@@ -30,6 +30,7 @@ mod item_text;
 mod item_use;
 mod java;
 mod lang;
+mod map;
 mod menu;
 mod merchant;
 mod panorama;

@@ -255,12 +255,15 @@ pub fn frame(
     centre: [f32; 3],
     yaw: f32,
     light: [u8; 4],
+    map: bool,
 ) {
     let mut m = mul(&translate(centre[0], centre[1], centre[2]), &rot_y(yaw));
     m = mul(&m, &rot_y(90.0));
     m = mul(&m, &translate(-0.5, -0.5, -0.5));
     let t = 0.0625f32;
-    let h = 0.75f32 / 2.0;
+    // renderFrameForMap: the whole block's face, a full-depth backing
+    let h = if map { 0.5f32 } else { 0.75f32 / 2.0 };
+    let back = if map { t } else { t * 0.5 };
     block_box(
         out,
         &m,
@@ -268,7 +271,7 @@ pub fn frame(
             0.0,
             0.5 - h + t,
             0.5 - h + t,
-            t * 0.5,
+            back,
             0.5 + h - t,
             0.5 + h - t,
         ],

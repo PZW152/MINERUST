@@ -8,6 +8,8 @@ pub const ATLAS_SIZE: u32 = 2048;
 /// Atlas width in 16px cells.
 const GRID: usize = (ATLAS_SIZE / 16) as usize;
 pub const MIP_LEVELS: u32 = 5;
+/// Maps that can be shown at once (in the hand and in item frames).
+pub const MAP_SLOTS: usize = 8;
 pub const UI_SIZE: u32 = 2048;
 
 /// Where the Unicode glyph cache starts in the GUI sheet: a 64 by 64 grid
@@ -178,6 +180,9 @@ pub struct Atlas {
     pub mobs: HashMap<&'static str, (u16, u32)>,
     /// `entity/steve.png` (64x32) in the top half of a 64x64 tile.
     pub skin: u16,
+    /// Blank 128 x 128 tiles the maps' `DynamicTexture`s are drawn into:
+    /// rect and top-left pixel.
+    pub map_slots: Vec<([f32; 4], (u32, u32))>,
     /// `environment/clouds.png` as a 256x256 opacity mask.
     pub clouds: Vec<bool>,
 }
@@ -197,7 +202,7 @@ pub struct Anim {
 }
 
 /// Mip chain for one tile, as it is stored in the atlas.
-fn mip_chain(mut px: Vec<u8>, size: u32) -> Vec<Vec<u8>> {
+pub fn mip_chain(mut px: Vec<u8>, size: u32) -> Vec<Vec<u8>> {
     // generateMipmapData walks `data.length` (the number of levels),
     // not the pixels: only the first few decide transparency
     let transparent = px.chunks(4).take(MIP_LEVELS as usize).any(|p| p[3] == 0);
@@ -618,6 +623,7 @@ impl Atlas {
             .chain([crate::render::model::BOOK_TEXTURE])
             .chain(crate::render::model::ARMOR_TEXTURES)
             .chain(["../misc/pumpkinblur", "../misc/vignette", "../misc/shadow"])
+            .chain(["../map/map_background", "../map/map_icons"])
         {
             let path = match name.strip_prefix("../") {
                 Some(rest) => format!("assets/minecraft/textures/{rest}.png"),
@@ -738,8 +744,15 @@ impl Atlas {
         let char_width = font_widths(&font);
         let sga_width = read_png(jar, "assets/minecraft/textures/font/ascii_sga.png")
             .map_or([0u8; 256], |i| font_widths(&i));
+        let map_slots = (0..MAP_SLOTS)
+            .map(|_| {
+                let t = b.add(vec![0u8; 128 * 128 * 4], 128);
+                (b.rects[t as usize], b.origins[t as usize])
+            })
+            .collect();
         Ok(Atlas {
             skin,
+            map_slots,
             destroy,
             items,
             mobs,

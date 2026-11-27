@@ -441,6 +441,10 @@ pub struct Game {
     /// The latest server values of the mobs' per-tick animation counters,
     /// taken over one client tick at a time (see `merge_mobs`).
     mob_net: std::collections::HashMap<u32, MobAnim>,
+    /// `S34PacketMaps` as received, and which map each atlas slot shows
+    /// (with the tick it was last wanted).
+    maps: std::collections::HashMap<i32, crate::map::MapView>,
+    map_slots: Vec<Option<(i32, u64)>>,
     /// `EntityPlayerSP.horseJumpPowerCounter`, `horseJumpPower` and the
     /// jump key as it was last tick.
     horse_jump_counter: i32,
@@ -777,6 +781,8 @@ impl Game {
             next_step: 1.0,
             mobs: Vec::new(),
             mob_net: Default::default(),
+            maps: Default::default(),
+            map_slots: Vec::new(),
             horse_jump_counter: 0,
             horse_jump_power: 0.0,
             was_jumping: false,
@@ -1477,6 +1483,13 @@ impl Game {
             };
             self.counts[2] += 1;
             match e {
+                Event::Map(v) => {
+                    let id = v.id;
+                    self.maps.insert(id, v);
+                    if let Some(i) = self.map_slots.iter().position(|s| s.is_some_and(|s| s.0 == id)) {
+                        self.upload_map(i, id);
+                    }
+                }
                 Event::Tick(..) => {}
                 Event::Chunk {
                     key,
@@ -2022,6 +2035,7 @@ impl Game {
 
     /// `TextureAtlasSprite.updateAnimation` for every animated tile.
     fn tick_animations(&mut self) {
+        self.refresh_map_slots();
         self.tick_particles();
         if self.anim_state.len() != self.atlas.anims.len() {
             self.anim_state = vec![(0, 0); self.atlas.anims.len()];
@@ -6387,6 +6401,10 @@ impl Game {
                     crate::item_use::max_duration(st.id, st.meta),
                 )
             });
+            let held_map = self
+                .equipped_icon()
+                .filter(|s| s.id == 358)
+                .and_then(|s| self.map_draw(s.meta));
             entities::hand(
                 &mut hand,
                 &self.atlas,
@@ -6404,6 +6422,7 @@ impl Game {
                         - (self.prev_render_arm[1]
                             + (self.render_arm[1] - self.prev_render_arm[1]) * partial),
                 ),
+                held_map.as_ref(),
             );
         }
 
@@ -7246,6 +7265,74 @@ impl MobAnim {
 }
 
 impl Game {
+    /// Puts map `id`'s texture into slot `i` of the atlas.
+    fn upload_map(&mut self, i: usize, id: i32) {
+        let Some(v) = self.maps.get(&id) else { return };
+        let Some(&(_, (x, y))) = self.atlas.map_slots.get(i) else { return };
+        let px = crate::map::texture(&v.colours);
+        self.renderer.queue_tile_update(crate::render::vk::TileUpdate {
+            x,
+            y,
+            size: 128,
+            mips: crate::render::atlas::mip_chain(px, 128),
+        });
+    }
+
+    /// `MapItemRenderer.getMapRendererInstance`: the maps in the hand and in
+    /// the item frames near by get atlas slots, the longest unused giving
+    /// way.
+    pub(super) fn refresh_map_slots(&mut self) {
+        let n = self.atlas.map_slots.len();
+        if self.map_slots.len() != n {
+            self.map_slots = vec![None; n];
+        }
+        let mut wanted: Vec<i32> = Vec::new();
+        if let Some(s) = self.equipped_icon().filter(|s| s.id == 358) {
+            wanted.push(s.meta);
+        }
+        for v in &self.boats {
+            if let crate::entity::vehicle::Vehicle::Hang(h) = &v.v {
+                if let Some(s) = h.item.filter(|s| s.id == 358) {
+                    if !wanted.contains(&s.meta) {
+                        wanted.push(s.meta);
+                    }
+                }
+            }
+        }
+        let now = self.ticks as u64;
+        for id in wanted {
+            if !self.maps.contains_key(&id) {
+                continue;
+            }
+            if let Some(s) = self.map_slots.iter_mut().flatten().find(|s| s.0 == id) {
+                s.1 = now;
+                continue;
+            }
+            let i = match self.map_slots.iter().position(|s| s.is_none()) {
+                Some(i) => i,
+                None => (0..n)
+                    .min_by_key(|&i| self.map_slots[i].map_or(0, |s| s.1))
+                    .unwrap_or(0),
+            };
+            if i < n {
+                self.map_slots[i] = Some((id, now));
+                self.upload_map(i, id);
+            }
+        }
+    }
+
+    /// The textures and markers to draw map `id` with.
+    pub(super) fn map_draw(&self, id: i32) -> Option<crate::render::entities::MapDraw<'_>> {
+        let v = self.maps.get(&id)?;
+        let i = self.map_slots.iter().position(|s| s.is_some_and(|s| s.0 == id))?;
+        Some(crate::render::entities::MapDraw {
+            tex: self.atlas.map_slots[i].0,
+            background: self.atlas.mob_tex("../map/map_background")?.rect,
+            icons: self.atlas.mob_tex("../map/map_icons")?.rect,
+            marks: &v.marks,
+        })
+    }
+
     /// `EntityPlayerSP.isRidingHorse`: on a saddled horse.
     fn riding_horse(&self) -> bool {
         self.riding.is_some_and(|id| {

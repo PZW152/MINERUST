@@ -160,6 +160,8 @@ pub enum Command {
 }
 
 pub enum Event {
+    /// `S34PacketMaps`: a map's colours and markers.
+    Map(crate::map::MapView),
     /// `S37PacketStatistics`: statistic id and value.
     Statistics(Vec<(String, i32)>),
     /// `S36PacketSignEditorOpen`
@@ -523,6 +525,9 @@ pub struct Sim {
     await_ack: bool,
     /// The world directory (the overworld's).
     base_dir: Option<PathBuf>,
+    /// `MapStorage`'s maps, and the ids whose data the client has.
+    pub maps: crate::map::Maps,
+    maps_sent: std::collections::HashSet<i32>,
     /// A dimension change asked for by a command (respawning out of the Nether).
     pending_travel: Option<i32>,
     /// Tell the client on the first tick which dimension the save is in.
@@ -737,6 +742,8 @@ impl Sim {
             portal_cooldown: 0,
             await_ack: false,
             base_dir: cfg.save_dir.clone(),
+            maps: crate::map::Maps::new(cfg.save_dir.clone()),
+            maps_sent: Default::default(),
             pending_travel: None,
             announce_dim: false,
             stats_file: crate::stats::StatisticsFile::open(
@@ -1524,6 +1531,88 @@ impl Sim {
         }
     }
 
+    /// `ItemMap.onUpdate` for every map in the inventory (the held one
+    /// also draws), and `S34PacketMaps` for what changed and for the maps
+    /// in item frames.
+    fn tick_maps(&mut self, events: &mut Vec<Event>) {
+        let (feet, yaw) = self.play.player;
+        let spawn = [self.spawn[0].floor() as i32, self.spawn[2].floor() as i32];
+        let time = self.world_time;
+        let mut shown = Vec::new();
+        for i in 0..self.play.inv.main.len() {
+            let Some(mut s) = self.play.inv.main[i] else { continue };
+            if s.id != 358 {
+                continue;
+            }
+            // ItemMap.onCreated: an extended copy becomes a new map one
+            // scale up around the same centre
+            if s.nbt().is_some_and(|t| t.int("map_is_scaling").unwrap_or(0) != 0) {
+                let old = self.maps.get_or_make(s.meta, spawn, self.dim).1.clone();
+                let nid = self.maps.unique_id();
+                let mut m = old;
+                m.scale = (m.scale + 1).min(4);
+                m.colours = vec![0; 16384];
+                m.marks.clear();
+                m.step = 0;
+                m.sent = false;
+                m.saved = false;
+                self.maps.list.insert(nid, m);
+                s = crate::item::Stack { meta: nid, ..s }.edit_tag(|t| {
+                    if let crate::world::anvil::Nbt::Compound(v) = t {
+                        v.retain(|(k, _)| k != "map_is_scaling");
+                    }
+                });
+                if s.nbt().is_some_and(|t| matches!(&*t, crate::world::anvil::Nbt::Compound(v) if v.is_empty())) {
+                    s.tag = crate::item_tag::Tag::NONE;
+                }
+                self.play.inv.main[i] = Some(s);
+                self.play.inv_dirty = true;
+            }
+            let (id, m) = self.maps.get_or_make(s.meta, spawn, self.dim);
+            if id != s.meta {
+                self.play.inv.main[i] = Some(crate::item::Stack { meta: id, ..s });
+                self.play.inv_dirty = true;
+            }
+            if m.dim as i32 == self.dim {
+                m.update_player_mark(feet[0], feet[2], yaw, time);
+            } else if !m.marks.is_empty() {
+                m.marks.clear();
+                m.sent = false;
+            }
+            if i == self.play.inv.selected {
+                m.update(&self.world, feet[0], feet[2]);
+            }
+            shown.push(id);
+        }
+        // a map no longer carried loses the player's marker
+        for (id, m) in self.maps.list.iter_mut() {
+            if !shown.contains(id) && !m.marks.is_empty() {
+                m.marks.clear();
+                m.sent = false;
+            }
+        }
+        for v in &self.play.vehicles {
+            if let crate::entity::vehicle::Vehicle::Hang(h) = &v.v {
+                if let Some(s) = h.item.filter(|s| s.id == 358) {
+                    shown.push(s.meta);
+                }
+            }
+        }
+        for id in shown {
+            let known = self.maps_sent.contains(&id);
+            let Some(m) = self.maps.get(id) else { continue };
+            if !m.sent || !known {
+                m.sent = true;
+                events.push(Event::Map(crate::map::MapView {
+                    id,
+                    colours: m.colours.clone(),
+                    marks: m.marks.clone(),
+                }));
+                self.maps_sent.insert(id);
+            }
+        }
+    }
+
     /// `EntityHorse.openGUI` (`displayGUIHorse`): tamed, and not ridden by
     /// someone else.
     fn open_horse(&mut self, id: u32) {
@@ -2047,6 +2136,7 @@ impl Sim {
             events.push(Event::Moving(moving));
         }
         self.play = play;
+        self.tick_maps(events);
         self.pick_up_arrows(events);
         self.player_events(events);
         if self.play.inv_dirty {
@@ -2610,6 +2700,31 @@ impl Sim {
                 }
                 self.play.inv_dirty = true;
             }
+            return;
+        }
+        // ItemEmptyMap.onItemRightClick: a new map around the player
+        if held.id == 395 {
+            let id = self.maps.unique_id();
+            let (feet, _) = self.play.player;
+            let mut m = crate::map::MapData::new(0, feet[0], feet[2], self.dim);
+            m.saved = false;
+            self.maps.list.insert(id, m);
+            let map = crate::item::Stack::new(358, id, 1);
+            let sel = self.play.inv.selected;
+            if held.count <= 1 {
+                self.play.inv.main[sel] = Some(map);
+            } else {
+                self.play.inv.main[sel] = Some(crate::item::Stack {
+                    count: held.count - 1,
+                    ..held
+                });
+                if let Some(map) = self.play.inv.add(map) {
+                    let mut rnd = std::mem::replace(&mut self.world.rand, JavaRandom::new(0));
+                    self.play.throw(map, &mut rnd);
+                    self.world.rand = rnd;
+                }
+            }
+            self.play.inv_dirty = true;
             return;
         }
         // ItemSnowball, ItemEgg, ItemEnderPearl, ItemPotion (splash)
@@ -3491,6 +3606,7 @@ impl Sim {
         let Some(base) = self.base_dir.clone() else {
             return Ok(());
         };
+        self.maps.save()?;
         // ServerConfigurationManager.writePlayerData → saveStatFile
         self.stats_file.save_stat_file()?;
         // Shutdown can apply commands and save before a tick reports changes.
@@ -8199,6 +8315,63 @@ mod tests {
     }
 
     /// `EntityVillager.interact`, `ContainerMerchant`, `useRecipe`.
+    #[test]
+    fn maps_draw_and_extend() {
+        use crate::item::Stack;
+        let (mut sim, x, y, z) = redstone_sim();
+        arena(&mut sim, x, y, z);
+        sim.play.mode = GameMode::Survival;
+        let feet = [x as f64 + 0.5, (y + 1) as f64, z as f64 + 0.5];
+        let step = |sim: &mut Sim, c: &[Command]| {
+            let mut ev = Vec::new();
+            let mut v = vec![Command::Player(feet, [0.0, 0.0], false)];
+            v.extend_from_slice(c);
+            sim.step(&v, &mut ev);
+            ev
+        };
+        sim.play.inv.main[0] = Some(Stack::new(395, 0, 2));
+        step(&mut sim, &[Command::UseAir]);
+        assert_eq!(sim.play.inv.main[0].map(|s| (s.id, s.count)), Some((395, 1)));
+        let map = sim.play.inv.main.iter().flatten().find(|s| s.id == 358).copied();
+        let map = map.expect("a filled map in the inventory");
+        // hold it: a sixteenth of the columns each tick, then all drawn
+        let at = sim.play.inv.main.iter().position(|s| s.is_some_and(|s| s.id == 358)).unwrap();
+        sim.play.inv.selected = at;
+        let mut seen = None;
+        for _ in 0..20 {
+            for e in step(&mut sim, &[]) {
+                if let Event::Map(v) = e {
+                    seen = Some(v);
+                }
+            }
+        }
+        let v = seen.expect("S34PacketMaps");
+        assert_eq!(v.id, map.meta);
+        let drawn = v.colours.iter().filter(|&&c| c != 0).count();
+        assert!(drawn > 8000, "only {drawn} pixels drawn");
+        assert_eq!(v.marks.len(), 1);
+        assert_eq!(v.marks[0].icon, 0, "the player's marker");
+        let m = sim.maps.list[&map.meta].clone();
+        assert_eq!(m.scale, 0);
+        // eight paper around it: a new map one scale up, same centre
+        let cells: Vec<Option<Stack>> = (0..9)
+            .map(|i| Some(if i == 4 { map } else { Stack::new(339, 0, 1) }))
+            .collect();
+        let out = crate::crafting::find_matching(&crate::crafting::Grid {
+            cells: &cells,
+            width: 3,
+        })
+        .expect("RecipesMapExtending");
+        sim.play.inv.main[8] = Some(out);
+        step(&mut sim, &[]);
+        let big = sim.play.inv.main[8].unwrap();
+        assert_ne!(big.meta, map.meta);
+        assert!(big.nbt().is_none(), "map_is_scaling cleared");
+        let b = &sim.maps.list[&big.meta];
+        assert_eq!(b.scale, 1);
+        assert_eq!((b.x_center, b.z_center), (m.x_center, m.z_center));
+    }
+
     #[test]
     fn horses_saddle_ride_and_jump() {
         use crate::entity::mob::Kind;

@@ -122,6 +122,7 @@ impl Recipe {
                 left.is_empty()
             }
             Recipe::Special("RecipesMapCloning") => map_cloning(g).is_some(),
+            Recipe::Special("RecipesMapExtending") => map_extending(g).is_some(),
             Recipe::Special("RecipesArmorDyes") => armor_dyes(g).is_some(),
             Recipe::Special("RecipeFireworks") => fireworks(g).is_some(),
             // The others read item NBT (dye colours, firework and book
@@ -137,6 +138,7 @@ impl Recipe {
                 Some(Stack::new(out.0, out.1, out.2))
             }
             Recipe::Special("RecipesMapCloning") => map_cloning(g),
+            Recipe::Special("RecipesMapExtending") => map_extending(g),
             Recipe::Special("RecipesArmorDyes") => armor_dyes(g),
             Recipe::Special("RecipeFireworks") => fireworks(g),
             Recipe::Special(_) => None,
@@ -333,6 +335,29 @@ fn map_cloning(g: &Grid) -> Option<Stack> {
         return None;
     }
     Some(Stack::new(FILLED_MAP, m.meta, n + 1))
+}
+
+/// `RecipesMapExtending`: a filled map in the middle of eight paper (3 x 3
+/// only); the copy is marked `map_is_scaling`, and `ItemMap.onCreated`
+/// gives it a new map one scale up. (The scale-4 limit is checked when
+/// that map is made.)
+fn map_extending(g: &Grid) -> Option<Stack> {
+    if g.width != 3 || g.len() != 9 {
+        return None;
+    }
+    for i in 0..9 {
+        let s = g.slot(i)?;
+        let want = if i == 4 { FILLED_MAP } else { 339 };
+        if s.id != want {
+            return None;
+        }
+    }
+    let m = g.slot(4)?;
+    Some(
+        Stack { count: 1, ..m }.edit_tag(|t| {
+            t.set("map_is_scaling", crate::world::anvil::Nbt::Byte(1));
+        }),
+    )
 }
 
 /// `CraftingManager.findMatchingRecipe`: two of the same damageable item

@@ -1200,6 +1200,12 @@ impl ServerWorld {
         }
     }
 
+    /// `Chunk.getHeightValue` without loading anything (0 when unloaded).
+    pub fn peek_height(&self, x: i32, z: i32) -> i32 {
+        self.ch(x >> 4, z >> 4)
+            .map_or(0, |c| c.height[((z & 15) << 4 | (x & 15)) as usize])
+    }
+
     fn height_min(&self, x: i32, z: i32) -> i32 {
         self.ch(x >> 4, z >> 4).map_or(0, |c| c.height_min)
     }
