@@ -171,6 +171,27 @@ SCENES = {
         [f"{x} 95 {z} 1" for x in range(-249, -235) for z in range(131, 140)] +
         [f"{-246 + 2 * i} 96 135 118 {i}" for i in range(4)] +
         [f"{-246 + 2 * i} 96 137 120 {i * 2 + (i & 1) * 4}" for i in range(4)] + ["-238 96 135 122 0"])),
+    # open doors in a plank wall, close up from both sides (the village-house view)
+    "doorway_s": dict(seed=12345, time=6000, pos=(-242.5, 96.0, 134.3), look=(0.0, 10.0), setblock=";".join(
+        [f"{x} 95 {z} 1" for x in range(-250, -234) for z in range(131, 142)] +
+        [f"{x} {y} 136 5 0" for x in range(-250, -234) for y in (96, 97, 98) if x not in (-246, -244, -242, -240, -238)] +
+        [f"{-246 + 2 * i} 96 136 64 {(1, 3)[i % 2] | 4}" for i in range(4)] +
+        [f"{-246 + 2 * i} 97 136 64 {8 | (i // 2)}" for i in range(4)] +
+        ["-238 96 136 64 1", "-238 97 136 64 8"])),
+    "doorway_n": dict(seed=12345, time=6000, pos=(-242.5, 96.0, 140.5), look=(180.0, 10.0), setblock=";".join(
+        [f"{x} 95 {z} 1" for x in range(-250, -234) for z in range(131, 142)] +
+        [f"{x} {y} 136 5 0" for x in range(-250, -234) for y in (96, 97, 98) if x not in (-246, -244, -242, -240, -238)] +
+        [f"{-246 + 2 * i} 96 136 64 {(1, 3)[i % 2] | 4}" for i in range(4)] +
+        [f"{-246 + 2 * i} 97 136 64 {8 | (i // 2)}" for i in range(4)] +
+        ["-238 96 136 64 1", "-238 97 136 64 8"])),
+    # RenderPainting and RenderItemFrame on a wall: four paintings, framed
+    # items as sprites and a block in each rotation, and an empty frame.
+    "doorway_close": dict(seed=12345, time=6000, pos=(-242.5, 96.0, 137.7), look=(180.0, 10.0), setblock=";".join(
+        [f"{x} 95 {z} 1" for x in range(-250, -234) for z in range(131, 142)] +
+        [f"{x} {y} 136 5 0" for x in range(-250, -234) for y in (96, 97, 98) if x not in (-246, -244, -242, -240, -238)] +
+        [f"{-246 + 2 * i} 96 136 64 {(1, 3)[i % 2] | 4}" for i in range(4)] +
+        [f"{-246 + 2 * i} 97 136 64 {8 | (i // 2)}" for i in range(4)] +
+        ["-238 96 136 64 1", "-238 97 136 64 8"])),
     # RenderPainting and RenderItemFrame on a wall: four paintings, framed
     # items as sprites and a block in each rotation, and an empty frame.
     "hanging": dict(seed=12345, time=6000, pos=(-242.5, 97.0, 131.5), look=(0.0, 5.0), setblock=";".join(

@@ -901,7 +901,8 @@ fn boxed(
     let own = r.bright(x, y, z);
     for f in 0..6 {
         let n = NORMALS[f];
-        let axis = f / 2;
+        // faces 0/1 are y, 2/3 are z, 4/5 are x (NORMALS)
+        let axis = [1, 1, 2, 2, 0, 0][f];
         let positive = f % 2 == 1;
         let on_boundary = if positive {
             b[axis + 3] >= 1.0
@@ -1350,7 +1351,8 @@ fn boxes(
     for (bi, b) in list.iter().enumerate() {
         for f in 0..6 {
             let n = NORMALS[f];
-            let axis = f / 2;
+            // faces 0/1 are y, 2/3 are z, 4/5 are x (NORMALS)
+            let axis = [1, 1, 2, 2, 0, 0][f];
             let positive = f % 2 == 1;
             let on_boundary = if positive {
                 b[axis + 3] >= 1.0
