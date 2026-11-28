@@ -9,7 +9,8 @@
 
 ## 2026-11-28
 
-- The Statistics screen's Mobs page (GuiStats$StatsMobsList: each mob killed or killed by, with "You killed" and "killed you" lines), and stat.entityKilledBy.<name> counted on death
+- The Statistics screen's Blocks and Items pages (GuiStats$StatsBlock / $StatsItem: crafted, used and mined or depleted, crafted and used, with the slot icons and the column header), and the statistics behind them: mineBlock.<id> on harvesting, craftItem.<id> for crafted and smelted results, useItem.<id> when a held stack is used on a block, breakItem.<id> when a tool breaks
+- `927ab54` The Statistics screen's Mobs page (GuiStats$StatsMobsList: each mob killed or killed by, with "You killed" and "killed you" lines), and stat.entityKilledBy.<name> counted on death
 - `373e545` More achievements: When Pigs Fly (EntityPig.fall over 5 blocks with the player on it), On A Rail (a thousand blocks from where the minecart ride began) and The Beginning. (killing the Wither)
 - `8469f01` Achievements unlock: picking up wood, leather, diamonds and blaze rods (EntityItem.onCollideWithPlayer), crafting a workbench, pickaxes, furnace, hoe, bread, cake, sword, enchanting table and bookshelf (SlotCrafting.onCrafting), smelting iron and fish (SlotFurnace), taking a brewed potion, killing a monster, a blow of 18 (Overkill), and going to the Nether, the End and back
 - `7b8f29d` Breeding counts towards stat.animalsBred and unlocks Repopulation for cows (EntityAIMate.spawnBaby's triggerAchievement)

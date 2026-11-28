@@ -76,6 +76,13 @@ pub enum Command {
         /// Where on the block the click landed (`hitX`, `hitY`, `hitZ`).
         hit: [f32; 3],
     },
+    /// `Use` itself, after its statistics are noted.
+    UseOnInner {
+        target: [i32; 3],
+        face: [i32; 3],
+        sneaking: bool,
+        hit: [f32; 3],
+    },
     Select(usize),
     /// `C0EPacketClickWindow`: container slot number (-999 outside),
     /// mouse button or hotbar key, click mode.
@@ -1227,11 +1234,13 @@ impl Sim {
                 for s in play.broke.drain(..) {
                     self.splayer.fx.push(crate::entity::base::Fx::BrokenItem(s));
                 }
-                // Block.harvestBlock: player.addExhaustion(0.025)
+                // Block.harvestBlock: addStat(mineBlockStatArray[id]),
+                // player.addExhaustion(0.025)
                 if play.mode == GameMode::Survival
                     && id != crate::block::AIR
                     && self.world.block(p[0], p[1], p[2]) != id
                 {
+                    self.stats_file.increase_stat(&format!("stat.mineBlock.{id}"), 1);
                     self.splayer.food.add_exhaustion(0.025);
                 }
                 self.play = play;
@@ -1243,6 +1252,33 @@ impl Sim {
                 hit,
             } => {
                 ACTIONS_DONE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                // ItemStack.tryPlaceItemIntoWorld: addStat(objectUseStats) when
+                // the held stack was used (seen as it shrinking)
+                let before = self.play.inv.held();
+                let sel = self.play.inv.selected;
+                self.apply(&Command::UseOnInner {
+                    target,
+                    face,
+                    sneaking,
+                    hit,
+                });
+                let after = self.play.inv.main[sel];
+                if let Some(b) = before {
+                    let used = match after {
+                        None => true,
+                        Some(a) => a.id != b.id || a.count < b.count,
+                    };
+                    if used {
+                        self.stats_file.increase_stat(&format!("stat.useItem.{}", b.id), 1);
+                    }
+                }
+            }
+            Command::UseOnInner {
+                target,
+                face,
+                sneaking,
+                hit,
+            } => {
                 // ItemMinecart.onItemUse (rails have no onBlockActivated)
                 if self.place_cart(target) {
                     return;
@@ -2369,6 +2405,9 @@ impl Sim {
         self.stats_file.increase_stat("stat.playOneMinute", 1);
         for a in std::mem::take(&mut self.play.achievements) {
             self.achieve(a);
+        }
+        for (k, n) in std::mem::take(&mut self.play.stat_adds) {
+            self.stats_file.increase_stat(&k, n);
         }
         // addMountedMovementStat: a thousand blocks from where the
         // minecart ride began
@@ -5099,7 +5138,9 @@ impl Sim {
             match f {
                 crate::entity::base::Fx::Sound(n, p, v, pi) => sounds.push((n, p, v, pi)),
                 crate::entity::base::Fx::Particle(n, p, m) => parts.push((n, p, m)),
-                crate::entity::base::Fx::BrokenItem(_) => {
+                crate::entity::base::Fx::BrokenItem(b) => {
+                    // ItemStack.damageItem: addStat(objectBreakStats)
+                    self.stats_file.increase_stat(&format!("stat.breakItem.{}", b.id), 1);
                     // renderBrokenItemStack: playSound("random.break", 0.8,
                     // 0.8 + worldObj.rand.nextFloat() * 0.4); its particles
                     // are client-side and the server's do nothing

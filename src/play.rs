@@ -330,6 +330,8 @@ pub struct Play {
     pub drops_made: i32,
     /// `triggerAchievement` calls since the last tick.
     pub achievements: Vec<&'static str>,
+    /// `addStat` calls since the last tick.
+    pub stat_adds: Vec<(String, i32)>,
     /// Withers made by the last skull (position, yaw), and whether the
     /// difficulty is Peaceful.
     pub wither_spawns: Vec<([f64; 3], f32)>,
@@ -609,6 +611,7 @@ impl Play {
             skull_updates: Vec::new(),
             drops_made: 0,
             achievements: Vec::new(),
+            stat_adds: Vec::new(),
             wither_spawns: Vec::new(),
             difficulty_peaceful: false,
             pending: Vec::new(),
@@ -2196,6 +2199,10 @@ impl Play {
         w.rand = rnd;
         // SlotCrafting.onCrafting / SlotFurnace.onCrafting /
         // ContainerBrewingStand$Potion: their achievements
+        // ItemStack.onCrafting: addStat(objectCraftStats, amount)
+        for (s, n) in fx.crafted.iter().chain(fx.smelted.iter()) {
+            self.stat_adds.push((format!("stat.craftItem.{}", s.id), (*n).max(s.count) as i32));
+        }
         for (s, _) in &fx.crafted {
             let a = match s.id {
                 58 => "achievement.buildWorkBench",

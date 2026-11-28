@@ -131,6 +131,9 @@ fn fill(pattern: &str, args: &[String]) -> String {
     out
 }
 
+/// `textures/gui/container/stats_icons.png` on the GUI sheet.
+const ICONS: (f32, f32) = (0.0, 1280.0);
+
 pub struct StatsScreen {
     pub list: SlotList,
     /// 0 General, 3 Mobs
@@ -148,8 +151,16 @@ impl StatsScreen {
     /// `initGui`: the list between 32 and height - 64.
     pub fn resize(&mut self, w: f32, h: f32) {
         let amount = self.list.amount;
-        let slot = if self.page == 3 { 36.0 } else { 10.0 };
+        let slot = match self.page {
+            3 => 36.0,
+            1 | 2 => 20.0,
+            _ => 10.0,
+        };
         self.list = SlotList::new(w, h, 32.0, h - 64.0, slot);
+        if self.page == 1 || self.page == 2 {
+            // setHasListHeader(true, 20)
+            self.list.header_padding = 20.0;
+        }
         self.list.show_selection_box = false;
         self.list.amount = amount;
     }
@@ -157,6 +168,51 @@ impl StatsScreen {
     /// `drawScreen`: the list, then the title.
     pub fn draw(&mut self, ui: &mut Ui, lang: &Lang, values: &[(String, i32)], m: (f32, f32), down: bool) {
         let mut events = Vec::new();
+        if self.page == 1 || self.page == 2 {
+            // GuiStats$StatsBlock / $StatsItem: crafted, used, mined for the
+            // blocks; depleted, crafted, used for the items
+            let get = |k: String| values.iter().find(|e| e.0 == k).map_or(0, |e| e.1);
+            let blocks = self.page == 1;
+            let ids: Vec<u16> = if blocks { (1u16..256).collect() } else { (256u16..2300).collect() };
+            let rows: Vec<(u16, [i32; 3])> = ids
+                .into_iter()
+                .filter_map(|id| {
+                    let c = get(format!("stat.craftItem.{id}"));
+                    let u = get(format!("stat.useItem.{id}"));
+                    let v = if blocks {
+                        [c, u, get(format!("stat.mineBlock.{id}"))]
+                    } else {
+                        [get(format!("stat.breakItem.{id}")), c, u]
+                    };
+                    (v.iter().any(|&x| x > 0)).then_some((id, v))
+                })
+                .collect();
+            let n = rows.len();
+            let icons = if blocks { [18.0, 36.0, 54.0] } else { [72.0, 18.0, 36.0] };
+            let x0 = (ui.w / 2.0).trunc() - 92.0 - 16.0;
+            let hy = self.list.top + 4.0 - self.list.amount as i32 as f32;
+            self.list.draw(ui, m, down, n, None, &mut events, &mut |ui, i, x, y, _h| {
+                let (id, v) = rows[i];
+                // drawStatsScreen: the slot and the item
+                ui.sheet(x + 40.0 + 1.0, y + 1.0, ICONS.0, ICONS.1, 18.0, 18.0);
+                crate::screens::draw_stack_with(ui, &crate::item::Stack::new(id, 0, 1), x + 40.0 + 2.0, y + 2.0, None);
+                let c = if i % 2 == 0 { 0xFFFFFF } else { 0x909090 };
+                for (k, col) in [115.0, 165.0, 215.0].into_iter().enumerate() {
+                    let t = grouped(v[k] as i64);
+                    let w = ui.text_width(&t);
+                    ui.text(&t, x + col - w, y + 5.0, c, true);
+                }
+            });
+            // drawListHeader
+            if hy + 19.0 > self.list.top && hy < self.list.bottom {
+                for (k, col) in [115.0, 165.0, 215.0].into_iter().enumerate() {
+                    ui.sheet(x0 + col - 18.0, hy + 1.0, ICONS.0, ICONS.1 + 18.0, 18.0, 18.0);
+                    ui.sheet(x0 + col - 18.0, hy + 1.0, ICONS.0 + icons[k], ICONS.1 + 18.0, 18.0, 18.0);
+                }
+            }
+            ui.centered(lang.get("gui.stats"), ui.w / 2.0, 20.0, 0xFFFFFF);
+            return;
+        }
         if self.page == 3 {
             // GuiStats$StatsMobsList
             let get = |k: String| values.iter().find(|e| e.0 == k).map_or(0, |e| e.1);

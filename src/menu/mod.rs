@@ -921,9 +921,9 @@ impl Menu {
                     return self.back(ui, ctx);
                 }
             }
-            Screen::Stats(_, st) if b.id == 1 || b.id == 4 => {
-                // GuiStats.actionPerformed: the General and Mobs pages
-                st.page = if b.id == 4 { 3 } else { 0 };
+            Screen::Stats(_, st) if (1..=4).contains(&b.id) => {
+                // GuiStats.actionPerformed: the four pages
+                st.page = (b.id - 1) as u8;
                 st.list.amount = 0.0;
                 let (w, h) = (self.w, self.h);
                 st.resize(w, h);
@@ -1341,9 +1341,7 @@ fn init(s: &mut Screen, ui: &Ui, ctx: &mut Ctx, w: f32, h: f32) {
                 Button::new(3, cx, h - 52.0, 80.0, 20.0, t("stat.itemsButton")),
                 Button::new(4, cx + 80.0, h - 52.0, 80.0, 20.0, t("stat.mobsButton")),
             ];
-            // the General and Mobs pages so far
-            v[2].enabled = false;
-            v[3].enabled = false;
+
             b.buttons = v;
         }
         // GuiAchievements.initGui: a GuiOptionButton of 80
