@@ -242,6 +242,8 @@ pub enum Screen {
     Chat,
     /// `GuiEditSign`
     Sign,
+    /// `GuiScreenBook`
+    Book,
 }
 
 /// What the window wants after an input event.
@@ -345,6 +347,8 @@ pub struct Game {
     table_rand: JavaRandom,
     /// `TileEntitySign.signText` as the client knows it.
     sign_texts: HashMap<[i32; 3], [String; 4]>,
+    /// `GuiScreenBook` while it is open.
+    book_gui: Option<crate::book::BookScreen>,
     /// The heads' kinds and rotations.
     skulls: HashMap<[i32; 3], (i32, i32)>,
     /// `GuiEditSign`: the sign, its lines, the line edited, `updateCounter`.
@@ -733,6 +737,7 @@ impl Game {
             creative_tab: 0,
             chest_lids: HashMap::new(),
             sign_texts: HashMap::new(),
+            book_gui: None,
             skulls: HashMap::new(),
             tables: HashMap::new(),
             table_rand: JavaRandom::new(
@@ -2062,6 +2067,9 @@ impl Game {
 
     /// `TextureAtlasSprite.updateAnimation` for every animated tile.
     fn tick_animations(&mut self) {
+        if let Some(b) = self.book_gui.as_mut() {
+            b.ticks += 1;
+        }
         self.refresh_map_slots();
         self.tick_particles();
         if self.anim_state.len() != self.atlas.anims.len() {
@@ -3834,6 +3842,13 @@ impl Game {
         let Some(s) = self.view.inv.held() else {
             return;
         };
+        // ItemWritableBook / ItemEditableBook.onItemRightClick:
+        // displayGUIBook
+        if s.id == 386 || s.id == 387 {
+            self.book_gui = Some(crate::book::BookScreen::open(&s, crate::sim::PLAYER_NAME));
+            self.screen = Screen::Book;
+            self.input = Input::default();
+        }
         if s.id == 346 {
             // ItemFishingRod.onItemRightClick: swingItem
             self.swing_item();
@@ -4456,6 +4471,23 @@ impl Game {
         self.screen == Screen::Window && (self.creative.is_some() || self.anvil.is_some())
             || self.screen == Screen::Chat
             || self.screen == Screen::Sign
+            || self.screen == Screen::Book
+    }
+
+    /// What `GuiScreenBook` asked for: closing sends the book when it
+    /// changed.
+    fn book_action(&mut self, a: crate::book::BookAction) -> Request {
+        match a {
+            crate::book::BookAction::None => Request::None,
+            crate::book::BookAction::Close(data) => {
+                if let Some((pages, title)) = data {
+                    let _ = self.sim.commands.send(Command::BookEdit(pages, title));
+                }
+                self.book_gui = None;
+                self.screen = Screen::Playing;
+                Request::Grab
+            }
+        }
     }
 
     /// `GuiEditSign.onGuiClosed`: `C12PacketUpdateSign`.
@@ -4564,6 +4596,20 @@ impl Game {
 
     /// `GuiScreen.keyTyped` for the screens that take text.
     pub fn text_key(&mut self, ch: char, code: i32, ctrl: bool, shift: bool) -> Request {
+        if self.screen == Screen::Book {
+            let (w, h) = self.gui_size();
+            let atlas = self.atlas.clone();
+            let ui = crate::gui::Ui::new(&atlas, w, h);
+            let clip = self
+                .shell
+                .as_ref()
+                .map_or_else(String::new, |s| s.clipboard.clone());
+            let a = match self.book_gui.as_mut() {
+                Some(b) => b.key(&ui, ch, code, &clip),
+                None => crate::book::BookAction::Close(None),
+            };
+            return self.book_action(a);
+        }
         if let Some((_, lines, line, _)) = self.sign_edit.as_mut() {
             // GuiEditSign.keyTyped
             let _ = (ctrl, shift);
@@ -5213,6 +5259,23 @@ impl Game {
                     }
                 }
                 Request::None
+            }
+            Screen::Book => {
+                if button != 0 {
+                    return Request::None;
+                }
+                let (w, _) = self.gui_size();
+                let m = self.gui_mouse();
+                let r = self.book_gui.as_mut().map(|b| b.click(w, m));
+                match r {
+                    Some((pressed, a)) => {
+                        if pressed {
+                            self.sound("gui.button.press", None, 1.0, 1.0);
+                        }
+                        self.book_action(a)
+                    }
+                    None => Request::None,
+                }
             }
             Screen::Sign => {
                 // the Done button
@@ -6895,6 +6958,12 @@ impl Game {
                 }
             }
             Screen::Sign => self.draw_sign_editor(&mut ui, m),
+            Screen::Book => {
+                let w = ui.w;
+                if let Some(b) = self.book_gui.as_ref() {
+                    b.draw(&mut ui, &self.lang, w, m);
+                }
+            }
             Screen::Playing => {}
         }
         // Minecraft.runGameLoop: guiAchievement.updateAchievementWindow, last

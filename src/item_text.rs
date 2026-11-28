@@ -36,6 +36,12 @@ pub fn display_name(s: &Stack, lang: &Lang) -> String {
     }
     match s.id {
         373 => return potion_name(s, lang),
+        // ItemEditableBook.getItemStackDisplayName: the title
+        387 => {
+            if let Some(t) = s.nbt().and_then(|t| t.string("title").map(|x| x.to_string())) {
+                return t;
+            }
+        }
         383 => {
             let mut n = tr(lang, "item.monsterPlacer.name");
             if let Some((_, e, _, _)) = EGGS.iter().find(|e| e.0 == s.meta) {
@@ -176,6 +182,12 @@ pub fn tooltip(s: &Stack, lang: &Lang) -> Vec<String> {
     v.push(name);
     // Item.addInformation
     match s.id {
+        // ItemEditableBook.addInformation: the author
+        387 => {
+            if let Some(a) = s.nbt().and_then(|t| t.string("author").map(|x| x.to_string())) {
+                v.push(format!("\u{a7}7{}", lang.format("book.byAuthor", &[a])));
+            }
+        }
         373 if s.meta != 0 => {
             let fx = crate::potion::effects_of(s.meta, false);
             let mut mods = Vec::new();

@@ -29,6 +29,7 @@ const AUTOSAVE_TICKS: i64 = 900;
 mod bed;
 #[path = "commands.rs"]
 mod commands;
+pub use commands::PLAYER_NAME;
 #[path = "sim_dispense.rs"]
 mod dispense;
 #[path = "sim_fishing.rs"]
@@ -92,6 +93,9 @@ pub enum Command {
     MerchantSelect(usize),
     /// `MC|Beacon`: the chosen primary and secondary powers.
     BeaconSet(i32, i32),
+    /// `MC|BEdit` / `MC|BSign`: the book and quill's pages, and its title
+    /// when signed.
+    BookEdit(Vec<String>, Option<String>),
     /// `C0BPacketEntityAction` 6: the horse jump bar's power (0..100)
     HorseJump(i32),
     /// `C12PacketUpdateSign`
@@ -1383,6 +1387,20 @@ impl Sim {
                 let mut play = std::mem::replace(&mut self.play, Play::new(GameMode::Survival));
                 play.close(&mut self.world);
                 self.play = play;
+            }
+            Command::BookEdit(ref pages, ref title) => {
+                // ItemWritableBook.validBookPageTagContents: at most 50
+                // pages of under 256 characters
+                let valid = pages.len() <= 50 && pages.iter().all(|p| p.chars().count() < 256);
+                if let (true, Some(h)) = (valid, self.play.inv.held()) {
+                    if let Some(s) =
+                        crate::book::apply(h, pages, title.as_deref(), crate::sim::commands::PLAYER_NAME)
+                    {
+                        let sel = self.play.inv.selected;
+                        self.play.inv.main[sel] = Some(s);
+                        self.play.inv_dirty = true;
+                    }
+                }
             }
             Command::BeaconSet(a, b) => {
                 // NetHandlerPlayServer: with a payment, it is used up and the
