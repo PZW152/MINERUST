@@ -345,6 +345,8 @@ pub struct Game {
     table_rand: JavaRandom,
     /// `TileEntitySign.signText` as the client knows it.
     sign_texts: HashMap<[i32; 3], [String; 4]>,
+    /// The heads' kinds and rotations.
+    skulls: HashMap<[i32; 3], (i32, i32)>,
     /// `GuiEditSign`: the sign, its lines, the line edited, `updateCounter`.
     sign_edit: Option<([i32; 3], [String; 4], usize, i32)>,
     /// `TileEntityChest.prevLidAngle` / `lidAngle` of the chests that move.
@@ -731,6 +733,7 @@ impl Game {
             creative_tab: 0,
             chest_lids: HashMap::new(),
             sign_texts: HashMap::new(),
+            skulls: HashMap::new(),
             tables: HashMap::new(),
             table_rand: JavaRandom::new(
                 std::time::SystemTime::now()
@@ -1791,6 +1794,9 @@ impl Game {
                 Event::Hits(_) => {}
                 Event::SignText(p, t) => {
                     self.sign_texts.insert(p, t);
+                }
+                Event::Skull(p, k, r) => {
+                    self.skulls.insert(p, (k, r));
                 }
                 Event::OpenSign(p) => {
                     // NetHandlerPlayClient.handleSignEditorOpen: GuiEditSign
@@ -6104,6 +6110,38 @@ impl Game {
         self.draw_boats(&mut dynamic, eye, partial);
         self.draw_chests(&mut dynamic, eye, partial);
         self.draw_signs(&mut dynamic, eye);
+        // TileEntitySkullRenderer
+        for (&p, &(kind, rot)) in &self.skulls {
+            let w = &self.world;
+            if w.peek_block(p[0], p[1], p[2]) != block::SKULL {
+                continue;
+            }
+            let d = [p[0] as f64 + 0.5 - eye[0], p[1] as f64 + 0.5 - eye[1], p[2] as f64 + 0.5 - eye[2]];
+            if d[0] * d[0] + d[1] * d[1] + d[2] * d[2] > 64.0 * 64.0 {
+                continue;
+            }
+            let tex = if kind == 3 {
+                Some(self.atlas.skin_tex())
+            } else {
+                self.atlas.mob_tex(render::hanging::skull_texture(kind))
+            };
+            let Some(tex) = tex else { continue };
+            let (sky, blk) = (w.light(true, p[0], p[1], p[2]), w.light(false, p[0], p[1], p[2]));
+            let rel = [
+                (p[0] as f64 - eye[0]) as f32,
+                (p[1] as f64 - eye[1]) as f32,
+                (p[2] as f64 - eye[2]) as f32,
+            ];
+            let side = (w.peek_meta(p[0], p[1], p[2]) & 7) as i32;
+            render::hanging::skull(
+                &mut dynamic,
+                tex,
+                rel,
+                side,
+                rot as f32 * 360.0 / 16.0,
+                [(blk << 4) as u8, (sky << 4) as u8, 0, 0],
+            );
+        }
         self.draw_tables(&mut dynamic, eye, partial);
         self.draw_player(&mut dynamic, partial);
         self.draw_orbs(&mut translucent, eye, partial);

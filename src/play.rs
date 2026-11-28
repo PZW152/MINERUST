@@ -48,6 +48,8 @@ pub enum Tile {
     Spawner { mob: String },
     /// `TileEntitySign.signText`; `editable` until the placer's update.
     Sign { text: [String; 4], editable: bool },
+    /// `TileEntitySkull`: `SkullType` and `Rot` (sixteenths, on the floor).
+    Skull { kind: i32, rot: i32 },
     /// `TileEntityBeacon`: the pyramid's levels, the chosen powers, whether
     /// the sky is open (`isComplete`) and the payment slot.
     Beacon {
@@ -322,6 +324,8 @@ pub struct Play {
     /// `S36PacketSignEditorOpen` to send, and sign texts that changed.
     pub sign_open: Option<Pos>,
     pub sign_updates: Vec<(Pos, [String; 4])>,
+    /// Heads placed since the last tick (`S35PacketUpdateTileEntity` 4).
+    pub skull_updates: Vec<(Pos, i32, i32)>,
     /// Generated entities (villagers, witches, chest minecarts).
     pub pending: Vec<crate::world::server::GenEntity>,
 }
@@ -594,6 +598,7 @@ impl Play {
                     .map_or(0, |d| d.as_nanos() as i64),
             ),
             sign_updates: Vec::new(),
+            skull_updates: Vec::new(),
             pending: Vec::new(),
         }
     }
@@ -866,6 +871,15 @@ impl Play {
                 Tile::Brewing { slots, .. } => slots.to_vec(),
                 // BlockBeacon keeps no drops of its payment
                 Tile::Beacon { .. } => Vec::new(),
+                // BlockSkull.getDrops: the head of its kind (not after a
+                // creative player's hit, onBlockHarvested's bit 8)
+                Tile::Skull { kind, .. } => {
+                    if self.mode == GameMode::Creative {
+                        Vec::new()
+                    } else {
+                        vec![Some(Stack::new(397, kind, 1))]
+                    }
+                }
                 Tile::Spawner { .. }
                 | Tile::Sign { .. }
                 | Tile::Comparator { .. }
@@ -1224,6 +1238,9 @@ impl Play {
         }
         if held.id == 323 {
             return self.place_sign(w, target, face);
+        }
+        if held.id == 397 {
+            return self.place_skull(w, target, face, held);
         }
         if held.id == 259 {
             // ItemFlintAndSteel.onItemUse: fire on the clicked side.
@@ -1904,6 +1921,52 @@ impl Play {
         self.inv_dirty = true;
         self.sign_open = Some(p);
         true
+    }
+
+    /// `ItemSkull.onItemUse`: on top of or beside a solid block, the head
+    /// turned with the player on the floor.
+    fn place_skull(&mut self, w: &mut ServerWorld, t: Pos, face: [i32; 3], held: Stack) -> bool {
+        let side = match face {
+            [0, -1, 0] => 0,
+            [0, 1, 0] => 1,
+            [0, 0, -1] => 2,
+            [0, 0, 1] => 3,
+            [-1, 0, 0] => 4,
+            _ => 5,
+        };
+        if side == 0 || !w.material(t[0], t[1], t[2]).is_solid() {
+            return false;
+        }
+        let p = [t[0] + face[0], t[1] + face[1], t[2] + face[2]];
+        if !(0..256).contains(&p[1]) || !w.material(p[0], p[1], p[2]).replaceable() {
+            return false;
+        }
+        w.set_block(p[0], p[1], p[2], block::SKULL, side, 2);
+        let rot = if side == 1 {
+            ((self.player.1 * 16.0 / 360.0) as f64 + 0.5).floor() as i32 & 15
+        } else {
+            0
+        };
+        let kind = held.meta.clamp(0, 4);
+        self.tiles.insert(p, Tile::Skull { kind, rot });
+        self.skull_updates.push((p, kind, rot));
+        if self.mode != GameMode::Creative {
+            self.inv.consume_held();
+        }
+        self.inv_dirty = true;
+        true
+    }
+
+    /// The heads in chunk (cx, cz) for the client.
+    pub fn skulls_in(&self, cx: i32, cz: i32) -> Vec<(Pos, i32, i32)> {
+        self.tiles
+            .iter()
+            .filter(|(p, _)| p[0] >> 4 == cx && p[2] >> 4 == cz)
+            .filter_map(|(p, t)| match t {
+                Tile::Skull { kind, rot } => Some((*p, *kind, *rot)),
+                _ => None,
+            })
+            .collect()
     }
 
     /// `NetHandlerPlayServer.processUpdateSign`
@@ -2632,6 +2695,14 @@ impl Play {
                         ("Comparator", vec![("OutputSignal", Nbt::Int(*output))])
                     }
                     Tile::Daylight => ("DLDetector", vec![]),
+                    Tile::Skull { kind, rot } => (
+                        "Skull",
+                        vec![
+                            ("SkullType", Nbt::Byte(*kind as i8)),
+                            ("Rot", Nbt::Byte(*rot as i8)),
+                            ("ExtraType", Nbt::String(String::new())),
+                        ],
+                    ),
                     // TileEntityBeacon.writeToNBT
                     Tile::Beacon {
                         levels,
@@ -2755,6 +2826,10 @@ impl Play {
                 }
             }
             "DLDetector" => Tile::Daylight,
+            "Skull" => Tile::Skull {
+                kind: t.int("SkullType").unwrap_or(0) as i32,
+                rot: t.int("Rot").unwrap_or(0) as i32,
+            },
             "Beacon" => Tile::Beacon {
                 levels: t.int("Levels").unwrap_or(0) as i32,
                 primary: t.int("Primary").unwrap_or(0) as i32,
@@ -3047,6 +3122,7 @@ impl Play {
                 }
                 Tile::Comparator { output } => format!("K,{},{},{},{}", p[0], p[1], p[2], output),
                 Tile::Daylight => format!("L,{},{},{}", p[0], p[1], p[2]),
+                Tile::Skull { kind, rot } => format!("U,{},{},{},{},{}", p[0], p[1], p[2], kind, rot),
                 Tile::Beacon {
                     levels,
                     primary,
@@ -3179,6 +3255,16 @@ impl Play {
                         secondary: f.get(6)?.trim().parse().ok()?,
                         complete: false,
                         payment: None,
+                    },
+                );
+            }
+            "U" => {
+                let f: Vec<&str> = line.splitn(6, ',').collect();
+                self.tiles.insert(
+                    pos(f[1], f[2], f[3])?,
+                    Tile::Skull {
+                        kind: f.get(4)?.parse().ok()?,
+                        rot: f.get(5)?.trim().parse().ok()?,
                     },
                 );
             }

@@ -162,6 +162,8 @@ pub enum Command {
 }
 
 pub enum Event {
+    /// `S35PacketUpdateTileEntity` 4: a head's kind and rotation.
+    Skull([i32; 3], i32, i32),
     /// The beacons whose beam shows (`isComplete`).
     Beacons(Vec<[i32; 3]>),
     /// `S34PacketMaps`: a map's colours and markers.
@@ -2380,6 +2382,9 @@ impl Sim {
                 for (p, t) in self.play.signs_in(key.0, key.1) {
                     events.push(Event::SignText(p, t));
                 }
+                for (p, k, r) in self.play.skulls_in(key.0, key.1) {
+                    events.push(Event::Skull(p, k, r));
+                }
             }
         }
         // Chunks that entered the range or became ready without changing.
@@ -2399,6 +2404,9 @@ impl Sim {
                 });
                 for (p, t) in self.play.signs_in(key.0, key.1) {
                     events.push(Event::SignText(p, t));
+                }
+                for (p, k, r) in self.play.skulls_in(key.0, key.1) {
+                    events.push(Event::Skull(p, k, r));
                 }
             }
         }
@@ -4958,6 +4966,9 @@ impl Sim {
         }
         for (p, t) in std::mem::take(&mut self.play.sign_updates) {
             events.push(Event::SignText(p, t));
+        }
+        for (p, k, r) in std::mem::take(&mut self.play.skull_updates) {
+            events.push(Event::Skull(p, k, r));
         }
         if std::mem::take(&mut self.mode_changed) {
             events.push(Event::GameMode(self.play.mode));
@@ -8488,6 +8499,40 @@ mod tests {
     }
 
     /// `EntityVillager.interact`, `ContainerMerchant`, `useRecipe`.
+    #[test]
+    fn heads_place_turn_and_drop() {
+        use crate::item::Stack;
+        use crate::play::Tile;
+        let (mut sim, x, y, z) = redstone_sim();
+        arena(&mut sim, x, y, z);
+        sim.play.mode = GameMode::Survival;
+        let floor = [x + 2, y, z];
+        sim.world.set_block(floor[0], floor[1], floor[2], crate::block::STONE, 0, 3);
+        sim.world.set_block(floor[0], floor[1] + 1, floor[2], 0, 0, 3);
+        let sel = sim.play.inv.selected;
+        sim.play.inv.main[sel] = Some(Stack::new(397, 4, 1));
+        let mut ev = Vec::new();
+        sim.step(
+            &[
+                Command::Player([x as f64 + 0.5, (y + 1) as f64, z as f64 + 0.5], [90.0, 30.0], false),
+                Command::Use {
+                    target: floor,
+                    face: [0, 1, 0],
+                    sneaking: false,
+                    hit: [0.5, 1.0, 0.5],
+                },
+            ],
+            &mut ev,
+        );
+        let at = [floor[0], floor[1] + 1, floor[2]];
+        assert_eq!(sim.world.peek_block(at[0], at[1], at[2]), crate::block::SKULL);
+        assert_eq!(sim.world.peek_meta(at[0], at[1], at[2]), 1, "on the floor");
+        // yaw 90 is four sixteenths round
+        assert_eq!(sim.play.tiles.get(&at), Some(&Tile::Skull { kind: 4, rot: 4 }));
+        assert!(ev.iter().any(|e| matches!(e, Event::Skull(p, 4, 4) if *p == at)));
+        assert!(sim.play.inv.main[sel].is_none());
+    }
+
     #[test]
     fn beacons_build_pay_and_empower() {
         use crate::item::Stack;

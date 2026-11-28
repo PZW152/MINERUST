@@ -392,3 +392,41 @@ pub fn beacon_beam(
         beam_side(blended, t, base, x, y, h, [1.0, 0.0], [v0, v1], c);
     }
 }
+
+/// `TileEntitySkullRenderer.render`: `ModelSkeletonHead` (an 8 x 8 x 8
+/// head) on the floor turned by `rot` degrees, or against the wall on
+/// side `side`; `rel` is the block's corner.
+pub fn skull(out: &mut Vec<Vertex>, tex: Tex, rel: [f32; 3], side: i32, rot: f32, light: [u8; 4]) {
+    let (t, r) = match side {
+        1 => ([0.5, 0.0, 0.5], rot),
+        2 => ([0.5, 0.25, 0.74], rot),
+        3 => ([0.5, 0.25, 0.26], 180.0),
+        4 => ([0.74, 0.25, 0.5], 270.0),
+        _ => ([0.26, 0.25, 0.5], 90.0),
+    };
+    let m = mul(
+        &translate(rel[0] + t[0], rel[1] + t[1], rel[2] + t[2]),
+        &super::entities::scale(-1.0, -1.0, 1.0),
+    );
+    let part = super::model::Part::new([0.0; 3])
+        .bx(0.0, 0.0, [-4.0, -8.0, -4.0], [8.0, 8.0, 8.0], 0.0)
+        .r(0.0, r.to_radians(), 0.0);
+    let mut d = super::model::Draw {
+        out,
+        tex,
+        light,
+        tint: [1.0; 4],
+    };
+    super::model::render(&mut d, &m, &part);
+}
+
+/// The texture of head kind `kind` (`TileEntitySkullRenderer`).
+pub fn skull_texture(kind: i32) -> &'static str {
+    match kind {
+        1 => "skeleton/wither_skeleton",
+        2 => "zombie/zombie",
+        3 => "steve",
+        4 => "creeper/creeper",
+        _ => "skeleton/skeleton",
+    }
+}

@@ -139,6 +139,7 @@ pub const PUMPKIN_STEM: u8 = 104;
 pub const MELON_STEM: u8 = 105;
 pub const FENCE_GATE: u8 = 107;
 pub const BEACON: u8 = 138;
+pub const SKULL: u8 = 144;
 pub const COBBLESTONE_WALL: u8 = 139;
 pub const GLOWSTONE: u8 = 89;
 pub const LIT_PUMPKIN: u8 = 91;
@@ -666,6 +667,8 @@ fn build() -> [BlockInfo; 256] {
     beacon.solid = true;
     beacon.light_value = 15;
     t[BEACON as usize] = beacon;
+    // BlockSkull: drawn by TileEntitySkullRenderer only
+    t[SKULL as usize] = base(Shape::None, M::Circuits, false);
     t[LIT_PUMPKIN as usize].light_value = 15;
     t[LIT_REDSTONE_ORE as usize].light_value = 9;
 
