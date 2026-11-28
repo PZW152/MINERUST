@@ -15,6 +15,7 @@ pub mod ai;
 mod end;
 mod extra;
 pub mod horse;
+pub mod wither;
 mod nether;
 pub use extra::{village_golems, Other, Puff, Strike};
 pub use nether::Fireball;
@@ -50,6 +51,8 @@ pub enum Kind {
     EnderCrystal,
     /// `EntitySnowman`
     SnowGolem,
+    /// `EntityWither`
+    Wither,
 }
 
 /// What a leashed mob is tied to: the player, or the leash knot on the
@@ -60,7 +63,7 @@ pub enum Leash {
     Knot([i32; 3]),
 }
 
-pub const ALL_KINDS: [Kind; 28] = [
+pub const ALL_KINDS: [Kind; 29] = [
     Kind::Pig,
     Kind::Cow,
     Kind::Sheep,
@@ -89,6 +92,7 @@ pub const ALL_KINDS: [Kind; 28] = [
     Kind::EnderDragon,
     Kind::EnderCrystal,
     Kind::SnowGolem,
+    Kind::Wither,
 ];
 
 impl Kind {
@@ -113,6 +117,7 @@ impl Kind {
             Kind::MagmaCube => (0.6, 0.6),
             Kind::EnderDragon => (16.0, 8.0),
             Kind::EnderCrystal => (2.0, 2.0),
+            Kind::Wither => (0.9, 4.0),
             _ => (0.6, 1.8),
         }
     }
@@ -137,6 +142,7 @@ impl Kind {
             Kind::MagmaCube => 1.0,
             Kind::EnderDragon => 200.0,
             Kind::EnderCrystal => 5.0,
+            Kind::Wither => 300.0,
             _ => 20.0,
         }
     }
@@ -158,6 +164,7 @@ impl Kind {
             Kind::PigZombie => 0.5,
             Kind::Blaze | Kind::Ghast | Kind::MagmaCube => 0.7,
             Kind::EnderDragon | Kind::EnderCrystal => 0.7,
+            Kind::Wither => 0.6,
         }
     }
     pub fn hostile(self) -> bool {
@@ -206,6 +213,7 @@ impl Kind {
                 | Kind::MagmaCube
                 | Kind::EnderDragon
                 | Kind::EnderCrystal
+                | Kind::Wither
         )
     }
     /// `EnumCreatureType.creature` (counts towards the animal cap).
@@ -260,6 +268,7 @@ impl Kind {
             Kind::Horse => "Horse",
             Kind::IronGolem => "Iron Golem",
             Kind::SnowGolem => "Snow Golem",
+            Kind::Wither => "Wither",
             Kind::Ghast => "Ghast",
             Kind::PigZombie => "Zombie Pigman",
             Kind::Blaze => "Blaze",
@@ -293,6 +302,7 @@ impl Kind {
             Kind::Horse => "EntityHorse",
             Kind::IronGolem => "VillagerGolem",
             Kind::SnowGolem => "SnowMan",
+            Kind::Wither => "WitherBoss",
             Kind::Ghast => "Ghast",
             Kind::PigZombie => "PigZombie",
             Kind::Blaze => "Blaze",
@@ -453,6 +463,8 @@ pub struct Mob {
     /// `EntityVillager.buyingList`, `wealth`, `timeUntilReset`,
     /// `needsInitilization`, and `buyingPlayer` being the player.
     pub offers: Option<Vec<crate::merchant::Recipe>>,
+    /// `EntityWither`'s state.
+    pub wither: wither::WitherState,
     /// `EntityCreeper.getPowered` (data watcher 17): struck by lightning.
     pub powered: bool,
     /// `EntityLiving.leashedToEntity`, and the `Leash` tag of a mob loaded
@@ -858,6 +870,7 @@ impl Mob {
             persistent: false,
             custom_name: String::new(),
             offers: None,
+            wither: Default::default(),
             powered: false,
             leash: None,
             leash_tag: None,
@@ -2390,6 +2403,16 @@ impl Mob {
         if self.health <= 0.0 {
             return false;
         }
+        // EntityWither.attackEntityFrom: nothing while charging or from
+        // drowning; any hurt makes it break out
+        if self.kind == Kind::Wither {
+            if self.wither.invul > 0 || drown {
+                return false;
+            }
+            if self.wither.block_break <= 0 {
+                self.wither.block_break = 20;
+            }
+        }
         let applied;
         let fresh;
         if self.hurt_resistant as f32 > 10.0 && amount <= self.last_damage {
@@ -2604,6 +2627,11 @@ impl Mob {
     fn drop_few_items(&mut self, hit: bool, l: i32) -> Vec<Stack> {
         let burning = self.burning();
         let mut v = Vec::new();
+        // EntityWither.dropFewItems: the nether star
+        if self.kind == Kind::Wither {
+            v.push(Stack::new(399, 0, 1));
+            return v;
+        }
         let r = &mut self.rand;
         let mut each = |v: &mut Vec<Stack>, id: u16, meta: i32, n: i32| {
             for _ in 0..n {
@@ -2711,6 +2739,7 @@ impl Mob {
                     living(r, &mut v, id);
                 }
             }
+            Kind::Wither => {}
             // EntitySnowman.dropFewItems: nextInt(16) snowballs
             Kind::SnowGolem => {
                 let n = r.next_int_n(16);
@@ -2779,6 +2808,7 @@ impl Mob {
             Kind::EnderCrystal | Kind::EnderDragon => return 0,
             Kind::Squid => return 1 + world_rand.next_int_n(3),
             Kind::Bat | Kind::IronGolem => return 0,
+            Kind::Wither => return 50,
             _ => {}
         }
         if self.kind.animal() {
@@ -3345,6 +3375,57 @@ impl Mobs {
             let hit = nether::tick_fireball(&mut self.fireballs[k], w, player, &self.list);
             let gone = self.fireballs[k].ticks_alive() > 600;
             match hit {
+                Some((imp, at)) if self.fireballs[k].wither > 0 => {
+                    // EntityWitherSkull.onImpact: 8 from the wither (it heals
+                    // 5 for a kill), Wither II on Normal and Hard, a blast of 1
+                    let f = self.fireballs.remove(k);
+                    let secs = match player.difficulty {
+                        2 => 10,
+                        3 => 40,
+                        _ => 0,
+                    };
+                    match imp {
+                        nether::Impact::Player => {
+                            out.hits.push(Hit::Fireball {
+                                amount: 8.0,
+                                shooter: f.shooter_id(),
+                                small: false,
+                            });
+                            if secs > 0 {
+                                out.hits.push(Hit::Potion {
+                                    effects: vec![crate::potion::Effect::new(crate::potion::WITHER, 20 * secs, 1)],
+                                    scale: 1.0,
+                                    from: at,
+                                });
+                            }
+                        }
+                        nether::Impact::Mob(id) => {
+                            let mut killed = false;
+                            if let Some(t) = self.list.iter_mut().find(|m| m.id == id) {
+                                if t.hurt(8.0, Some(f.pos), true) {
+                                    killed = t.health <= 0.0;
+                                    if secs > 0 && !matches!(t.kind, Kind::Wither) {
+                                        t.potions.add_effect(crate::potion::Effect::new(crate::potion::WITHER, 20 * secs, 1));
+                                    }
+                                }
+                            }
+                            if killed {
+                                if let Some(s) = self.list.iter_mut().find(|m| m.id == f.shooter_id()) {
+                                    s.health = (s.health + 5.0).min(s.max_health());
+                                }
+                            }
+                        }
+                        nether::Impact::Block(..) => {}
+                    }
+                    explosions.push(crate::world::explosion::Request {
+                        pos: at,
+                        size: 1.0,
+                        flaming: false,
+                        smoking: true,
+                        exploder: crate::world::explosion::Exploder::None,
+                        exclude: None,
+                    });
+                }
                 Some((imp, at)) => {
                     let f = self.fireballs.remove(k);
                     match imp {
@@ -4270,6 +4351,7 @@ impl Mobs {
             ("Health", Nbt::Short(m.health.ceil() as i16)),
             ("PersistenceRequired", Nbt::Byte(m.persistent as i8)),
             ("powered", Nbt::Byte(m.powered as i8)),
+            ("Invul", Nbt::Int(m.wither.invul)),
             // EntityLiving.writeEntityToNBT: Leashed and the holder
             ("Leashed", Nbt::Byte(m.leash.or(m.leash_tag).is_some() as i8)),
             // EntityLiving.writeEntityToNBT
@@ -4463,6 +4545,9 @@ impl Mobs {
         }
         m.persistent = t.int("PersistenceRequired").unwrap_or(0) != 0;
         m.powered = m.kind == Kind::Creeper && t.int("powered").unwrap_or(0) != 0;
+        if m.kind == Kind::Wither {
+            m.wither.invul = t.int("Invul").unwrap_or(0) as i32;
+        }
         if t.int("Leashed").unwrap_or(0) != 0 {
             if let Some(l) = t.get("Leash") {
                 m.leash_tag = match (l.int("X"), l.int("Y"), l.int("Z")) {
@@ -4600,6 +4685,7 @@ pub fn hurt_sound(k: Kind) -> &'static str {
         Kind::MagmaCube => "mob.slime.small",
         Kind::EnderDragon => "mob.enderdragon.hit",
         Kind::EnderCrystal | Kind::SnowGolem => "",
+        Kind::Wither => "mob.wither.hurt",
     }
 }
 
@@ -4629,6 +4715,7 @@ pub fn death_sound(k: Kind) -> &'static str {
         Kind::Blaze => "mob.blaze.death",
         Kind::MagmaCube => "mob.slime.small",
         Kind::EnderDragon => "mob.enderdragon.end",
+        Kind::Wither => "mob.wither.death",
         Kind::EnderCrystal | Kind::SnowGolem => "",
     }
 }
@@ -4677,6 +4764,7 @@ pub fn idle_sound(k: Kind) -> Option<&'static str> {
         | Kind::MagmaCube
         | Kind::EnderCrystal
         | Kind::SnowGolem => return None,
+        Kind::Wither => "mob.wither.idle",
     })
 }
 
@@ -4984,6 +5072,10 @@ fn tick_mob(
     }
     if m.kind == Kind::Ghast {
         nether::ghast(m, w, player, balls, out);
+        return;
+    }
+    if m.kind == Kind::Wither {
+        wither::tick(m, w, player, others, balls, out, explosions);
         return;
     }
     if m.kind == Kind::EnderCrystal {

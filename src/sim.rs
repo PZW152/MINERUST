@@ -411,6 +411,10 @@ pub struct MobView {
     pub tail_counter: i32,
     /// `getMaxHealth`, for the mount's hearts.
     pub max_health: f32,
+    /// `EntityWither.getInvulTime` and the side heads' pitch and yaw
+    /// (previous, current).
+    pub wither_invul: i32,
+    pub wither_heads: [[[f32; 2]; 2]; 2],
     /// `S1BPacketEntityAttach(1, ...)`: whom the lead goes to.
     pub leash: Option<LeashView>,
 }
@@ -1955,6 +1959,7 @@ impl Sim {
 
     /// Advances the world by one tick and reports what the client must know.
     pub fn step(&mut self, commands: &[Command], events: &mut Vec<Event>) {
+        self.play.difficulty_peaceful = self.difficulty == crate::entity::living::Difficulty::Peaceful;
         for c in commands {
             self.apply(c);
         }
@@ -4271,6 +4276,8 @@ impl Sim {
                 hanim: [0.0; 6],
                 tail_counter: 0,
                 max_health: m.max_health(),
+                wither_invul: m.wither.invul,
+                wither_heads: [m.wither.prev_heads, m.wither.heads],
                 leash: m.leash.map(|l| match l {
                     crate::entity::mob::Leash::Player => LeashView::Player,
                     crate::entity::mob::Leash::Knot(b) => LeashView::Knot([
@@ -4359,7 +4366,14 @@ impl Sim {
             .mobs
             .fireballs
             .iter()
-            .map(|f| (f.pos, f.prev_pos, f.small as u8))
+            .map(|f| {
+                let k = match f.wither {
+                    1 => 3,
+                    2 => 4,
+                    _ => f.small as u8,
+                };
+                (f.pos, f.prev_pos, k)
+            })
             .collect();
         shots.extend(self.eyes.iter().map(|e| (e.pos, e.prev, 2u8)));
         events.push(Event::Fireballs(shots));
@@ -5005,6 +5019,38 @@ impl Sim {
         }
         for (p, k, r) in std::mem::take(&mut self.play.skull_updates) {
             events.push(Event::Skull(p, k, r));
+        }
+        // BlockSkull.makeWither: the wither, charging, and the snow puffs
+        for (at, yaw) in std::mem::take(&mut self.play.wither_spawns) {
+            let mut r = JavaRandom::new(self.world.rand.next_long());
+            let id = self.mobs.spawn(crate::entity::mob::Kind::Wither, at, yaw, &mut r);
+            if let Some(m) = self.mobs.list.iter_mut().find(|m| m.id == id) {
+                m.yaw = yaw;
+                m.body_yaw = yaw;
+                m.head_yaw = yaw;
+                m.persistent = true;
+                m.wither_ignite();
+            }
+            if self.stats_file.trigger_achievement("achievement.spawnWither") {
+                let dirty = self.stats_file.take_dirty();
+                self.stats_out.extend(dirty);
+            }
+            let mut puffs = Vec::new();
+            for _ in 0..120 {
+                puffs.push((
+                    "snowballpoof",
+                    [
+                        at[0] - 0.5 + self.world.rand.next_double(),
+                        at[1] - 0.55 + self.world.rand.next_double() * 3.9,
+                        at[2] - 0.5 + self.world.rand.next_double(),
+                    ],
+                    [0.0; 3],
+                ));
+            }
+            self.pending_out.push(crate::entity::mob::Outcome {
+                particles: puffs,
+                ..Default::default()
+            });
         }
         if std::mem::take(&mut self.mode_changed) {
             events.push(Event::GameMode(self.play.mode));
@@ -8535,6 +8581,54 @@ mod tests {
     }
 
     /// `EntityVillager.interact`, `ContainerMerchant`, `useRecipe`.
+    #[test]
+    fn withers_rise_from_soul_sand_and_skulls() {
+        use crate::entity::mob::Kind;
+        use crate::item::Stack;
+        let (mut sim, x, y, z) = redstone_sim();
+        arena(&mut sim, x, y, z);
+        sim.play.mode = GameMode::Survival;
+        sim.difficulty = crate::entity::living::Difficulty::Normal;
+        let (bx, by, bz) = (x + 4, y + 1, z);
+        // the T of soul sand along x
+        for dx in 0..3 {
+            sim.world.set_block(bx + dx, by + 1, bz, crate::block::SOUL_SAND, 0, 3);
+        }
+        sim.world.set_block(bx + 1, by, bz, crate::block::SOUL_SAND, 0, 3);
+        let feet = [x as f64 + 0.5, (y + 1) as f64, z as f64 + 0.5];
+        let place = |sim: &mut Sim, sx: i32| {
+            let sel = sim.play.inv.selected;
+            sim.play.inv.main[sel] = Some(Stack::new(397, 1, 1));
+            sim.step(
+                &[
+                    Command::Player(feet, [0.0, 0.0], false),
+                    Command::Use {
+                        target: [sx, by + 1, bz],
+                        face: [0, 1, 0],
+                        sneaking: false,
+                        hit: [0.5, 1.0, 0.5],
+                    },
+                ],
+                &mut Vec::new(),
+            );
+        };
+        place(&mut sim, bx);
+        place(&mut sim, bx + 1);
+        assert!(!sim.mobs.list.iter().any(|m| m.kind == Kind::Wither));
+        place(&mut sim, bx + 2);
+        let w = sim.mobs.list.iter().find(|m| m.kind == Kind::Wither).expect("a wither");
+        assert_eq!(w.wither.invul, 220);
+        assert_eq!(sim.world.peek_block(bx + 1, by, bz), 0, "the soul sand is gone");
+        assert_eq!(sim.world.peek_block(bx, by + 2, bz), 0, "the skulls are gone");
+        // it charges, heals and then blasts
+        for _ in 0..230 {
+            sim.step(&[Command::Player(feet, [0.0, 0.0], false)], &mut Vec::new());
+        }
+        let w = sim.mobs.list.iter().find(|m| m.kind == Kind::Wither).expect("still there");
+        assert_eq!(w.wither.invul, 0);
+        assert!(w.health > 250.0, "healed to {}", w.health);
+    }
+
     #[test]
     fn lightning_charges_creepers_and_turns_pigs() {
         use crate::entity::mob::Kind;

@@ -326,6 +326,10 @@ pub struct Play {
     pub sign_updates: Vec<(Pos, [String; 4])>,
     /// Heads placed since the last tick (`S35PacketUpdateTileEntity` 4).
     pub skull_updates: Vec<(Pos, i32, i32)>,
+    /// Withers made by the last skull (position, yaw), and whether the
+    /// difficulty is Peaceful.
+    pub wither_spawns: Vec<([f64; 3], f32)>,
+    pub difficulty_peaceful: bool,
     /// Generated entities (villagers, witches, chest minecarts).
     pub pending: Vec<crate::world::server::GenEntity>,
 }
@@ -599,6 +603,8 @@ impl Play {
             ),
             sign_updates: Vec::new(),
             skull_updates: Vec::new(),
+            wither_spawns: Vec::new(),
+            difficulty_peaceful: false,
             pending: Vec::new(),
         }
     }
@@ -1950,6 +1956,25 @@ impl Play {
         let kind = held.meta.clamp(0, 4);
         self.tiles.insert(p, Tile::Skull { kind, rot });
         self.skull_updates.push((p, kind, rot));
+        // BlockSkull.makeWither (not on Peaceful)
+        if kind == 1 && self.difficulty_peaceful == false {
+            let tiles = &self.tiles;
+            let shape = {
+                let at = |x: i32, y: i32, z: i32| w.peek_block(x, y, z);
+                let skull = |x: i32, y: i32, z: i32| {
+                    w.peek_block(x, y, z) == block::SKULL
+                        && matches!(tiles.get(&[x, y, z]), Some(Tile::Skull { kind: 1, .. }))
+                };
+                crate::entity::mob::wither::summon_shape(&at, &skull, p)
+            };
+            if let Some((clear, at, yaw)) = shape {
+                for c in &clear {
+                    self.tiles.remove(c);
+                    w.set_block(c[0], c[1], c[2], block::AIR, 0, 2);
+                }
+                self.wither_spawns.push((at, yaw));
+            }
+        }
         if self.mode != GameMode::Creative {
             self.inv.consume_held();
         }

@@ -14,6 +14,8 @@ pub struct Fireball {
     pub small: bool,
     shooter: u32,
     ticks: i32,
+    /// `EntityWitherSkull`: 1 black, 2 blue (`isInvulnerable`).
+    pub wither: u8,
 }
 
 impl Fireball {
@@ -38,6 +40,7 @@ impl Fireball {
             small,
             shooter: u32::MAX,
             ticks: 0,
+            wither: 0,
         }
     }
 
@@ -62,6 +65,7 @@ impl Fireball {
             small,
             shooter,
             ticks: 0,
+            wither: 0,
         }
     }
 }
@@ -155,9 +159,11 @@ pub fn tick_fireball(
     };
     let at = f.pos;
     f.pos = to;
+    // getMotionFactor: a blue wither skull is slower
+    let factor = if f.wither == 2 { 0.73f32 } else { 0.95f32 } as f64;
     for k in 0..3 {
         f.motion[k] += f.acc[k];
-        f.motion[k] *= 0.95;
+        f.motion[k] *= factor;
     }
     impact.map(|(i, t)| (i, [at[0] + d[0] * t, at[1] + d[1] * t, at[2] + d[2] * t]))
 }

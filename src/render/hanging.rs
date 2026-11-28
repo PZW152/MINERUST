@@ -4,11 +4,13 @@ use super::mesher::Vertex;
 use super::model::Tex;
 use super::{mul, rot_y, transform, translate, Mat4};
 
-pub const TEXTURES: [&str; 4] = [
+pub const TEXTURES: [&str; 6] = [
     "../painting/paintings_kristoffer_zetterstrand",
     "lead_knot",
     "beacon_beam",
     "creeper/creeper_armor",
+    "wither/wither",
+    "wither/wither_invulnerable",
 ];
 
 /// The world-space normal `n` under the rotation of `m`, lit as
@@ -518,4 +520,20 @@ pub fn lightning(out: &mut Vec<Vertex>, white: [f32; 4], rel: [f32; 3], vertex: 
             }
         }
     }
+}
+
+/// `RenderWitherSkull`: `ModelSkeletonHead(0, 35, 64, 64)` turned with the
+/// skull's flight.
+pub fn wither_skull(out: &mut Vec<Vertex>, tex: Tex, rel: [f32; 3], yaw: f32, pitch: f32) {
+    let m = mul(&translate(rel[0], rel[1], rel[2]), &super::entities::scale(-1.0, -1.0, 1.0));
+    let part = super::model::Part::new([0.0; 3])
+        .bx(0.0, 35.0, [-4.0, -8.0, -4.0], [8.0, 8.0, 8.0], 0.0)
+        .r(pitch.to_radians(), yaw.to_radians(), 0.0);
+    let mut d = super::model::Draw {
+        out,
+        tex,
+        light: [240, 240, 0, 0],
+        tint: [1.0; 4],
+    };
+    super::model::render(&mut d, &m, &part);
 }

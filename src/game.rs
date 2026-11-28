@@ -6099,9 +6099,14 @@ impl Game {
             };
             let atlas = &self.atlas;
             // RenderDragon / RenderWither: BossStatus.setBossStatus
-            if m.kind == crate::entity::mob::Kind::EnderDragon {
+            if matches!(m.kind, crate::entity::mob::Kind::EnderDragon | crate::entity::mob::Kind::Wither) {
+                let key = if m.kind == crate::entity::mob::Kind::Wither {
+                    "entity.WitherBoss.name"
+                } else {
+                    "entity.EnderDragon.name"
+                };
                 let name = if m.custom_name.is_empty() {
-                    self.lang.get("entity.EnderDragon.name").to_string()
+                    self.lang.get(key).to_string()
                 } else {
                     m.custom_name.clone()
                 };
@@ -6374,6 +6379,23 @@ impl Game {
         let eye_tex = self.atlas.mob_tex("../items/ender_eye");
         {
             for &(pos, prev, kind) in &self.fireballs {
+                // RenderWitherSkull
+                if kind == 3 || kind == 4 {
+                    let name = if kind == 4 { "wither/wither_invulnerable" } else { "wither/wither" };
+                    if let Some(t) = self.atlas.mob_tex(name) {
+                        let tp = sp as f64;
+                        let c = [
+                            (prev[0] + (pos[0] - prev[0]) * tp - eye[0]) as f32,
+                            (prev[1] + (pos[1] - prev[1]) * tp - eye[1]) as f32,
+                            (prev[2] + (pos[2] - prev[2]) * tp - eye[2]) as f32,
+                        ];
+                        let d = [pos[0] - prev[0], pos[1] - prev[1], pos[2] - prev[2]];
+                        let yaw = (d[0].atan2(d[2]).to_degrees()) as f32;
+                        let pitch = (d[1].atan2((d[0] * d[0] + d[2] * d[2]).sqrt()).to_degrees()) as f32;
+                        crate::render::hanging::wither_skull(&mut dynamic, t, c, yaw, pitch);
+                    }
+                    continue;
+                }
                 let Some(t) = (if kind == 2 { eye_tex } else { fire_tex }) else {
                     continue;
                 };

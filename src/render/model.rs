@@ -402,9 +402,45 @@ fn villager(a: &Anim, witch: bool, ticks: f32, id: u32) -> Vec<Part> {
     vec![head, body, rl, ll, arms]
 }
 
+/// `ModelWither` posed by `setRotationAngles` and `setLivingAnimations`.
+fn wither(mv: &MobView, a: &Anim, partial: f32) -> Vec<Part> {
+    let c = cos(a.age * 0.1);
+    let rx1 = (0.065 + 0.05 * c) * PI;
+    let lerp = |h: usize, k: usize| mv.wither_heads[0][h][k] + (mv.wither_heads[1][h][k] - mv.wither_heads[0][h][k]) * partial;
+    let body = mv.prev_body_yaw + (mv.body_yaw - mv.prev_body_yaw) * partial;
+    let mut v = vec![
+        Part::new([0.0; 3])
+            .bx(0.0, 0.0, [-4.0, -4.0, -4.0], [8.0, 8.0, 8.0], 0.0)
+            .r(a.head_pitch / (180.0 / PI), a.head_yaw / (180.0 / PI), 0.0),
+    ];
+    for (h, x) in [(0usize, -8.0f32), (1, 10.0)] {
+        v.push(
+            Part::new([x, 4.0, 0.0])
+                .bx(32.0, 0.0, [-4.0, -4.0, -4.0], [6.0, 6.0, 6.0], 0.0)
+                .r(lerp(h, 0) / (180.0 / PI), (lerp(h, 1) - body) / (180.0 / PI), 0.0),
+        );
+    }
+    v.push(Part::new([0.0; 3]).bx(0.0, 16.0, [-10.0, 3.9, -0.5], [20.0, 3.0, 3.0], 0.0));
+    v.push(
+        Part::new([-2.0, 6.9, -0.5])
+            .bx(0.0, 22.0, [0.0, 0.0, 0.0], [3.0, 10.0, 3.0], 0.0)
+            .bx(24.0, 22.0, [-4.0, 1.5, 0.5], [11.0, 2.0, 2.0], 0.0)
+            .bx(24.0, 22.0, [-4.0, 4.0, 0.5], [11.0, 2.0, 2.0], 0.0)
+            .bx(24.0, 22.0, [-4.0, 6.5, 0.5], [11.0, 2.0, 2.0], 0.0)
+            .r(rx1, 0.0, 0.0),
+    );
+    v.push(
+        Part::new([-2.0, 6.9 + cos(rx1) * 10.0, -0.5 + sin(rx1) * 10.0])
+            .bx(12.0, 22.0, [0.0, 0.0, 0.0], [3.0, 6.0, 3.0], 0.0)
+            .r((0.265 + 0.1 * c) * PI, 0.0, 0.0),
+    );
+    v
+}
+
 fn parts(mv: &MobView, a: &Anim, ticks: f32, layer: u8, partial: f32) -> Vec<Part> {
     let id = mv.id;
     match mv.kind {
+        Kind::Wither => wither(mv, a, partial),
         Kind::Slime
         | Kind::Enderman
         | Kind::Squid
@@ -923,6 +959,17 @@ pub fn mob(
     // preRenderCallback
     match m.kind {
         Kind::CaveSpider => mat = mul(&mat, &super::entities::scale(0.7, 0.7, 0.7)),
+        // RenderWither.preRenderCallback: twice the size, growing while it
+        // charges
+        Kind::Wither => {
+            let t = m.wither_invul;
+            let s = if t > 0 {
+                2.0 - (t as f32 - partial) / 220.0 * 0.5
+            } else {
+                2.0
+            };
+            mat = mul(&mat, &super::entities::scale(s, s, s));
+        }
         Kind::Creeper => {
             let mut f = (m.prev_fuse as f32 + (m.fuse - m.prev_fuse) as f32 * partial) / 28.0;
             f = f.clamp(0.0, 1.0);
@@ -1062,6 +1109,15 @@ pub fn mob(
         } else {
             if m.kind == Kind::Zombie && m.flags & 32 != 0 {
                 "zombie/zombie_villager"
+            } else if m.kind == Kind::Wither {
+                // RenderWither.getEntityTexture: blue while charging (it
+                // flickers in the last 80 ticks)
+                let t = m.wither_invul;
+                if t > 0 && (t > 80 || t / 5 % 2 != 1) {
+                    "wither/wither_invulnerable"
+                } else {
+                    "wither/wither"
+                }
             } else {
                 texture(m.kind, m.variant, layer)
             }
@@ -1166,6 +1222,27 @@ pub fn mob(
             } else {
                 render(&mut d, &mat, p);
             }
+        }
+    }
+    // RenderWither.shouldRenderPass: armoured at half health, the blue
+    // texture added on a model a tenth bigger (its scrolling left out)
+    if m.kind == Kind::Wither && m.health <= m.max_health / 2.0 {
+        if let Some(t) = tex("wither/wither_invulnerable") {
+            let mut glow = Vec::new();
+            let mut d = Draw {
+                out: &mut glow,
+                tex: t,
+                light: [240, 240, 0, 0],
+                tint: [0.5, 0.5, 0.5, 1.0],
+            };
+            let mm = mul(
+                &mul(&mat, &translate(0.0, -0.01, 0.0)),
+                &super::entities::scale(1.1, 1.1, 1.1),
+            );
+            for p in wither(m, &a, partial) {
+                render(&mut d, &mm, &p);
+            }
+            super::entities::push_additive(&glow);
         }
     }
     // RenderCreeper.shouldRenderPass: a charged creeper's swirl,
