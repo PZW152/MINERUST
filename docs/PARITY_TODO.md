@@ -23,7 +23,7 @@ AI：
 - [ ] 馬：任務 AI 已完成；尚缺 `EntityAIRunAroundLikeCrazy` 以外的騎乘者行為（`func_110256_cu` 鬆開韁繩的特殊情況）、殭屍與骷髏馬的生成（只能用召喚）
 - [ ] 村民：開門、回屋、繁殖、跟隨鐵魔像、`setLookingForHome`、交易後的聲望與開心粒子（都需要村莊資料 `VillageCollection`；交易已完成）
 - [ ] 鐵魔像：`DefendVillage`、`MoveThroughVillage`、`MoveTowardsRestriction`（需要村莊資料）；拿花（`setHoldingRose` 只有計時，沒有畫）
-- [ ] 狼被非玩家打時傷害減半；豹貓 `OcelotSit` 對床與「箱子有人在用」的判斷
+- [ ] 豹貓 `OcelotSit` 對床與「箱子有人在用」的判斷
 - [ ] 終界使者、烈焰使者、惡魂、蝙蝠、魷魚的 `updateEntityActionState`（`extra.rs`、`nether.rs`）逐行對照原始碼
 - [ ] 蠹魚被魔法傷害（藥水）時也會召喚同伴（`DamageSource.magic`），目前只認有來源實體的傷害
 - [ ] `EntityAITarget` 的 `nearbyOnly`（`canEasilyReach`）與家的範圍（`isWithinHomeDistance`）

@@ -2488,12 +2488,16 @@ impl Mob {
 
     fn hurt_by(
         &mut self,
-        amount: f32,
+        mut amount: f32,
         from: Option<[f64; 3]>,
         blockable: bool,
         drown: bool,
     ) -> bool {
         let src = self.hurt_src.take();
+        // EntityWolf.attackEntityFrom: another mob's damage is (d + 1) / 2
+        if self.kind == Kind::Wolf && matches!(src, Some(ai::Target::Mob(_))) {
+            amount = (amount + 1.0) / 2.0;
+        }
         // EntitySilverfish.attackEntityFrom: an entity's damage (or magic)
         // wakes the silverfish around, 20 ticks on
         if self.kind == Kind::Silverfish && self.ally_cooldown <= 0 && src.is_some() {
