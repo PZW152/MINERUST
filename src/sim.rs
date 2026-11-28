@@ -7855,6 +7855,40 @@ mod tests {
         assert_eq!(sim.world.block(x + 2, y + 1, z), block::LIT_REDSTONE_ORE);
     }
 
+    /// BlockCauldron.onBlockActivated: a bucket fills it, a bottle takes a
+    /// level as a water bottle, dyed leather is washed.
+    #[test]
+    fn cauldron_fills_and_empties() {
+        let (mut sim, x, y, z) = redstone_sim();
+        sim.world.set_block(x, y + 1, z, block::CAULDRON, 0, 3);
+        sim.step(&[Command::SetMode(GameMode::Survival)], &mut Vec::new());
+        let feet = [x as f64 + 0.5, (y + 1) as f64, z as f64 + 3.5];
+        let sel = sim.play.inv.selected;
+        let mut use_with = |sim: &mut Sim, s: crate::item::Stack| {
+            sim.play.inv.main[sel] = Some(s);
+            sim.step(
+                &[
+                    Command::Player(feet, [180.0, 0.0], false),
+                    Command::Use { target: [x, y + 1, z], face: [0, 1, 0], sneaking: false, hit: [0.5, 1.0, 0.5] },
+                ],
+                &mut Vec::new(),
+            );
+        };
+        use_with(&mut sim, crate::item::Stack::new(326, 0, 1));
+        assert_eq!(sim.world.meta(x, y + 1, z), 3);
+        assert_eq!(sim.play.inv.main[sel].map(|s| s.id), Some(325), "the bucket is empty");
+        use_with(&mut sim, crate::item::Stack::new(374, 0, 2));
+        assert_eq!(sim.world.meta(x, y + 1, z), 2);
+        assert!(sim.play.inv.main.iter().flatten().any(|s| s.id == 373 && s.meta == 0), "a water bottle");
+        let dyed = crate::item::Stack::new(299, 0, 1).edit_tag(|t| {
+            use crate::world::anvil::Nbt;
+            t.set("display", Nbt::Compound(vec![("color".to_string(), Nbt::Int(0xff0000))]));
+        });
+        use_with(&mut sim, dyed);
+        assert_eq!(sim.world.meta(x, y + 1, z), 1);
+        assert_eq!(sim.play.inv.main[sel].and_then(|s| s.dye_color()), None, "washed");
+    }
+
     /// A stone floor with nothing on it around the test site.
     fn arena(sim: &mut Sim, x: i32, y: i32, z: i32) {
         for dx in -2..14 {

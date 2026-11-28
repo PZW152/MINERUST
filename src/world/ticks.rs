@@ -93,6 +93,19 @@ impl ServerWorld {
             if self.raining && self.can_snow_at(x, y, z, true) {
                 self.set_block(x, y, z, block::SNOW_LAYER, 0, 3);
             }
+            // Block.fillWithRain where it rains (canSpawnLightningBolt):
+            // a cauldron gains a level one time in 20
+            if self.raining {
+                let b = self.biome(x, z);
+                if !b.enable_snow && b.enable_rain && self.block(x, y - 1, z) == block::CAULDRON {
+                    if self.rand.next_int_n(20) == 1 {
+                        let m = self.meta(x, y - 1, z);
+                        if m < 3 {
+                            self.set_meta(x, y - 1, z, m + 1, 2);
+                        }
+                    }
+                }
+            }
         }
         let sections = self.chunks[&(cx, cz)].sections;
         for sec in 0..16i32 {

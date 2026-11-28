@@ -844,6 +844,66 @@ impl Play {
         self.spawn(e);
     }
 
+    /// `BlockCauldron.onBlockActivated`: a water bucket fills it, a glass
+    /// bottle takes a level as a water bottle, dyed leather armour is
+    /// washed for a level. False lets the held item be used as usual.
+    fn use_cauldron(&mut self, w: &mut ServerWorld, p: Pos) -> bool {
+        let Some(held) = self.inv.held() else { return true };
+        let level = w.meta(p[0], p[1], p[2]) as i32;
+        let creative = self.mode == GameMode::Creative;
+        let sel = self.inv.selected;
+        // setWaterLevel: the new level and a neighbour update (comparators)
+        let set = |w: &mut ServerWorld, l: i32| {
+            w.set_meta(p[0], p[1], p[2], l.clamp(0, 3), 2);
+            w.notify_neighbours(p[0], p[1], p[2], block::CAULDRON);
+        };
+        match held.id {
+            // water bucket
+            326 => {
+                if level < 3 {
+                    if !creative {
+                        self.inv.main[sel] = Some(Stack::new(325, 0, 1));
+                    }
+                    set(w, 3);
+                    self.inv_dirty = true;
+                }
+                true
+            }
+            // glass bottle
+            374 => {
+                if level > 0 {
+                    if !creative {
+                        let mut bottle = Stack::new(373, 0, 1);
+                        if !self.inv.add_stack(&mut bottle, false) {
+                            let id = self.next_item;
+                            self.next_item += 1;
+                            let pos = [p[0] as f64 + 0.5, p[1] as f64 + 1.5, p[2] as f64 + 0.5];
+                            self.spawn(ItemEntity::new(id, Stack::new(373, 0, 1), pos));
+                        }
+                        self.inv.consume_held();
+                        self.inv_dirty = true;
+                    }
+                    set(w, level - 1);
+                }
+                false
+            }
+            // ItemArmor.removeColor on leather
+            298..=301 if level > 0 => {
+                // (a stack without a tag is left as it is)
+                let washed = if held.nbt().is_none() { held } else { held.edit_tag(|t| {
+                    if let Some(crate::world::anvil::Nbt::Compound(v)) = t.get_mut("display") {
+                        v.retain(|(k, _)| k != "color");
+                    }
+                }) };
+                self.inv.main[sel] = Some(washed);
+                self.inv_dirty = true;
+                set(w, level - 1);
+                true
+            }
+            _ => false,
+        }
+    }
+
     /// The player finished digging `p` (or clicked it in creative).
     pub fn dig(&mut self, w: &mut ServerWorld, p: Pos) {
         let id = w.block(p[0], p[1], p[2]);
@@ -1198,6 +1258,11 @@ impl Play {
                 block::DRAGON_EGG => {
                     w.dragon_egg_teleport(target[0], target[1], target[2]);
                     return true;
+                }
+                block::CAULDRON => {
+                    if self.use_cauldron(w, target) {
+                        return true;
+                    }
                 }
                 block::WOODEN_DOOR => {
                     // BlockDoor.onBlockActivated
