@@ -177,6 +177,87 @@ fn join_nice(v: &[String]) -> String {
     s
 }
 
+/// `CommandBase.doesStringStartWith`: case-insensitive prefix.
+fn starts_with(prefix: &str, s: &str) -> bool {
+    s.len() >= prefix.len() && s[..prefix.len()].eq_ignore_ascii_case(prefix)
+}
+
+/// `getListOfStringsMatchingLastWord`
+fn matching_last(args: &[&str], options: &[&str]) -> Vec<String> {
+    let last = args.last().copied().unwrap_or("");
+    options
+        .iter()
+        .filter(|o| starts_with(last, o))
+        .map(|o| o.to_string())
+        .collect()
+}
+
+/// `MinecraftServer.getPossibleCompletions`: what Tab offers for the chat
+/// line up to the cursor. A command line lists command names (with the
+/// slash while it is the only word) or that command's
+/// `addTabCompletionOptions`; anything else, the player names. The command
+/// names come in name order (the game's own order is its `HashMap`'s).
+pub fn tab_complete(text: &str) -> Vec<String> {
+    let players = [PLAYER_NAME];
+    let Some(line) = text.strip_prefix('/') else {
+        let last = text.split(' ').last().unwrap_or("");
+        return players
+            .iter()
+            .filter(|p| starts_with(last, p))
+            .map(|p| p.to_string())
+            .collect();
+    };
+    let single = !line.contains(' ');
+    let words: Vec<&str> = line.split(' ').collect();
+    // CommandHandler.getPossibleCommands
+    let mut out: Vec<String> = if words.len() == 1 {
+        let mut names: Vec<&str> = COMMANDS.iter().map(|c| c.0).collect();
+        names.sort_unstable();
+        names
+            .into_iter()
+            .filter(|n| starts_with(words[0], n))
+            .map(|n| n.to_string())
+            .collect()
+    } else {
+        let a = &words[1..];
+        let n = a.len();
+        let item_names = || ITEM_NAMES.iter().map(|e| e.1).collect::<Vec<_>>();
+        let block_names = || BLOCK_NAMES.iter().map(|e| e.1).collect::<Vec<_>>();
+        match words[0].to_lowercase().as_str() {
+            "clear" | "effect" if n == 1 => matching_last(a, &players),
+            "difficulty" if n == 1 => matching_last(a, &["peaceful", "easy", "normal", "hard"]),
+            "gamemode" if n == 1 => matching_last(a, &["survival", "creative", "adventure"]),
+            "gamemode" if n == 2 => matching_last(a, &players),
+            "gamerule" if n == 1 => {
+                let names = crate::gamerules::names();
+                let v: Vec<&str> = names.iter().map(|s| s.as_str()).collect();
+                matching_last(a, &v)
+            }
+            "gamerule" if n == 2 => matching_last(a, &["true", "false"]),
+            "give" if n == 1 => matching_last(a, &players),
+            "give" if n == 2 => matching_last(a, &item_names()),
+            "help" if n == 1 => {
+                let v: Vec<&str> = COMMANDS.iter().map(|c| c.0).collect();
+                matching_last(a, &v)
+            }
+            "me" | "say" => matching_last(a, &players),
+            "setblock" if n == 4 => matching_last(a, &block_names()),
+            "spawnpoint" | "tp" if n == 1 || n == 2 => matching_last(a, &players),
+            "time" if n == 1 => matching_last(a, &["set", "add"]),
+            "time" if n == 2 && a[0] == "set" => matching_last(a, &["day", "night"]),
+            "weather" if n == 1 => matching_last(a, &["clear", "rain", "thunder"]),
+            "xp" if n == 2 => matching_last(a, &players),
+            _ => Vec::new(),
+        }
+    };
+    if single {
+        for s in out.iter_mut() {
+            s.insert(0, '/');
+        }
+    }
+    out
+}
+
 /// `CommandGameMode.getGameModeFromCommand`
 fn game_mode(s: &str) -> Result<GameMode, Fail> {
     match s.to_lowercase().as_str() {
@@ -701,6 +782,20 @@ mod tests {
     /// CommandGameRule, and what the rules do: doDaylightCycle stops the
     /// clock (and the time packet says so), keepInventory keeps the items
     /// and the levels through death.
+    /// MinecraftServer.getPossibleCompletions and the commands'
+    /// addTabCompletionOptions
+    #[test]
+    fn tab_completion() {
+        assert_eq!(tab_complete("/ga"), vec!["/gamemode", "/gamerule"]);
+        assert_eq!(tab_complete("/gamerule keep"), vec!["keepInventory"]);
+        assert_eq!(tab_complete("/gamerule keepInventory t"), vec!["true"]);
+        assert_eq!(tab_complete("/time set n"), vec!["night"]);
+        assert_eq!(tab_complete("/weather "), vec!["clear", "rain", "thunder"]);
+        assert_eq!(tab_complete("/give Player minecraft:diamond_s")[0], "minecraft:diamond_sword");
+        assert_eq!(tab_complete("hello p"), vec!["Player"]);
+        assert!(tab_complete("/seed x").is_empty());
+    }
+
     #[test]
     fn game_rules() {
         let cfg = SimConfig {

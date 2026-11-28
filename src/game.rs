@@ -4924,7 +4924,7 @@ impl Game {
                 .shell
                 .as_ref()
                 .map_or_else(String::new, |s| s.clipboard.clone());
-            let r = c.key(&ui, &mut self.chat, &st, ch, code, ctrl, shift, &mut clip);
+            let r = c.key(&ui, &mut self.chat, &st, ch, code, ctrl, shift, &mut clip, self.ticks as i32);
             if let Some(s) = self.shell.as_mut() {
                 s.clipboard = clip;
             }

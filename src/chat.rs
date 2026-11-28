@@ -75,6 +75,8 @@ fn arg_text(a: &str, lang: &Lang) -> String {
 struct Line {
     counter: i32,
     text: String,
+    /// `ChatLine.getChatLineID` (0: none)
+    id: i32,
 }
 
 #[derive(Default)]
@@ -129,7 +131,17 @@ fn format_colors(s: &str, colours: bool) -> String {
 impl ChatGui {
     /// `printChatMessage`: wrapped to the chat width (`setChatLine`).
     pub fn print(&mut self, ui: &Ui, s: &GameSettings, text: &str, counter: i32, open: bool) {
-        self.set_line(ui, s, text, counter, open, false);
+        self.set_line(ui, s, text, counter, open, false, 0);
+    }
+
+    /// `printChatMessageWithOptionalDeletion`: the lines with the same id
+    /// go first (`deleteChatLine`).
+    pub fn print_with_id(&mut self, ui: &Ui, s: &GameSettings, text: &str, counter: i32, open: bool, id: i32) {
+        if id != 0 {
+            self.drawn.retain(|l| l.id != id);
+            self.lines.retain(|l| l.id != id);
+        }
+        self.set_line(ui, s, text, counter, open, false, id);
     }
 
     fn set_line(
@@ -140,6 +152,7 @@ impl ChatGui {
         counter: i32,
         open: bool,
         refresh: bool,
+        id: i32,
     ) {
         let width = (chat_width(s) as f32 / s.chat_scale).floor();
         let mut pieces = vec![format_colors(text, s.chat_colours)];
@@ -189,7 +202,7 @@ impl ChatGui {
                 self.scrolled = true;
                 self.scroll_by(s, open, 1);
             }
-            self.drawn.insert(0, Line { counter, text: l });
+            self.drawn.insert(0, Line { counter, text: l, id });
         }
         self.drawn.truncate(100);
         if !refresh {
@@ -198,6 +211,7 @@ impl ChatGui {
                 Line {
                     counter,
                     text: text.to_string(),
+                    id,
                 },
             );
             self.lines.truncate(100);
@@ -208,14 +222,14 @@ impl ChatGui {
     pub fn refresh(&mut self, ui: &Ui, s: &GameSettings) {
         self.drawn.clear();
         self.reset_scroll();
-        let lines: Vec<(i32, String)> = self
+        let lines: Vec<(i32, String, i32)> = self
             .lines
             .iter()
             .rev()
-            .map(|l| (l.counter, l.text.clone()))
+            .map(|l| (l.counter, l.text.clone(), l.id))
             .collect();
-        for (c, t) in lines {
-            self.set_line(ui, s, &t, c, false, true);
+        for (c, t, id) in lines {
+            self.set_line(ui, s, &t, c, false, true, id);
         }
     }
 
@@ -316,6 +330,10 @@ pub struct ChatScreen {
     pub field: TextField,
     history_cursor: usize,
     history_buffer: String,
+    /// `playerNamesFound`, `foundPlayerNames`, `autocompleteIndex`
+    names_found: bool,
+    found: Vec<String>,
+    found_index: usize,
 }
 
 /// What a key in the chat screen did.
@@ -338,7 +356,74 @@ impl ChatScreen {
             field,
             history_cursor: chat.sent.len(),
             history_buffer: String::new(),
+            names_found: false,
+            found: Vec::new(),
+            found_index: 0,
         }
+    }
+
+    /// `getNthWordFromPosWS(-1, cursor, false)`: where the word before the
+    /// cursor starts.
+    fn word_start(&self) -> usize {
+        let mut p = self.field.cursor.min(self.field.text.len());
+        while p > 0 && self.field.text[p - 1] != ' ' {
+            p -= 1;
+        }
+        p
+    }
+
+    /// Replaces the word before the cursor with `s`
+    /// (`deleteFromCursor(start - cursor)`, `writeText`).
+    fn replace_word(&mut self, ui: &Ui, s: &str) {
+        let start = self.word_start();
+        let cur = self.field.cursor;
+        let mut t = self.field.text.clone();
+        t.splice(start..cur, s.chars());
+        let text: String = t.iter().collect();
+        let end = start + s.chars().count();
+        self.field.set_text(ui, &text);
+        self.field.cursor = end;
+        self.field.selection_end = end;
+    }
+
+    /// `autocompletePlayerNames`, with the server's answer
+    /// (`onAutocompleteResponse`) at hand at once.
+    fn autocomplete(&mut self, ui: &Ui, chat: &mut ChatGui, st: &GameSettings, counter: i32) {
+        if !self.names_found {
+            let before: String = self.field.text[..self.field.cursor.min(self.field.text.len())].iter().collect();
+            let list: Vec<String> = crate::sim::commands::tab_complete(&before)
+                .into_iter()
+                .filter(|s| !s.is_empty())
+                .collect();
+            // onAutocompleteResponse: the common prefix first
+            let word: String = self.field.text[self.word_start()..self.field.cursor.min(self.field.text.len())]
+                .iter()
+                .collect();
+            let prefix = common_prefix(&list);
+            self.found = list;
+            self.found_index = 0;
+            if !prefix.is_empty() && !word.eq_ignore_ascii_case(&prefix) {
+                self.replace_word(ui, &prefix);
+                return;
+            }
+            if self.found.is_empty() {
+                return;
+            }
+            self.names_found = true;
+            self.replace_word(ui, "");
+        } else {
+            self.replace_word(ui, "");
+            if self.found_index >= self.found.len() {
+                self.found_index = 0;
+            }
+        }
+        if self.found.len() > 1 {
+            // printChatMessageWithOptionalDeletion(..., 1)
+            chat.print_with_id(ui, st, &self.found.join(", "), counter, true, 1);
+        }
+        let s = self.found[self.found_index].clone();
+        self.found_index += 1;
+        self.replace_word(ui, &s);
     }
 
     /// `getSentHistory`
@@ -372,7 +457,13 @@ impl ChatScreen {
         ctrl: bool,
         shift: bool,
         clip: &mut String,
+        counter: i32,
     ) -> ChatKey {
+        if code == 15 {
+            self.autocomplete(ui, chat, s, counter);
+            return ChatKey::None;
+        }
+        self.names_found = false;
         match code {
             1 => ChatKey::Close,
             28 | 156 => {
@@ -424,4 +515,16 @@ impl ChatScreen {
         self.field.w = ui.w - 4.0;
         self.field.draw(ui);
     }
+}
+
+/// `StringUtils.getCommonPrefix`
+fn common_prefix(v: &[String]) -> String {
+    let Some(first) = v.first() else {
+        return String::new();
+    };
+    let mut n = first.chars().count();
+    for s in &v[1..] {
+        n = n.min(first.chars().zip(s.chars()).take_while(|(a, b)| a == b).count());
+    }
+    first.chars().take(n).collect()
 }

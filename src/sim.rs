@@ -28,7 +28,7 @@ const AUTOSAVE_TICKS: i64 = 900;
 #[path = "sim_bed.rs"]
 mod bed;
 #[path = "commands.rs"]
-mod commands;
+pub mod commands;
 pub use commands::PLAYER_NAME;
 #[path = "sim_dispense.rs"]
 mod dispense;

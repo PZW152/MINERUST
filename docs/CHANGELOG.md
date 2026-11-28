@@ -9,7 +9,8 @@
 
 ## 2026-11-28
 
-- A hurt mob or player kicks its legs out (limbSwingAmount 1.5 in attackEntityFrom and handleHealthUpdate). The hurt camera tilt stays one way: the client's handleHealthUpdate sets attackedAtYaw to 0 in 1.7.10, so it never had a direction
+- Tab completes in chat (GuiChat.autocompletePlayerNames with MinecraftServer.getPossibleCompletions): command names, then each command's arguments (game rules and true/false, game modes, difficulties, time set/add and day/night, weather, item and block names for give and setblock, the player's name), the common prefix first, then cycling with the choices listed in one chat line that replaces itself (printChatMessageWithOptionalDeletion)
+- `43baacd` - A hurt mob or player kicks its legs out (limbSwingAmount 1.5 in attackEntityFrom and handleHealthUpdate). The hurt camera tilt stays one way: the client's handleHealthUpdate sets attackedAtYaw to 0 in 1.7.10, so it never had a direction
 - `110a28c` - Right-clicking a mob that does nothing with the held item uses it (Minecraft.func_147121_ag after interactWithEntitySendPacket is false): eating, drinking, throwing snowballs or eggs, drawing the bow while looking at an animal now work
 - `f4fd2c7` - Puppies and kittens drawn as ModelWolf and ModelOcelot do with isChild: the wolf's head at full size moved down and forward, the kitten's at three quarters, the rest at half size
 - `350e3a5` - shotcompare scene `sleep` (lying in a bed at night, `--sleep "x y z"` for MINERUST and ShotHarness): within 2.1 of the game

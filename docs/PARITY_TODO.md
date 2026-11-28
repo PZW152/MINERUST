@@ -36,7 +36,7 @@ AI：
       豹貓生成時的幼貓、馬的逐行核對
 - [ ] 區塊的 `InhabitedTime` 寫進存檔（目前寫 0，重新載入從 0 開始）
 - [ ] 高壓苦力怕的剩餘部分：盔甲層的捲動（目前靜止）、高壓苦力怕炸死殭屍、骷髏、苦力怕時掉頭顱
-- [ ] 遊戲規則的剩餘部分：`commandBlockOutput` 只存著（指令方塊未做）；`/gamerule` 的 Tab 補完
+- [ ] 遊戲規則的剩餘部分：`commandBlockOutput` 只存著（指令方塊未做）
 
 數值與外觀：
 - [ ] 藥水效果尚缺：隱形時不畫出生物、生物盔甲上的保護附魔（`applyArmorCalculations` 之後的 `getEnchantmentModifierDamage`）、
@@ -104,7 +104,7 @@ AI：
       `/achievement` 指令、成就的聊天公告
 - [ ] 資源包、使用統計（Snooper）、直播畫面
 - [ ] 告示牌與名字標籤的格式碼：顏色與 `§r` 已完成，粗體、斜體、底線、刪除線、亂碼（`§k`）還畫成一般字；輸入法的候選窗位置（`set_ime_cursor_area`，原版由系統決定，需確認）
-- [ ] 指令：summon、enchant、gamerule、playsound、spreadplayers、testfor 等，Tab 自動補完
+- [ ] 指令：summon、enchant、playsound、spreadplayers、testfor 等；Tab 補完的指令名依名稱排序（原版是 `HashMap` 的順序），客戶端在同一 tick 算出清單（原版等伺服器回 `S3APacketTabComplete`）
 
 系統：
 - [ ] 多人與區域網路（協定 5）
