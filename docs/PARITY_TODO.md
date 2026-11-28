@@ -29,7 +29,6 @@ AI：
 - [ ] `EntityAITarget` 的 `nearbyOnly`（`canEasilyReach`）與家的範圍（`isWithinHomeDistance`）
 
 生成與狀態：
-- [ ] 雞騎士、蜘蛛騎士已生成；騎乘關係尚未存檔（`Riding`），重新載入後各自分開
 - [ ] 殭屍增援的剩餘部分：丟擲物、火焰彈與爆炸造成的傷害還不知道來源實體（`DamageSource.getEntity`，只看攻擊目標）；找生成點時 `checkNoEntityCollision` 只看生物、玩家與船，沒看礦車、點燃的 TNT 與掉落方塊；跟隨距離的 `Random zombie-spawn bonus` 修飾值
 - [ ] 村民的 `EntityAIRestrictOpenDoor`（夜裡關在屋裡時不開門、不破門）
 - [ ] `onSpawnWithEgg` 的其餘部分：殭屍的擊退抗性加成、跟隨距離的 `nextGaussian`、蜘蛛在困難模式的藥水效果、

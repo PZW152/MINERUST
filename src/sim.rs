@@ -2789,7 +2789,7 @@ impl Sim {
                     && (m.pos[0].floor() as i32) >> 4 == cx
                     && (m.pos[2].floor() as i32) >> 4 == cz
             })
-            .map(crate::entity::mob::Mobs::to_nbt)
+            .filter_map(|m| mobs.to_nbt_with_mounts(m))
             .collect();
         entities.extend(play.items_nbt(cx, cz, dim));
         entities.extend(play.falling_nbt(cx, cz, dim));
@@ -3088,7 +3088,7 @@ impl Sim {
                 } else if e.string("id") == Some("FallingSand") {
                     self.play.falling_from_nbt(e);
                 } else if !self.play.vehicle_from_nbt(e) {
-                    let _ = self.mobs.from_nbt(e);
+                    let _ = self.mobs.from_nbt_with_mounts(e);
                 }
             }
         }
@@ -8280,6 +8280,33 @@ mod tests {
         assert!(!passed(&mut sim), "wheat: the cow reacts");
         sim.play.inv.main[sel] = Some(crate::item::Stack::new(332, 0, 3));
         assert!(passed(&mut sim), "a snowball: on to sendUseItem");
+    }
+
+    /// Entity.writeToNBTOptional / writeMountToNBT: a spider jockey is one
+    /// entry, the skeleton with the spider under Riding, and comes back
+    /// mounted; a chicken jockey's chicken keeps IsChickenJockey.
+    #[test]
+    fn jockeys_are_saved_together() {
+        use crate::entity::mob::{Kind, Mobs};
+        let mut mobs = Mobs::default();
+        let mut r = JavaRandom::new(3);
+        let spider = mobs.spawn(Kind::Spider, [0.5, 70.0, 0.5], 0.0, &mut r);
+        let skel = mobs.spawn(Kind::Skeleton, [0.5, 70.0, 0.5], 0.0, &mut r);
+        mobs.list.iter_mut().find(|m| m.id == skel).unwrap().mount = Some(spider);
+        let tags: Vec<_> = mobs.list.iter().filter_map(|m| mobs.to_nbt_with_mounts(m)).collect();
+        assert_eq!(tags.len(), 1, "the spider is inside the skeleton's entry");
+        assert_eq!(tags[0].string("id"), Some("Skeleton"));
+        assert_eq!(tags[0].get("Riding").and_then(|t| t.string("id")), Some("Spider"));
+        let mut back = Mobs::default();
+        let top = back.from_nbt_with_mounts(&tags[0]).unwrap();
+        let rider = back.list.iter().find(|m| m.id == top).unwrap();
+        let under = back.list.iter().find(|m| Some(m.id) == rider.mount).unwrap();
+        assert_eq!(under.kind, Kind::Spider);
+        let mut c = crate::entity::mob::Mob::new(9, Kind::Chicken, [0.0, 70.0, 0.0], 0.0, 1);
+        c.chicken_jockey = true;
+        let mut back = Mobs::default();
+        back.from_nbt(&Mobs::to_nbt(&c)).unwrap();
+        assert!(back.list[0].chicken_jockey);
     }
 
     /// A hoe tills grass, seeds go on farmland, bone meal grows the crop,

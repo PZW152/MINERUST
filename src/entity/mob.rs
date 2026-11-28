@@ -4609,6 +4609,48 @@ impl Mobs {
             .collect()
     }
 
+    /// `Entity.writeToNBTOptional` for a chunk: nothing for a mob another
+    /// mob rides (it is saved inside its rider), and a rider carries its
+    /// mount under `Riding` (`writeMountToNBT`), all the way down.
+    pub fn to_nbt_with_mounts(&self, m: &Mob) -> Option<crate::world::anvil::Nbt> {
+        if self.list.iter().any(|r| r.mount == Some(m.id) && r.health > 0.0) {
+            return None;
+        }
+        let mut chain = vec![m];
+        while let Some(mid) = chain.last().unwrap().mount {
+            match self.list.iter().find(|x| x.id == mid && x.health > 0.0) {
+                Some(x) if !chain.iter().any(|c| c.id == x.id) => chain.push(x),
+                _ => break,
+            }
+        }
+        let mut tag: Option<crate::world::anvil::Nbt> = None;
+        for x in chain.into_iter().rev() {
+            let mut t = Self::to_nbt(x);
+            if let (Some(below), crate::world::anvil::Nbt::Compound(v)) = (tag.take(), &mut t) {
+                v.push(("Riding".to_string(), below));
+            }
+            tag = Some(t);
+        }
+        tag
+    }
+
+    /// Reads a mob and the mounts under its `Riding`
+    /// (`AnvilChunkLoader.readChunkFromNBT`: each one created, added and
+    /// mounted by the one above).
+    pub fn from_nbt_with_mounts(&mut self, t: &crate::world::anvil::Nbt) -> Option<u32> {
+        let top = self.from_nbt(t)?;
+        let (mut rider, mut tag) = (top, t);
+        while let Some(r) = tag.get("Riding") {
+            let Some(mid) = self.from_nbt(r) else { break };
+            if let Some(m) = self.list.iter_mut().find(|m| m.id == rider) {
+                m.mount = Some(mid);
+            }
+            rider = mid;
+            tag = r;
+        }
+        Some(top)
+    }
+
     /// `EntityLiving.writeToNBT` for the region files.
     pub fn to_nbt(m: &Mob) -> crate::world::anvil::Nbt {
         use crate::world::anvil::{compound, list, Nbt};
@@ -4720,6 +4762,8 @@ impl Mobs {
                 m.horse_nbt(&mut v);
             }
             Kind::IronGolem => v.push(("PlayerCreated", Nbt::Byte(m.player_made as i8))),
+            // EntityChicken.writeEntityToNBT
+            Kind::Chicken => v.push(("IsChickenJockey", Nbt::Byte(m.chicken_jockey as i8))),
             Kind::PigZombie => v.push(("Anger", Nbt::Short(m.anger as i16))),
             _ => {}
         }
@@ -4852,6 +4896,7 @@ impl Mobs {
                 m.horse_from_nbt(t);
             }
             Kind::IronGolem => m.player_made = t.int("PlayerCreated").unwrap_or(0) != 0,
+            Kind::Chicken => m.chicken_jockey = t.int("IsChickenJockey").unwrap_or(0) != 0,
             Kind::PigZombie => m.anger = t.int("Anger").unwrap_or(0) as i32,
             _ => {}
         }
