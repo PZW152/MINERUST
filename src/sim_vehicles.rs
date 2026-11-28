@@ -324,6 +324,10 @@ impl Sim {
         let held = self.play.inv.held();
         match &mut self.play.vehicles[i].v {
             Vehicle::Orb(_) | Vehicle::Rocket(_) => {}
+            Vehicle::Hang(h) if h.knot => {
+                let tile = h.tile;
+                self.knot_interact(i, tile, held, creative);
+            }
             Vehicle::Hang(h) => {
                 // EntityItemFrame.interactFirst
                 if h.interact(held) && !creative {
@@ -935,6 +939,155 @@ impl Sim {
         }
         if !sounds.is_empty() {
             events.push(Event::Sounds(sounds));
+        }
+    }
+}
+
+impl Sim {
+    /// `EntityLiving.interactFirst`: the player's own lead comes off (and
+    /// drops unless in creative); a held lead ties a mob that allows it
+    /// (a tamed one only to its owner, here always the player).
+    pub(super) fn leash_interact(&mut self, id: u32) -> bool {
+        use crate::entity::mob::Leash;
+        let creative = self.play.mode == GameMode::Creative;
+        let held = self.play.inv.held();
+        let Some(i) = self.mobs.list.iter().position(|m| m.id == id && m.health > 0.0) else {
+            return false;
+        };
+        let m = &mut self.mobs.list[i];
+        if m.leash == Some(Leash::Player) {
+            m.leash = None;
+            let p = m.pos;
+            if !creative {
+                Self::entity_drop(&mut self.play, p, crate::item::Stack::new(crate::entity::hanging::LEAD, 0, 1));
+            }
+            return true;
+        }
+        if held.is_some_and(|s| s.id == crate::entity::hanging::LEAD) && m.allow_leashing() {
+            m.leash = Some(Leash::Player);
+            if !creative {
+                self.play.inv.consume_held();
+                self.play.inv_dirty = true;
+            }
+            return true;
+        }
+        false
+    }
+
+    /// `EntityLeashKnot.getKnotForBlock`
+    fn knot_at(&self, b: [i32; 3]) -> Option<usize> {
+        self.play.vehicles.iter().position(
+            |v| matches!(&v.v, Vehicle::Hang(h) if h.knot && !h.e.dead && h.tile == b),
+        )
+    }
+
+    /// `EntityLeashKnot.attatch`
+    fn make_knot(&mut self, b: [i32; 3]) {
+        if self.knot_at(b).is_none() {
+            let id = self.alloc_vehicle_id();
+            let seed = self.mobs.rand.next_long();
+            let h = crate::entity::hanging::Hanging::knot(id, b, seed);
+            self.play.vehicles.push(Tracked::new(Vehicle::Hang(h)));
+        }
+    }
+
+    /// Mobs within 7 blocks of `c` led by the player.
+    fn led_near(&self, c: [f64; 3]) -> Vec<usize> {
+        use crate::entity::mob::Leash;
+        let r = 7.0;
+        self.mobs
+            .list
+            .iter()
+            .enumerate()
+            .filter(|(_, m)| {
+                m.leash == Some(Leash::Player)
+                    && m.bb.max[0] > c[0] - r
+                    && m.bb.min[0] < c[0] + r
+                    && m.bb.max[1] > c[1] - r
+                    && m.bb.min[1] < c[1] + r
+                    && m.bb.max[2] > c[2] - r
+                    && m.bb.min[2] < c[2] + r
+            })
+            .map(|(i, _)| i)
+            .collect()
+    }
+
+    /// `ItemLead.attachLead`: the player's mobs near the fence move to its
+    /// knot (made when there is none).
+    pub(super) fn attach_lead(&mut self, b: [i32; 3]) -> bool {
+        let led = self.led_near([b[0] as f64, b[1] as f64, b[2] as f64]);
+        if led.is_empty() {
+            return false;
+        }
+        self.make_knot(b);
+        for i in led {
+            self.mobs.list[i].leash = Some(crate::entity::mob::Leash::Knot(b));
+        }
+        true
+    }
+
+    /// `EntityLeashKnot.interactFirst`: with a lead, the player's mobs are
+    /// tied here; otherwise the knot comes off (in creative its mobs are
+    /// let go without dropping their leads).
+    fn knot_interact(&mut self, i: usize, b: [i32; 3], held: Option<crate::item::Stack>, creative: bool) {
+        use crate::entity::mob::Leash;
+        let pos = self.play.vehicles[i].v.e().pos;
+        let mut tied = false;
+        if held.is_some_and(|s| s.id == crate::entity::hanging::LEAD) {
+            for k in self.led_near(pos) {
+                self.mobs.list[k].leash = Some(Leash::Knot(b));
+                tied = true;
+            }
+        }
+        if !tied {
+            self.play.vehicles[i].v.e_mut().dead = true;
+            if creative {
+                for m in self.mobs.list.iter_mut() {
+                    if m.leash == Some(Leash::Knot(b)) {
+                        m.leash = None;
+                    }
+                }
+            }
+        }
+    }
+
+    /// `EntityLiving.updateLeashedState` (`recreateLeash` for a loaded mob)
+    /// and `EntityCreature`'s pull, after the mobs have moved.
+    pub(super) fn tick_leashes(&mut self) {
+        use crate::entity::mob::Leash;
+        let feet = self.play.player.0;
+        for i in 0..self.mobs.list.len() {
+            if self.mobs.list[i].health <= 0.0 {
+                continue;
+            }
+            if let Some(t) = self.mobs.list[i].leash_tag.take() {
+                match t {
+                    Leash::Player => self.mobs.list[i].leash = Some(Leash::Player),
+                    Leash::Knot(b) => {
+                        self.make_knot(b);
+                        self.mobs.list[i].leash = Some(Leash::Knot(b));
+                    }
+                }
+            }
+            let Some(l) = self.mobs.list[i].leash else {
+                self.mobs.list[i].unleashed_tick();
+                continue;
+            };
+            let holder = match l {
+                Leash::Player => Some(feet),
+                Leash::Knot(b) => self.knot_at(b).map(|k| self.play.vehicles[k].v.e().pos),
+            };
+            let broke = match holder {
+                Some(h) => self.mobs.list[i].leash_tick(&mut self.world, h),
+                None => true,
+            };
+            if broke {
+                // clearLeashed(true, true): the lead drops
+                let m = &mut self.mobs.list[i];
+                m.leash = None;
+                let p = m.pos;
+                Self::entity_drop(&mut self.play, p, crate::item::Stack::new(crate::entity::hanging::LEAD, 0, 1));
+            }
         }
     }
 }

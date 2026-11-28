@@ -399,6 +399,16 @@ pub struct MobView {
     pub tail_counter: i32,
     /// `getMaxHealth`, for the mount's hearts.
     pub max_health: f32,
+    /// `S1BPacketEntityAttach(1, ...)`: whom the lead goes to.
+    pub leash: Option<LeashView>,
+}
+
+/// The holder of a lead as the client draws it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum LeashView {
+    Player,
+    /// A leash knot's position.
+    Knot([f64; 3]),
 }
 
 #[derive(Clone, Debug)]
@@ -1249,6 +1259,13 @@ impl Sim {
                         self.play.inv.consume_held();
                         self.play.inv_dirty = true;
                     }
+                } else if !used
+                    && self.play.inv.held().is_some_and(|s| s.id == crate::entity::hanging::LEAD)
+                    && crate::block::info(self.world.peek_block(target[0], target[1], target[2])).shape
+                        == crate::block::Shape::Fence
+                {
+                    // ItemLead.onItemUse: true on a fence, mobs or not
+                    self.attach_lead(target);
                 } else if let (false, Some(h)) = (used, hang) {
                     // ItemHangingEntity.onItemUse: true on the four sides
                     let side = match face {
@@ -1462,6 +1479,7 @@ impl Sim {
                 self.play.merchant_index = 0;
                 self.play.inv_dirty = true;
             }
+            Command::Interact { id } if self.leash_interact(id) => {}
             Command::Interact { id } => {
                 let mut out = crate::entity::mob::Outcome::default();
                 let held = self.play.inv.held();
@@ -2137,6 +2155,7 @@ impl Sim {
         }
         self.play = play;
         self.tick_maps(events);
+        self.tick_leashes();
         self.pick_up_arrows(events);
         self.player_events(events);
         if self.play.inv_dirty {
@@ -3564,6 +3583,7 @@ impl Sim {
                             }
                         }
                         "chest" => m.horse_flags |= 8,
+                        "leash" => m.leash = Some(crate::entity::mob::Leash::Player),
                         "iron" | "gold" | "diamond" => {
                             m.horse_armor = match p {
                                 "iron" => 1,
@@ -4062,6 +4082,14 @@ impl Sim {
                 hanim: [0.0; 6],
                 tail_counter: 0,
                 max_health: m.max_health(),
+                leash: m.leash.map(|l| match l {
+                    crate::entity::mob::Leash::Player => LeashView::Player,
+                    crate::entity::mob::Leash::Knot(b) => LeashView::Knot([
+                        b[0] as f64 + 0.5,
+                        b[1] as f64 + 0.5,
+                        b[2] as f64 + 0.5,
+                    ]),
+                }),
                 bb: [
                     m.bb.min[0],
                     m.bb.min[1],
@@ -8315,6 +8343,50 @@ mod tests {
     }
 
     /// `EntityVillager.interact`, `ContainerMerchant`, `useRecipe`.
+    #[test]
+    fn leads_tie_pull_and_break() {
+        use crate::entity::mob::{Kind, Leash};
+        use crate::item::Stack;
+        let (mut sim, x, y, z) = redstone_sim();
+        arena(&mut sim, x, y, z);
+        sim.play.mode = GameMode::Survival;
+        let mut r = JavaRandom::new(5);
+        let cow = sim.mobs.spawn(Kind::Cow, [x as f64 + 2.5, (y + 1) as f64, z as f64 + 0.5], 0.0, &mut r);
+        let zombie = sim.mobs.spawn(Kind::Zombie, [x as f64 - 2.5, (y + 1) as f64, z as f64 + 0.5], 0.0, &mut r);
+        let step = |sim: &mut Sim, feet: [f64; 3], c: &[Command]| {
+            let mut v = vec![Command::Player(feet, [0.0, 0.0], false)];
+            v.extend_from_slice(c);
+            sim.step(&v, &mut Vec::new());
+        };
+        let feet = [x as f64 + 0.5, (y + 1) as f64, z as f64 + 0.5];
+        sim.play.inv.main[0] = Some(Stack::new(420, 0, 2));
+        step(&mut sim, feet, &[Command::Interact { id: zombie }]);
+        assert_eq!(sim.mobs.list.iter().find(|m| m.id == zombie).unwrap().leash, None, "no leading monsters");
+        step(&mut sim, feet, &[Command::Interact { id: cow }]);
+        let m = sim.mobs.list.iter().find(|m| m.id == cow).unwrap();
+        assert_eq!(m.leash, Some(Leash::Player));
+        assert_eq!(sim.play.inv.main[0].map(|s| s.count), Some(1));
+        // the saved mob keeps its lead
+        let t = crate::entity::mob::Mobs::to_nbt(m);
+        assert_eq!(t.int("Leashed"), Some(1));
+        // walk 8 blocks away: the cow is pulled after
+        let far = [feet[0], feet[1], feet[2] + 8.0];
+        let d0 = 8.0;
+        for _ in 0..40 {
+            step(&mut sim, far, &[]);
+        }
+        let m = sim.mobs.list.iter().find(|m| m.id == cow).unwrap();
+        let d = ((m.pos[0] - far[0]).powi(2) + (m.pos[2] - far[2]).powi(2)).sqrt();
+        assert!(d < d0 - 2.0, "pulled to {d}");
+        assert_eq!(m.leash, Some(Leash::Player));
+        // too far: the lead breaks and drops
+        let gone = [feet[0], feet[1], feet[2] + 40.0];
+        step(&mut sim, gone, &[]);
+        let m = sim.mobs.list.iter().find(|m| m.id == cow).unwrap();
+        assert_eq!(m.leash, None);
+        assert!(sim.play.items.iter().any(|i| i.stack.id == 420), "the lead dropped");
+    }
+
     #[test]
     fn maps_draw_and_extend() {
         use crate::item::Stack;

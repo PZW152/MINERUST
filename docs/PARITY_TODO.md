@@ -83,7 +83,8 @@ AI：
       （目前只畫伺服器位置）；`RenderFish` 的 GL 光照（法線 (0,1,0)，與丟擲物同樣未做）
 - [ ] 玻璃瓶裝水（`ItemGlassBottle.onItemRightClick`，需確認）
 - [ ] 煙火的剩餘部分：物品說明文字（`ItemFirework.addInformation`、`ItemFireworkCharge` 的顏色與形狀）、煙火之星圖示的疊色、發射時客戶端也會再播一次升空聲（原版兩邊都播，這裡只播伺服器那次）、`fireworksSpark` 以外的 `EntityFireworkSparkFX` 碰撞細節
-- [ ] 終界之眼（丟出）、火焰彈、指南針與時鐘、拴繩、書與羽毛筆（需確認哪些已有；生怪蛋、鞍、命名牌、唱片、畫、物品展示框、地圖已完成）
+- [ ] 終界之眼（丟出）、火焰彈、指南針與時鐘、書與羽毛筆（需確認哪些已有；生怪蛋、鞍、命名牌、唱片、畫、物品展示框、地圖、拴繩已完成）
+- [ ] 拴繩的剩餘部分：存檔裡牽在玩家手上的 `Leash` 寫 UUID 0（讀回時一律當成玩家）、生物死亡時的拴繩、尋路的 `setAvoidsWater(false)` 只對有任務 AI 的生物有用
 - [ ] 地圖的剩餘部分：框中地圖的綠色標記（`updateDecorations(1, ...)`）、地圖擴大配方在比例 4 時應拒絕（目前在做新地圖時才夾到 4）、物品說明的「Scaling at 1:N」、只送變動的欄（`MapInfo.dirtyMinY`，目前整張送出）、未載入區塊不會為了地圖而載入
 - [ ] 物品展示框的剩餘部分：框中指南針指向框的方向、
       框中附魔物品的光澤；箭與丟擲物打中畫或展示框（需確認 `canBeCollidedWith` 在箭的碰撞裡有算到）；
@@ -96,7 +97,7 @@ AI：
 
 實體：
 - [ ] 拴繩結、終界之眼、凋零怪與凋零頭、閃電實體、巨人（雪人已完成；雪球打中怪物時，怪物還不會把雪人當成仇人，`setRevengeTarget` 只記得玩家）
-- [ ] 騎乘：騎乘時玩家模型的坐姿（`ModelBiped.isRiding`）；馬的物品欄畫面裡的馬（`GuiScreenHorseInventory` 的 `func_147046_a`）；拴繩
+- [ ] 騎乘：騎乘時玩家模型的坐姿（`ModelBiped.isRiding`）；馬的物品欄畫面裡的馬（`GuiScreenHorseInventory` 的 `func_147046_a`）
 - [ ] 礦車：漏斗礦車的吸取、指令方塊與生怪磚礦車、觸發鐵軌、`MovingSoundMinecart` 的連續音效、騎乘中生物的存檔（`Riding`）
 - [ ] 掉落物改為客戶端自行模擬（原版客戶端也跑 `EntityItem.onUpdate`，伺服器每 20 tick 校正）
 - [ ] 經驗來源：繁殖

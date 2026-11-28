@@ -100,6 +100,11 @@ pub enum Ai {
         speed: f64,
         pos: [f64; 3],
     },
+    /// `EntityAIMoveTowardsRestriction` (added while leashed)
+    MoveTowardsRestriction {
+        speed: f64,
+        pos: [f64; 3],
+    },
     /// `EntityAIWatchClosest`; `mutex` 3 makes it `EntityAIWatchClosest2`.
     WatchClosest {
         cls: Cls,
@@ -196,6 +201,19 @@ impl Tasks {
 
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
+    }
+
+    /// `EntityAITasks.removeTask` for every entry `f` picks.
+    pub fn remove_where(&mut self, f: impl Fn(&Ai) -> bool) {
+        while let Some(i) = self.entries.iter().position(|e| f(&e.ai)) {
+            self.entries.remove(i);
+            self.executing.retain(|&k| k != i);
+            for k in self.executing.iter_mut() {
+                if *k > i {
+                    *k -= 1;
+                }
+            }
+        }
     }
 
     /// `onUpdateTasks`
@@ -832,6 +850,7 @@ impl Ai {
             Ai::Pet(p) => p.mutex(),
             Ai::Swimming => 4,
             Ai::Panic { .. } | Ai::Wander { .. } | Ai::CreeperSwell { .. } => 1,
+            Ai::MoveTowardsRestriction { .. } => 1,
             Ai::AvoidEntity { .. } | Ai::FleeSun { .. } => 1,
             Ai::Tempt { .. } | Ai::LookIdle { .. } => 3,
             Ai::AttackOnCollide { .. } | Ai::ArrowAttack { .. } => 3,
@@ -873,6 +892,30 @@ impl Ai {
                     return false;
                 }
                 cx.player.held == Some(*item)
+            }
+            Ai::MoveTowardsRestriction { pos, .. } => {
+                let f = [
+                    math::floor_double(m.pos[0]),
+                    math::floor_double(m.pos[1]),
+                    math::floor_double(m.pos[2]),
+                ];
+                if m.within_home(f[0], f[1], f[2]) {
+                    return false;
+                }
+                let Some(h) = m.home else { return false };
+                // findRandomTargetBlockTowards: away from the mirror point
+                let mirror = [
+                    2.0 * m.pos[0] - h[0] as f64,
+                    2.0 * m.pos[1] - h[1] as f64,
+                    2.0 * m.pos[2] - h[2] as f64,
+                ];
+                match m.random_target(cx.w, 16, 7, Some(mirror)) {
+                    Some(p) => {
+                        *pos = p;
+                        true
+                    }
+                    None => false,
+                }
             }
             Ai::Wander { pos, .. } => {
                 if m.age >= 100 {
@@ -1085,6 +1128,7 @@ impl Ai {
             Ai::Panic { .. } | Ai::Wander { .. } | Ai::AvoidEntity { .. } | Ai::FleeSun { .. } => {
                 !m.no_path()
             }
+            Ai::MoveTowardsRestriction { .. } => !m.no_path(),
             Ai::WatchClosest {
                 dist,
                 look_time,
@@ -1134,7 +1178,10 @@ impl Ai {
     fn start_executing(&mut self, m: &mut Mob, cx: &mut Cx) {
         match self {
             Ai::ControlledByPlayer { current_speed, .. } => *current_speed = 0.0,
-            Ai::Panic { speed, pos } | Ai::Wander { speed, pos } | Ai::FleeSun { speed, pos } => {
+            Ai::Panic { speed, pos }
+            | Ai::Wander { speed, pos }
+            | Ai::FleeSun { speed, pos }
+            | Ai::MoveTowardsRestriction { speed, pos } => {
                 m.try_move_to_xyz(cx.w, pos[0], pos[1], pos[2], *speed);
             }
             Ai::Pet(p) => p.start_executing(m, cx),
@@ -3548,5 +3595,64 @@ fn horse_puffs(m: &mut Mob, name: &'static str, cx: &mut Cx) {
             m.pos[2] + (m.rand.next_float() * w * 2.0 - w) as f64,
         ];
         cx.out.particles.push((name, p, v));
+    }
+}
+
+impl Mob {
+    /// `EntityCreature.updateLeashedState` with the holder at `holder`:
+    /// home around it, the restriction task, walking after it past 4,
+    /// pulled past 6. True when the lead breaks (past 10).
+    pub fn leash_tick(&mut self, w: &mut ServerWorld, holder: [f64; 3]) -> bool {
+        self.home = Some([holder[0] as i32, holder[1] as i32, holder[2] as i32]);
+        self.home_dist = 5.0;
+        let d = ((holder[0] - self.pos[0]).powi(2)
+            + (holder[1] - self.pos[1]).powi(2)
+            + (holder[2] - self.pos[2]).powi(2))
+        .sqrt() as f32;
+        if self.tamed && self.sitting {
+            return d > 10.0;
+        }
+        if !self.move_restrict {
+            self.tasks.add(
+                2,
+                Ai::MoveTowardsRestriction {
+                    speed: 1.0,
+                    pos: [0.0; 3],
+                },
+            );
+            self.avoids_water = false;
+            self.move_restrict = true;
+        }
+        // EntityHorse.onLeashDistance: pulled away from its food
+        if self.kind == Kind::Horse && d > 6.0 {
+            self.horse_flags &= !32;
+        }
+        if d > 4.0 {
+            self.try_move_to_xyz(w, holder[0], holder[1], holder[2], 1.0);
+        }
+        if d > 6.0 {
+            let d = d as f64;
+            let v = [
+                (holder[0] - self.pos[0]) / d,
+                (holder[1] - self.pos[1]) / d,
+                (holder[2] - self.pos[2]) / d,
+            ];
+            for k in 0..3 {
+                self.motion[k] += v[k] * v[k].abs() * 0.4;
+            }
+        }
+        d > 10.0
+    }
+
+    /// `EntityCreature.updateLeashedState` once the lead is gone.
+    pub fn unleashed_tick(&mut self) {
+        if self.move_restrict {
+            self.move_restrict = false;
+            self.tasks
+                .remove_where(|a| matches!(a, Ai::MoveTowardsRestriction { .. }));
+            self.avoids_water = true;
+            self.home = None;
+            self.home_dist = -1.0;
+        }
     }
 }

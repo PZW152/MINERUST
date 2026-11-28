@@ -1258,3 +1258,63 @@ pub fn framed_item(
         }
     }
 }
+
+/// `RenderLiving.renderLeash`: two strips of 24 segments sagging from the
+/// mob (`start`, its render y lowered by `(1.6 - height) / 2` in `base_y`)
+/// to the holder, alternating light and dark brown. Positions are relative
+/// to the camera; `white` is a plain white tile.
+pub fn leash_rope(
+    out: &mut Vec<Vertex>,
+    white: [f32; 4],
+    start: [f32; 3],
+    base_y: f32,
+    to: [f32; 3],
+    light: [u8; 4],
+) {
+    let d = [to[0] - start[0], to[1] - start[1], to[2] - start[2]];
+    let uv = [(white[0] + white[2]) * 0.5, (white[1] + white[3]) * 0.5];
+    let colour = |i: i32| -> [u8; 4] {
+        if i % 2 == 0 {
+            [(0.5f32 * 255.0) as u8, (0.4f32 * 255.0) as u8, (0.3f32 * 255.0) as u8, 255]
+        } else {
+            [(0.35f32 * 255.0) as u8, (0.28f32 * 255.0) as u8, (0.21f32 * 255.0) as u8, 255]
+        }
+    };
+    let point = |i: i32| -> [f32; 3] {
+        let t = i as f32 / 24.0;
+        [
+            start[0] + d[0] * t,
+            base_y + d[1] * (t * t + t) * 0.5 + ((24.0 - i as f32) / 18.0 + 0.125),
+            start[2] + d[2] * t,
+        ]
+    };
+    let k = 0.025f32;
+    for strip in 0..2 {
+        let pair = |i: i32| -> ([f32; 3], [f32; 3]) {
+            let p = point(i);
+            if strip == 0 {
+                (p, [p[0] + k, p[1] + k, p[2]])
+            } else {
+                ([p[0], p[1] + k, p[2]], [p[0] + k, p[1], p[2] + k])
+            }
+        };
+        for i in 0..24 {
+            let (a0, b0) = pair(i);
+            let (a1, b1) = pair(i + 1);
+            let (c0, c1) = (colour(i), colour(i + 1));
+            let quad = [(a0, c0), (b0, c0), (b1, c1), (a1, c1)];
+            // GL_CULL_FACE is off: both sides
+            for order in [[0usize, 1, 2, 3], [3, 2, 1, 0]] {
+                for q in order {
+                    let (p, c) = quad[q];
+                    out.push(Vertex {
+                        pos: p,
+                        uv,
+                        color: c,
+                        light,
+                    });
+                }
+            }
+        }
+    }
+}

@@ -478,6 +478,11 @@ impl Game {
                 };
                 crate::render::hanging::painting(out, t, rel, yaw, art(a), &lm);
             }
+            None if h.knot => {
+                if let Some(t) = self.atlas.mob_tex("lead_knot") {
+                    crate::render::hanging::knot(out, t, rel, light);
+                }
+            }
             None => {
                 let d = (h.dir & 3) as usize;
                 // the centre of the block in front of the wall

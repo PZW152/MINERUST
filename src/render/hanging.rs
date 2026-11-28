@@ -4,7 +4,7 @@ use super::mesher::Vertex;
 use super::model::Tex;
 use super::{mul, rot_y, transform, translate, Mat4};
 
-pub const TEXTURES: [&str; 1] = ["../painting/paintings_kristoffer_zetterstrand"];
+pub const TEXTURES: [&str; 2] = ["../painting/paintings_kristoffer_zetterstrand", "lead_knot"];
 
 /// The world-space normal `n` under the rotation of `m`, lit as
 /// `RenderHelper.enableStandardItemLighting` does.
@@ -286,4 +286,21 @@ pub fn frame(
     ] {
         block_box(out, &m, b, planks, light);
     }
+}
+
+/// `RenderLeashKnot`: `ModelLeashKnot` (one 6 x 8 x 6 box) upside down at
+/// the knot.
+pub fn knot(out: &mut Vec<Vertex>, tex: Tex, rel: [f32; 3], light: [u8; 4]) {
+    let m = mul(
+        &translate(rel[0], rel[1], rel[2]),
+        &super::entities::scale(-1.0, -1.0, 1.0),
+    );
+    let part = super::model::Part::new([0.0; 3]).bx(0.0, 0.0, [-3.0, -6.0, -3.0], [6.0, 8.0, 6.0], 0.0);
+    let mut d = super::model::Draw {
+        out,
+        tex,
+        light,
+        tint: [1.0; 4],
+    };
+    super::model::render(&mut d, &m, &part);
 }

@@ -52,6 +52,14 @@ pub enum Kind {
     SnowGolem,
 }
 
+/// What a leashed mob is tied to: the player, or the leash knot on the
+/// fence at a block (a knot's entity id once found).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Leash {
+    Player,
+    Knot([i32; 3]),
+}
+
 pub const ALL_KINDS: [Kind; 28] = [
     Kind::Pig,
     Kind::Cow,
@@ -445,6 +453,15 @@ pub struct Mob {
     /// `EntityVillager.buyingList`, `wealth`, `timeUntilReset`,
     /// `needsInitilization`, and `buyingPlayer` being the player.
     pub offers: Option<Vec<crate::merchant::Recipe>>,
+    /// `EntityLiving.leashedToEntity`, and the `Leash` tag of a mob loaded
+    /// from a save until `recreateLeash` finds its holder.
+    pub leash: Option<Leash>,
+    pub leash_tag: Option<Leash>,
+    /// `EntityCreature.homePosition` / `maximumHomeDistance` (set while
+    /// leashed) and `isMovementAITaskSet`.
+    pub home: Option<[i32; 3]>,
+    pub home_dist: f32,
+    pub move_restrict: bool,
     /// `EntityHorse`: data watcher 16, `temper`, the jump strength
     /// attribute, `horseChest` (saddle, armour, the chest's 15), the
     /// eating / mouth / rearing / gallop counters, `jumpPower`,
@@ -839,6 +856,11 @@ impl Mob {
             persistent: false,
             custom_name: String::new(),
             offers: None,
+            leash: None,
+            leash_tag: None,
+            home: None,
+            home_dist: -1.0,
+            move_restrict: false,
             horse_flags: 0,
             temper: 0,
             jump_strength: 0.7,
@@ -2105,8 +2127,26 @@ impl Mob {
     ) -> Option<[f64; 3]> {
         let mut best = None;
         let mut best_w = -99999.0f32;
+        // a home near enough limits the targets to it
+        let near_home = match self.home {
+            Some(h) => {
+                let f = [
+                    math::floor_double(self.pos[0]),
+                    math::floor_double(self.pos[1]),
+                    math::floor_double(self.pos[2]),
+                ];
+                let d = ((h[0] - f[0]) as f32).powi(2)
+                    + ((h[1] - f[1]) as f32).powi(2)
+                    + ((h[2] - f[2]) as f32).powi(2)
+                    + 4.0;
+                let r = self.home_dist + xz as f32;
+                (d as f64) < (r * r) as f64
+            }
+            None => false,
+        };
         for _ in 0..10 {
             let mut dx = self.rand.next_int_n(2 * xz) - xz;
+            // (the home check comes after the offsets are drawn)
             let dy = self.rand.next_int_n(2 * y) - y;
             let mut dz = self.rand.next_int_n(2 * xz) - xz;
             if let Some(a) = away {
@@ -2118,6 +2158,9 @@ impl Mob {
             dx += math::floor_double(self.pos[0]);
             let ty = dy + math::floor_double(self.pos[1]);
             dz += math::floor_double(self.pos[2]);
+            if near_home && !self.within_home(dx, ty, dz) {
+                continue;
+            }
             let wgt = self.path_weight(w, dx, ty, dz);
             if wgt > best_w {
                 best_w = wgt;
@@ -2125,6 +2168,41 @@ impl Mob {
             }
         }
         best
+    }
+
+    /// `EntityCreature.isWithinHomeDistance`
+    pub fn within_home(&self, x: i32, y: i32, z: i32) -> bool {
+        match self.home {
+            Some(h) if self.home_dist >= 0.0 => {
+                let d = ((h[0] - x) as f32).powi(2)
+                    + ((h[1] - y) as f32).powi(2)
+                    + ((h[2] - z) as f32).powi(2);
+                d < self.home_dist * self.home_dist
+            }
+            _ => true,
+        }
+    }
+
+    /// `EntityLiving.allowLeashing` with its overrides: not leashed, not a
+    /// monster (`IMob`), not a villager, bat or undead horse.
+    pub fn allow_leashing(&self) -> bool {
+        self.leash.is_none()
+            && !self.kind.hostile()
+            && !matches!(
+                self.kind,
+                Kind::Slime
+                    | Kind::MagmaCube
+                    | Kind::Ghast
+                    | Kind::Blaze
+                    | Kind::Enderman
+                    | Kind::Silverfish
+                    | Kind::PigZombie
+                    | Kind::EnderDragon
+                    | Kind::EnderCrystal
+                    | Kind::Villager
+                    | Kind::Bat
+            )
+            && !(self.kind == Kind::Horse && self.horse_undead())
     }
 
     /// `getBlockPathWeight`
@@ -4188,10 +4266,30 @@ impl Mobs {
             ("HealF", Nbt::Float(m.health)),
             ("Health", Nbt::Short(m.health.ceil() as i16)),
             ("PersistenceRequired", Nbt::Byte(m.persistent as i8)),
+            // EntityLiving.writeEntityToNBT: Leashed and the holder
+            ("Leashed", Nbt::Byte(m.leash.or(m.leash_tag).is_some() as i8)),
             // EntityLiving.writeEntityToNBT
             ("CustomName", Nbt::String(m.custom_name.clone())),
             ("CustomNameVisible", Nbt::Byte(0)),
         ];
+        match m.leash.or(m.leash_tag) {
+            Some(Leash::Knot(b)) => v.push((
+                "Leash",
+                crate::world::anvil::compound(vec![
+                    ("X", Nbt::Int(b[0])),
+                    ("Y", Nbt::Int(b[1])),
+                    ("Z", Nbt::Int(b[2])),
+                ]),
+            )),
+            Some(Leash::Player) => v.push((
+                "Leash",
+                crate::world::anvil::compound(vec![
+                    ("UUIDMost", Nbt::Long(0)),
+                    ("UUIDLeast", Nbt::Long(0)),
+                ]),
+            )),
+            None => {}
+        }
         // EntityAgeable.writeEntityToNBT, EntityAnimal.writeEntityToNBT
         if m.kind.animal() || m.kind == Kind::Villager {
             v.push(("Age", Nbt::Int(m.growing_age)));
@@ -4360,6 +4458,15 @@ impl Mobs {
             }
         }
         m.persistent = t.int("PersistenceRequired").unwrap_or(0) != 0;
+        if t.int("Leashed").unwrap_or(0) != 0 {
+            if let Some(l) = t.get("Leash") {
+                m.leash_tag = match (l.int("X"), l.int("Y"), l.int("Z")) {
+                    (Some(x), Some(y), Some(z)) => Some(Leash::Knot([x as i32, y as i32, z as i32])),
+                    _ if l.get("UUIDMost").is_some() => Some(Leash::Player),
+                    _ => None,
+                };
+            }
+        }
         if let Some(n) = t.string("CustomName") {
             m.custom_name = n.to_string();
         }

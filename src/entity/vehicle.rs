@@ -213,6 +213,11 @@ impl Vehicle {
                 object, data, id, p, seed,
             ))),
             76 => Some(Vehicle::Rocket(Rocket::at(id, p, seed))),
+            77 => Some(Vehicle::Hang(Hanging::knot(
+                id,
+                [p[0].floor() as i32, p[1].floor() as i32, p[2].floor() as i32],
+                seed,
+            ))),
             _ => None,
         }
     }
@@ -262,6 +267,12 @@ impl Tracked {
     }
 
     /// `Entity.writeToNBT`
+    /// `writeToNBTOptional`: a leash knot is never saved (the mob's
+    /// `Leash` makes it again).
+    pub fn saved(&self) -> bool {
+        !matches!(&self.v, Vehicle::Hang(h) if h.knot)
+    }
+
     pub fn to_nbt(&self, dim: i32) -> crate::world::anvil::Nbt {
         use crate::world::anvil::{compound, item_nbt, Nbt};
         match &self.v {

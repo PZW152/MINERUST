@@ -5927,6 +5927,44 @@ impl Game {
                 partial,
                 light,
             );
+            // RenderLiving.renderLeash
+            if let Some(l) = m.leash {
+                let width = m.bb[3] - m.bb[0];
+                let height = m.bb[4] - m.bb[1];
+                let holder = match l {
+                    crate::sim::LeashView::Player => {
+                        // the client player's posY is at the eyes and its
+                        // getEyeHeight 0.12
+                        let pp = [
+                            self.player.prev_pos[0] + (self.player.pos[0] - self.player.prev_pos[0]) * t,
+                            self.player.prev_pos[1] + (self.player.pos[1] - self.player.prev_pos[1]) * t,
+                            self.player.prev_pos[2] + (self.player.pos[2] - self.player.prev_pos[2]) * t,
+                        ];
+                        let yaw = (self.player.yaw as f64).to_radians();
+                        let pitch = (self.player.pitch as f64).to_radians();
+                        let (c, s, sp, cp) = (yaw.cos(), yaw.sin(), pitch.sin(), pitch.cos());
+                        [
+                            pp[0] - c * 0.7 - s * 0.5 * cp,
+                            pp[1] + 1.62 + 0.12 * 0.7 - sp * 0.5 - 0.25,
+                            pp[2] - s * 0.7 + c * 0.5 * cp,
+                        ]
+                    }
+                    // an EntityHanging: no turn, eye height 0.425
+                    crate::sim::LeashView::Knot(k) => [k[0], k[1] + 0.425 * 0.7 + 0.5 - 0.25, k[2]],
+                };
+                let ry = ((m.prev_body_yaw + (m.body_yaw - m.prev_body_yaw) * partial) as f64)
+                    .to_radians()
+                    + std::f64::consts::FRAC_PI_2;
+                let (ox, oz) = (ry.cos() * width * 0.4, ry.sin() * width * 0.4);
+                let start = [rel[0] + ox as f32, rel[1], rel[2] + oz as f32];
+                let base_y = rel[1] - ((1.6 - height) * 0.5) as f32;
+                let to = [
+                    start[0] + (holder[0] - (p[0] + ox)) as f32,
+                    rel[1] + (holder[1] - p[1]) as f32,
+                    start[2] + (holder[2] - (p[2] + oz)) as f32,
+                ];
+                entities::leash_rope(&mut dynamic, atlas.named("white"), start, base_y, to, light);
+            }
             // RendererLivingEntity.passSpecialRender: a named mob under the
             // crosshair, not ridden, within 64 blocks
             if !m.custom_name.is_empty()

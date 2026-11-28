@@ -70,7 +70,12 @@ pub struct Hanging {
     /// `tickCounter1`
     ticks: i32,
     pub velocity_changed: bool,
+    /// `EntityLeashKnot`: a lead tied to a fence.
+    pub knot: bool,
 }
+
+/// `Items.lead`
+pub const LEAD: u16 = 420;
 
 impl Hanging {
     /// `EntityHanging(World)`: 0.5 by 0.5, yOffset 0.
@@ -88,7 +93,19 @@ impl Hanging {
             drop_chance: 1.0,
             ticks: 0,
             velocity_changed: false,
+            knot: false,
         }
+    }
+
+    /// `EntityLeashKnot(world, x, y, z)`: at the middle of the fence, its
+    /// box the entity's 0.5 by 0.5.
+    pub fn knot(id: u32, tile: [i32; 3], seed: i64) -> Hanging {
+        let mut h = Hanging::new(id, tile, None, seed);
+        h.knot = true;
+        let p = [tile[0] as f64 + 0.5, tile[1] as f64 + 0.5, tile[2] as f64 + 0.5];
+        h.e.set_position(p[0], p[1], p[2]);
+        h.e.prev = p;
+        h
     }
 
     pub fn width_pixels(&self) -> i32 {
@@ -108,6 +125,10 @@ impl Hanging {
 
     /// `EntityHanging.setDirection`: rotation, position and box.
     pub fn set_direction(&mut self, d: i32) {
+        if self.knot {
+            // EntityLeashKnot.setDirection does nothing
+            return;
+        }
         self.dir = d;
         let mut yaw = (d * 90) as f32;
         let (wp, hp) = (self.width_pixels(), self.height_pixels());
@@ -196,6 +217,11 @@ impl Hanging {
     /// block behind every 16 pixels, and no other hanging entity overlapping
     /// (`others` are their boxes).
     pub fn on_valid_surface(&self, world: &dyn BlockView, others: &[Aabb]) -> bool {
+        if self.knot {
+            // EntityLeashKnot: the block still renders as a fence (type 11)
+            let [x, y, z] = self.tile;
+            return crate::block::info(world.peek_block(x, y, z)).shape == crate::block::Shape::Fence;
+        }
         if !colliding_boxes_except(world, &self.e.bb, Some(self.id)).is_empty() {
             return false;
         }
@@ -294,7 +320,8 @@ impl Hanging {
     /// `itemDropChance`.
     pub fn broken_drops(&mut self, creative: bool, self_too: bool) -> Vec<Stack> {
         let mut v = Vec::new();
-        if creative {
+        // EntityLeashKnot.onBroken drops nothing
+        if creative || self.knot {
             return v;
         }
         match self.art {
@@ -333,6 +360,9 @@ impl Hanging {
     /// `S0EPacketSpawnObject` 71 for frames (data: direction); paintings
     /// have `S10PacketSpawnPainting` (here type 1000, direction and art).
     pub fn spawn_data(&self) -> (i32, i32) {
+        if self.knot {
+            return (77, 0);
+        }
         match self.art {
             None => (71, self.dir),
             Some(a) => (1000, self.dir | (a as i32) << 2),

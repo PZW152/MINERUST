@@ -2802,7 +2802,7 @@ impl Play {
             list.extend(tmp.items_nbt(cx, cz, dim));
             list.extend(tmp.falling_nbt(cx, cz, dim));
         }
-        list.extend(vehicles.iter().map(|b| b.to_nbt(dim)));
+        list.extend(vehicles.iter().filter(|b| b.saved()).map(|b| b.to_nbt(dim)));
         crate::world::anvil::write_nbt(&compound(vec![("Entities", Nbt::List(10, list))]))
     }
 
@@ -2829,7 +2829,7 @@ impl Play {
             .iter()
             .filter(|b| {
                 let p = b.v.e().pos;
-                (p[0].floor() as i32) >> 4 == cx && (p[2].floor() as i32) >> 4 == cz
+                b.saved() && (p[0].floor() as i32) >> 4 == cx && (p[2].floor() as i32) >> 4 == cz
             })
             .map(|b| b.to_nbt(dim))
             .collect()
