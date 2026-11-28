@@ -2470,27 +2470,59 @@ impl Play {
         self.inv_dirty = true;
     }
 
-    /// Creative middle click: put the block in the hotbar.
-    pub fn pick_block(&mut self, id: u8, meta: i32) {
-        if self.mode != GameMode::Creative || !block::info(id).exists || id == block::AIR {
-            return;
-        }
-        let want = Stack::new(
-            id as ItemId,
-            if id == block::LEAVES || id == block::LEAVES2 || id == block::LOG || id == block::LOG2
-            {
-                meta & 3
-            } else {
-                meta
-            },
-            1,
-        );
-        if let Some(i) = (0..9).find(
-            |&i| matches!(self.inv.main[i], Some(s) if s.id == want.id && s.meta == want.meta),
-        ) {
-            self.inv.selected = i;
-        } else {
-            self.inv.main[self.inv.selected] = Some(want);
+    /// `Minecraft.middleClickMouse` on a block: the item it is picked as
+    /// (`Block.getItem(World..)`, `getDamageValue`), then
+    /// `InventoryPlayer.setCurrentItem`: a hotbar slot already holding it
+    /// is selected (in survival too); creative brings it to the hand.
+    pub fn pick_block(&mut self, w: &ServerWorld, p: Pos) {
+        let id = w.peek_block(p[0], p[1], p[2]);
+        let meta = w.peek_meta(p[0], p[1], p[2]) as i32;
+        let skull = match self.tiles.get(&p) {
+            Some(Tile::Skull { kind, .. }) => Some(*kind as i32),
+            _ => None,
+        };
+        let below = w.peek_meta(p[0], p[1] - 1, p[2]) as i32;
+        let Some((item, dmg, subtypes)) = pick_item(id, meta, below, skull) else { return };
+        self.set_current_item(item, dmg, subtypes);
+    }
+
+    /// `InventoryPlayer.setCurrentItem` and `creativePickItem`.
+    pub fn set_current_item(&mut self, item: ItemId, dmg: i32, subtypes: bool) {
+        let creative = self.mode == GameMode::Creative;
+        let main = &self.inv.main;
+        let find = |item: ItemId, dmg: Option<i32>| {
+            (0..main.len()).find(|&i| {
+                matches!(main[i], Some(s) if s.id == item && dmg.map_or(true, |d| s.meta == d))
+            })
+        };
+        let held = main[self.inv.selected];
+        let found = find(item, subtypes.then_some(dmg));
+        match found {
+            Some(i) if i < 9 => self.inv.selected = i,
+            _ if creative => {
+                if let Some(e) = (0..main.len()).find(|&i| main[i].is_none()) {
+                    if e < 9 {
+                        self.inv.selected = e;
+                    }
+                }
+                // creativePickItem: an unenchanted tool in hand stays
+                let sel = self.inv.selected;
+                if let Some(h) = held {
+                    if crate::enchant::enchantable(&h) && find(h.id, Some(h.meta)) == Some(sel) {
+                        self.inv_dirty = true;
+                        return;
+                    }
+                }
+                match find(item, Some(dmg)) {
+                    Some(k) => {
+                        let n = self.inv.main[k].map_or(1, |s| s.count);
+                        self.inv.main[k] = self.inv.main[sel];
+                        self.inv.main[sel] = Some(Stack::new(item, dmg, n));
+                    }
+                    None => self.inv.main[sel] = Some(Stack::new(item, dmg, 1)),
+                }
+            }
+            _ => {}
         }
         self.inv_dirty = true;
     }
@@ -3495,5 +3527,110 @@ impl Tile {
             complete: false,
             payment: None,
         }
+    }
+}
+
+/// `Block.getItem(World, x, y, z)` and the damage `middleClickMouse` gives
+/// it: the item, its damage, and `getHasSubtypes`. `None` for the blocks
+/// with no item (a spawner, portals, a lit redstone ore, a dragon egg).
+pub fn pick_item(id: u8, meta: i32, below: i32, skull: Option<i32>) -> Option<(ItemId, i32, bool)> {
+    let it = |i: ItemId| Some((i, 0, false));
+    match id {
+        0 => None,
+        // BlockDoor, BlockBed, signs, cake, cauldron, brewing stand
+        64 => it(324),
+        71 => it(330),
+        26 => it(355),
+        63 | 68 => it(323),
+        92 => it(354),
+        118 => it(380),
+        117 => it(379),
+        // crops give their seed, stems the seeds, wart, reeds
+        59 => it(295),
+        141 => it(391),
+        142 => it(392),
+        104 => it(361),
+        105 => it(362),
+        115 => it(372),
+        83 => it(338),
+        // redstone parts
+        55 => it(331),
+        93 | 94 => it(356),
+        149 | 150 => it(404),
+        75 | 76 => Some((76, 0, false)),
+        123 | 124 => Some((123, 0, false)),
+        132 => it(287),
+        // BlockCocoa: cocoa beans
+        127 => Some((351, 3, true)),
+        // BlockSkull: the tile entity's type
+        144 => Some((397, skull.unwrap_or(meta), true)),
+        140 => it(390),
+        // BlockFarmland gives dirt, and dirt reads the moisture as its damage
+        60 => Some((3, if meta == 1 { 0 } else { meta }, true)),
+        61 | 62 => Some((61, 0, false)),
+        99 | 100 => Some((id as ItemId - 60, 0, false)),
+        34 => Some((if meta & 8 != 0 { 29 } else { 33 }, 0, false)),
+        // the double slabs give their slab
+        43 => Some((44, meta & 7, true)),
+        125 => Some((126, meta & 7, true)),
+        // no item: spawner, piston moving, portals, dragon egg, lit redstone ore
+        52 | 36 | 90 | 119 | 122 | 74 => None,
+        _ => {
+            // Item.registerItems: the ItemBlocks with subtypes
+            let subtypes = matches!(
+                id,
+                3 | 5 | 6 | 12 | 17 | 18 | 24 | 31 | 35 | 37 | 38 | 44 | 78 | 95 | 97 | 98 | 126
+                    | 139 | 145 | 155 | 159 | 160 | 161 | 162 | 171 | 175
+            );
+            if !subtypes {
+                return Some((id as ItemId, 0, false));
+            }
+            let dmg = match id {
+                // BlockDirt.getDamageValue: coarse dirt (1) reads as dirt
+                3 => {
+                    if meta == 1 {
+                        0
+                    } else {
+                        meta
+                    }
+                }
+                161 => meta & 3,
+                31 | 97 => meta,
+                44 | 126 => meta & 7,
+                // BlockDoublePlant: the top half asks the bottom
+                175 => {
+                    if meta & 8 != 0 {
+                        below & 7
+                    } else {
+                        meta & 7
+                    }
+                }
+                _ => crate::drops::damage_dropped(id, meta),
+            };
+            Some((id as ItemId, dmg, true))
+        }
+    }
+}
+
+#[cfg(test)]
+mod pick_tests {
+    use super::pick_item;
+
+    /// `Minecraft.middleClickMouse` against `Block.getItem` / `getDamageValue`.
+    #[test]
+    fn middle_click_picks_what_the_game_picks() {
+        // either half of a door is the door item
+        assert_eq!(pick_item(64, 8, 3, None), Some((324, 0, false)));
+        assert_eq!(pick_item(64, 3, 0, None), Some((324, 0, false)));
+        assert_eq!(pick_item(71, 9, 0, None), Some((330, 0, false)));
+        // stairs and torches lose their facing; logs keep the wood
+        assert_eq!(pick_item(53, 3, 0, None), Some((53, 0, false)));
+        assert_eq!(pick_item(17, 5, 0, None), Some((17, 1, true)));
+        // a double slab is its slab; the top of a tall flower asks below
+        assert_eq!(pick_item(43, 9, 0, None), Some((44, 1, true)));
+        assert_eq!(pick_item(175, 8, 4, None), Some((175, 4, true)));
+        assert_eq!(pick_item(127, 9, 0, None), Some((351, 3, true)));
+        assert_eq!(pick_item(144, 1, 0, Some(4)), Some((397, 4, true)));
+        assert_eq!(pick_item(52, 0, 0, None), None);
     }
 }

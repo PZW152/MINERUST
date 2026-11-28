@@ -1356,12 +1356,16 @@ fn boxes(
                 for a in 0..3 {
                     pos[a] = if p[a] == 1 { b[a + 3] } else { b[a] };
                 }
+                // RenderBlocks.renderFaceZNeg / renderFaceXPos (without
+                // field_152631_f, which only fences and stairs set): the U
+                // runs backwards within the box's own range, so a thin box
+                // samples the near edge of the icon, not the far one
                 let (mut u, v) = match f {
                     0 | 1 => (pos[0], pos[2]),
-                    2 => (1.0 - pos[0], 1.0 - pos[1]),
+                    2 => (b[0] + b[3] - pos[0], 1.0 - pos[1]),
                     3 => (pos[0], 1.0 - pos[1]),
                     4 => (pos[2], 1.0 - pos[1]),
-                    _ => (1.0 - pos[2], 1.0 - pos[1]),
+                    _ => (b[2] + b[5] - pos[2], 1.0 - pos[1]),
                 };
                 if flip {
                     u = 1.0 - u;

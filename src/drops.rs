@@ -195,7 +195,7 @@ fn get_item_dropped(id: u8, meta: i32, r: &mut JavaRandom, fortune: i32) -> Opti
 }
 
 /// `Block.damageDropped(meta)`
-fn damage_dropped(id: u8, meta: i32) -> i32 {
+pub fn damage_dropped(id: u8, meta: i32) -> i32 {
     match id {
         // planks, sand, sandstone, wool, flowers, stained glass and panes,
         // stone brick, walls, skull, stained clay, carpet

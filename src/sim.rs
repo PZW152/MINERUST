@@ -121,7 +121,11 @@ pub enum Command {
     DropHeld {
         all: bool,
     },
-    PickBlock(u8, i32),
+    /// Middle click on a block (its position).
+    PickBlock([i32; 3]),
+    /// Middle click on an entity in creative: the item, its damage and
+    /// `getHasSubtypes`.
+    PickEntity(crate::item::ItemId, i32, bool),
     SetMode(GameMode),
     /// Health, food and the like, encoded by the client for the save file.
     Stats(String),
@@ -1518,7 +1522,12 @@ impl Sim {
                 play.drop_held(&mut self.world, all);
                 self.play = play;
             }
-            Command::PickBlock(id, meta) => self.play.pick_block(id, meta),
+            Command::PickBlock(p) => self.play.pick_block(&self.world, p),
+            Command::PickEntity(item, dmg, sub) => {
+                if self.play.mode == crate::entity::survival::GameMode::Creative {
+                    self.play.set_current_item(item, dmg, sub);
+                }
+            }
             Command::SetMode(m) => {
                 self.play.mode = m;
                 self.play.inv_dirty = true;

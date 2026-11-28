@@ -3696,6 +3696,44 @@ impl Game {
         }
     }
 
+    /// `Minecraft.middleClickMouse` on an entity: what item it is picked as.
+    fn pick_entity(&self, id: u32) -> Option<(crate::item::ItemId, i32, bool)> {
+        use crate::entity::minecart::CartKind;
+        use crate::entity::vehicle::Vehicle;
+        if let Some(m) = self.mobs.iter().find(|m| m.id == id) {
+            // a spawn egg of its EntityList id, if it has one
+            let name = m.kind.id();
+            return crate::item_data::EGGS
+                .iter()
+                .find(|e| e.1 == name)
+                .map(|e| (383, e.0, true));
+        }
+        let c = self.boats.iter().find(|c| c.v.id() == id)?;
+        Some(match &c.v {
+            Vehicle::Boat(_) => (333, 0, false),
+            Vehicle::Cart(m) => (
+                match m.kind {
+                    CartKind::Furnace => 343,
+                    CartKind::Chest => 342,
+                    CartKind::Tnt => 407,
+                    CartKind::Hopper => 408,
+                    CartKind::Command => 422,
+                    _ => 328,
+                },
+                0,
+                false,
+            ),
+            Vehicle::Hang(h) if h.knot => (420, 0, false),
+            Vehicle::Hang(h) if h.art.is_some() => (321, 0, false),
+            // an item frame: what it shows, else the frame
+            Vehicle::Hang(h) => match h.item {
+                Some(s) => (s.id, s.meta, true),
+                None => (389, 0, false),
+            },
+            _ => return None,
+        })
+    }
+
     /// The render chunks around a block the client changed
     /// (`markBlockForUpdate`).
     fn mark_block_dirty(&mut self, p: [i32; 3]) {
@@ -5304,9 +5342,11 @@ impl Game {
                     1 => self.use_item(),
                     _ => {
                         if let Some((b, _)) = self.selected {
-                            let id = self.world.peek_block(b[0], b[1], b[2]);
-                            let meta = self.world.peek_meta(b[0], b[1], b[2]) as i32;
-                            let _ = self.sim.commands.send(Command::PickBlock(id, meta));
+                            let _ = self.sim.commands.send(Command::PickBlock(b));
+                        } else if let Some((id, _)) = self.target_mob {
+                            if let Some((item, dmg, sub)) = self.pick_entity(id) {
+                                let _ = self.sim.commands.send(Command::PickEntity(item, dmg, sub));
+                            }
                         }
                     }
                 }
