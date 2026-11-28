@@ -559,6 +559,10 @@ pub struct ServerWorld {
     pub map_features: bool,
     /// `World.isRaining`
     pub raining: bool,
+    /// `isThundering` (the weighted thunder strength above 0.9), and the
+    /// bolts `func_147456_g` struck this tick.
+    pub thundering: bool,
+    pub bolts: Vec<[i32; 3]>,
     /// `World.getCurrentMoonPhaseFactor`
     pub moon_factor: f32,
     /// `Chunk.inhabitedTime`, and for the chunks the player watches the
@@ -650,6 +654,8 @@ impl ServerWorld {
             pending_structure_chunks: Vec::new(),
             map_features: true,
             raining: false,
+            thundering: false,
+            bolts: Vec::new(),
             moon_factor: 1.0,
             inhabited: FastMap::default(),
             watched: FastMap::default(),

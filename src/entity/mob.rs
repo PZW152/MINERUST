@@ -453,6 +453,8 @@ pub struct Mob {
     /// `EntityVillager.buyingList`, `wealth`, `timeUntilReset`,
     /// `needsInitilization`, and `buyingPlayer` being the player.
     pub offers: Option<Vec<crate::merchant::Recipe>>,
+    /// `EntityCreeper.getPowered` (data watcher 17): struck by lightning.
+    pub powered: bool,
     /// `EntityLiving.leashedToEntity`, and the `Leash` tag of a mob loaded
     /// from a save until `recreateLeash` finds its holder.
     pub leash: Option<Leash>,
@@ -856,6 +858,7 @@ impl Mob {
             persistent: false,
             custom_name: String::new(),
             offers: None,
+            powered: false,
             leash: None,
             leash_tag: None,
             home: None,
@@ -4266,6 +4269,7 @@ impl Mobs {
             ("HealF", Nbt::Float(m.health)),
             ("Health", Nbt::Short(m.health.ceil() as i16)),
             ("PersistenceRequired", Nbt::Byte(m.persistent as i8)),
+            ("powered", Nbt::Byte(m.powered as i8)),
             // EntityLiving.writeEntityToNBT: Leashed and the holder
             ("Leashed", Nbt::Byte(m.leash.or(m.leash_tag).is_some() as i8)),
             // EntityLiving.writeEntityToNBT
@@ -4458,6 +4462,7 @@ impl Mobs {
             }
         }
         m.persistent = t.int("PersistenceRequired").unwrap_or(0) != 0;
+        m.powered = m.kind == Kind::Creeper && t.int("powered").unwrap_or(0) != 0;
         if t.int("Leashed").unwrap_or(0) != 0 {
             if let Some(l) = t.get("Leash") {
                 m.leash_tag = match (l.int("X"), l.int("Y"), l.int("Z")) {
@@ -5540,7 +5545,8 @@ fn creeper_fuse(
         // the creeper is the exploder (getExplosivePlacedBy)
         explosions.push(crate::world::explosion::Request {
             pos: m.pos,
-            size: 3.0,
+            // func_146077_cc: a charged creeper's blast is twice as big
+            size: if m.powered { 6.0 } else { 3.0 },
             flaming: false,
             smoking: true,
             exploder: crate::world::explosion::Exploder::Living(m.pos),

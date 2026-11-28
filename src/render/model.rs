@@ -1168,6 +1168,38 @@ pub fn mob(
             }
         }
     }
+    // RenderCreeper.shouldRenderPass: a charged creeper's swirl,
+    // ModelCreeper(2.0) in half grey added on top (its scrolling left out)
+    if m.kind == Kind::Creeper && m.flags & 256 != 0 {
+        if let Some(t) = tex("creeper/creeper_armor") {
+            let g = 2.0f32;
+            let hr = [a.head_pitch / (180.0 / PI), a.head_yaw / (180.0 / PI), 0.0];
+            let mut head = Part::new([0.0, 4.0, 0.0]).bx(0.0, 0.0, [-4.0, -8.0, -4.0], [8.0, 8.0, 8.0], g);
+            head.rot = hr;
+            let mut v = vec![
+                head,
+                Part::new([0.0, 4.0, 0.0]).bx(16.0, 16.0, [-4.0, 0.0, -2.0], [8.0, 12.0, 4.0], g),
+            ];
+            for (x, z, ph) in [(-2.0, 4.0, 0.0), (2.0, 4.0, PI), (-2.0, -4.0, PI), (2.0, -4.0, 0.0)] {
+                v.push(
+                    Part::new([x, 16.0, z])
+                        .bx(0.0, 16.0, [-2.0, 0.0, -2.0], [4.0, 6.0, 4.0], g)
+                        .r(cos(a.swing * 0.6662 + ph) * 1.4 * a.amount, 0.0, 0.0),
+                );
+            }
+            let mut glow = Vec::new();
+            let mut d = Draw {
+                out: &mut glow,
+                tex: t,
+                light,
+                tint: [0.5, 0.5, 0.5, 1.0],
+            };
+            for p in &v {
+                render(&mut d, &mat, p);
+            }
+            super::entities::push_additive(&glow);
+        }
+    }
     // RenderBiped: the armour passes (shouldRenderPass, armorItemInSlot(3 -
     // pass)) on ModelZombie / ModelSkeleton(1.0 or 0.5, true), then
     // renderEquippedItems' held item from the right arm

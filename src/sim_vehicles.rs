@@ -1091,3 +1091,134 @@ impl Sim {
         }
     }
 }
+
+impl Sim {
+    /// `EntityLightningBolt`'s fire: the struck block and four around it
+    /// (the constructor), or the block alone (each restrike).
+    fn bolt_fire(&mut self, p: [f64; 3], around: bool, r: &mut JavaRandom) {
+        use crate::entity::living::Difficulty;
+        let (x, y, z) = (
+            math::floor_double(p[0]),
+            math::floor_double(p[1]),
+            math::floor_double(p[2]),
+        );
+        let place = |w: &mut ServerWorld, x: i32, y: i32, z: i32| {
+            if w.is_air(x, y, z) && w.can_place_fire(x, y, z) {
+                w.set_block(x, y, z, crate::block::FIRE, 0, 3);
+            }
+        };
+        if around {
+            if !matches!(self.difficulty, Difficulty::Normal | Difficulty::Hard) {
+                return;
+            }
+            place(&mut self.world, x, y, z);
+            for _ in 0..4 {
+                let (a, b, c) = (
+                    x + r.next_int_n(3) - 1,
+                    y + r.next_int_n(3) - 1,
+                    z + r.next_int_n(3) - 1,
+                );
+                place(&mut self.world, a, b, c);
+            }
+        } else {
+            place(&mut self.world, x, y, z);
+        }
+    }
+
+    /// New bolts from the world's thunder, then `EntityLightningBolt.onUpdate`
+    /// for each: the thunder, restrikes and what it hits.
+    pub(super) fn tick_lightning(&mut self, events: &mut Vec<Event>) {
+        for b in std::mem::take(&mut self.world.bolts) {
+            let p = [b[0] as f64, b[1] as f64, b[2] as f64];
+            let mut r = JavaRandom::new(self.world.rand.next_long());
+            let _vertex = r.next_long();
+            let living = r.next_int_n(3) + 1;
+            self.bolt_fire(p, true, &mut r);
+            self.bolts.push((p, 2, living, r));
+            events.push(Event::Lightning(p));
+        }
+        let mut bolts = std::mem::take(&mut self.bolts);
+        for (p, state, living, r) in bolts.iter_mut() {
+            if *state == 2 {
+                let a = 0.8 + r.next_float() * 0.2;
+                let b = 0.5 + r.next_float() * 0.2;
+                self.pending_out.push(crate::entity::mob::Outcome {
+                    sounds: vec![("ambient.weather.thunder", *p, 10000.0, a), ("random.explode", *p, 2.0, b)],
+                    ..Default::default()
+                });
+            }
+            *state -= 1;
+            if *state < 0 {
+                if *living == 0 {
+                    *state = i32::MIN;
+                    continue;
+                } else if *state < -r.next_int_n(10) {
+                    *living -= 1;
+                    *state = 1;
+                    let _vertex = r.next_long();
+                    let pp = *p;
+                    self.bolt_fire(pp, false, r);
+                }
+            }
+            if *state >= 0 {
+                self.struck(*p);
+            }
+        }
+        bolts.retain(|b| b.1 != i32::MIN);
+        self.bolts = bolts;
+    }
+
+    /// `onStruckByLightning` for what is within 3 blocks (6 more upwards).
+    fn struck(&mut self, p: [f64; 3]) {
+        use crate::entity::mob::Kind;
+        let inside = |q: [f64; 3]| {
+            q[0] > p[0] - 3.0 && q[0] < p[0] + 3.0 && q[1] > p[1] - 3.0 && q[1] < p[1] + 9.0 && q[2] > p[2] - 3.0 && q[2] < p[2] + 3.0
+        };
+        let mut convert = Vec::new();
+        for m in self.mobs.list.iter_mut() {
+            if m.dead || m.health <= 0.0 || !inside(m.pos) {
+                continue;
+            }
+            match m.kind {
+                // EntityPig / EntityVillager: a zombie pigman or a witch
+                Kind::Pig | Kind::Villager => {
+                    convert.push((m.pos, m.yaw, if m.kind == Kind::Pig { Kind::PigZombie } else { Kind::Witch }));
+                    m.dead = true;
+                    m.health = 0.0;
+                    continue;
+                }
+                Kind::Creeper => m.powered = true,
+                _ => {}
+            }
+            // Entity.onStruckByLightning: dealFireDamage(5), then fire
+            if !m.kind.fireproof() {
+                m.damage(5.0, None);
+            }
+            m.fire += 1;
+            if m.fire == 0 {
+                m.set_fire(8);
+            }
+        }
+        for (pos, yaw, kind) in convert {
+            let mut r = JavaRandom::new(self.world.rand.next_long());
+            let id = self.mobs.spawn(kind, pos, yaw, &mut r);
+            if let Some(m) = self.mobs.list.iter_mut().find(|m| m.id == id) {
+                m.yaw = yaw;
+                if kind == Kind::PigZombie {
+                    // EntityPig: a golden sword in hand
+                    m.equipment[0] = Some(crate::item::Stack::new(283, 0, 1));
+                }
+            }
+        }
+        let (feet, _) = self.play.player;
+        if inside(feet) && !self.splayer.dead {
+            let src = crate::entity::living::Source::named(crate::entity::living::SourceKind::InFire);
+            let d = self.difficulty;
+            self.splayer.attack(&self.world, src, 5.0, d);
+            self.splayer.e.fire += 1;
+            if self.splayer.e.fire == 0 {
+                self.splayer.e.set_fire(8);
+            }
+        }
+    }
+}

@@ -166,6 +166,8 @@ pub enum Command {
 }
 
 pub enum Event {
+    /// `S2CPacketSpawnGlobalEntity`: a lightning bolt.
+    Lightning([f64; 3]),
     /// `S35PacketUpdateTileEntity` 4: a head's kind and rotation.
     Skull([i32; 3], i32, i32),
     /// The beacons whose beam shows (`isComplete`).
@@ -548,6 +550,9 @@ pub struct Sim {
     /// `MapStorage`'s maps, and the ids whose data the client has.
     pub maps: crate::map::Maps,
     maps_sent: std::collections::HashSet<i32>,
+    /// `EntityLightningBolt`s: position, `lightningState`,
+    /// `boltLivingTime` and the entity's random.
+    bolts: Vec<([f64; 3], i32, i32, JavaRandom)>,
     beams_sent: Vec<[i32; 3]>,
     /// A dimension change asked for by a command (respawning out of the Nether).
     pending_travel: Option<i32>,
@@ -765,6 +770,7 @@ impl Sim {
             base_dir: cfg.save_dir.clone(),
             maps: crate::map::Maps::new(cfg.save_dir.clone()),
             maps_sent: Default::default(),
+            bolts: Vec::new(),
             beams_sent: Vec::new(),
             pending_travel: None,
             announce_dim: false,
@@ -1983,6 +1989,8 @@ impl Sim {
             self.weather.update(&mut r);
             self.world.rand = r;
             self.world.raining = self.dim == 0 && self.weather.rain > 0.2;
+            // getWeightedThunderStrength(1) > 0.9
+            self.world.thundering = self.dim == 0 && self.weather.thunder * self.weather.rain > 0.9;
         }
         self.world.skylight_subtracted = match self.dim {
             // WorldProviderHell.calculateCelestialAngle is always 0.5 (midnight),
@@ -2316,6 +2324,7 @@ impl Sim {
         }
         self.play = play;
         self.tick_maps(events);
+        self.tick_lightning(events);
         self.tick_leashes();
         self.tick_beacons(events);
         self.pick_up_arrows(events);
@@ -3558,6 +3567,14 @@ impl Sim {
             let mut parts = item.split(':');
             let name = parts.next().unwrap_or("");
             let off = (i as f64 - (n - 1.0) / 2.0) * 2.2;
+            if name == "LightningBolt" {
+                // a bolt five blocks ahead, on the ground
+                let (x, z) = (feet[0] + fwd[0] * 5.0 + side[0] * off, feet[2] + fwd[1] * 5.0 + side[1] * off);
+                let (bx, bz) = (x.floor() as i32, z.floor() as i32);
+                let y = self.world.precipitation_height(bx, bz);
+                self.world.bolts.push([bx, y, bz]);
+                continue;
+            }
             if name == "Item" {
                 // Item:<id>:<count>: a dropped stack three blocks ahead
                 let id = parts.next().and_then(|v| v.parse().ok()).unwrap_or(1u16);
@@ -4222,7 +4239,8 @@ impl Sim {
                     | (m.is_child() as u32) << 4
                     | (m.zombie_villager as u32) << 5
                     | ((m.conversion >= 0) as u32) << 6
-                    | (m.saddled as u32) << 7,
+                    | (m.saddled as u32) << 7
+                    | (m.powered as u32) << 8,
                 carried: [m.carried, m.carried_meta],
                 attack_timer: m.attack_timer,
                 equipment: m.equipment,
@@ -8517,6 +8535,29 @@ mod tests {
     }
 
     /// `EntityVillager.interact`, `ContainerMerchant`, `useRecipe`.
+    #[test]
+    fn lightning_charges_creepers_and_turns_pigs() {
+        use crate::entity::mob::Kind;
+        let (mut sim, x, y, z) = redstone_sim();
+        arena(&mut sim, x, y, z);
+        sim.difficulty = crate::entity::living::Difficulty::Normal;
+        let mut r = JavaRandom::new(4);
+        let at = [x as f64 + 4.5, (y + 1) as f64, z as f64 + 0.5];
+        let creeper = sim.mobs.spawn(Kind::Creeper, at, 0.0, &mut r);
+        let pig = sim.mobs.spawn(Kind::Pig, [at[0] + 1.0, at[1], at[2]], 0.0, &mut r);
+        let feet = [x as f64 - 10.5, (y + 1) as f64, z as f64 + 0.5];
+        sim.world.bolts.push([x + 4, y + 1, z]);
+        let mut ev = Vec::new();
+        sim.step(&[Command::Player(feet, [0.0, 0.0], false)], &mut ev);
+        assert!(ev.iter().any(|e| matches!(e, Event::Lightning(_))));
+        for _ in 0..3 {
+            sim.step(&[Command::Player(feet, [0.0, 0.0], false)], &mut ev);
+        }
+        assert!(sim.mobs.list.iter().find(|m| m.id == creeper).unwrap().powered, "charged");
+        assert!(sim.mobs.list.iter().all(|m| m.id != pig || m.dead), "the pig is gone");
+        assert!(sim.mobs.list.iter().any(|m| m.kind == Kind::PigZombie), "a zombie pigman");
+    }
+
     #[test]
     fn heads_place_turn_and_drop() {
         use crate::item::Stack;

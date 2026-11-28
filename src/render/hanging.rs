@@ -4,10 +4,11 @@ use super::mesher::Vertex;
 use super::model::Tex;
 use super::{mul, rot_y, transform, translate, Mat4};
 
-pub const TEXTURES: [&str; 3] = [
+pub const TEXTURES: [&str; 4] = [
     "../painting/paintings_kristoffer_zetterstrand",
     "lead_knot",
     "beacon_beam",
+    "creeper/creeper_armor",
 ];
 
 /// The world-space normal `n` under the rotation of `m`, lit as
@@ -428,5 +429,93 @@ pub fn skull_texture(kind: i32) -> &'static str {
         3 => "steve",
         4 => "creeper/creeper",
         _ => "skeleton/skeleton",
+    }
+}
+
+/// `RenderLightningBolt`: four widening layers of the main stroke and two
+/// side branches, each eight 16-block segments, from the seed `vertex`.
+pub fn lightning(out: &mut Vec<Vertex>, white: [f32; 4], rel: [f32; 3], vertex: i64) {
+    use crate::java::JavaRandom;
+    let uv = [(white[0] + white[2]) * 0.5, (white[1] + white[3]) * 0.5];
+    let c = [(0.45f32 * 255.0) as u8, (0.45f32 * 255.0) as u8, (0.5f32 * 255.0) as u8, (0.3f32 * 255.0) as u8];
+    let mut xs = [0f64; 8];
+    let mut zs = [0f64; 8];
+    let (mut x13, mut z15) = (0f64, 0f64);
+    let mut r = JavaRandom::new(vertex);
+    for i in (0..8).rev() {
+        xs[i] = x13;
+        zs[i] = z15;
+        x13 += (r.next_int_n(11) - 5) as f64;
+        z15 += (r.next_int_n(11) - 5) as f64;
+    }
+    let (x, y, z) = (rel[0] as f64, rel[1] as f64, rel[2] as f64);
+    for layer in 0..4 {
+        let mut r2 = JavaRandom::new(vertex);
+        for branch in 0..3 {
+            let mut top = 7i32;
+            let mut bottom = 0i32;
+            if branch > 0 {
+                top = 7 - branch;
+                bottom = top - 2;
+            }
+            let mut dx = xs[top as usize] - x13;
+            let mut dz = zs[top as usize] - z15;
+            let mut seg = top;
+            while seg >= bottom {
+                let (px, pz) = (dx, dz);
+                if branch == 0 {
+                    dx += (r2.next_int_n(11) - 5) as f64;
+                    dz += (r2.next_int_n(11) - 5) as f64;
+                } else {
+                    dx += (r2.next_int_n(31) - 15) as f64;
+                    dz += (r2.next_int_n(31) - 15) as f64;
+                }
+                let mut w1 = 0.1 + layer as f64 * 0.2;
+                if branch == 0 {
+                    w1 *= seg as f64 * 0.1 + 1.0;
+                }
+                let mut w2 = 0.1 + layer as f64 * 0.2;
+                if branch == 0 {
+                    w2 *= (seg - 1) as f64 * 0.1 + 1.0;
+                }
+                let mut strip = Vec::with_capacity(10);
+                for k in 0..5 {
+                    let mut ax = x + 0.5 - w1;
+                    let mut az = z + 0.5 - w1;
+                    if k == 1 || k == 2 {
+                        ax += w1 * 2.0;
+                    }
+                    if k == 2 || k == 3 {
+                        az += w1 * 2.0;
+                    }
+                    let mut bx = x + 0.5 - w2;
+                    let mut bz = z + 0.5 - w2;
+                    if k == 1 || k == 2 {
+                        bx += w2 * 2.0;
+                    }
+                    if k == 2 || k == 3 {
+                        bz += w2 * 2.0;
+                    }
+                    strip.push([bx + dx, y + (seg * 16) as f64, bz + dz]);
+                    strip.push([ax + px, y + ((seg + 1) * 16) as f64, az + pz]);
+                }
+                // GL_TRIANGLE_STRIP as quads, both ways round
+                for k in 0..4 {
+                    let q = [strip[2 * k], strip[2 * k + 1], strip[2 * k + 3], strip[2 * k + 2]];
+                    for order in [[0usize, 1, 2, 3], [3, 2, 1, 0]] {
+                        for i in order {
+                            let p = q[i];
+                            out.push(Vertex {
+                                pos: [p[0] as f32, p[1] as f32, p[2] as f32],
+                                uv,
+                                color: c,
+                                light: [240, 240, 0, 0],
+                            });
+                        }
+                    }
+                }
+                seg -= 1;
+            }
+        }
     }
 }

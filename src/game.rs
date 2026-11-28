@@ -447,6 +447,11 @@ pub struct Game {
     /// The latest server values of the mobs' per-tick animation counters,
     /// taken over one client tick at a time (see `merge_mobs`).
     mob_net: std::collections::HashMap<u32, MobAnim>,
+    /// The client's `EntityLightningBolt`s (position, `lightningState`,
+    /// `boltLivingTime`, `boltVertex`, random) and
+    /// `WorldClient.lastLightningBolt`.
+    bolts: Vec<([f64; 3], i32, i32, i64, JavaRandom)>,
+    last_lightning: i32,
     /// Beacons with a beam: place and `beamRenderScale`.
     beacons: Vec<([i32; 3], f32)>,
     /// `S34PacketMaps` as received, and which map each atlas slot shows
@@ -792,6 +797,8 @@ impl Game {
             next_step: 1.0,
             mobs: Vec::new(),
             mob_net: Default::default(),
+            bolts: Vec::new(),
+            last_lightning: 0,
             beacons: Vec::new(),
             maps: Default::default(),
             map_slots: Vec::new(),
@@ -1495,6 +1502,12 @@ impl Game {
             };
             self.counts[2] += 1;
             match e {
+                Event::Lightning(p) => {
+                    let mut r = JavaRandom::new(self.particle_rand.next_long());
+                    let vertex = r.next_long();
+                    let living = r.next_int_n(3) + 1;
+                    self.bolts.push((p, 2, living, vertex, r));
+                }
                 Event::Beacons(list) => {
                     let old = std::mem::take(&mut self.beacons);
                     self.beacons = list
@@ -2067,6 +2080,28 @@ impl Game {
 
     /// `TextureAtlasSprite.updateAnimation` for every animated tile.
     fn tick_animations(&mut self) {
+        // World.updateWeather: the flash fades, then the bolts update
+        if self.last_lightning > 0 {
+            self.last_lightning -= 1;
+        }
+        let mut bolts = std::mem::take(&mut self.bolts);
+        bolts.retain_mut(|(_, state, living, vertex, r)| {
+            *state -= 1;
+            if *state < 0 {
+                if *living == 0 {
+                    return false;
+                } else if *state < -r.next_int_n(10) {
+                    *living -= 1;
+                    *state = 1;
+                    *vertex = r.next_long();
+                }
+            }
+            true
+        });
+        if bolts.iter().any(|b| b.1 >= 0) {
+            self.last_lightning = 2;
+        }
+        self.bolts = bolts;
         if let Some(b) = self.book_gui.as_mut() {
             b.ticks += 1;
         }
@@ -5427,7 +5462,11 @@ impl Game {
         let sun = sb * 0.8f32 + 0.2f32;
         for i in 0..256usize {
             let f = sun * 0.95f32 + 0.05f32;
-            let f1 = self.light_table[i / 16] * f;
+            let mut f1 = self.light_table[i / 16] * f;
+            // EntityRenderer.updateLightmap: full sky light during a flash
+            if self.last_lightning > 0 {
+                f1 = self.light_table[i / 16];
+            }
             let f2 = self.light_table[i % 16] * (self.torch_x * 0.1f32 + 1.5f32);
             let f3 = f1 * (sun * 0.65f32 + 0.35f32);
             let f4 = f1 * (sun * 0.65f32 + 0.35f32);
@@ -5574,6 +5613,13 @@ impl Game {
             for c in &mut sky {
                 *c = *c * (1.0 - thunder * 0.75) + l * thunder * 0.75;
             }
+        }
+        // the lightning's flash
+        if self.last_lightning > 0 {
+            let f = (self.last_lightning as f32 - partial).min(1.0) * 0.45;
+            sky[0] = sky[0] * (1.0 - f) + 0.8 * f;
+            sky[1] = sky[1] * (1.0 - f) + 0.8 * f;
+            sky[2] = sky[2] * (1.0 - f) + 1.0 * f;
         }
         let mut fog = match self.dim {
             // WorldProviderHell.getFogColor
@@ -5962,6 +6008,7 @@ impl Game {
         // --- Dropped items, crack overlay, hand ---
         entities::set_glint_time(self.started.elapsed().as_millis() as u64);
         let _ = entities::take_glint();
+        let _ = entities::take_additive();
         let mut dynamic: Vec<crate::render::mesher::Vertex> = Vec::new();
         let mut fish_line: Vec<[f32; 3]> = Vec::new();
         let mut translucent: Vec<crate::render::mesher::Vertex> = Vec::new();
@@ -7029,7 +7076,20 @@ impl Game {
             }
         }
         let hand_glint = entities::take_glint();
+        // RenderLightningBolt, after the charged creepers' swirls
+        let mut additive = entities::take_additive();
+        for b in &self.bolts {
+            if b.1 >= 0 {
+                let rel = [
+                    (b.0[0] - eye[0]) as f32,
+                    (b.0[1] - eye[1]) as f32,
+                    (b.0[2] - eye[2]) as f32,
+                ];
+                crate::render::hanging::lightning(&mut additive, self.atlas.named("white"), rel, b.3);
+            }
+        }
         let frame = Frame {
+            additive: &additive,
             glint: &world_glint,
             hand_glint: &hand_glint,
             end_portals: &end_portals,
@@ -7121,6 +7181,7 @@ pub fn draw_ui_only(
         hand: &[],
         glint: &[],
         hand_glint: &[],
+        additive: &[],
         weather: &[],
         end_portals: &[],
         labels: &[],

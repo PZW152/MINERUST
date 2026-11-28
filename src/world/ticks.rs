@@ -72,6 +72,16 @@ impl ServerWorld {
             return;
         }
         let (bx, bz) = (cx * 16, cz * 16);
+        // "thunder": one chunk in 100000 a tick is struck
+        if self.rand.next_int_n(100000) == 0 && self.raining && self.thundering {
+            self.update_lcg = self.update_lcg.wrapping_mul(3).wrapping_add(1013904223);
+            let k = self.update_lcg >> 2;
+            let (x, z) = (bx + (k & 15), bz + (k >> 8 & 15));
+            let y = self.precipitation_height(x, z);
+            if self.can_lightning_strike_at(x, y, z) {
+                self.bolts.push([x, y, z]);
+            }
+        }
         if self.rand.next_int_n(16) == 0 {
             self.update_lcg = self.update_lcg.wrapping_mul(3).wrapping_add(1013904223);
             let k = self.update_lcg >> 2;

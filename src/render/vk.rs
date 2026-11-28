@@ -410,6 +410,8 @@ pub struct Frame<'a> {
     /// The enchantment glint's layers over `dynamic` and over `hand`.
     pub glint: &'a [Vertex],
     pub hand_glint: &'a [Vertex],
+    /// Camera-relative quads added to what is there (lightning).
+    pub additive: &'a [Vertex],
     /// Rain and snow streaks (camera-relative, alpha blended).
     pub weather: &'a [Vertex],
     /// `RenderEndPortal` quads (camera-relative, at y + 0.75).
@@ -560,6 +562,7 @@ pub struct Renderer {
     pipe_crack: vk::Pipeline,
     pipe_hand: vk::Pipeline,
     pipe_world_glint: vk::Pipeline,
+    pipe_additive: vk::Pipeline,
     pipe_label: vk::Pipeline,
     ui_tex: (vk::Image, vk::DeviceMemory, vk::ImageView),
     stars: (vk::Buffer, vk::DeviceMemory, u32),
@@ -931,10 +934,15 @@ impl Renderer {
                 // kind 16: the crack pipeline (10, depth bias, no depth
                 // write) with the world glint's additive blend
                 let world_glint = kind_in == 16;
+                // kind 17: the translucent world pipeline (2) adding
+                // (GL_SRC_ALPHA, GL_ONE): the lightning bolt
+                let additive = kind_in == 17;
                 let kind = if glint || vignette {
                     9
                 } else if world_glint {
                     10
+                } else if additive {
+                    2
                 } else {
                     kind_in
                 };
@@ -1125,6 +1133,16 @@ impl Renderer {
                         .dst_alpha_blend_factor(vk::BlendFactor::ONE)
                         .alpha_blend_op(vk::BlendOp::ADD);
                 }
+                if additive {
+                    att = att
+                        .blend_enable(true)
+                        .src_color_blend_factor(vk::BlendFactor::SRC_ALPHA)
+                        .dst_color_blend_factor(vk::BlendFactor::ONE)
+                        .color_blend_op(vk::BlendOp::ADD)
+                        .src_alpha_blend_factor(vk::BlendFactor::ZERO)
+                        .dst_alpha_blend_factor(vk::BlendFactor::ONE)
+                        .alpha_blend_op(vk::BlendOp::ADD);
+                }
                 if world_glint {
                     att = att
                         .blend_enable(true)
@@ -1188,6 +1206,7 @@ impl Renderer {
             let pipe_crack = mk(c"vs_terrain", c"fs_crack", 10);
             let pipe_hand = mk(c"vs_terrain", c"fs_terrain", 11);
             let pipe_world_glint = mk(c"vs_terrain", c"fs_glint", 16);
+            let pipe_additive = mk(c"vs_terrain", c"fs_terrain", 17);
             let pipe_portal = mk(c"vs_portal", c"fs_portal", 12);
             let pipe_label = mk(c"vs_terrain", c"fs_terrain", 15);
             device.destroy_shader_module(module, None);
@@ -1258,6 +1277,7 @@ impl Renderer {
                 pipe_label,
                 pipe_hand,
                 pipe_world_glint,
+                pipe_additive,
                 ui_tex: (
                     vk::Image::null(),
                     vk::DeviceMemory::null(),
@@ -2403,6 +2423,7 @@ impl Renderer {
                 .max(frame.weather.len())
                 .max(frame.glint.len())
                 .max(frame.hand_glint.len())
+                .max(frame.additive.len())
                 / 4
                 + 1) as u32;
             self.ensure_indices(need);
@@ -2979,6 +3000,13 @@ impl Renderer {
                 wptr.add(hglint_at * vsz),
                 n_hglint * vsz,
             );
+            let add_at = hglint_at + n_hglint;
+            let n_add = frame.additive.len().min(cap - add_at);
+            std::ptr::copy_nonoverlapping(
+                frame.additive.as_ptr() as *const u8,
+                wptr.add(add_at * vsz),
+                n_add * vsz,
+            );
             if n_dyn >= 4 {
                 dev.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, self.pipe_opaque);
                 push([0.0; 4], [0.0; 4]);
@@ -3053,6 +3081,12 @@ impl Renderer {
                     &[((n_dyn + n_crack + n_hand) * vsz) as u64],
                 );
                 dev.cmd_draw_indexed(cmd, (n_weather / 4) as u32 * 6, 1, 0, 0, 0);
+            }
+            if n_add >= 4 {
+                dev.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, self.pipe_additive);
+                push([0.0; 4], [0.0; 4]);
+                dev.cmd_bind_vertex_buffers(cmd, 0, &[wbuf], &[(add_at * vsz) as u64]);
+                dev.cmd_draw_indexed(cmd, (n_add / 4) as u32 * 6, 1, 0, 0, 0);
             }
             if let Some(c) = &frame.clouds {
                 if !c.before_terrain {
@@ -3415,6 +3449,7 @@ impl Drop for Renderer {
             self.device.destroy_pipeline(self.pipe_crack, None);
             self.device.destroy_pipeline(self.pipe_hand, None);
             self.device.destroy_pipeline(self.pipe_world_glint, None);
+            self.device.destroy_pipeline(self.pipe_additive, None);
             self.device.destroy_pipeline(self.pipe_portal, None);
             self.device.destroy_pipeline(self.pipe_label, None);
             self.device.destroy_buffer(self.stars.0, None);

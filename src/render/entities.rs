@@ -232,6 +232,20 @@ thread_local! {
     static GLINT_MS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
+thread_local! {
+    /// Quads drawn added to the scene (`glBlendFunc(GL_ONE, GL_ONE)`),
+    /// made while building the entities.
+    static ADDITIVE: std::cell::RefCell<Vec<Vertex>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+pub fn push_additive(v: &[Vertex]) {
+    ADDITIVE.with(|a| a.borrow_mut().extend_from_slice(v));
+}
+
+pub fn take_additive() -> Vec<Vertex> {
+    ADDITIVE.with(|a| std::mem::take(&mut *a.borrow_mut()))
+}
+
 /// Sets the clock the glint scrolls by.
 pub fn set_glint_time(ms: u64) {
     GLINT_MS.with(|c| c.set(ms));

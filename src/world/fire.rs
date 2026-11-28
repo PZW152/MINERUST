@@ -42,6 +42,11 @@ impl ServerWorld {
             || self.catches(x, y, z + 1)
     }
 
+    /// `BlockFire.canPlaceBlockAt`
+    pub fn can_place_fire(&mut self, x: i32, y: i32, z: i32) -> bool {
+        self.solid_top_surface(x, y - 1, z) || self.neighbour_burns(x, y, z)
+    }
+
     /// `World.canLightningStrikeAt`
     fn rain_at(&mut self, x: i32, y: i32, z: i32) -> bool {
         self.can_lightning_strike_at(x, y, z)
