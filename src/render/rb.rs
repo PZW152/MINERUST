@@ -4394,6 +4394,118 @@ impl<'a, 'b> Rb<'a, 'b> {
         true
     }
 
+    /// `renderBlockCocoa`: the pod for its growth stage hanging from the
+    /// log on its side, and its stalk.
+    pub fn render_block_cocoa(&mut self, x: i32, y: i32, z: i32) -> bool {
+        self.bright = self.mixed(x, y, z);
+        self.color(1.0, 1.0, 1.0);
+        let m = self.meta;
+        let dir = m & 3;
+        let stage = (m & 12) >> 2;
+        let name = match stage {
+            0 => "cocoa_stage_0",
+            1 => "cocoa_stage_1",
+            _ => "cocoa_stage_2",
+        };
+        let icon = Icon::new(self.atlas().named(name));
+        let w = 4 + stage * 2;
+        let h = 5 + stage * 2;
+        let (wf, hf) = (w as f64, h as f64);
+        let mut u0 = icon.u(15.0 - wf);
+        let mut u1 = icon.u(15.0);
+        let mut v0 = icon.v(4.0);
+        let mut v1 = icon.v(4.0 + hf);
+        let (ox, oz) = match dir {
+            0 => (8.0 - (w / 2) as f64, 15.0 - wf),
+            1 => (1.0, 8.0 - (w / 2) as f64),
+            2 => (8.0 - (w / 2) as f64, 1.0),
+            _ => (15.0 - wf, 8.0 - (w / 2) as f64),
+        };
+        let (xf, yf, zf) = (x as f64, y as f64, z as f64);
+        let x0 = xf + ox / 16.0;
+        let x1 = xf + (ox + wf) / 16.0;
+        let y0 = yf + (12.0 - hf) / 16.0;
+        let y1 = yf + 0.75;
+        let z0 = zf + oz / 16.0;
+        let z1 = zf + (oz + wf) / 16.0;
+        self.vertex(x0, y0, z0, u0, v1);
+        self.vertex(x0, y0, z1, u1, v1);
+        self.vertex(x0, y1, z1, u1, v0);
+        self.vertex(x0, y1, z0, u0, v0);
+        self.vertex(x1, y0, z1, u0, v1);
+        self.vertex(x1, y0, z0, u1, v1);
+        self.vertex(x1, y1, z0, u1, v0);
+        self.vertex(x1, y1, z1, u0, v0);
+        self.vertex(x1, y0, z0, u0, v1);
+        self.vertex(x0, y0, z0, u1, v1);
+        self.vertex(x0, y1, z0, u1, v0);
+        self.vertex(x1, y1, z0, u0, v0);
+        self.vertex(x0, y0, z1, u0, v1);
+        self.vertex(x1, y0, z1, u1, v1);
+        self.vertex(x1, y1, z1, u1, v0);
+        self.vertex(x0, y1, z1, u0, v0);
+        // the top and bottom
+        let mut top = w;
+        if stage >= 2 {
+            top -= 1;
+        }
+        u0 = icon.min_u();
+        u1 = icon.u(top as f64);
+        v0 = icon.v(0.0);
+        v1 = icon.v(top as f64);
+        self.vertex(x0, y1, z1, u0, v1);
+        self.vertex(x1, y1, z1, u1, v1);
+        self.vertex(x1, y1, z0, u1, v0);
+        self.vertex(x0, y1, z0, u0, v0);
+        self.vertex(x0, y0, z0, u0, v0);
+        self.vertex(x1, y0, z0, u1, v0);
+        self.vertex(x1, y0, z1, u1, v1);
+        self.vertex(x0, y0, z1, u0, v1);
+        // the stalk
+        u0 = icon.u(12.0);
+        u1 = icon.max_u();
+        v0 = icon.v(0.0);
+        v1 = icon.v(4.0);
+        let (sx, sz) = match dir {
+            0 => {
+                std::mem::swap(&mut u0, &mut u1);
+                (8.0, 12.0)
+            }
+            1 => (0.0, 8.0),
+            2 => (8.0, 0.0),
+            _ => {
+                std::mem::swap(&mut u0, &mut u1);
+                (12.0, 8.0)
+            }
+        };
+        let x0 = xf + sx / 16.0;
+        let x1 = xf + (sx + 4.0) / 16.0;
+        let y0 = yf + 0.75;
+        let y1 = yf + 1.0;
+        let z0 = zf + sz / 16.0;
+        let z1 = zf + (sz + 4.0) / 16.0;
+        if dir == 2 || dir == 0 {
+            self.vertex(x0, y0, z0, u1, v1);
+            self.vertex(x0, y0, z1, u0, v1);
+            self.vertex(x0, y1, z1, u0, v0);
+            self.vertex(x0, y1, z0, u1, v0);
+            self.vertex(x0, y0, z1, u0, v1);
+            self.vertex(x0, y0, z0, u1, v1);
+            self.vertex(x0, y1, z0, u1, v0);
+            self.vertex(x0, y1, z1, u0, v0);
+        } else {
+            self.vertex(x1, y0, z0, u0, v1);
+            self.vertex(x0, y0, z0, u1, v1);
+            self.vertex(x0, y1, z0, u1, v0);
+            self.vertex(x1, y1, z0, u0, v0);
+            self.vertex(x0, y0, z0, u1, v1);
+            self.vertex(x1, y0, z0, u0, v1);
+            self.vertex(x1, y1, z0, u0, v0);
+            self.vertex(x0, y1, z0, u1, v0);
+        }
+        true
+    }
+
     /// `renderBlockBeacon`: a glass cube around an obsidian base and the
     /// beacon itself.
     pub fn render_block_beacon(&mut self, x: i32, y: i32, z: i32) -> bool {

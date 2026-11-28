@@ -147,6 +147,14 @@ SCENES = {
         "-245 96 136 80", "-245 97 136 80", "-245 98 136 86 0",
         "-239 96 136 42", "-239 97 136 42", "-240 97 136 42", "-238 97 136 42", "-239 98 136 91 0",
     ])),
+    # RenderBlocks.renderBlockCocoa: pods of each stage on the four sides of jungle logs
+    "cocoa": dict(seed=12345, time=6000, pos=(-242.5, 97.0, 131.5), look=(0.0, 20.0), setblock=";".join(
+        [f"{x} 95 {z} 1" for x in range(-249, -235) for z in range(131, 140)] +
+        [f"{x} {y} 136 17 3" for x in (-246, -242, -238) for y in (96, 97, 98)] + [
+        "-246 97 135 127 0", "-246 96 135 127 4", "-247 97 136 127 1", "-245 97 136 127 3",
+        "-242 97 135 127 8", "-242 96 135 127 2", "-243 97 136 127 9", "-241 97 136 127 11",
+        "-238 97 135 127 4", "-239 96 136 127 5", "-237 96 136 127 7", "-238 98 135 127 8",
+    ])),
     # RenderPainting and RenderItemFrame on a wall: four paintings, framed
     # items as sprites and a block in each rotation, and an empty frame.
     "hanging": dict(seed=12345, time=6000, pos=(-242.5, 97.0, 131.5), look=(0.0, 5.0), setblock=";".join(
