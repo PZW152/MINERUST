@@ -108,6 +108,8 @@ pub struct ServerPlayer {
     in_combat: bool,
     /// Sounds and particles this tick.
     pub fx: Vec<Fx>,
+    /// `addStat` calls this tick: statistic and amount.
+    pub stat_adds: Vec<(&'static str, i32)>,
     /// `S12PacketEntityVelocity` for the client (knockback).
     pub velocity: Option<[f64; 3]>,
     /// The client should play the hurt animation (`setEntityState(2)`).
@@ -170,6 +172,7 @@ impl ServerPlayer {
             taking_damage: false,
             in_combat: false,
             fx: Vec::new(),
+            stat_adds: Vec::new(),
             velocity: None,
             hurt_anim: false,
             feet: [0.0; 3],
@@ -268,6 +271,7 @@ impl ServerPlayer {
         // NetHandlerPlayServer.processPlayer: the jump
         if self.on_ground && !on_ground && d[1] > 0.0 {
             // EntityPlayer.jump: addStat(jump), exhaustion
+            self.stat_adds.push(("stat.jump", 1));
             self.food.add_exhaustion(if sprinting { 0.8 } else { 0.2 });
         }
         self.feet = feet;
@@ -367,17 +371,28 @@ impl ServerPlayer {
             let i =
                 (math::sqrt_double(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]) * 100.0).round() as i32;
             if i > 0 {
+                self.stat_adds.push(("stat.diveOneCm", i));
                 self.food.add_exhaustion(0.015 * i as f32 * 0.01);
             }
         } else if self.e.in_water {
             let i = (math::sqrt_double(d[0] * d[0] + d[2] * d[2]) * 100.0).round() as i32;
             if i > 0 {
+                self.stat_adds.push(("stat.swimOneCm", i));
                 self.food.add_exhaustion(0.015 * i as f32 * 0.01);
             }
         } else if self.on_ladder(w) {
+            if d[1] > 0.0 {
+                self.stat_adds.push(("stat.climbOneCm", (d[1] * 100.0).round() as i32));
+            }
+        } else if !self.on_ground {
+            let i = (math::sqrt_double(d[0] * d[0] + d[2] * d[2]) * 100.0).round() as i32;
+            if i > 25 {
+                self.stat_adds.push(("stat.flyOneCm", i));
+            }
         } else if self.on_ground {
             let i = (math::sqrt_double(d[0] * d[0] + d[2] * d[2]) * 100.0).round() as i32;
             if i > 0 {
+                self.stat_adds.push(("stat.walkOneCm", i));
                 if self.sprinting {
                     self.food.add_exhaustion(0.099999994 * i as f32 * 0.01);
                 } else {
@@ -402,6 +417,9 @@ impl ServerPlayer {
         // capabilities.allowFlying
         if self.creative {
             return;
+        }
+        if distance >= 2.0 {
+            self.stat_adds.push(("stat.fallOneCm", (distance as f64 * 100.0).round() as i32));
         }
         let jump = self
             .living
@@ -672,6 +690,7 @@ impl ServerPlayer {
         let a = (a - self.living.absorption).max(0.0);
         self.living.absorption -= before - a;
         if a != 0.0 {
+            self.stat_adds.push(("stat.damageTaken", (a * 10.0).round() as i32));
             self.food.add_exhaustion(src.hunger());
             let h = self.living.health;
             self.living.set_health(h - a);

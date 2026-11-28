@@ -31,6 +31,8 @@ pub enum Action {
     Language,
     /// `options.txt` changed (render distance, GUI scale, FOV, ...).
     Settings,
+    /// `C16PacketClientStatus(REQUEST_STATS)`
+    RequestStats,
 }
 
 /// `WorldSettings` of `GuiCreateWorld`.
@@ -174,6 +176,8 @@ pub enum Screen {
     ChatOptions(Basic, f32),
     /// `GuiAchievements`
     Achievements(Basic, Box<crate::gui_achievements::State>),
+    /// `GuiStats` (its General page)
+    Stats(Basic, Box<crate::gui_stats::StatsScreen>),
 }
 
 /// A screen of plain and option buttons.
@@ -188,8 +192,10 @@ pub struct Menu {
     pub h: f32,
     pub mouse: (f32, f32),
     pub down: bool,
-    /// The achievements the player has (for `GuiAchievements`).
+    /// The achievements the player has (for `GuiAchievements`) and every
+    /// statistic the client knows (for `GuiStats`).
     pub achieved: Vec<String>,
+    pub stat_values: Vec<(String, i32)>,
     /// `GuiScreen.selectedButton`
     selected: Option<usize>,
     pending: Option<Action>,
@@ -204,6 +210,7 @@ impl Menu {
             mouse: (0.0, 0.0),
             down: false,
             achieved: Vec::new(),
+            stat_values: Vec::new(),
             selected: None,
             pending: None,
         }
@@ -219,6 +226,7 @@ impl Menu {
             mouse: (0.0, 0.0),
             down: false,
             achieved: Vec::new(),
+            stat_values: Vec::new(),
             selected: None,
             pending: None,
         }
@@ -317,6 +325,7 @@ impl Menu {
             Screen::Options(s) | Screen::Sounds(s) | Screen::Ingame(s) => &mut s.buttons,
             Screen::Todo(s, _) => &mut s.buttons,
             Screen::Achievements(s, _) => &mut s.buttons,
+            Screen::Stats(s, _) => &mut s.buttons,
             Screen::ChatOptions(s, _) => &mut s.buttons,
             Screen::Video(s) => &mut s.buttons,
             Screen::Controls(s) => &mut s.buttons,
@@ -432,6 +441,10 @@ impl Menu {
                 a.draw(ui, ctx.lang, &self.achieved, m, down, partial);
                 // the screen draws its own Done button
                 return;
+            }
+            Screen::Stats(_, st) => {
+                default_background(ui, ctx.in_world);
+                st.draw(ui, ctx.lang, &self.stat_values, m, down);
             }
             Screen::ChatOptions(_, sep) => {
                 default_background(ui, ctx.in_world);
@@ -908,7 +921,7 @@ impl Menu {
                     return self.back(ui, ctx);
                 }
             }
-            Screen::Sounds(_) | Screen::Todo(..) | Screen::Achievements(..) => {
+            Screen::Sounds(_) | Screen::Todo(..) | Screen::Achievements(..) | Screen::Stats(..) => {
                 if b.id == 200 {
                     ctx.settings.save();
                     return self.back(ui, ctx);
@@ -974,16 +987,20 @@ impl Menu {
                     ui,
                     ctx,
                 ),
-                6 => self.open(
-                    Screen::Todo(
-                        Basic {
-                            buttons: Vec::new(),
-                        },
-                        lang.get("gui.stats").to_string(),
-                    ),
-                    ui,
-                    ctx,
-                ),
+                6 => {
+                    self.open(
+                        Screen::Stats(
+                            Basic {
+                                buttons: Vec::new(),
+                            },
+                            Box::new(crate::gui_stats::StatsScreen::new()),
+                        ),
+                        ui,
+                        ctx,
+                    );
+                    // GuiStats.initGui: C16PacketClientStatus(REQUEST_STATS)
+                    return Action::RequestStats;
+                }
                 _ => {}
             },
         }
@@ -1306,6 +1323,22 @@ fn init(s: &mut Screen, ui: &Ui, ctx: &mut Ctx, w: f32, h: f32) {
         }
         Screen::Todo(b, _) => {
             b.buttons = vec![Button::wide(200, cx - 100.0, h - 27.0, t("gui.done"))];
+        }
+        // GuiStats.initButtons
+        Screen::Stats(b, st) => {
+            st.resize(w, h);
+            let mut v = vec![
+                Button::new(200, cx + 4.0, h - 28.0, 150.0, 20.0, t("gui.done")),
+                Button::new(1, cx - 160.0, h - 52.0, 80.0, 20.0, t("stat.generalButton")),
+                Button::new(2, cx - 80.0, h - 52.0, 80.0, 20.0, t("stat.blocksButton")),
+                Button::new(3, cx, h - 52.0, 80.0, 20.0, t("stat.itemsButton")),
+                Button::new(4, cx + 80.0, h - 52.0, 80.0, 20.0, t("stat.mobsButton")),
+            ];
+            // only the General page so far
+            for b in v.iter_mut().skip(2) {
+                b.enabled = false;
+            }
+            b.buttons = v;
         }
         // GuiAchievements.initGui: a GuiOptionButton of 80
         Screen::Achievements(b, _) => {

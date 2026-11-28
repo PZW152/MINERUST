@@ -1170,6 +1170,18 @@ impl Game {
                         self.start_use = Some([v[0], v[1], v[2]]);
                     }
                 }
+                // stats  GuiStats over the pause menu
+                "stats" => {
+                    self.screen = Screen::Paused;
+                    let mut m = crate::menu::Menu::ingame();
+                    m.stack.push(crate::menu::Screen::Stats(
+                        crate::menu::Basic { buttons: Vec::new() },
+                        Box::new(crate::gui_stats::StatsScreen::new()),
+                    ));
+                    self.menu = Some(m);
+                    self.menu_size = (0.0, 0.0);
+                    let _ = self.sim.commands.send(Command::RequestStats);
+                }
                 // achievements  GuiAchievements over the pause menu
                 "achievements" => {
                     self.screen = Screen::Paused;
@@ -7302,6 +7314,7 @@ impl Game {
             .filter(|(k, v)| **v > 0 && crate::stats::is_achievement(k))
             .map(|(k, _)| k.clone())
             .collect();
+        menu.stat_values = self.client_stats.iter().map(|(k, v)| (k.clone(), *v)).collect();
         let mut ctx = Self::menu_ctx(shell, &self.lang, &mut sounds);
         menu.draw(ui, &mut ctx, partial);
         let a = menu.take_pending();
@@ -7391,6 +7404,10 @@ impl Game {
             }
             Action::QuitToTitle => Request::QuitToTitle,
             Action::Quit => Request::Quit,
+            Action::RequestStats => {
+                let _ = self.sim.commands.send(Command::RequestStats);
+                Request::None
+            }
             Action::Language => {
                 if let Some(sh) = &self.shell {
                     self.lang = sh.load_lang(&self.atlas);

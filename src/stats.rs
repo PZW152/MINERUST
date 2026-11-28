@@ -229,6 +229,20 @@ impl StatisticsFile {
         out
     }
 
+    /// Every statistic with its value (the first `REQUEST_STATS`).
+    pub fn all(&self) -> Vec<(String, i32)> {
+        self.data
+            .iter()
+            .map(|e| e.0.clone())
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|id| {
+                let v = self.write_stat(&id);
+                (id, v)
+            })
+            .collect()
+    }
+
     /// `sendStats` after an achievement: the dirty statistics.
     pub fn take_dirty(&mut self) -> Vec<(String, i32)> {
         std::mem::take(&mut self.dirty)

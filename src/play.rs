@@ -326,6 +326,8 @@ pub struct Play {
     pub sign_updates: Vec<(Pos, [String; 4])>,
     /// Heads placed since the last tick (`S35PacketUpdateTileEntity` 4).
     pub skull_updates: Vec<(Pos, i32, i32)>,
+    /// `addStat(dropStat)` calls since the last tick.
+    pub drops_made: i32,
     /// Withers made by the last skull (position, yaw), and whether the
     /// difficulty is Peaceful.
     pub wither_spawns: Vec<([f64; 3], f32)>,
@@ -603,6 +605,7 @@ impl Play {
             ),
             sign_updates: Vec::new(),
             skull_updates: Vec::new(),
+            drops_made: 0,
             wither_spawns: Vec::new(),
             difficulty_peaceful: false,
             pending: Vec::new(),
@@ -2413,6 +2416,7 @@ impl Play {
     pub fn drop_held(&mut self, w: &mut ServerWorld, all: bool) {
         let sel = self.inv.selected;
         let Some(s) = self.inv.main[sel] else { return };
+        self.drops_made += 1;
         let n = if all { s.count } else { 1 };
         self.inv.main[sel] = if s.count > n {
             Some(Stack {

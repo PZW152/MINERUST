@@ -93,6 +93,8 @@ pub enum Command {
     MerchantSelect(usize),
     /// `MC|Beacon`: the chosen primary and secondary powers.
     BeaconSet(i32, i32),
+    /// `C16PacketClientStatus(REQUEST_STATS)`
+    RequestStats,
     /// `MC|BEdit` / `MC|BSign`: the book and quill's pages, and its title
     /// when signed.
     BookEdit(Vec<String>, Option<String>),
@@ -575,6 +577,8 @@ pub struct Sim {
     send_achievements: bool,
     /// statistics to send with this tick's events
     stats_out: Vec<(String, i32)>,
+    stats_sent_all: bool,
+    was_dead: bool,
     eyes: Vec<EnderEye>,
     /// `level.dat` of a world opened from vanilla (Anvil mode).
     anvil_level: Option<crate::world::anvil::Nbt>,
@@ -790,6 +794,8 @@ impl Sim {
             ),
             send_achievements: true,
             stats_out: Vec::new(),
+            stats_sent_all: false,
+            was_dead: false,
             eyes: Vec::new(),
             anvil_level: None,
             anvil_imported: Default::default(),
@@ -1417,6 +1423,17 @@ impl Sim {
                         self.play.inv_dirty = true;
                     }
                 }
+            }
+            Command::RequestStats => {
+                // func_150876_a: everything the first time, then what changed
+                let v = if self.stats_sent_all {
+                    self.stats_file.take_dirty()
+                } else {
+                    self.stats_sent_all = true;
+                    let _ = self.stats_file.take_dirty();
+                    self.stats_file.all()
+                };
+                self.stats_out.extend(v);
             }
             Command::BeaconSet(a, b) => {
                 // NetHandlerPlayServer: with a payment, it is used up and the
@@ -2336,6 +2353,19 @@ impl Sim {
         self.play = play;
         self.tick_maps(events);
         self.tick_lightning(events);
+        // EntityPlayer.onUpdate: playOneMinute; addStat calls; onDeath
+        self.stats_file.increase_stat("stat.playOneMinute", 1);
+        let drops = std::mem::take(&mut self.play.drops_made);
+        if drops > 0 {
+            self.stats_file.increase_stat("stat.drop", drops);
+        }
+        for (k, n) in std::mem::take(&mut self.splayer.stat_adds) {
+            self.stats_file.increase_stat(k, n);
+        }
+        if self.splayer.dead && !self.was_dead {
+            self.stats_file.increase_stat("stat.deaths", 1);
+        }
+        self.was_dead = self.splayer.dead;
         self.tick_leashes();
         self.tick_beacons(events);
         self.pick_up_arrows(events);
@@ -4863,6 +4893,15 @@ impl Sim {
         let (feet, yaw) = self.play.player;
         let hit = self.mobs.attack(id, f, feet, yaw, &mut out);
         if hit {
+            self.stats_file.increase_stat("stat.damageDealt", (f * 10.0).round() as i32);
+            // EntityPlayer.onKillEntity / addStat(mobKills), killEntity.<name>
+            if let Some(m) = self.mobs.list.iter().find(|m| m.id == id) {
+                if m.health <= 0.0 && living {
+                    self.stats_file.increase_stat("stat.mobKills", 1);
+                    let k = format!("stat.killEntity.{}", m.kind.id());
+                    self.stats_file.increase_stat(&k, 1);
+                }
+            }
             if kb > 0 {
                 self.mobs.add_velocity(
                     id,
