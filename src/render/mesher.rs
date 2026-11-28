@@ -41,6 +41,27 @@ pub struct MeshChunk {
     pub sections: u16,
     /// `heightMap[z << 4 | x]`
     pub height: Box<[i32; 256]>,
+    /// `TileEntityFlowerPot` contents: local x, y, local z, the plant's
+    /// block and data (block 0 for an empty pot).
+    pub pots: Vec<([u8; 3], u8, u8)>,
+}
+
+/// `BlockFlowerPot.createNewTileEntity`: the plant a pot without a tile
+/// entity gets from its metadata (as the witch hut's red mushroom).
+pub fn pot_from_meta(meta: i32) -> Option<(u8, i32)> {
+    Some(match meta {
+        1 => (38, 0),
+        2 => (37, 0),
+        3..=6 => (6, meta - 3),
+        7 => (40, 0),
+        8 => (39, 0),
+        9 => (81, 0),
+        10 => (32, 0),
+        11 => (31, 2),
+        12 => (6, 4),
+        13 => (6, 5),
+        _ => return None,
+    })
 }
 
 #[path = "rb.rs"]
@@ -1610,144 +1631,74 @@ fn cauldron(cx: &Ctx, out: &mut Vec<Vertex>, meta: i32, x: i32, y: i32, z: i32) 
     }
 }
 
-/// `renderBlockFlowerpot`
+/// `renderBlockFlowerpot`: the pot as a standard block, its four inner
+/// walls and the dirt, then the plant of its tile entity.
 fn flower_pot(cx: &Ctx, out: &mut Vec<Vertex>, meta: i32, x: i32, y: i32, z: i32) {
     let r = &cx.r;
-    let list = crate::shapes::static_boxes(block::FLOWER_POT, meta as u8);
-    boxes(
-        cx,
-        out,
-        x,
-        y,
-        z,
-        &list,
-        &|_, f| {
-            if f == 1 {
-                None
-            } else {
-                cx.rect(block::FLOWER_POT, 0, f).map(|t| (t, false))
-            }
-        },
-        [1.0; 3],
-    );
+    {
+        let mut rb = rb::Rb::new(cx, out, block::FLOWER_POT, 0);
+        rb.set_bounds([0.3125, 0.0, 0.3125, 0.6875, 0.375, 0.6875]);
+        rb.render_standard(x, y, z);
+        let bright = rb.mixed_brightness(x, y, z);
+        rb.set_color_brightness(1.0, bright);
+        let icon = rb.side_icon(0);
+        let e = 0.1865f64;
+        let (fx, fy, fz) = (x as f64, y as f64, z as f64);
+        rb.face_x_pos(fx - 0.5 + e, fy, fz, icon);
+        rb.face_x_neg(fx + 0.5 - e, fy, fz, icon);
+        rb.face_z_pos(fx, fy, fz - 0.5 + e, icon);
+        rb.face_z_neg(fx, fy, fz + 0.5 - e, icon);
+        let dirt = rb::Icon::new(cx.rect(block::DIRT, 0, 1).unwrap_or([0.0; 4]));
+        rb.face_y_pos(fx, fy - 0.5 + e + 0.1875, fz, dirt);
+    }
     let light = light_bytes(r.bright(x, y, z));
     let (lx, lz) = ((x - 16) as f32, (z - 16) as f32);
     let fy = y as f32;
-    if let Some(d) = cx.rect(block::FLOWER_POT, 15, 1) {
-        let (a, b, h) = (0.375f32, 0.625f32, 0.25f32);
-        quad(
-            out,
-            [
-                [lx + a, fy + h, lz + a],
-                [lx + a, fy + h, lz + b],
-                [lx + b, fy + h, lz + b],
-                [lx + b, fy + h, lz + a],
-            ],
-            [[d[0], d[1]], [d[0], d[3]], [d[2], d[3]], [d[2], d[1]]],
-            [255; 4],
-            light,
-            false,
-        );
-        // The rim.
-        if let Some(p) = cx.rect(block::FLOWER_POT, 0, 1) {
-            let (o0, o1, i0, i1, hy) = (0.3125f32, 0.6875f32, 0.375f32, 0.625f32, 0.375f32);
-            let uvq = |x0: f32, z0: f32, x1: f32, z1: f32| {
-                let u = |a: f32| p[0] + (p[2] - p[0]) * a;
-                let v = |a: f32| p[1] + (p[3] - p[1]) * a;
-                [
-                    [u(x0), v(z0)],
-                    [u(x0), v(z1)],
-                    [u(x1), v(z1)],
-                    [u(x1), v(z0)],
-                ]
-            };
-            for (x0, z0, x1, z1) in [
-                (o0, o0, o1, i0),
-                (o0, i1, o1, o1),
-                (o0, i0, i0, i1),
-                (i1, i0, o1, i1),
-            ] {
-                quad(
-                    out,
-                    [
-                        [lx + x0, fy + hy, lz + z0],
-                        [lx + x0, fy + hy, lz + z1],
-                        [lx + x1, fy + hy, lz + z1],
-                        [lx + x1, fy + hy, lz + z0],
-                    ],
-                    uvq(x0, z0, x1, z1),
-                    [255; 4],
-                    light,
-                    false,
-                );
+    // the plant in it (TileEntityFlowerPot), lifted by 4/16
+    let at = [(x - 16) as u8, y as u8, (z - 16) as u8];
+    let plant = match cx.r.chunks[4].pots.iter().find(|p| p.0 == at) {
+        Some(&(_, b, d)) => (b != 0).then_some((b, d as i32)),
+        None => pot_from_meta(meta),
+    };
+    match plant {
+        Some((block::CACTUS, _)) => {
+            // render type 13: three stacked boxes a quarter wide, all faces
+            let mut rb = rb::Rb::new(cx, out, block::CACTUS, 0);
+            rb.renderAllFaces = true;
+            rb.origin[1] -= 0.25;
+            let e = 0.125;
+            for k in 0..3 {
+                let y0 = k as f64 * 0.25;
+                rb.set_render_bounds(0.5 - e, y0, 0.5 - e, 0.5 + e, y0 + 0.25, 0.5 + e);
+                rb.render_standard(x, y, z);
             }
         }
-    }
-    // TileEntityFlowerPot contents by metadata (BlockFlowerPot.createNewTileEntity).
-    let plant = match meta {
-        1 => Some((block::RED_FLOWER, 0)),
-        2 => Some((block::YELLOW_FLOWER, 0)),
-        3..=6 => Some((block::SAPLING, meta - 3)),
-        7 => Some((block::RED_MUSHROOM, 0)),
-        8 => Some((block::BROWN_MUSHROOM, 0)),
-        10 => Some((block::DEADBUSH, 0)),
-        11 => Some((block::TALLGRASS, 2)),
-        12 => Some((block::SAPLING, 4)),
-        13 => Some((block::SAPLING, 5)),
-        _ => None,
-    };
-    if let Some((pid, pm)) = plant {
-        if let Some(t) = cx.rect(pid, pm, 0) {
-            let tint = if pid == block::TALLGRASS {
-                cx.grass_color_at(x, y, z)
-            } else {
-                [1.0; 3]
-            };
-            let s = 0.75f32;
-            let d = 0.45 * s;
-            let (cx0, cz0) = (lx + 0.5, lz + 0.5);
-            let (y0, y1) = (fy + 0.25, fy + 0.25 + s);
-            let uv = [[t[0], t[1]], [t[0], t[3]], [t[2], t[3]], [t[2], t[1]]];
-            let c = col(tint[0], tint[1], tint[2]);
-            quad(
-                out,
-                [
-                    [cx0 - d, y1, cz0 - d],
-                    [cx0 - d, y0, cz0 - d],
-                    [cx0 + d, y0, cz0 + d],
-                    [cx0 + d, y1, cz0 + d],
-                ],
-                uv,
-                c,
-                light,
-                true,
-            );
-            quad(
-                out,
-                [
-                    [cx0 - d, y1, cz0 + d],
-                    [cx0 - d, y0, cz0 + d],
-                    [cx0 + d, y0, cz0 - d],
-                    [cx0 + d, y1, cz0 - d],
-                ],
-                uv,
-                c,
-                light,
-                true,
-            );
+        Some((b, d)) => {
+            // render type 1: drawCrossedSquares at three quarters' size,
+            // in the plant's colour (a fern takes the grass colour)
+            if let Some(t) = cx.rect(b, d, 0) {
+                let c = if b == block::TALLGRASS {
+                    let g = cx.grass_color_at(x, y, z);
+                    col(g[0], g[1], g[2])
+                } else {
+                    [255; 4]
+                };
+                let s = 0.75f32;
+                let h = 0.45 * s;
+                let (x0, x1, z0, z1) = (lx + 0.5 - h, lx + 0.5 + h, lz + 0.5 - h, lz + 0.5 + h);
+                let (y0, y1) = (fy + 0.25, fy + 0.25 + s);
+                let uv = [[t[0], t[1]], [t[0], t[3]], [t[2], t[3]], [t[2], t[1]]];
+                for q in [
+                    [[x0, y1, z0], [x0, y0, z0], [x1, y0, z1], [x1, y1, z1]],
+                    [[x1, y1, z1], [x1, y0, z1], [x0, y0, z0], [x0, y1, z0]],
+                    [[x0, y1, z1], [x0, y0, z1], [x1, y0, z0], [x1, y1, z0]],
+                    [[x1, y1, z0], [x1, y0, z0], [x0, y0, z1], [x0, y1, z1]],
+                ] {
+                    quad(out, q, uv, c, light, false);
+                }
+            }
         }
-    } else if meta == 9 {
-        let cactus = [[0.375f32, 0.25, 0.375, 0.625, 1.0, 0.625]];
-        boxes(
-            cx,
-            out,
-            x,
-            y,
-            z,
-            &cactus,
-            &|_, f| cx.rect(block::CACTUS, 0, f.max(2)).map(|t| (t, false)),
-            [1.0; 3],
-        );
+        None => {}
     }
 }
 

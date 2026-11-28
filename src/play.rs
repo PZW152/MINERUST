@@ -50,6 +50,8 @@ pub enum Tile {
     Sign { text: [String; 4], editable: bool },
     /// `TileEntitySkull`: `SkullType` and `Rot` (sixteenths, on the floor).
     Skull { kind: i32, rot: i32 },
+    /// `TileEntityFlowerPot`: the plant's item (0 for none) and data.
+    FlowerPot { item: i32, data: i32 },
     /// `TileEntityBeacon`: the pyramid's levels, the chosen powers, whether
     /// the sky is open (`isComplete`) and the payment slot.
     Beacon {
@@ -960,6 +962,17 @@ impl Play {
         if id == block::JUKEBOX {
             self.eject_record(w, p);
         }
+        // BlockFlowerPot.breakBlock: the plant drops (onBlockHarvested
+        // empties the pot first for a creative player)
+        if id == block::FLOWER_POT {
+            if let Some((item, data)) = self.pot_content(p, meta as i32) {
+                if self.mode != GameMode::Creative {
+                    let mut rnd = std::mem::replace(&mut w.rand, JavaRandom::new(0));
+                    self.drop_at_block(Stack::new(item, data, 1), p, &mut rnd);
+                    w.rand = rnd;
+                }
+            }
+        }
         // Container contents spill out.
         if let Some(t) = self.tiles.remove(&p) {
             let slots: Vec<Option<Stack>> = match t {
@@ -980,6 +993,7 @@ impl Play {
                     }
                 }
                 Tile::Spawner { .. }
+                | Tile::FlowerPot { .. }
                 | Tile::Sign { .. }
                 | Tile::Comparator { .. }
                 | Tile::Daylight
@@ -1262,6 +1276,25 @@ impl Play {
                 block::CAULDRON => {
                     if self.use_cauldron(w, target) {
                         return true;
+                    }
+                }
+                // BlockFlowerPot.onBlockActivated: an empty pot takes a
+                // flower, sapling, mushroom, cactus, dead bush or fern
+                block::FLOWER_POT => {
+                    if let Some(h) = self.inv.held() {
+                        let m = w.meta(target[0], target[1], target[2]) as i32;
+                        let fits = matches!(h.id, 37 | 38 | 81 | 39 | 40 | 6 | 32)
+                            || h.id == 31 && h.meta == 2;
+                        if h.id < 256 && fits && self.pot_content(target, m).is_none() {
+                            self.tiles.insert(target, Tile::FlowerPot { item: h.id as i32, data: h.meta });
+                            w.set_meta(target[0], target[1], target[2], h.meta, 2);
+                            w.mark_dirty(target[0], target[1], target[2]);
+                            if self.mode != GameMode::Creative {
+                                self.inv.consume_held();
+                                self.inv_dirty = true;
+                            }
+                            return true;
+                        }
                     }
                 }
                 block::WOODEN_DOOR => {
@@ -2119,6 +2152,31 @@ impl Play {
     }
 
     /// The heads in chunk (cx, cz) for the client.
+    /// The flower pots' contents in a chunk, for its mesh.
+    pub fn pots_in(&self, cx: i32, cz: i32) -> Vec<([u8; 3], u8, u8)> {
+        self.tiles
+            .iter()
+            .filter(|(p, _)| p[0] >> 4 == cx && p[2] >> 4 == cz)
+            .filter_map(|(p, t)| match t {
+                Tile::FlowerPot { item, data } => Some((
+                    [(p[0] & 15) as u8, p[1] as u8, (p[2] & 15) as u8],
+                    if (1..256).contains(item) { *item as u8 } else { 0 },
+                    *data as u8,
+                )),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The plant in a flower pot: its tile entity, else what
+    /// `createNewTileEntity` makes of the metadata.
+    pub fn pot_content(&self, p: Pos, meta: i32) -> Option<(ItemId, i32)> {
+        match self.tiles.get(&p) {
+            Some(Tile::FlowerPot { item, data }) => (*item != 0).then_some((*item as ItemId, *data)),
+            _ => crate::render::mesher::pot_from_meta(meta).map(|(b, d)| (b as ItemId, d)),
+        }
+    }
+
     pub fn skulls_in(&self, cx: i32, cz: i32) -> Vec<(Pos, i32, i32)> {
         self.tiles
             .iter()
@@ -2589,6 +2647,14 @@ impl Play {
             Some(Tile::Skull { kind, .. }) => Some(*kind as i32),
             _ => None,
         };
+        // BlockFlowerPot.getItem / getDamageValue: the plant in it
+        if id == block::FLOWER_POT {
+            if let Some((item, data)) = self.pot_content(p, meta) {
+                let sub = matches!(item, 6 | 31 | 37 | 38);
+                self.set_current_item(item, data, sub);
+                return;
+            }
+        }
         let below = w.peek_meta(p[0], p[1] - 1, p[2]) as i32;
         let Some((item, dmg, subtypes)) = pick_item(id, meta, below, skull) else { return };
         self.set_current_item(item, dmg, subtypes);
@@ -2929,6 +2995,10 @@ impl Play {
                         ("Comparator", vec![("OutputSignal", Nbt::Int(*output))])
                     }
                     Tile::Daylight => ("DLDetector", vec![]),
+                    Tile::FlowerPot { item, data } => (
+                        "FlowerPot",
+                        vec![("Item", Nbt::Int(*item)), ("Data", Nbt::Int(*data))],
+                    ),
                     Tile::Skull { kind, rot } => (
                         "Skull",
                         vec![
@@ -3060,6 +3130,10 @@ impl Play {
                 }
             }
             "DLDetector" => Tile::Daylight,
+            "FlowerPot" => Tile::FlowerPot {
+                item: t.int("Item").unwrap_or(0) as i32,
+                data: t.int("Data").unwrap_or(0) as i32,
+            },
             "Skull" => Tile::Skull {
                 kind: t.int("SkullType").unwrap_or(0) as i32,
                 rot: t.int("Rot").unwrap_or(0) as i32,
@@ -3357,6 +3431,7 @@ impl Play {
                 Tile::Comparator { output } => format!("K,{},{},{},{}", p[0], p[1], p[2], output),
                 Tile::Daylight => format!("L,{},{},{}", p[0], p[1], p[2]),
                 Tile::Skull { kind, rot } => format!("U,{},{},{},{},{}", p[0], p[1], p[2], kind, rot),
+                Tile::FlowerPot { item, data } => format!("F,{},{},{},{},{}", p[0], p[1], p[2], item, data),
                 Tile::Beacon {
                     levels,
                     primary,
@@ -3489,6 +3564,16 @@ impl Play {
                         secondary: f.get(6)?.trim().parse().ok()?,
                         complete: false,
                         payment: None,
+                    },
+                );
+            }
+            "F" => {
+                let f: Vec<&str> = line.splitn(6, ',').collect();
+                self.tiles.insert(
+                    pos(f[1], f[2], f[3])?,
+                    Tile::FlowerPot {
+                        item: f.get(4)?.parse().ok()?,
+                        data: f.get(5)?.trim().parse().ok()?,
                     },
                 );
             }

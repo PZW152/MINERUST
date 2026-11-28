@@ -322,6 +322,11 @@ impl<'a, 'b> Rb<'a, 'b> {
     }
 
     /// `Block.getMixedBrightnessForBlock` of the block being drawn.
+    /// `getMixedBrightnessForBlock`
+    pub fn mixed_brightness(&self, x: i32, y: i32, z: i32) -> i32 {
+        self.mixed(x, y, z)
+    }
+
     fn mixed(&self, x: i32, y: i32, z: i32) -> i32 {
         self.c().r.bright(x, y, z)
     }

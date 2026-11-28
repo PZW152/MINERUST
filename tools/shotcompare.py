@@ -162,6 +162,10 @@ SCENES = {
         [f"{-249 + 2 * i} 97 135 {64 if i < 4 else 71} {8 + (i // 2) % 2}" for i in range(8)] +
         [f"{-249 + 2 * i} 96 138 {64 if i < 4 else 71} {4 + i % 4}" for i in range(8)] +
         [f"{-249 + 2 * i} 97 138 {64 if i < 4 else 71} {8 + (i // 2) % 2}" for i in range(8)])),
+    # RenderBlocks.renderBlockFlowerpot: a pot of each kind createNewTileEntity makes from metadata
+    "pots": dict(seed=12345, time=6000, pos=(-241.5, 97.6, 132.0), look=(0.0, 25.0), setblock=";".join(
+        [f"{x} 95 {z} 1" for x in range(-249, -235) for z in range(131, 140)] +
+        [f"{-248 + i} 96 135 140 {m}" for i, m in enumerate([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 0])])),
     # RenderPainting and RenderItemFrame on a wall: four paintings, framed
     # items as sprites and a block in each rotation, and an empty frame.
     "hanging": dict(seed=12345, time=6000, pos=(-242.5, 97.0, 131.5), look=(0.0, 5.0), setblock=";".join(

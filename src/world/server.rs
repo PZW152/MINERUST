@@ -1055,7 +1055,7 @@ impl ServerWorld {
     /// chunks touching the block and its 26 neighbours
     /// (`RenderGlobal.markBlocksForUpdate(x - 1, .., x + 1, ..)`).
     #[inline]
-    fn mark_dirty(&mut self, x: i32, y: i32, z: i32) {
+    pub(crate) fn mark_dirty(&mut self, x: i32, y: i32, z: i32) {
         self.mark_dirty_range(x, z, y - 1, y + 1);
     }
 

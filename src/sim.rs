@@ -1102,6 +1102,7 @@ impl Sim {
             data: c.data.clone(),
             sections: c.sections,
             height: Box::new(c.height),
+            pots: self.play.pots_in(key.0, key.1),
         })
     }
 
@@ -7887,6 +7888,41 @@ mod tests {
         use_with(&mut sim, dyed);
         assert_eq!(sim.world.meta(x, y + 1, z), 1);
         assert_eq!(sim.play.inv.main[sel].and_then(|s| s.dye_color()), None, "washed");
+    }
+
+    /// BlockFlowerPot: a sapling goes in an empty pot, a second plant does
+    /// not, middle click picks the plant, breaking drops pot and plant.
+    #[test]
+    fn flower_pots_take_plants() {
+        let (mut sim, x, y, z) = redstone_sim();
+        sim.world.set_block(x, y + 1, z, block::FLOWER_POT, 0, 3);
+        sim.step(&[Command::SetMode(GameMode::Survival)], &mut Vec::new());
+        let feet = [x as f64 + 0.5, (y + 1) as f64, z as f64 + 3.5];
+        let sel = sim.play.inv.selected;
+        let at = [x, y + 1, z];
+        let mut use_with = |sim: &mut Sim, s: crate::item::Stack| {
+            sim.play.inv.main[sel] = Some(s);
+            sim.step(
+                &[
+                    Command::Player(feet, [180.0, 0.0], false),
+                    Command::Use { target: at, face: [0, 1, 0], sneaking: false, hit: [0.5, 0.375, 0.5] },
+                ],
+                &mut Vec::new(),
+            );
+        };
+        use_with(&mut sim, crate::item::Stack::new(6, 2, 3));
+        assert_eq!(sim.play.tiles.get(&at), Some(&crate::play::Tile::FlowerPot { item: 6, data: 2 }));
+        assert_eq!(sim.world.meta(x, y + 1, z), 2);
+        assert_eq!(sim.play.inv.main[sel].map(|s| s.count), Some(2));
+        use_with(&mut sim, crate::item::Stack::new(38, 0, 1));
+        assert_eq!(sim.play.tiles.get(&at), Some(&crate::play::Tile::FlowerPot { item: 6, data: 2 }), "full");
+        assert_eq!(sim.play.pots_in(x >> 4, z >> 4), vec![([(x & 15) as u8, (y + 1) as u8, (z & 15) as u8], 6, 2)]);
+        sim.play.inv.main[sel] = None;
+        sim.step(&[Command::Dig(at)], &mut Vec::new());
+        let ids: Vec<(u16, i32)> = sim.play.items.iter().map(|e| (e.stack.id, e.stack.meta)).collect();
+        assert!(ids.contains(&(6, 2)) && ids.contains(&(390, 0)), "{ids:?}");
+        assert!(sim.play.tiles.get(&at).is_none());
+        assert_eq!(crate::play::pick_item(140, 0, 0, None), Some((390, 0, false)));
     }
 
     /// A stone floor with nothing on it around the test site.
