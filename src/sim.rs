@@ -219,6 +219,8 @@ pub enum Event {
     Items(Vec<ItemView>),
     /// After `Respawn`: where to put the player (feet).
     Respawn([f64; 3]),
+    /// `S05PacketSpawnPosition`: the world spawn (block coordinates).
+    SpawnPosition([i32; 3]),
     /// Every mob and arrow near the player, sent each tick.
     Mobs(Vec<MobView>, Vec<ArrowView>),
     /// Damage and experience for the player.
@@ -540,6 +542,9 @@ pub struct Sim {
     unknown_level_keys: Vec<(String, String)>,
     pub play: Play,
     spawn: [f64; 3],
+    /// The world spawn last sent to the client (`S05PacketSpawnPosition`
+    /// on login and after `/setworldspawn`).
+    sent_spawn: Option<[i32; 3]>,
     stats: Option<String>,
     respawn_pending: bool,
     pub mobs: crate::entity::mob::Mobs,
@@ -772,6 +777,7 @@ impl Sim {
             unknown_level_keys: Vec::new(),
             play: Play::new(cfg.mode),
             spawn: [0.0; 3],
+            sent_spawn: None,
             stats: None,
             respawn_pending: false,
             mobs: crate::entity::mob::Mobs::default(),
@@ -2040,6 +2046,11 @@ impl Sim {
 
     /// Advances the world by one tick and reports what the client must know.
     pub fn step(&mut self, commands: &[Command], events: &mut Vec<Event>) {
+        let sp = self.spawn.map(|v| v.floor() as i32);
+        if self.sent_spawn != Some(sp) {
+            self.sent_spawn = Some(sp);
+            events.push(Event::SpawnPosition(sp));
+        }
         self.play.difficulty_peaceful = self.difficulty == crate::entity::living::Difficulty::Peaceful;
         for c in commands {
             self.apply(c);

@@ -335,6 +335,14 @@ pub struct Game {
     noise: BiomeNoise,
     /// `(ticks shown, position in the frame order)` per animated tile.
     anim_state: Vec<(u32, usize)>,
+    /// `TextureCompass` / `TextureClock`: `currentAngle`, `angleDelta`,
+    /// `frameCounter`.
+    compass_state: (f64, f64, Option<usize>),
+    clock_state: (f64, f64, Option<usize>),
+    /// `Math.random` for the dials outside the Overworld.
+    dial_rand: JavaRandom,
+    /// The world spawn from `S05PacketSpawnPosition`.
+    spawn_point: [i32; 3],
     /// Cloud texel the current cloud mesh was built for.
     cloud_cell: Option<(i32, i32, bool)>,
     /// Server view of the inventory and open window.
@@ -720,6 +728,14 @@ impl Game {
             ticks: 0,
             noise: BiomeNoise::new(),
             anim_state: Vec::new(),
+            compass_state: (0.0, 0.0, None),
+            clock_state: (0.0, 0.0, None),
+            dial_rand: JavaRandom::new(
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |d| d.as_nanos() as i64),
+            ),
+            spawn_point: [0; 3],
             cloud_cell: None,
             view: InvView {
                 beacon: [0; 3],
@@ -2028,6 +2044,7 @@ impl Game {
                     }
                 }
                 Event::Weather(w) => self.weather = w,
+                Event::SpawnPosition(p) => self.spawn_point = p,
                 Event::Respawn(p) => {
                     self.player = Player::new(p[0], p[1], p[2]);
                     self.player.allow_flying = self.mode == GameMode::Creative;
@@ -2104,6 +2121,84 @@ impl Game {
         }
     }
 
+    /// `TextureCompass.updateAnimation` and `TextureClock.updateAnimation`.
+    fn tick_dials(&mut self) {
+        use std::f64::consts::PI;
+        let surface = self.dim == 0;
+        // TextureCompass.updateCompass(world, posX, posZ, rotationYaw, false, false)
+        let n = self.atlas.compass.frames.len();
+        if n > 0 {
+            let sp = self.spawn_point;
+            let dx = sp[0] as f64 - self.player.pos[0];
+            let dz = sp[2] as f64 - self.player.pos[2];
+            let yaw = self.player.yaw as f64 % 360.0;
+            let mut target = -((yaw - 90.0) * PI / 180.0 - dz.atan2(dx));
+            if !surface {
+                target = self.dial_rand.next_double() * PI as f32 as f64 * 2.0;
+            }
+            let (cur, delta, frame) = &mut self.compass_state;
+            let mut d = target - *cur;
+            while d < -PI {
+                d += PI * 2.0;
+            }
+            while d >= PI {
+                d -= PI * 2.0;
+            }
+            d = d.clamp(-1.0, 1.0);
+            *delta += d * 0.1;
+            *delta *= 0.8;
+            *cur += *delta;
+            let mut f = ((*cur / (PI * 2.0) + 1.0) * n as f64) as i32 % n as i32;
+            while f < 0 {
+                f = (f + n as i32) % n as i32;
+            }
+            if *frame != Some(f as usize) {
+                *frame = Some(f as usize);
+                let a = &self.atlas.compass;
+                self.renderer.queue_tile_update(crate::render::vk::TileUpdate {
+                    x: a.x,
+                    y: a.y,
+                    size: 16,
+                    mips: a.frames[f as usize].clone(),
+                });
+            }
+        }
+        // TextureClock.updateAnimation
+        let n = self.atlas.clock.frames.len();
+        if n > 0 {
+            let mut target = self.celestial_angle(1.0) as f64;
+            if !surface {
+                target = self.dial_rand.next_double();
+            }
+            let (cur, delta, frame) = &mut self.clock_state;
+            let mut d = target - *cur;
+            while d < -0.5 {
+                d += 1.0;
+            }
+            while d >= 0.5 {
+                d -= 1.0;
+            }
+            d = d.clamp(-1.0, 1.0);
+            *delta += d * 0.1;
+            *delta *= 0.8;
+            *cur += *delta;
+            let mut f = ((*cur + 1.0) * n as f64) as i32 % n as i32;
+            while f < 0 {
+                f = (f + n as i32) % n as i32;
+            }
+            if *frame != Some(f as usize) {
+                *frame = Some(f as usize);
+                let a = &self.atlas.clock;
+                self.renderer.queue_tile_update(crate::render::vk::TileUpdate {
+                    x: a.x,
+                    y: a.y,
+                    size: 16,
+                    mips: a.frames[f as usize].clone(),
+                });
+            }
+        }
+    }
+
     /// `TextureAtlasSprite.updateAnimation` for every animated tile.
     fn tick_animations(&mut self) {
         self.minecart_sounds();
@@ -2137,6 +2232,7 @@ impl Game {
         if self.anim_state.len() != self.atlas.anims.len() {
             self.anim_state = vec![(0, 0); self.atlas.anims.len()];
         }
+        self.tick_dials();
         for (i, a) in self.atlas.anims.iter().enumerate() {
             let st = &mut self.anim_state[i];
             st.0 += 1;

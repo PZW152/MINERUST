@@ -172,6 +172,10 @@ pub struct Atlas {
     pub glyphs: std::sync::Mutex<GlyphCache>,
     /// Animated tiles (`.png.mcmeta`).
     pub anims: Vec<Anim>,
+    /// `TextureCompass` and `TextureClock`: the item tiles whose frame is
+    /// chosen from the world, not played in order.
+    pub compass: Dial,
+    pub clock: Dial,
     /// `destroy_stage_0` .. `destroy_stage_9`.
     pub destroy: [u16; 10],
     /// Item sprites by `(id, meta)`.
@@ -198,6 +202,14 @@ pub struct Anim {
     /// Frame indices in playback order.
     pub order: Vec<usize>,
     /// Mip chain of every frame.
+    pub frames: Vec<Vec<Vec<u8>>>,
+}
+
+/// A sprite whose frame follows an angle (`TextureCompass`, `TextureClock`).
+pub struct Dial {
+    pub x: u32,
+    pub y: u32,
+    /// Mip chain of every frame (`framesTextureData`).
     pub frames: Vec<Vec<Vec<u8>>>,
 }
 
@@ -561,6 +573,20 @@ impl Atlas {
                 items.insert((id, meta), b.add(crop(&img, 0, 0, 16), 16));
             }
         }
+        // TextureMap.registerIcons: compass and clock are their own sprite
+        // classes, every 16-pixel frame of the strip kept
+        let mut dial = |name: &str, id: u16| -> Result<Dial, String> {
+            let img = read_png(jar, &format!("assets/minecraft/textures/items/{name}.png"))?;
+            let count = (img.h / img.w.max(1)).max(1);
+            let size = img.w.min(16);
+            let frames = (0..count)
+                .map(|i| mip_chain(crop(&img, 0, i * img.w, size), size))
+                .collect();
+            let (x, y) = b.origins[items[&(id, 0)] as usize];
+            Ok(Dial { x, y, frames })
+        };
+        let compass = dial("compass", 345)?;
+        let clock = dial("clock", 347)?;
         // a white tile: what drawing with GL_TEXTURE_2D disabled samples
         names.insert("white", b.add(vec![255u8; 16 * 16 * 4], 16));
         // the default font for text drawn in the world (signs)
@@ -761,6 +787,8 @@ impl Atlas {
             sga_width,
             glyphs,
             anims,
+            compass,
+            clock,
             clouds,
             mips: b.mips,
             rects: b.rects,
