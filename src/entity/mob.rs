@@ -428,6 +428,18 @@ pub struct Mob {
     pub zombie_villager: bool,
     /// `EntityZombie.isBreakDoorsTaskSet`
     pub break_doors_task: bool,
+    /// `zombie.spawnReinforcements`: the base value and the amounts of its
+    /// operation-0 modifiers (leader bonus, caller and callee charges).
+    pub reinforce_base: f64,
+    pub reinforce_mods: Vec<(String, f64)>,
+    /// The zombie called for help this hurt (`attackEntityFrom`); the
+    /// spawn attempt runs at the start of the next mob tick.
+    reinforce: Option<ai::Target>,
+    /// The entity behind the damage being applied (`DamageSource.getEntity`),
+    /// set by the callers that know it, taken by `hurt_by`.
+    pub hurt_src: Option<ai::Target>,
+    /// `worldObj.difficultySetting == HARD`, as of the last mob tick.
+    hard: bool,
     /// `EntityZombie.conversionTime` while `isConverting` (dataWatcher 14),
     /// else -1.
     pub conversion: i32,
@@ -871,6 +883,11 @@ impl Mob {
             baby: false,
             zombie_villager: false,
             break_doors_task: false,
+            reinforce_base: 0.0,
+            reinforce_mods: Vec::new(),
+            reinforce: None,
+            hurt_src: None,
+            hard: false,
             conversion: -1,
             infected_by: None,
             convert_now: false,
@@ -998,6 +1015,13 @@ impl Mob {
         };
         if kind == Kind::EnderDragon {
             m.waypoint = [pos[0], 100.0, pos[2]];
+        }
+        if matches!(kind, Kind::Zombie | Kind::PigZombie) {
+            // EntityZombie.applyEntityAttributes; EntityPigZombie sets 0 after
+            m.reinforce_base = m.rand.next_double() * 0.1f32 as f64;
+            if kind == Kind::PigZombie {
+                m.reinforce_base = 0.0;
+            }
         }
         m.egg_timer = m.rand.next_int_n(6000) + 6000;
         match kind {
@@ -1139,7 +1163,8 @@ impl Mob {
                 let _follow = self.rand.next_double() * 1.5 * t as f64;
                 if self.rand.next_float() < t * 0.05 {
                     // leader zombie: reinforcement chance and max health
-                    let _ = self.rand.next_double();
+                    let b = self.rand.next_double() * 0.25 + 0.5;
+                    self.reinforce_mods.push(("Leader zombie bonus".into(), b));
                     let k = self.rand.next_double() * 3.0 + 1.0;
                     self.health = (self.kind.max_health() as f64 * (1.0 + k)) as f32;
                     self.set_break_doors_task(true);
@@ -2461,6 +2486,7 @@ impl Mob {
         blockable: bool,
         drown: bool,
     ) -> bool {
+        let src = self.hurt_src.take();
         if self.health <= 0.0 {
             return false;
         }
@@ -2532,7 +2558,23 @@ impl Mob {
             self.task_ticks = 0;
             self.path.clear();
         }
+        if matches!(self.kind, Kind::Zombie | Kind::PigZombie) {
+            // EntityZombie.attackEntityFrom: the attack target, else the
+            // old AI's entityToAttack, else the damage's entity
+            let t = self
+                .attack_target
+                .or(self.target_player.then_some(ai::Target::Player))
+                .or(src);
+            if t.is_some() && self.hard && (self.rand.next_float() as f64) < self.reinforce_chance() {
+                self.reinforce = t;
+            }
+        }
         true
+    }
+
+    /// The `zombie.spawnReinforcements` attribute (`RangedAttribute` 0 to 1).
+    pub fn reinforce_chance(&self) -> f64 {
+        (self.reinforce_base + self.reinforce_mods.iter().map(|m| m.1).sum::<f64>()).clamp(0.0, 1.0)
     }
 
     /// `EntityLivingBase.knockBack`: no mob here has knockback resistance
@@ -3406,9 +3448,64 @@ impl Mobs {
         id
     }
 
+    /// The rest of `EntityZombie.attackEntityFrom`: fifty tries at a dark,
+    /// clear spot 7 to 40 blocks off on each axis for a new zombie that
+    /// takes the attacker as its target.
+    fn summon_reinforcement(&mut self, i: usize, target: ai::Target, w: &mut ServerWorld, player: &PlayerInfo) {
+        let range = |r: &mut JavaRandom, a: i32, b: i32| if a >= b { a } else { r.next_int_n(b - a + 1) + a };
+        // new EntityZombie(worldObj): its id and its constructor
+        let id = self.next_id;
+        self.next_id += 1;
+        let seed = self.rand.next_long();
+        let mut z = Mob::new(id, Kind::Zombie, [0.0; 3], 0.0, seed);
+        let p = self.list[i].pos;
+        let (x0, y0, z0) = (math::floor_double(p[0]), math::floor_double(p[1]), math::floor_double(p[2]));
+        for _ in 0..50 {
+            let r = &mut self.list[i].rand;
+            let x = x0 + range(r, 7, 40) * range(r, -1, 1);
+            let y = y0 + range(r, 7, 40) * range(r, -1, 1);
+            let zz = z0 + range(r, 7, 40) * range(r, -1, 1);
+            if !(w.solid_top_surface(x, y - 1, zz) && w.block_light_value(x, y, zz, true) < 10) {
+                continue;
+            }
+            z.set_position(x as f64, y as f64, zz as f64);
+            // checkNoEntityCollision: living entities, the player, boats
+            let crowded = self.list.iter().any(|m| !m.dead && m.bb.intersects(&z.bb))
+                || player.bb().intersects(&z.bb)
+                || w.solid_entities.iter().any(|(_, b)| b.intersects(&z.bb));
+            if crowded
+                || !colliding_boxes(w, &z.bb).is_empty()
+                || crate::entity::base::any_liquid(w, &z.bb)
+            {
+                continue;
+            }
+            z.attack_target = Some(target);
+            let cx = SpawnCtx::of(w, z.pos);
+            // onSpawnWithEgg draws the world's random; nothing here reads
+            // the world while it is lent
+            let mut wr = std::mem::replace(&mut w.rand, JavaRandom::new(0));
+            z.on_spawn(&mut wr, &cx);
+            self.list[i]
+                .reinforce_mods
+                .push(("Zombie reinforcement caller charge".into(), -0.05f32 as f64));
+            z.reinforce_mods
+                .push(("Zombie reinforcement callee charge".into(), -0.05f32 as f64));
+            self.list.push(z);
+            self.finish_jockey(id, &mut wr, &cx);
+            w.rand = wr;
+            break;
+        }
+    }
+
     /// One tick for every mob in a loaded chunk.
     pub fn tick(&mut self, w: &mut ServerWorld, player: &PlayerInfo, out: &mut Outcome) {
         self.difficulty = player.difficulty;
+        for i in 0..self.list.len() {
+            self.list[i].hard = player.difficulty == 3;
+            if let Some(t) = self.list[i].reinforce.take() {
+                self.summon_reinforcement(i, t, w, player);
+            }
+        }
         // BlockPumpkin.onBlockAdded: spawnEntityInWorld, and the client's
         // 120 particles over the blocks that were there
         for (iron, p) in std::mem::take(&mut w.golems) {
@@ -3654,6 +3751,7 @@ impl Mobs {
             let Some(t) = self.list.iter_mut().find(|m| m.id == st.target) else {
                 continue;
             };
+            t.hurt_src = Some(ai::Target::Mob(st.from));
             if t.hurt(st.amount, Some(st.at), true) {
                 if t.health <= 0.0 && t.kind == Kind::Villager {
                     infections.push((st.target, st.from));
@@ -3918,6 +4016,7 @@ impl Mobs {
         let Some(m) = self.list.iter_mut().find(|m| m.id == id) else {
             return false;
         };
+        m.hurt_src = Some(ai::Target::Player);
         let hit = m.hurt(dmg, Some(attacker), true);
         if hit {
             m.recently_hit = 100;
@@ -4609,6 +4708,35 @@ impl Mobs {
             v.push(("IsVillager", Nbt::Byte(m.zombie_villager as i8)));
             v.push(("ConversionTime", Nbt::Int(m.conversion)));
             v.push(("CanBreakDoors", Nbt::Byte(m.break_doors_task as i8)));
+            // SharedMonsterAttributes.writeBaseAttributeMapToNBT (the
+            // zombie's own attribute)
+            let mods = m
+                .reinforce_mods
+                .iter()
+                .enumerate()
+                .map(|(k, (n, a))| {
+                    // each modifier its own UUID (UUID.randomUUID in the
+                    // game); readAttributeModifierFromNBT rejects repeats
+                    Nbt::Compound(vec![
+                        ("Name".to_string(), Nbt::String(n.clone())),
+                        ("Amount".to_string(), Nbt::Double(*a)),
+                        ("Operation".to_string(), Nbt::Int(0)),
+                        ("UUIDMost".to_string(), Nbt::Long(0x5A6F_6D62_6965_0000 | m.id as i64)),
+                        ("UUIDLeast".to_string(), Nbt::Long(k as i64 + 1)),
+                    ])
+                })
+                .collect();
+            v.push((
+                "Attributes",
+                Nbt::List(
+                    10,
+                    vec![Nbt::Compound(vec![
+                        ("Name".to_string(), Nbt::String("zombie.spawnReinforcements".to_string())),
+                        ("Base".to_string(), Nbt::Double(m.reinforce_base)),
+                        ("Modifiers".to_string(), Nbt::List(10, mods)),
+                    ])],
+                ),
+            ));
         }
         v.push((
             "Equipment",
@@ -4743,6 +4871,25 @@ impl Mobs {
         }
         if matches!(m.kind, Kind::Zombie | Kind::PigZombie) {
             m.set_break_doors_task(t.int("CanBreakDoors").unwrap_or(0) != 0);
+            for a in t.list("Attributes") {
+                if a.string("Name") != Some("zombie.spawnReinforcements") {
+                    continue;
+                }
+                if let Some(crate::world::anvil::Nbt::Double(b)) = a.get("Base") {
+                    m.reinforce_base = *b;
+                }
+                m.reinforce_mods = a
+                    .list("Modifiers")
+                    .iter()
+                    .filter(|x| x.int("Operation").unwrap_or(0) == 0)
+                    .filter_map(|x| match x.get("Amount") {
+                        Some(crate::world::anvil::Nbt::Double(d)) => {
+                            Some((x.string("Name").unwrap_or("").to_string(), *d))
+                        }
+                        _ => None,
+                    })
+                    .collect();
+            }
         }
         for (k, e) in t.list("Equipment").iter().take(5).enumerate() {
             m.equipment[k] = crate::world::anvil::item_from_nbt(e);
@@ -5881,6 +6028,11 @@ fn tick_arrows(
                         let src = match a.shooter {
                             Shooter::Player => Some(player.feet),
                             _ => from,
+                        };
+                        m.hurt_src = match a.shooter {
+                            Shooter::Player => Some(ai::Target::Player),
+                            Shooter::Mob(id) => Some(ai::Target::Mob(id)),
+                            Shooter::None => None,
                         };
                         let ok = m.hurt(h.damage as f32, src, true);
                         if ok {

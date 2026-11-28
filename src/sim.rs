@@ -8044,6 +8044,47 @@ mod tests {
         assert_ne!(sim.world.block(x + 4, y + 1, z + 5), block::WOODEN_DOOR, "both halves");
     }
 
+    /// `EntityZombie.attackEntityFrom` on Hard: a zombie whose
+    /// reinforcement chance comes up calls a new zombie to a dark spot 7 to
+    /// 40 blocks off, after the attacker; each pays 0.05 of its chance.
+    #[test]
+    fn hurt_zombie_calls_reinforcements_on_hard() {
+        use crate::entity::mob::{ai::Target, Kind};
+        let (mut sim, x, y, z) = redstone_sim();
+        arena(&mut sim, x, y, z);
+        sim.difficulty = crate::entity::living::Difficulty::Hard;
+        sim.world_time = 18000;
+        sim.play.mode = GameMode::Survival;
+        let feet = [x as f64 + 0.5, (y + 1) as f64, z as f64 + 0.5];
+        sim.step(&[Command::Player(feet, [0.0, 0.0], false)], &mut Vec::new());
+        let mut r = JavaRandom::new(5);
+        let id = sim.mobs.spawn(Kind::Zombie, [x as f64 + 6.5, (y + 1) as f64, z as f64 + 6.5], 0.0, &mut r);
+        let callee = |m: &&crate::entity::mob::Mob| m.reinforce_mods.iter().any(|x| x.0.ends_with("callee charge"));
+        let mut called = false;
+        for _ in 0..40 {
+            let m = sim.mobs.list.iter_mut().find(|m| m.id == id).unwrap();
+            m.reinforce_base = 1.0;
+            m.reinforce_mods.clear();
+            m.health = 20.0;
+            m.hurt_src = Some(Target::Player);
+            assert!(m.hurt(1.0, None, true));
+            // past the hurt-resistance window
+            for _ in 0..11 {
+                sim.step(&[Command::Player(feet, [0.0, 0.0], false)], &mut Vec::new());
+            }
+            if sim.mobs.list.iter().any(|m| callee(&m)) {
+                called = true;
+                break;
+            }
+        }
+        assert!(called, "a reinforcement came");
+        let new = sim.mobs.list.iter().find(callee).unwrap();
+        assert_eq!(new.kind, Kind::Zombie);
+        assert_eq!(new.attack_target, Some(Target::Player));
+        let caller = sim.mobs.list.iter().find(|m| m.id == id).unwrap();
+        assert!(caller.reinforce_mods.iter().any(|x| x.0.ends_with("caller charge")));
+    }
+
     /// A hoe tills grass, seeds go on farmland, bone meal grows the crop,
     /// random ticks grow it further (`BlockCrops.updateTick`), farmland
     /// without water dries, and the crop drops when its soil goes.
