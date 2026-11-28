@@ -172,6 +172,8 @@ pub enum Screen {
     Todo(Basic, String),
     /// `ScreenChatOptions` and the y of its "Multiplayer Settings" title.
     ChatOptions(Basic, f32),
+    /// `GuiAchievements`
+    Achievements(Basic, Box<crate::gui_achievements::State>),
 }
 
 /// A screen of plain and option buttons.
@@ -186,6 +188,8 @@ pub struct Menu {
     pub h: f32,
     pub mouse: (f32, f32),
     pub down: bool,
+    /// The achievements the player has (for `GuiAchievements`).
+    pub achieved: Vec<String>,
     /// `GuiScreen.selectedButton`
     selected: Option<usize>,
     pending: Option<Action>,
@@ -199,6 +203,7 @@ impl Menu {
             h: 0.0,
             mouse: (0.0, 0.0),
             down: false,
+            achieved: Vec::new(),
             selected: None,
             pending: None,
         }
@@ -213,6 +218,7 @@ impl Menu {
             h: 0.0,
             mouse: (0.0, 0.0),
             down: false,
+            achieved: Vec::new(),
             selected: None,
             pending: None,
         }
@@ -295,6 +301,7 @@ impl Menu {
                 c.seed.cursor_counter += 1;
             }
             Some(Screen::Rename(r)) => r.field.cursor_counter += 1,
+            Some(Screen::Achievements(_, a)) => a.tick(),
             _ => {}
         }
     }
@@ -309,6 +316,7 @@ impl Menu {
             Screen::Multiplayer(s) => &mut s.buttons,
             Screen::Options(s) | Screen::Sounds(s) | Screen::Ingame(s) => &mut s.buttons,
             Screen::Todo(s, _) => &mut s.buttons,
+            Screen::Achievements(s, _) => &mut s.buttons,
             Screen::ChatOptions(s, _) => &mut s.buttons,
             Screen::Video(s) => &mut s.buttons,
             Screen::Controls(s) => &mut s.buttons,
@@ -419,6 +427,11 @@ impl Menu {
             Screen::Todo(_, title) => {
                 default_background(ui, ctx.in_world);
                 ui.centered(title, w / 2.0, 15.0, 0xFFFFFF);
+            }
+            Screen::Achievements(_, a) => {
+                a.draw(ui, ctx.lang, &self.achieved, m, down, partial);
+                // the screen draws its own Done button
+                return;
             }
             Screen::ChatOptions(_, sep) => {
                 default_background(ui, ctx.in_world);
@@ -895,7 +908,7 @@ impl Menu {
                     return self.back(ui, ctx);
                 }
             }
-            Screen::Sounds(_) | Screen::Todo(..) => {
+            Screen::Sounds(_) | Screen::Todo(..) | Screen::Achievements(..) => {
                 if b.id == 200 {
                     ctx.settings.save();
                     return self.back(ui, ctx);
@@ -952,11 +965,11 @@ impl Menu {
                     return Action::Resume;
                 }
                 5 => self.open(
-                    Screen::Todo(
+                    Screen::Achievements(
                         Basic {
                             buttons: Vec::new(),
                         },
-                        lang.get("gui.achievements").to_string(),
+                        Box::new(crate::gui_achievements::State::new()),
                     ),
                     ui,
                     ctx,
@@ -1293,6 +1306,17 @@ fn init(s: &mut Screen, ui: &Ui, ctx: &mut Ctx, w: f32, h: f32) {
         }
         Screen::Todo(b, _) => {
             b.buttons = vec![Button::wide(200, cx - 100.0, h - 27.0, t("gui.done"))];
+        }
+        // GuiAchievements.initGui: a GuiOptionButton of 80
+        Screen::Achievements(b, _) => {
+            b.buttons = vec![Button::new(
+                200,
+                ((w as i32) / 2 + 24) as f32,
+                ((h as i32) / 2 + 74) as f32,
+                80.0,
+                20.0,
+                t("gui.done"),
+            )];
         }
         Screen::ChatOptions(b, sep) => {
             // ScreenChatOptions.initGui

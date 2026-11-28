@@ -19,6 +19,7 @@ mod front;
 mod game;
 mod gui;
 mod gui_achievement;
+mod gui_achievements;
 mod gui_container;
 mod gui_repair;
 mod hopper;

@@ -1170,6 +1170,17 @@ impl Game {
                         self.start_use = Some([v[0], v[1], v[2]]);
                     }
                 }
+                // achievements  GuiAchievements over the pause menu
+                "achievements" => {
+                    self.screen = Screen::Paused;
+                    let mut m = crate::menu::Menu::ingame();
+                    m.stack.push(crate::menu::Screen::Achievements(
+                        crate::menu::Basic { buttons: Vec::new() },
+                        Box::new(crate::gui_achievements::State::new()),
+                    ));
+                    self.menu = Some(m);
+                    self.menu_size = (0.0, 0.0);
+                }
                 "pause" => {
                     self.screen = Screen::Paused;
                     self.menu = Some(crate::menu::Menu::ingame());
@@ -7285,6 +7296,12 @@ impl Game {
             menu.resize(ui, &mut ctx, size.0, size.1);
         }
         menu.mouse = (mx.floor(), my.floor());
+        menu.achieved = self
+            .client_stats
+            .iter()
+            .filter(|(k, v)| **v > 0 && crate::stats::is_achievement(k))
+            .map(|(k, _)| k.clone())
+            .collect();
         let mut ctx = Self::menu_ctx(shell, &self.lang, &mut sounds);
         menu.draw(ui, &mut ctx, partial);
         let a = menu.take_pending();

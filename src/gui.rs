@@ -252,6 +252,17 @@ impl<'a> Ui<'a> {
         );
     }
 
+    /// `named_icon` under a colour (`glColor4f`).
+    pub fn named_icon_tinted(&mut self, name: &str, x: f32, y: f32, tint: u32) {
+        let t = self.atlas.named(name);
+        self.quad(
+            [[x, y], [x, y + 16.0], [x + 16.0, y + 16.0], [x + 16.0, y]],
+            [[t[0], t[1]], [t[0], t[3]], [t[2], t[3]], [t[2], t[1]]],
+            rgba(tint, 1.0),
+            BLOCKS,
+        );
+    }
+
     /// `drawTexturedModalRect` from the GUI sheet; `(u, v)` in sheet pixels.
     pub fn sheet(&mut self, x: f32, y: f32, u: f32, v: f32, w: f32, h: f32) {
         let s = UI_SIZE as f32;
