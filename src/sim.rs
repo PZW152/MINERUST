@@ -277,6 +277,8 @@ pub enum Event {
     CritFx(u32, bool),
     /// The server's `setSprinting(false)` (entity metadata flag 3).
     StopSprinting,
+    /// The mob right-clicked did nothing with it: use the held item.
+    InteractPassed,
     /// `setItemInUse` started (stack, ticks) or `clearItemInUse` (None).
     Using(Option<(crate::item::Stack, i32)>),
     /// `S19PacketEntityStatus` 9: the item use finished.
@@ -522,6 +524,9 @@ pub struct Sim {
     using_changed: bool,
     /// `setSprinting(false)` after a knockback hit, for the client.
     stop_sprinting: bool,
+    /// `EntityPlayer.interactWith` was false: the client goes on to
+    /// `sendUseItem` (Minecraft.func_147121_ag).
+    interact_passed: bool,
     bone_meal_fx: Vec<[i32; 3]>,
     /// `S0BPacketAnimation` 4 (critical) / 5 (magic critical) on a mob.
     crit_fx: Vec<(u32, bool)>,
@@ -764,6 +769,7 @@ impl Sim {
             push_add: [0.0; 3],
             using_changed: false,
             stop_sprinting: false,
+            interact_passed: false,
             bone_meal_fx: Vec::new(),
             crit_fx: Vec::new(),
             teleport_to: None,
@@ -1681,7 +1687,11 @@ impl Sim {
                     return;
                 }
                 let (feet, _) = self.play.player;
-                if let Some(mut next) = self.mobs.interact(id, held, feet, &mut out) {
+                let reacted = self.mobs.interact(id, held, feet, &mut out);
+                if reacted.is_none() {
+                    self.interact_passed = true;
+                }
+                if let Some(mut next) = reacted {
                     let i = self.play.inv.selected;
                     // shears on a sheep, flint and steel on a creeper:
                     // ItemStack.damageItem(1, player)
@@ -5390,6 +5400,9 @@ impl Sim {
         if std::mem::take(&mut self.stop_sprinting) {
             events.push(Event::StopSprinting);
         }
+        if std::mem::take(&mut self.interact_passed) {
+            events.push(Event::InteractPassed);
+        }
         if std::mem::take(&mut self.using_changed) {
             events.push(Event::Using(self.splayer.using.map(|(_, st, n)| (st, n))));
         }
@@ -8243,6 +8256,30 @@ mod tests {
         // it came out, breaking its block (and, walled in by stone, may
         // hide again beside it)
         assert_eq!(sim.world.block(egg[0], egg[1], egg[2]), block::AIR, "the hidden one came out");
+    }
+
+    /// EntityPlayer.interactWith: a cow takes wheat (in love), but does
+    /// nothing with a snowball, so the client is told to throw it.
+    #[test]
+    fn right_click_on_a_mob_falls_through_to_the_item() {
+        use crate::entity::mob::Kind;
+        let (mut sim, x, y, z) = redstone_sim();
+        arena(&mut sim, x, y, z);
+        sim.play.mode = GameMode::Survival;
+        let feet = [x as f64 + 0.5, (y + 1) as f64, z as f64 + 0.5];
+        sim.step(&[Command::Player(feet, [0.0, 0.0], false)], &mut Vec::new());
+        let mut r = JavaRandom::new(5);
+        let cow = sim.mobs.spawn(Kind::Cow, [x as f64 + 0.5, (y + 1) as f64, z as f64 + 2.5], 0.0, &mut r);
+        let sel = sim.play.inv.selected;
+        let passed = |sim: &mut Sim| {
+            let mut ev = Vec::new();
+            sim.step(&[Command::Interact { id: cow }], &mut ev);
+            ev.iter().any(|e| matches!(e, Event::InteractPassed))
+        };
+        sim.play.inv.main[sel] = Some(crate::item::Stack::new(296, 0, 3));
+        assert!(!passed(&mut sim), "wheat: the cow reacts");
+        sim.play.inv.main[sel] = Some(crate::item::Stack::new(332, 0, 3));
+        assert!(passed(&mut sim), "a snowball: on to sendUseItem");
     }
 
     /// A hoe tills grass, seeds go on farmland, bone meal grows the crop,

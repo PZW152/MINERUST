@@ -1951,6 +1951,13 @@ impl Game {
                     self.crit_emitters.push((id, magic, 1));
                 }
                 Event::StopSprinting => self.player.sprinting = false,
+                // Minecraft.func_147121_ag: interactWithEntitySendPacket was
+                // false, so the held item is used (sendUseItem)
+                Event::InteractPassed => {
+                    if self.view.inv.held().is_some() {
+                        self.use_item_air();
+                    }
+                }
                 Event::Sleep(Some((bed, pos))) => {
                     // NetHandlerPlayClient.handleUseBed -> sleepInBedAt on the
                     // client: posY is what the server worked out
