@@ -8653,6 +8653,30 @@ mod tests {
     }
 
     #[test]
+    fn fire_charges_light_fires() {
+        use crate::item::Stack;
+        let (mut sim, x, y, z) = redstone_sim();
+        arena(&mut sim, x, y, z);
+        sim.play.mode = GameMode::Survival;
+        let floor = [x + 2, y, z];
+        sim.world.set_block(floor[0], floor[1], floor[2], crate::block::STONE, 0, 3);
+        sim.world.set_block(floor[0], floor[1] + 1, floor[2], 0, 0, 3);
+        let sel = sim.play.inv.selected;
+        sim.play.inv.main[sel] = Some(Stack::new(385, 0, 2));
+        sim.step(
+            &[Command::Use {
+                target: floor,
+                face: [0, 1, 0],
+                sneaking: false,
+                hit: [0.5, 1.0, 0.5],
+            }],
+            &mut Vec::new(),
+        );
+        assert_eq!(sim.world.peek_block(floor[0], floor[1] + 1, floor[2]), crate::block::FIRE);
+        assert_eq!(sim.play.inv.main[sel].map(|s| s.count), Some(1));
+    }
+
+    #[test]
     fn heads_place_turn_and_drop() {
         use crate::item::Stack;
         use crate::play::Tile;

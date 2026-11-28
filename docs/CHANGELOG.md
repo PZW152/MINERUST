@@ -9,7 +9,8 @@
 
 ## 2026-11-28
 
-- Chests, trapped chests and ender chests held, dropped and in frames are drawn as the chest model (renderBlockAsItem type 22 through TileEntityRendererChestHelper); shadows no longer show bits of other textures (the quads stay inside shadow.png's square, as GL_CLAMP does)
+- Fire charges light fires (ItemFireball.onItemUse: fire on the clicked side with fire.ignite, used up outside creative)
+- `898691c` Chests, trapped chests and ender chests held, dropped and in frames are drawn as the chest model (renderBlockAsItem type 22 through TileEntityRendererChestHelper); shadows no longer show bits of other textures (the quads stay inside shadow.png's square, as GL_CLAMP does)
 - `3f1a042` Cocoa pods are drawn (RenderBlocks.renderBlockCocoa: the pod of each growth stage on its side of the log, its top and bottom, the stalk); shotcompare `cocoa` scene, 0.8% of pixels off
 - `9da751e` The Wither: BlockSkull.makeWither (three wither skulls on a T of soul sand either way round, not on Peaceful, the spawnWither achievement, snow puffs), EntityWither (charging for 220 ticks while healing to full and growing, the blast of 7, flying after the player, the main head's skulls every 40 ticks, the side heads picking living targets that are not undead and firing every 40-60 ticks, blue skulls on Normal and Hard when idle, breaking out of blocks after being hurt, healing a point a second, smoke and spell particles, a nether star and 50 experience, Invul in NBT), EntityWitherSkull (8 damage, Wither II for 10 or 40 seconds, healing the wither for a kill, a blast of 1, the blue skull's slower flight), ModelWither and RenderWither (the blue flickering charge texture, the size, the armour glow at half health), RenderWitherSkull, and its boss bar
 - `64584b0` The boss health bar: RenderDragon's BossStatus.setBossStatus and GuiIngame.renderBossHealth (name, bar, 100 frames after the boss was last drawn)

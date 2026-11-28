@@ -1248,6 +1248,25 @@ impl Play {
         if held.id == 397 {
             return self.place_skull(w, target, face, held);
         }
+        // ItemFireball.onItemUse: fire on the clicked side, the charge used up
+        if held.id == 385 {
+            let p = [target[0] + face[0], target[1] + face[1], target[2] + face[2]];
+            if w.is_air(p[0], p[1], p[2]) {
+                let pitch = (w.rand.next_float() - w.rand.next_float()) * 0.2 + 1.0;
+                w.redstone_effects.push(crate::world::redstone::Effect::Sound(
+                    "fire.ignite",
+                    [p[0] as f64 + 0.5, p[1] as f64 + 0.5, p[2] as f64 + 0.5],
+                    1.0,
+                    pitch,
+                ));
+                w.set_block(p[0], p[1], p[2], block::FIRE, 0, 3);
+            }
+            if self.mode != GameMode::Creative {
+                self.inv.consume_held();
+                self.inv_dirty = true;
+            }
+            return true;
+        }
         if held.id == 259 {
             // ItemFlintAndSteel.onItemUse: fire on the clicked side.
             let p = [
