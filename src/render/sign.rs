@@ -1,6 +1,6 @@
 //! `TileEntitySignRenderer` with `ModelSign`, and the sign text drawn by
 //! `FontRenderer` from `font/ascii.png` (kept in the block atlas so the 3D
-//! passes can sample it).
+//! passes can sample it) or from the Unicode pages.
 
 use super::atlas::Atlas;
 use super::mesher::Vertex;
@@ -20,7 +20,9 @@ fn parts(standing: bool) -> Vec<Part> {
 }
 
 /// `FontRenderer.drawString` (no shadow) in the text plane of `m`: one
-/// quad per ASCII glyph from the atlas copy of `ascii.png`.
+/// quad per glyph, from the atlas copy of `ascii.png` or, for characters
+/// outside it and whenever the Unicode font is on, from the Unicode glyph
+/// cache in the GUI sheet (`fs_terrain` reads U from 2 up there).
 pub fn text(
     out: &mut Vec<Vertex>,
     atlas: &Atlas,
@@ -34,49 +36,99 @@ pub fn text(
     let font = atlas.named("font_ascii");
     let (u0, v0) = (font[0], font[1]);
     let (du, dv) = ((font[2] - font[0]) / 128.0, (font[3] - font[1]) / 128.0);
+    let uni = crate::gui::unicode_flag(atlas);
+    let sheet = super::atlas::UI_SIZE as f32;
     let mut px = x;
-    for c in s.chars() {
-        if c == ' ' {
-            px += 4.0;
-            continue;
-        }
-        let Some(i) = crate::gui::ascii_index(c) else {
-            continue;
-        };
-        let cw = atlas.char_width[i] as f32;
-        let (tx, ty) = ((i % 16 * 8) as f32, (i / 16 * 8) as f32);
-        let w = cw - 0.01;
-        // renderDefaultChar's triangle strip as a quad
-        let corners = [
-            ([px, y], [tx, ty]),
-            ([px, y + 7.99], [tx, ty + 7.99]),
-            ([px + w - 1.0, y + 7.99], [tx + w - 1.0, ty + 7.99]),
-            ([px + w - 1.0, y], [tx + w - 1.0, ty]),
-        ];
-        for (p, t) in corners {
+    let base = color;
+    let mut color = color;
+    let quad = |out: &mut Vec<Vertex>, color: [u8; 4], corners: [([f32; 2], [f32; 2]); 4]| {
+        for (p, uv) in corners {
             let o = transform(m, [p[0], p[1], 0.0, 1.0]);
             out.push(Vertex {
                 pos: [o[0], o[1], o[2]],
-                uv: [u0 + t[0] * du, v0 + t[1] * dv],
+                uv,
                 color,
                 light,
             });
         }
-        px += cw;
+    };
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        if c == '\u{a7}' {
+            // renderStringAtPos: a colour code sets the colour (keeping the
+            // alpha), r resets it; the style codes draw as nothing here
+            if let Some(n) = chars.next() {
+                let k = "0123456789abcdefklmnor".find(n.to_ascii_lowercase());
+                match k {
+                    Some(k) if k < 16 => {
+                        let v = crate::gui::color_code(k);
+                        color = [(v >> 16) as u8, (v >> 8) as u8, v as u8, base[3]];
+                    }
+                    Some(21) => color = base,
+                    _ => {}
+                }
+            }
+            continue;
+        }
+        if c == ' ' {
+            px += 4.0;
+            continue;
+        }
+        match crate::gui::ascii_index(c) {
+            Some(i) if !uni && c != '\u{0}' => {
+                let cw = atlas.char_width[i] as f32;
+                let (tx, ty) = ((i % 16 * 8) as f32, (i / 16 * 8) as f32);
+                let w = cw - 0.01;
+                let t = |a: f32, b: f32| [u0 + a * du, v0 + b * dv];
+                // renderDefaultChar's triangle strip as a quad
+                quad(
+                    out,
+                    color,
+                    [
+                        ([px, y], t(tx, ty)),
+                        ([px, y + 7.99], t(tx, ty + 7.99)),
+                        ([px + w - 1.0, y + 7.99], t(tx + w - 1.0, ty + 7.99)),
+                        ([px + w - 1.0, y], t(tx + w - 1.0, ty)),
+                    ],
+                );
+                px += cw;
+            }
+            _ => {
+                // renderUnicodeChar
+                let (w, cell) = {
+                    let mut g = atlas.glyphs.lock().unwrap();
+                    let w = g.sizes.get(c as usize).copied().unwrap_or(0);
+                    if w == 0 {
+                        continue;
+                    }
+                    (w, g.cell(c as u32))
+                };
+                let a = (w >> 4) as f32;
+                let b = (w & 15) as f32 + 1.0;
+                if let Some((cu, cv)) = cell {
+                    let u = cu + a;
+                    let d = b - a - 0.02;
+                    let t = |a: f32, b: f32| [2.0 + a / sheet, b / sheet];
+                    quad(
+                        out,
+                        color,
+                        [
+                            ([px, y], t(u, cv)),
+                            ([px, y + 7.99], t(u, cv + 15.98)),
+                            ([px + d / 2.0, y + 7.99], t(u + d, cv + 15.98)),
+                            ([px + d / 2.0, y], t(u + d, cv)),
+                        ],
+                    );
+                }
+                px += (b - a) / 2.0 + 1.0;
+            }
+        }
     }
 }
 
-/// `FontRenderer.getStringWidth` for the default font.
+/// `FontRenderer.getStringWidth`
 pub fn width(atlas: &Atlas, s: &str) -> f32 {
-    s.chars()
-        .map(|c| {
-            if c == ' ' {
-                4.0
-            } else {
-                crate::gui::ascii_index(c).map_or(0.0, |i| atlas.char_width[i] as f32)
-            }
-        })
-        .sum()
+    crate::gui::text_width(atlas, s)
 }
 
 /// `TileEntitySignRenderer.renderTileEntityAt` with the block corner at

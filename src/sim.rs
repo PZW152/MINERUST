@@ -3651,6 +3651,17 @@ impl Sim {
                     if v[3] as u8 == crate::block::BEACON {
                         self.play.tiles.entry([v[0], v[1], v[2]]).or_insert_with(crate::play::Tile::beacon);
                     }
+                    // a sign's lines after `text=`, '|' apart
+                    if let Some(t) = cmd.split_once("text=").map(|t| t.1) {
+                        let mut text: [String; 4] = Default::default();
+                        for (l, s) in text.iter_mut().zip(t.split('|')) {
+                            *l = s.chars().take(15).collect();
+                        }
+                        self.play.tiles.insert(
+                            [v[0], v[1], v[2]],
+                            crate::play::Tile::Sign { text, editable: false },
+                        );
+                    }
                 }
             }
         }

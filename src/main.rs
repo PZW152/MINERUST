@@ -819,6 +819,8 @@ struct App {
     front: Option<front::Front>,
     window: Option<Arc<Window>>,
     grabbed: bool,
+    /// Whether the window takes input-method text (a text field is open).
+    ime: bool,
     /// Whether the game wanted the mouse on the last frame.
     wanted_grab: bool,
     focused: bool,
@@ -1214,6 +1216,25 @@ impl ApplicationHandler for App {
                     }
                 }
             }
+            WindowEvent::Ime(winit::event::Ime::Commit(text)) => {
+                // each composed character as a keyTyped with key code 0
+                for c in text.chars().filter(|c| !c.is_control()) {
+                    if let Some(f) = &mut self.front {
+                        let a = f.key(c, 0);
+                        self.front_action(a, el);
+                        continue;
+                    }
+                    let Some(g) = &mut self.game else { return };
+                    let req = if g.menu_open() {
+                        g.menu_key(c, 0)
+                    } else if g.text_input() {
+                        g.text_key(c, 0, false, false)
+                    } else {
+                        continue;
+                    };
+                    self.handle(req, el);
+                }
+            }
             WindowEvent::KeyboardInput { event, .. } => {
                 let pressed = event.state == ElementState::Pressed;
                 let PhysicalKey::Code(code) = event.physical_key else {
@@ -1352,6 +1373,16 @@ impl ApplicationHandler for App {
             }
             WindowEvent::RedrawRequested => {
                 let Some(w) = self.window.clone() else { return };
+                // LWJGL 2 leaves the window's input context on, so IME text
+                // reaches every screen as WM_CHAR; it stays off in play so the
+                // movement keys are not composed.
+                let want_ime = !self.unattended()
+                    && (self.front.is_some()
+                        || self.game.as_ref().is_some_and(|g| g.menu_open() || g.text_input()));
+                if want_ime != self.ime {
+                    self.ime = want_ime;
+                    w.set_ime_allowed(want_ime);
+                }
                 // gameSettings.fullScreen, from F11 or the video settings
                 let full = match (&self.front, &self.game) {
                     (Some(f), _) => Some(f.shell.settings.full_screen),
@@ -1622,6 +1653,7 @@ fn main() {
         atlas: None,
         window: None,
         grabbed: false,
+        ime: false,
         wanted_grab: true,
         focused: true,
         started: Instant::now(),

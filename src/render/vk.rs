@@ -75,7 +75,12 @@ fn fog_factor(d: f32) -> f32 {
 
 @fragment
 fn fs_terrain(i: TerrainOut) -> @location(0) vec4<f32> {
-    let t = textureSample(tex, samp, i.uv);
+    var t = textureSample(tex, samp, i.uv);
+    // U from 2 up: the Unicode glyph cache in the GUI sheet (text in the
+    // world: signs and name tags)
+    if (i.uv.x >= 1.5) {
+        t = textureSampleLevel(ui_tex, samp, i.uv - vec2<f32>(2.0, 0.0), 0.0);
+    }
     // glAlphaFunc(GL_GREATER, 0.1), or 0.5 for the terrain's first pass
     // (EntityRenderer.renderWorld), pushed in color.x
     if (t.a * i.color.a <= max(0.1, pc.color.x)) {

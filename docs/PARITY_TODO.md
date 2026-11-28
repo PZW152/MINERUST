@@ -88,8 +88,7 @@ AI：
 - [ ] 物品展示框的剩餘部分：框中指南針指向框的方向、
       框中附魔物品的光澤；箭與丟擲物打中畫或展示框（需確認 `canBeCollidedWith` 在箭的碰撞裡有算到）；
       活塞推動或被方塊壓到時的判定只靠每 100 tick 的 `onValidSurface`（與原版相同，但未逐一比對）
-- [ ] 命名牌的剩餘部分：名字含非 ASCII 字元時要用 unicode 字型（`sign::text` 只有 ascii.png，目前略過那些字）；
-      死亡訊息與聊天裡的生物名稱還不用自訂名字（`getCommandSenderName`）；名字標籤畫在實體之後而非
+- [ ] 命名牌的剩餘部分：死亡訊息與聊天裡的生物名稱還不用自訂名字（`getCommandSenderName`）；名字標籤畫在實體之後而非
       `renderEntities` 當中（只影響與半透明方塊的混色順序）
 - [ ] 特殊配方：書本複製
 - [ ] 物品名稱與說明一律由 `en_US.lang` 取得（藥水前綴與後綴、附魔書等）
@@ -106,7 +105,7 @@ AI：
       「Taking Inventory」。待做：一般統計尚缺 leaveGame、騎乘距離、殺玩家、用弓箭等間接方式的擊殺、創造模式與非放置類的使用次數、統計頁的欄位排序與圖示說明；成就尚缺 snipeSkeleton、ghast、exploreAllBiomes、diamondsToYou 的觸發點、成就畫面的滾輪縮放（`GuiAchievements` 已完成，縮放固定為 1）、
       `/achievement` 指令、成就的聊天公告
 - [ ] 資源包、使用統計（Snooper）、直播畫面
-- [ ] 告示牌上的非 ASCII 文字（原版用 unicode 字頁）
+- [ ] 告示牌與名字標籤的格式碼：顏色與 `§r` 已完成，粗體、斜體、底線、刪除線、亂碼（`§k`）還畫成一般字；輸入法的候選窗位置（`set_ime_cursor_area`，原版由系統決定，需確認）
 - [ ] 指令：summon、enchant、gamerule、playsound、spreadplayers、testfor 等，Tab 自動補完
 
 系統：

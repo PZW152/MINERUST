@@ -629,61 +629,76 @@ pub fn color_code(i: usize) -> u32 {
 
 pub const FONT_HEIGHT: f32 = 9.0;
 
+/// `FontRenderer.unicodeFlag`
+pub fn unicode_flag(atlas: &Atlas) -> bool {
+    atlas.glyphs.lock().map_or(false, |g| g.unicode)
+}
+
+/// `FontRenderer.getCharWidth`
+pub fn char_width(atlas: &Atlas, c: char) -> i32 {
+    if c == '\u{a7}' {
+        return -1;
+    }
+    if c == ' ' {
+        return 4;
+    }
+    let i = ascii_index(c);
+    if c != '\u{0}' && i.is_some() && !unicode_flag(atlas) {
+        return atlas.char_width[i.unwrap()] as i32;
+    }
+    let g = atlas.glyphs.lock().unwrap();
+    let w = g.sizes.get(c as usize).copied().unwrap_or(0);
+    if w != 0 {
+        let mut a = (w >> 4) as i32;
+        let mut b = (w & 15) as i32;
+        if b > 7 {
+            b = 15;
+            a = 0;
+        }
+        b += 1;
+        (b - a) / 2 + 1
+    } else {
+        0
+    }
+}
+
+/// `FontRenderer.getStringWidth`
+pub fn text_width(atlas: &Atlas, s: &str) -> f32 {
+    let mut w = 0;
+    let mut bold = false;
+    let mut it = s.chars().peekable();
+    while let Some(c) = it.next() {
+        let mut k = char_width(atlas, c);
+        if k < 0 && it.peek().is_some() {
+            let n = it.next().unwrap();
+            if n == 'l' || n == 'L' {
+                bold = true;
+            } else if n == 'r' || n == 'R' {
+                bold = false;
+            }
+            k = 0;
+        }
+        w += k;
+        if bold && k > 0 {
+            w += 1;
+        }
+    }
+    w as f32
+}
+
 impl<'a> Ui<'a> {
     pub fn unicode_flag(&self) -> bool {
-        self.atlas.glyphs.lock().map_or(false, |g| g.unicode)
+        unicode_flag(self.atlas)
     }
 
     /// `FontRenderer.getCharWidth`
     pub fn char_width(&self, c: char) -> i32 {
-        if c == '\u{a7}' {
-            return -1;
-        }
-        if c == ' ' {
-            return 4;
-        }
-        let i = ascii_index(c);
-        if c != '\u{0}' && i.is_some() && !self.unicode_flag() {
-            return self.atlas.char_width[i.unwrap()] as i32;
-        }
-        let g = self.atlas.glyphs.lock().unwrap();
-        let w = g.sizes.get(c as usize).copied().unwrap_or(0);
-        if w != 0 {
-            let mut a = (w >> 4) as i32;
-            let mut b = (w & 15) as i32;
-            if b > 7 {
-                b = 15;
-                a = 0;
-            }
-            b += 1;
-            (b - a) / 2 + 1
-        } else {
-            0
-        }
+        char_width(self.atlas, c)
     }
 
     /// `FontRenderer.getStringWidth`
     pub fn text_width(&self, s: &str) -> f32 {
-        let mut w = 0;
-        let mut bold = false;
-        let mut it = s.chars().peekable();
-        while let Some(c) = it.next() {
-            let mut k = self.char_width(c);
-            if k < 0 && it.peek().is_some() {
-                let n = it.next().unwrap();
-                if n == 'l' || n == 'L' {
-                    bold = true;
-                } else if n == 'r' || n == 'R' {
-                    bold = false;
-                }
-                k = 0;
-            }
-            w += k;
-            if bold && k > 0 {
-                w += 1;
-            }
-        }
-        w as f32
+        text_width(self.atlas, s)
     }
 
     /// `renderDefaultChar`: one cell of `font/ascii.png`.
