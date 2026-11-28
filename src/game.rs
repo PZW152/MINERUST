@@ -2029,7 +2029,10 @@ impl Game {
                     }
                 }
                 Event::Hurt => {
-                    // EntityLivingBase.handleHealthUpdate(2)
+                    // EntityLivingBase.handleHealthUpdate(2): limbSwingAmount
+                    // 1.5, attackedAtYaw 0 (so the camera always tilts the
+                    // same way), hurtTime
+                    self.p_limb[1] = 1.5;
                     self.stats.hurt_time = crate::entity::survival::MAX_HURT_TIME;
                     self.stats.hurt_resistance = 20;
                     let r = &mut self.particle_rand;

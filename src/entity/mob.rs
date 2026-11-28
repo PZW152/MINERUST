@@ -2512,6 +2512,8 @@ impl Mob {
                 self.wither.block_break = 20;
             }
         }
+        // the legs kick out, hurt or not
+        self.limb_amount = 1.5;
         let applied;
         let fresh;
         if self.hurt_resistant as f32 > 10.0 && amount <= self.last_damage {

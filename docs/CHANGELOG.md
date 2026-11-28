@@ -9,7 +9,8 @@
 
 ## 2026-11-28
 
-- Right-clicking a mob that does nothing with the held item uses it (Minecraft.func_147121_ag after interactWithEntitySendPacket is false): eating, drinking, throwing snowballs or eggs, drawing the bow while looking at an animal now work
+- A hurt mob or player kicks its legs out (limbSwingAmount 1.5 in attackEntityFrom and handleHealthUpdate). The hurt camera tilt stays one way: the client's handleHealthUpdate sets attackedAtYaw to 0 in 1.7.10, so it never had a direction
+- `110a28c` - Right-clicking a mob that does nothing with the held item uses it (Minecraft.func_147121_ag after interactWithEntitySendPacket is false): eating, drinking, throwing snowballs or eggs, drawing the bow while looking at an animal now work
 - `f4fd2c7` - Puppies and kittens drawn as ModelWolf and ModelOcelot do with isChild: the wolf's head at full size moved down and forward, the kitten's at three quarters, the rest at half size
 - `350e3a5` - shotcompare scene `sleep` (lying in a bed at night, `--sleep "x y z"` for MINERUST and ShotHarness): within 2.1 of the game
 - `3322619` - Silverfish hide and call for help (EntitySilverfish.updateEntityActionState): an idle one with no path crawls into the stone, cobblestone or stone bricks beside it (the infested block of the matching kind), a hurt one wakes those hiding within 10 blocks a second later, nearest layers first and stopping at random, each one breaking out of its block (or leaving the plain block behind without mobGriefing); they prefer paths over stone
