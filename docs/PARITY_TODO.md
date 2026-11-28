@@ -112,7 +112,6 @@ AI：
 
 系統：
 - [ ] 多人與區域網路（協定 5）
-- [ ] 附魔台的書架粒子（`EntityEnchantmentTableParticleFX`）
 - [ ] 破損物品的碎片粒子（客戶端）
 
 ## 5. 渲染

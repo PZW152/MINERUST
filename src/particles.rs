@@ -64,6 +64,8 @@ enum Kind {
     Dust,
     Note,
     Portal,
+    /// `EntityEnchantmentTableParticleFX`
+    Enchant,
     Heart,
     Bubble,
     Reddust,
@@ -483,6 +485,23 @@ impl Particles {
         self.add(p);
     }
 
+    /// `EntityEnchantmentTableParticleFX`: a glyph flying from a bookshelf
+    /// down into the table.
+    pub fn enchant(&mut self, pos: [f64; 3], m: [f64; 3]) {
+        let mut p = self.base(pos);
+        p.motion = m;
+        let f = self.r.next_float() * 0.6 + 0.4;
+        p.scale = self.r.next_float() * 0.5 + 0.2;
+        p.base_scale = p.scale;
+        p.color = [f * 0.9, f * 0.9, f, 1.0];
+        p.max_age = (self.rnd() * 10.0) as i32 + 30;
+        p.no_clip = true;
+        p.sprite = Sprite::Index((self.rnd() * 26.0 + 1.0 + 224.0) as i32);
+        p.kind = Kind::Enchant;
+        p.origin = pos;
+        self.add(p);
+    }
+
     /// `EntityHeartFX`
     pub fn heart(&mut self, pos: [f64; 3], m: [f64; 3]) {
         let mut p = self.moving(pos, [0.0; 3]);
@@ -755,6 +774,19 @@ impl Particles {
                 p.age += 1;
                 if p.age >= p.max_age {
                     return false;
+                }
+                if p.kind == Kind::Enchant {
+                    // EntityEnchantmentTableParticleFX.onUpdate (the age was
+                    // counted above, before the move as particleAge++ after)
+                    let f = 1.0 - (p.age - 1) as f32 / p.max_age as f32;
+                    let mut g = 1.0 - f;
+                    g *= g;
+                    g *= g;
+                    for a in 0..3 {
+                        p.pos[a] = p.origin[a] + p.motion[a] * f as f64;
+                    }
+                    p.pos[1] -= (g * 1.2) as f64;
+                    return true;
                 }
                 if p.kind == Kind::Portal {
                     // EntityPortalFX.onUpdate
@@ -1114,6 +1146,35 @@ impl Particles {
                         q.kind = Kind::Smoke;
                         q.max_age = 20;
                         self.add(q);
+                    }
+                }
+                block::ENCHANTING_TABLE => {
+                    // BlockEnchantmentTable.randomDisplayTick: glyphs from the
+                    // bookshelves with nothing in between
+                    for bx in x - 2..=x + 2 {
+                        let mut bz = z - 2;
+                        while bz <= z + 2 {
+                            if bx > x - 2 && bx < x + 2 && bz == z - 1 {
+                                bz = z + 2;
+                            }
+                            if self.r.next_int_n(16) == 0 {
+                                for by in y..=y + 1 {
+                                    if w.peek_block(bx, by, bz) == block::BOOKSHELF {
+                                        let (mx, mz) = ((bx - x) / 2 + x, (bz - z) / 2 + z);
+                                        if w.peek_block(mx, by, mz) != block::AIR {
+                                            break;
+                                        }
+                                        let m = [
+                                            (bx - x) as f64 + self.r.next_float() as f64 - 0.5,
+                                            (by - y) as f64 - self.r.next_float() as f64 - 1.0,
+                                            (bz - z) as f64 + self.r.next_float() as f64 - 0.5,
+                                        ];
+                                        self.enchant([x as f64 + 0.5, y as f64 + 2.0, z as f64 + 0.5], m);
+                                    }
+                                }
+                            }
+                            bz += 1;
+                        }
                     }
                 }
                 block::ENDER_CHEST => {
