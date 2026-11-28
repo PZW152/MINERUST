@@ -1346,6 +1346,16 @@ pub fn mob(
                 out.extend_from_slice(&[q[3], q[2], q[1], q[0]]);
             }
         }
+        if let (Some(hs), false) = (m.equipment[4], m.flags & 16 != 0) {
+            if !(298..=317).contains(&hs.id) {
+                let thin = m.kind == Kind::Skeleton && m.variant != 1;
+                let hp = &biped(&a, thin, true)[0];
+                let hm = part_matrix(&mat, hp);
+                if let Some(skin) = tex("../../entity/steve").or(tex("zombie/zombie")) {
+                    head_wear(out, tex, skin, block, &hm, hs, light);
+                }
+            }
+        }
     }
     // RenderSnowMan.renderEquippedItems: a pumpkin on the head
     if m.kind == Kind::SnowGolem {
@@ -1955,6 +1965,20 @@ pub fn player_layers(
             layers.push((raw, Some(c)));
         }
     }
+    if let Some(hs) = armor[3].filter(|s| !(298..=317).contains(&s.id)) {
+        let head = part_matrix(m, &biped_pose(pose, 0.0)[0]);
+        let mut raw = Vec::new();
+        head_wear(
+            &mut raw,
+            &|n| atlas.mob_tex(n),
+            atlas.skin_tex(),
+            &|o, id, meta, mat, l| super::entities::block_model(o, atlas, id, meta, mat, l),
+            &head,
+            hs,
+            light,
+        );
+        layers.push((raw, None));
+    }
     if let Some(s) = held {
         let am = arm_matrix(m, pose);
         let hm = held_matrix(&am, &s, blocking);
@@ -1969,6 +1993,50 @@ pub fn player_layers(
         layers.push((raw, None));
     }
     layers
+}
+
+/// `RenderBiped` / `RenderPlayer.renderEquippedItems`: what is worn in the
+/// helmet slot that is not armour, on the head (`bipedHead.postRender`): a
+/// block drawn in 3D (a pumpkin) at 0.625, or a head through
+/// `TileEntitySkullRenderer` at 1.0625.
+pub fn head_wear(
+    out: &mut Vec<Vertex>,
+    tex: &dyn Fn(&str) -> Option<Tex>,
+    skin: Tex,
+    block: &dyn Fn(&mut Vec<Vertex>, u8, u8, &Mat4, [u8; 4]),
+    head: &Mat4,
+    s: crate::item::Stack,
+    light: [u8; 4],
+) {
+    if let Some(b) = s.block().filter(|&b| super::item_block::render_type(b).is_some()) {
+        let k = 0.625;
+        let mut m = mul(head, &translate(0.0, -0.25, 0.0));
+        m = mul(&m, &rot_y(90.0));
+        m = mul(&m, &super::entities::scale(k, -k, -k));
+        m = mul(&m, &rot_y(90.0));
+        m = mul(&m, &translate(-0.5, -0.5, -0.5));
+        block(out, b, s.meta as u8, &m, light);
+    } else if s.id == 397 {
+        let k = 1.0625;
+        let mut m = mul(head, &super::entities::scale(k, -k, -k));
+        // func_152674_a(-0.5, 0, -0.5, 1, 180): on the floor, turned round
+        m = mul(&m, &super::entities::scale(-1.0, -1.0, 1.0));
+        let t = match s.meta {
+            3 => Some(skin),
+            k => tex(super::hanging::skull_texture(k)),
+        };
+        let Some(t) = t else { return };
+        let part = Part::new([0.0; 3])
+            .bx(0.0, 0.0, [-4.0, -8.0, -4.0], [8.0, 8.0, 8.0], 0.0)
+            .r(0.0, PI, 0.0);
+        let mut d = Draw {
+            out,
+            tex: t,
+            light,
+            tint: [1.0; 4],
+        };
+        render(&mut d, &m, &part);
+    }
 }
 
 pub const BOOK_TEXTURE: &str = "enchanting_table_book";
