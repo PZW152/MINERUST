@@ -3507,8 +3507,14 @@ impl Game {
                         continue;
                     }
                     let a = a.min(1.0);
-                    let (bx0, bx1) = (x as f64, x as f64 + 1.0);
-                    let (bz0, bz1) = (z as f64, z as f64 + 1.0);
+                    // the texture is clamped (its edges are clear): keep the
+                    // quad inside the shadow's own square so the UVs never
+                    // reach a neighbouring atlas tile
+                    let (bx0, bx1) = ((x as f64).max(px - s), (x as f64 + 1.0).min(px + s));
+                    let (bz0, bz1) = ((z as f64).max(pz - s), (z as f64 + 1.0).min(pz + s));
+                    if bx0 >= bx1 || bz0 >= bz1 {
+                        continue;
+                    }
                     let by = y as f64 + 0.015625;
                     let u0 = ((px - bx0) / 2.0 / s + 0.5) as f32;
                     let u1 = ((px - bx1) / 2.0 / s + 0.5) as f32;

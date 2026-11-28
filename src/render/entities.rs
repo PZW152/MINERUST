@@ -425,6 +425,18 @@ fn item_block(
     m: &Mat4,
     light: [u8; 4],
 ) -> bool {
+    // TileEntityRendererChestHelper: the chest model
+    if matches!(id, block::CHEST | block::TRAPPED_CHEST | block::ENDER_CHEST) {
+        let name = if id == block::ENDER_CHEST {
+            "chest/ender"
+        } else {
+            super::chest::texture(id == block::TRAPPED_CHEST, false, crate::gui::christmas())
+        };
+        if let Some(t) = atlas.mob_tex(name) {
+            super::chest::item_model(out, t, m, light);
+            return true;
+        }
+    }
     let Some((faces, pre)) = super::item_block::faces(atlas, id, meta) else {
         return false;
     };

@@ -89,6 +89,27 @@ pub fn world(
     }
 }
 
+/// `renderBlockAsItem` type 22 in the world (held, dropped, in a frame):
+/// `TileEntityRendererChestHelper.renderChest`, the closed single chest
+/// turned 90 degrees and centred under `base`.
+pub fn item_model(out: &mut Vec<Vertex>, tex: Tex, base: &Mat4, light: [u8; 4]) {
+    let mut m = mul(base, &rot_y(90.0));
+    m = mul(&m, &translate(-0.5, -0.5, -0.5));
+    m = mul(&m, &translate(0.0, 1.0, 1.0));
+    m = mul(&m, &super::entities::scale(1.0, -1.0, -1.0));
+    m = mul(&m, &translate(0.5, 0.5, 0.5));
+    m = mul(&m, &translate(-0.5, -0.5, -0.5));
+    let mut d = Draw {
+        out,
+        tex,
+        light,
+        tint: [1.0; 4],
+    };
+    for p in parts(false, 0.0) {
+        render(&mut d, &m, &p);
+    }
+}
+
 /// `RenderItem.renderItemIntoGUI` of a chest (`renderBlockAsItem` type
 /// 22): the closed single chest at the item's 16x16 place.
 pub fn gui_icon(tex: Tex, base: &Mat4) -> Vec<Vertex> {
