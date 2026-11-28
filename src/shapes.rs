@@ -664,6 +664,16 @@ pub fn selection(get: Get, id: u8, meta: u8, x: i32, y: i32, z: i32) -> Bx {
     if id == block::BREWING_STAND {
         return [0.0, 0.0, 0.0, 1.0, 0.125, 1.0];
     }
+    // BlockSkull.setBlockBoundsBasedOnState
+    if id == block::SKULL {
+        return match meta & 7 {
+            2 => [0.25, 0.25, 0.5, 0.75, 0.75, 1.0],
+            3 => [0.25, 0.25, 0.0, 0.75, 0.75, 0.5],
+            4 => [0.5, 0.25, 0.25, 1.0, 0.75, 0.75],
+            5 => [0.0, 0.25, 0.25, 0.5, 0.75, 0.75],
+            _ => [0.25, 0.0, 0.25, 0.75, 0.5, 0.75],
+        };
+    }
     if let Some(b) = selection_by_id(get, id, meta, x, y, z) {
         return b;
     }
