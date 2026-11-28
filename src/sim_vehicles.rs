@@ -937,6 +937,27 @@ impl Sim {
         if !destroyed.is_empty() {
             events.push(Event::Destroyed(destroyed));
         }
+        let aux = std::mem::take(&mut self.world.aux);
+        if !aux.is_empty() {
+            events.push(Event::AuxSounds(aux));
+        }
+        // WorldManager.destroyBlockPartially: to the players within 32
+        // blocks
+        let feet = play.player.0;
+        let anims: Vec<_> = std::mem::take(&mut self.world.break_anims)
+            .into_iter()
+            .filter(|(_, p, _)| {
+                let d = [
+                    p[0] as f64 - feet[0],
+                    p[1] as f64 - feet[1],
+                    p[2] as f64 - feet[2],
+                ];
+                d[0] * d[0] + d[1] * d[1] + d[2] * d[2] < 1024.0
+            })
+            .collect();
+        if !anims.is_empty() {
+            events.push(Event::BreakAnims(anims));
+        }
         if !sounds.is_empty() {
             events.push(Event::Sounds(sounds));
         }

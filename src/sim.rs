@@ -304,6 +304,11 @@ pub enum Event {
     Mount(Option<u32>),
     /// `playAuxSFX(2001)` of blocks the world broke: position, block, meta.
     Destroyed(Vec<([i32; 3], u8, i32)>),
+    /// `playAuxSFX` sounds whose pitch the client picks (1010 to 1012).
+    AuxSounds(Vec<(i32, [i32; 3])>),
+    /// `S25PacketBlockBreakAnim`: breaker, block, progress (outside 0..10
+    /// ends it).
+    BreakAnims(Vec<(u32, [i32; 3], i32)>),
     /// Falling blocks near the player, sent each tick.
     Falling(Vec<crate::entity::falling::FallingView>),
     /// The player picked these items up (`S0DPacketCollectItem`).
@@ -7989,6 +7994,54 @@ mod tests {
         }
         assert!(targeted, "the zombie chose the player");
         assert!(sim.splayer.living.health < before, "and hit");
+    }
+
+    /// `EntityAIBreakDoor`: a door-breaking zombie after a villager shut
+    /// behind a wooden door paths through it (`canPassClosedWoodenDoors`),
+    /// hits it with the crack growing for 240 ticks, and on Hard breaks it.
+    #[test]
+    fn zombie_breaks_a_door_on_hard() {
+        use crate::entity::mob::Kind;
+        let (mut sim, x, y, z) = redstone_sim();
+        arena(&mut sim, x, y, z);
+        sim.difficulty = crate::entity::living::Difficulty::Hard;
+        sim.play.mode = GameMode::Creative;
+        for dz in -2..14 {
+            for dy in 1..4 {
+                sim.world.set_block(x + 4, y + dy, z + dz, block::STONE, 0, 3);
+            }
+        }
+        for dy in 1..4 {
+            for (cx, cz) in [(1, 5), (2, 4), (2, 6), (3, 4), (3, 6)] {
+                sim.world.set_block(x + cx, y + dy, z + cz, block::STONE, 0, 3);
+            }
+        }
+        sim.world.set_block(x + 4, y + 1, z + 5, block::WOODEN_DOOR, 0, 2);
+        sim.world.set_block(x + 4, y + 2, z + 5, block::WOODEN_DOOR, 8, 2);
+        let feet = [x as f64 + 12.5, (y + 1) as f64, z as f64 + 12.5];
+        let mut r = JavaRandom::new(5);
+        sim.mobs.spawn(Kind::Villager, [x as f64 + 2.5, (y + 1) as f64, z as f64 + 5.5], 0.0, &mut r);
+        let id = sim.mobs.spawn(Kind::Zombie, [x as f64 + 9.5, (y + 1) as f64, z as f64 + 5.5], 0.0, &mut r);
+        sim.mobs.list.iter_mut().find(|m| m.id == id).unwrap().set_break_doors_task(true);
+        let (mut cracked, mut knocks) = (0, 0);
+        for _ in 0..800 {
+            let mut ev = Vec::new();
+            sim.step(&[Command::Player(feet, [0.0, 0.0], false)], &mut ev);
+            for e in ev {
+                match e {
+                    Event::BreakAnims(v) => cracked = cracked.max(v.iter().map(|a| a.2).max().unwrap_or(0)),
+                    Event::AuxSounds(v) => knocks += v.iter().filter(|a| a.0 == 1010).count(),
+                    _ => {}
+                }
+            }
+            if sim.world.block(x + 4, y + 1, z + 5) != block::WOODEN_DOOR {
+                break;
+            }
+        }
+        assert!(cracked >= 9, "the crack grew to {cracked}");
+        assert!(knocks > 0, "the zombie knocked");
+        assert_ne!(sim.world.block(x + 4, y + 2, z + 5), block::WOODEN_DOOR, "the door broke");
+        assert_ne!(sim.world.block(x + 4, y + 1, z + 5), block::WOODEN_DOOR, "both halves");
     }
 
     /// A hoe tills grass, seeds go on farmland, bone meal grows the crop,

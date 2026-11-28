@@ -343,6 +343,9 @@ pub struct Game {
     dial_rand: JavaRandom,
     /// The world spawn from `S05PacketSpawnPosition`.
     spawn_point: [i32; 3],
+    /// `RenderGlobal.damagedBlocks` of other breakers: block, damage and
+    /// the `cloudTickCounter` it was last set at.
+    damaged_blocks: std::collections::HashMap<u32, ([i32; 3], i32, u64)>,
     /// Cloud texel the current cloud mesh was built for.
     cloud_cell: Option<(i32, i32, bool)>,
     /// Server view of the inventory and open window.
@@ -736,6 +739,7 @@ impl Game {
                     .map_or(0, |d| d.as_nanos() as i64),
             ),
             spawn_point: [0; 3],
+            damaged_blocks: std::collections::HashMap::new(),
             cloud_cell: None,
             view: InvView {
                 beacon: [0; 3],
@@ -1745,6 +1749,35 @@ impl Game {
                 }
                 Event::Mount(v) => self.mounted(v),
                 Event::Destroyed(v) => self.destroyed_fx(v),
+                Event::AuxSounds(list) => {
+                    // RenderGlobal.playAuxSFX
+                    for (kind, p) in list {
+                        let name = match kind {
+                            1010 => "mob.zombie.wood",
+                            1011 => "mob.zombie.metal",
+                            1012 => "mob.zombie.woodbreak",
+                            _ => continue,
+                        };
+                        let pitch = (self.rng.next_float() - self.rng.next_float()) * 0.2 + 1.0;
+                        let at = [p[0] as f64 + 0.5, p[1] as f64 + 0.5, p[2] as f64 + 0.5];
+                        self.sound(name, Some(at), 2.0, pitch);
+                    }
+                }
+                Event::BreakAnims(list) => {
+                    // RenderGlobal.destroyBlockPartially
+                    for (id, p, k) in list {
+                        if (0..10).contains(&k) {
+                            let e = self.damaged_blocks.entry(id).or_insert((p, k, self.ticks));
+                            if e.0 != p {
+                                *e = (p, k, self.ticks);
+                            }
+                            e.1 = k;
+                            e.2 = self.ticks;
+                        } else {
+                            self.damaged_blocks.remove(&id);
+                        }
+                    }
+                }
                 Event::Teleport(p) => {
                     self.player.set_position(p[0], p[1], p[2]);
                     self.player.prev_pos = self.player.pos;
@@ -2121,6 +2154,14 @@ impl Game {
         }
     }
 
+    /// `RenderGlobal.updateClouds`: damage older than 400 ticks goes.
+    fn tick_damaged_blocks(&mut self) {
+        if self.ticks % 20 == 0 {
+            let now = self.ticks;
+            self.damaged_blocks.retain(|_, e| now - e.2 <= 400);
+        }
+    }
+
     /// `TextureCompass.updateAnimation` and `TextureClock.updateAnimation`.
     fn tick_dials(&mut self) {
         use std::f64::consts::PI;
@@ -2233,6 +2274,7 @@ impl Game {
             self.anim_state = vec![(0, 0); self.atlas.anims.len()];
         }
         self.tick_dials();
+        self.tick_damaged_blocks();
         for (i, a) in self.atlas.anims.iter().enumerate() {
             let st = &mut self.anim_state[i];
             st.0 += 1;
@@ -6843,6 +6885,32 @@ impl Game {
                 ];
                 entities::crack(&mut crack, &self.atlas, stage as usize, rel, b);
             }
+        }
+        // RenderGlobal.drawBlockDamageTexture: the other breakers' blocks
+        // (a zombie at a door), dropped beyond 32 blocks
+        let mut far = Vec::new();
+        for (&id, &(p, k, _)) in &self.damaged_blocks {
+            let rel = [
+                p[0] as f64 - eye[0],
+                p[1] as f64 - eye[1],
+                p[2] as f64 - eye[2],
+            ];
+            if rel[0] * rel[0] + rel[1] * rel[1] + rel[2] * rel[2] > 1024.0 {
+                far.push(id);
+                continue;
+            }
+            let bid = self.world.peek_block(p[0], p[1], p[2]);
+            if block::material(bid) == crate::block::Material::Air {
+                continue;
+            }
+            let w = &self.world;
+            let get = |x: i32, y: i32, z: i32| (w.peek_block(x, y, z), w.peek_meta(x, y, z));
+            let b = crate::shapes::selection(&get, bid, w.peek_meta(p[0], p[1], p[2]), p[0], p[1], p[2]);
+            let rel = [rel[0] as f32, rel[1] as f32, rel[2] as f32];
+            entities::crack(&mut crack, &self.atlas, k as usize, rel, b);
+        }
+        for id in far {
+            self.damaged_blocks.remove(&id);
         }
         let world_glint = entities::take_glint();
         let mut hand: Vec<crate::render::mesher::Vertex> = Vec::new();

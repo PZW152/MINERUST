@@ -34,7 +34,11 @@ pub struct Size {
 }
 
 pub struct Opts {
+    /// `canPassOpenWoodenDoors` (`isWoddenDoorAllowed`)
     pub doors: bool,
+    /// `canPassClosedWoodenDoors` (`isMovementBlockAllowed`): the door
+    /// breakers' paths go through closed wooden doors
+    pub break_doors: bool,
     pub avoid_water: bool,
     pub can_drown: bool,
 }
@@ -96,7 +100,7 @@ pub fn stand_at(
                     block::COBBLESTONE_WALL => false,
                     _ => !m.blocks_movement(),
                 };
-                if !passable {
+                if !passable && !(opts.break_doors && id == block::WOODEN_DOOR) {
                     // render type 11, the fence gate, render type 32
                     if block::info(id).shape == block::Shape::Fence
                         || id == block::FENCE_GATE

@@ -426,6 +426,8 @@ pub struct Mob {
     pub baby: bool,
     /// `EntityZombie.isVillager` (dataWatcher 13)
     pub zombie_villager: bool,
+    /// `EntityZombie.isBreakDoorsTaskSet`
+    pub break_doors_task: bool,
     /// `EntityZombie.conversionTime` while `isConverting` (dataWatcher 14),
     /// else -1.
     pub conversion: i32,
@@ -868,6 +870,7 @@ impl Mob {
             can_pick_up_loot: false,
             baby: false,
             zombie_villager: false,
+            break_doors_task: false,
             conversion: -1,
             infected_by: None,
             convert_now: false,
@@ -1117,8 +1120,8 @@ impl Mob {
                         self.jockey = Some((Kind::Chicken, false));
                     }
                 }
-                // setBreakDoorsAItask
-                let _ = self.rand.next_float() < t * 0.1;
+                let v = self.rand.next_float() < t * 0.1;
+                self.set_break_doors_task(v);
                 if self.kind == Kind::PigZombie {
                     // EntityPigZombie.addRandomArmor
                     self.equipment[0] = Some(Stack::new(283, 0, 1));
@@ -1139,6 +1142,7 @@ impl Mob {
                     let _ = self.rand.next_double();
                     let k = self.rand.next_double() * 3.0 + 1.0;
                     self.health = (self.kind.max_health() as f64 * (1.0 + k)) as f32;
+                    self.set_break_doors_task(true);
                 }
             }
             Kind::Sheep => {
@@ -1932,7 +1936,8 @@ impl Mob {
             h: (h + 1.0).floor() as i32,
         };
         let opts = Opts {
-            doors: self.kind == Kind::Villager,
+            doors: true,
+            break_doors: self.nav_break_doors(),
             avoid_water: !self.kind.animal() && self.kind != Kind::Villager,
             can_drown: true,
         };
@@ -1957,6 +1962,26 @@ impl Mob {
             _ => {
                 self.path.clear();
                 false
+            }
+        }
+    }
+
+    /// `PathNavigate.canPassClosedWoodenDoors`: `setBreakDoors(true)` in
+    /// the zombie's and the villager's constructors
+    fn nav_break_doors(&self) -> bool {
+        matches!(self.kind, Kind::Zombie | Kind::PigZombie | Kind::Villager)
+    }
+
+    /// `EntityZombie.setBreakDoorsAItask`: the door breaking task at
+    /// priority 1, added after the constructor's tasks.
+    pub fn set_break_doors_task(&mut self, v: bool) {
+        if self.break_doors_task != v {
+            self.break_doors_task = v;
+            if v {
+                ai::ensure_built(self);
+                self.tasks.add(1, ai::break_door());
+            } else {
+                self.tasks.remove_where(|a| matches!(a, ai::Ai::BreakDoor { .. }));
             }
         }
     }
@@ -4583,6 +4608,7 @@ impl Mobs {
             v.push(("IsBaby", Nbt::Byte(m.baby as i8)));
             v.push(("IsVillager", Nbt::Byte(m.zombie_villager as i8)));
             v.push(("ConversionTime", Nbt::Int(m.conversion)));
+            v.push(("CanBreakDoors", Nbt::Byte(m.break_doors_task as i8)));
         }
         v.push((
             "Equipment",
@@ -4714,6 +4740,9 @@ impl Mobs {
         }
         if t.int("IsBaby").unwrap_or(0) != 0 {
             m.set_baby(true);
+        }
+        if matches!(m.kind, Kind::Zombie | Kind::PigZombie) {
+            m.set_break_doors_task(t.int("CanBreakDoors").unwrap_or(0) != 0);
         }
         for (k, e) in t.list("Equipment").iter().take(5).enumerate() {
             m.equipment[k] = crate::world::anvil::item_from_nbt(e);

@@ -153,6 +153,16 @@ pub enum Ai {
         pos: [f64; 3],
     },
     RestrictSun,
+    /// `EntityAIBreakDoor` (with `EntityAIDoorInteract`'s fields): the
+    /// door, `hasStoppedDoorInteraction`, `entityPositionX/Z`,
+    /// `breakingTime`, `previousBreakProgress`.
+    BreakDoor {
+        pos: [i32; 3],
+        stopped: bool,
+        start: [f32; 2],
+        time: i32,
+        prev: i32,
+    },
     EatGrass {
         timer: i32,
     },
@@ -192,6 +202,8 @@ pub struct Tasks {
     /// `executingTaskEntries`, in the order they started.
     executing: Vec<usize>,
     tick_count: i32,
+    /// The constructor's tasks were added.
+    built: bool,
 }
 
 impl Tasks {
@@ -334,13 +346,15 @@ impl Mob {
             y,
             z,
             self.kind.follow_range(),
-            self.kind == Kind::Villager,
+            true,
+            self.nav_break_doors(),
             self.avoids_water,
         )
     }
 
     /// `World.getPathEntityToEntity` / `getEntityPathToXYZ` with their
-    /// range, `canPassOpenWoodenDoors` and `avoidsWater` arguments.
+    /// range, `canPassOpenWoodenDoors`, `canPassClosedWoodenDoors` and
+    /// `avoidsWater` arguments.
     #[allow(clippy::too_many_arguments)]
     fn create_path_with(
         &self,
@@ -350,6 +364,7 @@ impl Mob {
         z: f64,
         range: f32,
         doors: bool,
+        break_doors: bool,
         avoid_water: bool,
     ) -> Option<Vec<Pt>> {
         let (wd, h) = self.dims();
@@ -369,6 +384,7 @@ impl Mob {
         };
         let opts = Opts {
             doors,
+            break_doors,
             avoid_water,
             can_drown: true,
         };
@@ -855,7 +871,7 @@ impl Ai {
             Ai::Tempt { .. } | Ai::LookIdle { .. } => 3,
             Ai::AttackOnCollide { .. } | Ai::ArrowAttack { .. } => 3,
             Ai::WatchClosest { mutex, .. } => *mutex,
-            Ai::RestrictSun | Ai::FollowParent { .. } => 0,
+            Ai::RestrictSun | Ai::FollowParent { .. } | Ai::BreakDoor { .. } => 0,
             Ai::EatGrass { .. } => 7,
             Ai::ControlledByPlayer { .. } => 7,
             Ai::HurtByTarget { .. } | Ai::NearestAttackableTarget { .. } => 1,
@@ -1045,6 +1061,17 @@ impl Ai {
                 false
             }
             Ai::RestrictSun => cx.day,
+            Ai::BreakDoor { pos, .. } => {
+                // EntityAIDoorInteract.shouldExecute, then mobGriefing and
+                // a closed door
+                match door_interact(m, cx) {
+                    Some(p) => {
+                        *pos = p;
+                        !door_open(cx.w, p)
+                    }
+                    None => false,
+                }
+            }
             Ai::EatGrass { .. } => {
                 let child = m.growing_age < 0;
                 if m.rand.next_int_n(if child { 50 } else { 1000 }) != 0 {
@@ -1129,6 +1156,10 @@ impl Ai {
                 !m.no_path()
             }
             Ai::MoveTowardsRestriction { .. } => !m.no_path(),
+            Ai::BreakDoor { pos, time, .. } => {
+                let d = dist_sq_int(m, *pos);
+                *time <= 240 && !door_open(cx.w, *pos) && d < 4.0
+            }
             Ai::WatchClosest {
                 dist,
                 look_time,
@@ -1214,6 +1245,20 @@ impl Ai {
                 m.set_path(cx.w, p, *far);
             }
             Ai::RestrictSun => m.avoid_sun = true,
+            Ai::BreakDoor {
+                pos,
+                stopped,
+                start,
+                time,
+                ..
+            } => {
+                *stopped = false;
+                *start = [
+                    ((pos[0] as f32 + 0.5) as f64 - m.pos[0]) as f32,
+                    ((pos[2] as f32 + 0.5) as f64 - m.pos[2]) as f32,
+                ];
+                *time = 0;
+            }
             Ai::EatGrass { timer } => {
                 *timer = 40;
                 // setEntityState(10): the client lowers the head for 40 ticks
@@ -1256,8 +1301,9 @@ impl Ai {
         }
     }
 
-    fn reset_task(&mut self, m: &mut Mob, _cx: &mut Cx) {
+    fn reset_task(&mut self, m: &mut Mob, cx: &mut Cx) {
         match self {
+            Ai::BreakDoor { pos, .. } => cx.w.break_anims.push((m.id, *pos, -1)),
             Ai::ControlledByPlayer {
                 boosted,
                 current_speed,
@@ -1301,6 +1347,35 @@ impl Ai {
     fn update_task(&mut self, m: &mut Mob, cx: &mut Cx) {
         match self {
             Ai::Pet(p) => p.update_task(m, cx),
+            Ai::BreakDoor {
+                pos,
+                stopped,
+                start,
+                time,
+                prev,
+            } => {
+                // EntityAIDoorInteract.updateTask
+                let a = ((pos[0] as f32 + 0.5) as f64 - m.pos[0]) as f32;
+                let b = ((pos[2] as f32 + 0.5) as f64 - m.pos[2]) as f32;
+                if start[0] * a + start[1] * b < 0.0 {
+                    *stopped = true;
+                }
+                if m.rand.next_int_n(20) == 0 {
+                    cx.w.aux.push((1010, *pos));
+                }
+                *time += 1;
+                let k = (*time as f32 / 240.0 * 10.0) as i32;
+                if k != *prev {
+                    cx.w.break_anims.push((m.id, *pos, k));
+                    *prev = k;
+                }
+                if *time == 240 && cx.player.difficulty == 3 {
+                    let [x, y, z] = *pos;
+                    cx.w.set_block(x, y, z, crate::block::AIR, 0, 3);
+                    cx.w.aux.push((1012, *pos));
+                    cx.w.destroyed.push((*pos, crate::block::WOODEN_DOOR, 0));
+                }
+            }
             Ai::ControlledByPlayer {
                 max_speed,
                 current_speed,
@@ -1696,6 +1771,77 @@ pub fn uses_tasks(k: Kind) -> bool {
     )
 }
 
+/// The constructor's tasks, once, before any added later
+/// (`setBreakDoorsAItask` appends after them).
+pub fn ensure_built(m: &mut Mob) {
+    if !m.tasks.built {
+        m.tasks.built = true;
+        build(m);
+        build_pet(m);
+    }
+}
+
+/// `new EntityAIBreakDoor(zombie)`
+pub fn break_door() -> Ai {
+    Ai::BreakDoor {
+        pos: [0; 3],
+        stopped: false,
+        start: [0.0; 2],
+        time: 0,
+        prev: -1,
+    }
+}
+
+/// `Entity.getDistanceSq(int, int, int)`
+fn dist_sq_int(m: &Mob, p: [i32; 3]) -> f64 {
+    let d = [
+        m.pos[0] - p[0] as f64,
+        m.pos[1] - p[1] as f64,
+        m.pos[2] - p[2] as f64,
+    ];
+    d[0] * d[0] + d[1] * d[1] + d[2] * d[2]
+}
+
+/// `BlockDoor.func_150015_f`: the door's lower half is open.
+fn door_open(w: &ServerWorld, p: [i32; 3]) -> bool {
+    let m = w.peek_meta(p[0], p[1], p[2]) as i32;
+    let lower = if m & 8 != 0 {
+        w.peek_meta(p[0], p[1] - 1, p[2]) as i32
+    } else {
+        m
+    };
+    lower & 4 != 0
+}
+
+/// `EntityAIDoorInteract.shouldExecute`: the wooden door on the next
+/// points of the path, or in the mob's head block.
+fn door_interact(m: &Mob, cx: &mut Cx) -> Option<[i32; 3]> {
+    if !m.collided_h {
+        return None;
+    }
+    if m.no_path() || !m.nav_break_doors() {
+        return None;
+    }
+    let door = |w: &ServerWorld, p: [i32; 3]| w.peek_block(p[0], p[1], p[2]) == crate::block::WOODEN_DOOR;
+    let n = (m.path_index + 2).min(m.path.len());
+    for i in 0..n {
+        let pt = m.path[i];
+        let p = [pt.x, pt.y + 1, pt.z];
+        let dx = m.pos[0] - p[0] as f64;
+        let dz = m.pos[2] - p[2] as f64;
+        // getDistanceSq(x, posY, z)
+        if !(dx * dx + dz * dz > 2.25) && door(cx.w, p) {
+            return Some(p);
+        }
+    }
+    let p = [
+        math::floor_double(m.pos[0]),
+        math::floor_double(m.pos[1] + 1.0),
+        math::floor_double(m.pos[2]),
+    ];
+    door(cx.w, p).then_some(p)
+}
+
 fn watch(cls: Cls, dist: f32) -> Ai {
     Ai::WatchClosest {
         cls,
@@ -1975,10 +2121,7 @@ fn build(m: &mut Mob) {
 
 /// `EntityLiving.updateAITasks`, after `++entityAge` and `despawnEntity`.
 pub(super) fn update(m: &mut Mob, cx: &mut Cx) {
-    if m.tasks.is_empty() {
-        build(m);
-        build_pet(m);
-    }
+    ensure_built(m);
     if cx.out.births.iter().any(|b| b.parents[1] == m.id) {
         // spawnBaby: targetMate.setGrowingAge(6000), resetInLove()
         m.growing_age = 6000;
@@ -3288,7 +3431,7 @@ pub(super) fn old_update(m: &mut Mob, cx: &mut Cx) {
     let has_path = |m: &Mob| !m.path.is_empty();
     // the paths of the old AI: 16 blocks, through open doors, swimming
     let path_to = |m: &Mob, cx: &mut Cx, v: &View| {
-        m.create_path_with(cx.w, v.pos[0], v.bb.min[1], v.pos[2], 16.0, true, false)
+        m.create_path_with(cx.w, v.pos[0], v.bb.min[1], v.pos[2], 16.0, true, false, false)
     };
     let set = |m: &mut Mob, p: Option<Vec<Pt>>| {
         m.path = p.unwrap_or_default();
@@ -3339,6 +3482,7 @@ pub(super) fn old_update(m: &mut Mob, cx: &mut Cx) {
                     (p[2] as f32 + 0.5) as f64,
                     10.0,
                     true,
+                    false,
                     false,
                 );
                 set(m, found);
@@ -3516,6 +3660,7 @@ fn controlled_by_player(
                 || !stair_or_slab(cx.w.block(var4, var5 - 1, var6)));
         let opts = crate::entity::path::Opts {
             doors: true,
+            break_doors: false,
             avoid_water: false,
             can_drown: false,
         };
