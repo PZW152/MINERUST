@@ -463,6 +463,8 @@ pub struct AChunk {
     pub sections: u16,
     pub populated: bool,
     pub light_populated: bool,
+    /// `Chunk.inhabitedTime`
+    pub inhabited: i64,
     pub entities: Vec<Nbt>,
     pub tiles: Vec<Nbt>,
     pub ticks: Vec<Nbt>,
@@ -498,6 +500,7 @@ pub fn chunk_from_nbt(root: &Nbt) -> Option<AChunk> {
         sections: 0,
         populated: level.int("TerrainPopulated").unwrap_or(0) != 0,
         light_populated: level.int("LightPopulated").unwrap_or(0) != 0,
+        inhabited: level.int("InhabitedTime").unwrap_or(0),
         entities: level.list("Entities").to_vec(),
         tiles: level.list("TileEntities").to_vec(),
         ticks: level.list("TileTicks").to_vec(),
@@ -569,7 +572,7 @@ pub fn chunk_to_nbt(c: &AChunk, time: i64) -> Nbt {
         ("LightPopulated", Nbt::Byte(c.light_populated as i8)),
         ("TerrainPopulated", Nbt::Byte(c.populated as i8)),
         ("V", Nbt::Byte(1)),
-        ("InhabitedTime", Nbt::Long(0)),
+        ("InhabitedTime", Nbt::Long(c.inhabited)),
         ("Sections", Nbt::List(10, sections)),
         ("Biomes", Nbt::ByteArray(c.biomes.to_vec())),
         ("HeightMap", Nbt::IntArray(c.height.to_vec())),
@@ -647,6 +650,19 @@ pub fn slots(items: &[Nbt]) -> BTreeMap<i32, crate::item::Stack> {
 
 #[cfg(test)]
 mod tests {
+    /// Chunk.inhabitedTime goes through the chunk's NBT.
+    #[test]
+    fn inhabited_time_round_trip() {
+        let mut c = super::chunk_from_nbt(&super::compound(vec![(
+            "Level",
+            super::compound(vec![("xPos", super::Nbt::Int(2)), ("zPos", super::Nbt::Int(-1))]),
+        )]))
+        .unwrap();
+        c.inhabited = 123_456;
+        let back = super::chunk_from_nbt(&super::chunk_to_nbt(&c, 0)).unwrap();
+        assert_eq!(back.inhabited, 123_456);
+    }
+
     use super::*;
 
     #[test]

@@ -343,6 +343,7 @@ impl Chunk {
             sections: self.sections,
             populated: self.terrain_populated,
             light_populated: self.light_populated,
+            inhabited: 0,
             entities: Vec::new(),
             tiles: Vec::new(),
             ticks: Vec::new(),
@@ -733,6 +734,9 @@ impl ServerWorld {
                 {
                     let (entities, tiles, ticks) =
                         (a.entities.clone(), a.tiles.clone(), a.ticks.clone());
+                    if a.inhabited != 0 {
+                        self.inhabited.insert((cx, cz), a.inhabited);
+                    }
                     let mut c = Chunk::from_anvil(a);
                     c.no_sky = self.provider.dim != 0;
                     self.insert_restored(Box::new(c));
@@ -870,6 +874,7 @@ impl ServerWorld {
         use super::anvil::{self, Nbt};
         let c = self.chunks.get(&(cx, cz))?;
         let mut a = c.to_anvil();
+        a.inhabited = self.inhabited.get(&(cx, cz)).copied().unwrap_or(0);
         match lists {
             Some((tiles, entities)) => {
                 a.tiles = tiles;

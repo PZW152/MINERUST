@@ -9,7 +9,8 @@
 
 ## 2026-11-28
 
-- Jockeys survive a reload: a mob riding another is saved as one entry with its mount under `Riding` (Entity.writeToNBTOptional, writeMountToNBT) and mounted again on load (AnvilChunkLoader), and chickens keep IsChickenJockey
+- Chunks keep their InhabitedTime in Anvil saves (it was written as 0), so the regional difficulty that grows where the player spends time survives a reload. (1.7.10's level.dat has no Difficulty, which lives in options.txt; that to-do item was wrong and is gone)
+- `8c82e71` - Jockeys survive a reload: a mob riding another is saved as one entry with its mount under `Riding` (Entity.writeToNBTOptional, writeMountToNBT) and mounted again on load (AnvilChunkLoader), and chickens keep IsChickenJockey
 - `af89d1b` - Tab completes in chat (GuiChat.autocompletePlayerNames with MinecraftServer.getPossibleCompletions): command names, then each command's arguments (game rules and true/false, game modes, difficulties, time set/add and day/night, weather, item and block names for give and setblock, the player's name), the common prefix first, then cycling with the choices listed in one chat line that replaces itself (printChatMessageWithOptionalDeletion)
 - `43baacd` - A hurt mob or player kicks its legs out (limbSwingAmount 1.5 in attackEntityFrom and handleHealthUpdate). The hurt camera tilt stays one way: the client's handleHealthUpdate sets attackedAtYaw to 0 in 1.7.10, so it never had a direction
 - `110a28c` - Right-clicking a mob that does nothing with the held item uses it (Minecraft.func_147121_ag after interactWithEntitySendPacket is false): eating, drinking, throwing snowballs or eggs, drawing the bow while looking at an animal now work
