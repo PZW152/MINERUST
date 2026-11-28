@@ -465,6 +465,8 @@ pub struct Mob {
     pub offers: Option<Vec<crate::merchant::Recipe>>,
     /// `EntityWither`'s state.
     pub wither: wither::WitherState,
+    /// `EntityPig.fall` with the player on it from more than 5 blocks.
+    pub flew_pig: bool,
     /// `EntityWolf`: begging (data watcher 19), `isWet`, `isShaking`,
     /// `prevTimeWolfIsShaking` and `timeWolfIsShaking`.
     pub begging: bool,
@@ -877,6 +879,7 @@ impl Mob {
             custom_name: String::new(),
             offers: None,
             wither: Default::default(),
+            flew_pig: false,
             begging: false,
             wolf_wet: false,
             wolf_shaking: false,
@@ -1494,6 +1497,10 @@ impl Mob {
     /// `EntityLivingBase.fall` (Jump Boost, the fall sound, `fall` damage,
     /// the block's step), and the creeper's fuse jumps ahead.
     fn fall(&mut self, w: &ServerWorld, d: f32) {
+        // EntityPig.fall: When Pigs Fly
+        if self.kind == Kind::Pig && d > 5.0 && self.ridden_by_player {
+            self.flew_pig = true;
+        }
         match self.kind {
             Kind::Chicken
             | Kind::Bat
@@ -2983,6 +2990,8 @@ pub struct Outcome {
     pub births: Vec<ai::Birth>,
     /// Kinds the player bred this tick (`animalsBred`, `breedCow`).
     pub bred: Vec<Kind>,
+    /// Achievements the player earned through the mobs.
+    pub achievements: Vec<&'static str>,
     /// Uses the held item lost to a right click on a mob
     /// (`damageItem(n, player)`, applied by the caller with the player's
     /// random).
@@ -3348,6 +3357,9 @@ impl Mobs {
             if m.kind != Kind::EnderDragon {
                 m.update_distance();
             }
+            if std::mem::take(&mut m.flew_pig) {
+                out.achievements.push("achievement.flyPig");
+            }
             m.track();
         }
         self.convert_zombies(w, out);
@@ -3602,6 +3614,10 @@ impl Mobs {
                     m.dead = true;
                 }
                 if !m.dead {
+                    // EntityWither.dropFewItems: killWither
+                    if m.kind == Kind::Wither {
+                        out.achievements.push("achievement.killWither");
+                    }
                     for s in m.drops(by_player, looting) {
                         out.drops.push(([m.pos[0], m.pos[1] + 0.0, m.pos[2]], s));
                     }

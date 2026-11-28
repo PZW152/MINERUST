@@ -579,6 +579,8 @@ pub struct Sim {
     stats_out: Vec<(String, i32)>,
     stats_sent_all: bool,
     was_dead: bool,
+    /// `startMinecartRidingCoordinate`
+    rail_start: Option<[i32; 3]>,
     eyes: Vec<EnderEye>,
     /// `level.dat` of a world opened from vanilla (Anvil mode).
     anvil_level: Option<crate::world::anvil::Nbt>,
@@ -796,6 +798,7 @@ impl Sim {
             stats_out: Vec::new(),
             stats_sent_all: false,
             was_dead: false,
+            rail_start: None,
             eyes: Vec::new(),
             anvil_level: None,
             anvil_imported: Default::default(),
@@ -2366,6 +2369,29 @@ impl Sim {
         self.stats_file.increase_stat("stat.playOneMinute", 1);
         for a in std::mem::take(&mut self.play.achievements) {
             self.achieve(a);
+        }
+        // addMountedMovementStat: a thousand blocks from where the
+        // minecart ride began
+        let on_cart = self.riding.is_some_and(|id| {
+            self.play
+                .vehicles
+                .iter()
+                .any(|v| v.v.id() == id && matches!(v.v, crate::entity::vehicle::Vehicle::Cart(_)))
+        });
+        if on_cart {
+            let f = self.play.player.0;
+            let here = [f[0].floor() as i32, f[1].floor() as i32, f[2].floor() as i32];
+            match self.rail_start {
+                None => self.rail_start = Some(here),
+                Some(s) => {
+                    let d = [(s[0] - here[0]) as f64, (s[1] - here[1]) as f64, (s[2] - here[2]) as f64];
+                    if d[0] * d[0] + d[1] * d[1] + d[2] * d[2] >= 1_000_000.0 {
+                        self.achieve("achievement.onARail");
+                    }
+                }
+            }
+        } else {
+            self.rail_start = None;
         }
         let drops = std::mem::take(&mut self.play.drops_made);
         if drops > 0 {
@@ -4234,6 +4260,9 @@ impl Sim {
             explosions.extend(o.explosions);
             for (p, xp) in o.orbs {
                 self.spawn_orbs(play, p, xp);
+            }
+            for a in o.achievements {
+                self.achieve(a);
             }
             for k in o.bred {
                 self.stats_file.increase_stat("stat.animalsBred", 1);
