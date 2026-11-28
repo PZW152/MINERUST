@@ -31,6 +31,7 @@ pub fn render_type(id: u8) -> Option<i32> {
         Shape::Stairs => 10,
         Shape::Chest => 22,
         Shape::Anvil => 35,
+        Shape::Beacon => 34,
         Shape::Fence => 11,
         Shape::FenceGate => 21,
         Shape::Wall => 32,
@@ -279,6 +280,19 @@ pub fn faces(atlas: &Atlas, id: u8, meta: i32) -> Option<(Vec<ItemFace>, Mat4)> 
                 y += h;
                 f.bounds([0.5 - a, bottom, 0.5 - a, 0.5 + a, top, 0.5 + a].map(|x| x as f64));
                 f.six(&side_meta, 0.0);
+            }
+            half
+        }
+        34 => {
+            // obsidian, the beacon, then the glass around them
+            for (b, name) in [
+                ([0.125, 0.0, 0.125, 0.875, 0.1875, 0.875], "obsidian"),
+                ([0.1875, 0.1875, 0.1875, 0.8125, 0.875, 0.8125], "beacon"),
+                ([0.0, 0.0, 0.0, 1.0, 1.0, 1.0], "glass"),
+            ] {
+                let icon = Icon::new(atlas.named(name));
+                f.bounds(b);
+                f.six(&|_: &Rb, _: i32| icon, 0.0);
             }
             half
         }

@@ -48,6 +48,15 @@ pub enum Tile {
     Spawner { mob: String },
     /// `TileEntitySign.signText`; `editable` until the placer's update.
     Sign { text: [String; 4], editable: bool },
+    /// `TileEntityBeacon`: the pyramid's levels, the chosen powers, whether
+    /// the sky is open (`isComplete`) and the payment slot.
+    Beacon {
+        levels: i32,
+        primary: i32,
+        secondary: i32,
+        complete: bool,
+        payment: Option<Stack>,
+    },
     /// `TileEntityBrewingStand`: three bottles and the ingredient.
     Brewing {
         slots: [Option<Stack>; 4],
@@ -172,6 +181,8 @@ pub enum Open {
     /// `ContainerHorseInventory` of the horse with this id: whether it
     /// carries a chest and can wear armour.
     Horse(u32, bool, bool),
+    /// `ContainerBeacon`
+    Beacon(Pos),
 }
 
 /// The `Container` class an open window uses.
@@ -192,6 +203,7 @@ pub fn window_of(o: &Open) -> Window {
             chest: *chest,
             armor: *armor,
         },
+        Open::Beacon(_) => Window::Beacon,
     }
 }
 
@@ -221,6 +233,8 @@ pub struct InvView {
     pub merchant_index: usize,
     /// The open dispenser window is a dropper's (`container.dropper`).
     pub dropper: bool,
+    /// `ContainerBeacon`'s bars: levels, primary and secondary power.
+    pub beacon: [i32; 3],
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -513,6 +527,7 @@ fn facing_meta(yaw: f32) -> i32 {
 impl InvView {
     pub fn empty() -> InvView {
         InvView {
+            beacon: [0; 3],
             inv: Inventory::default(),
             open: Open::None,
             result: None,
@@ -628,6 +643,18 @@ impl Play {
             merchant_index: self.merchant_index,
             dropper: matches!(&self.open, Open::Dispenser(p)
                 if matches!(self.tiles.get(p), Some(Tile::Dispenser { dropper: true, .. }))),
+            beacon: match &self.open {
+                Open::Beacon(p) => match self.tiles.get(p) {
+                    Some(Tile::Beacon {
+                        levels,
+                        primary,
+                        secondary,
+                        ..
+                    }) => [*levels, *primary, *secondary],
+                    _ => [0; 3],
+                },
+                _ => [0; 3],
+            },
         }
     }
 
@@ -837,6 +864,8 @@ impl Play {
                 Tile::Dispenser { slots, .. } => slots.to_vec(),
                 Tile::Hopper { slots, .. } => slots.to_vec(),
                 Tile::Brewing { slots, .. } => slots.to_vec(),
+                // BlockBeacon keeps no drops of its payment
+                Tile::Beacon { .. } => Vec::new(),
                 Tile::Spawner { .. }
                 | Tile::Sign { .. }
                 | Tile::Comparator { .. }
@@ -1054,6 +1083,13 @@ impl Play {
                     self.inv_dirty = true;
                     return true;
                 }
+                block::BEACON => {
+                    // BlockBeacon.onBlockActivated: openBeaconMenu
+                    self.tiles.entry(target).or_insert_with(Tile::beacon);
+                    self.open = Open::Beacon(target);
+                    self.inv_dirty = true;
+                    return true;
+                }
                 block::LEVER => {
                     w.toggle_lever(target[0], target[1], target[2]);
                     return true;
@@ -1151,6 +1187,10 @@ impl Play {
                         slots: [None; 5],
                         cooldown: -1,
                     });
+                    return true;
+                }
+                block::BEACON => {
+                    self.tiles.entry(target).or_insert_with(Tile::beacon);
                     return true;
                 }
                 block::END_PORTAL_FRAME if self.inv.held().map(|s| s.id) == Some(381) => {
@@ -1920,6 +1960,10 @@ impl Play {
                 Some(Tile::Hopper { slots, .. }) => slots.to_vec(),
                 _ => Vec::new(),
             },
+            Open::Beacon(p) => match self.tiles.get(p) {
+                Some(Tile::Beacon { payment, .. }) => vec![*payment],
+                _ => vec![None],
+            },
             Open::Enchant(_) => self.enchant_slot.to_vec(),
             Open::Anvil(_) => self.repair_slots.to_vec(),
             Open::Merchant(_) => self.merchant_slots.to_vec(),
@@ -1970,6 +2014,11 @@ impl Play {
             Open::Hopper(p) => {
                 if let Some(Tile::Hopper { slots, .. }) = self.tiles.get_mut(&p) {
                     copy(slots, v);
+                }
+            }
+            Open::Beacon(p) => {
+                if let Some(Tile::Beacon { payment, .. }) = self.tiles.get_mut(&p) {
+                    *payment = v.first().copied().flatten();
                 }
             }
             Open::Enchant(_) => copy(&mut self.enchant_slot, v),
@@ -2583,6 +2632,20 @@ impl Play {
                         ("Comparator", vec![("OutputSignal", Nbt::Int(*output))])
                     }
                     Tile::Daylight => ("DLDetector", vec![]),
+                    // TileEntityBeacon.writeToNBT
+                    Tile::Beacon {
+                        levels,
+                        primary,
+                        secondary,
+                        ..
+                    } => (
+                        "Beacon",
+                        vec![
+                            ("Primary", Nbt::Int(*primary)),
+                            ("Secondary", Nbt::Int(*secondary)),
+                            ("Levels", Nbt::Int(*levels)),
+                        ],
+                    ),
                     // TileEntityJukebox.writeToNBT: Record and RecordItem
                     Tile::Jukebox { record } => (
                         "RecordPlayer",
@@ -2692,6 +2755,13 @@ impl Play {
                 }
             }
             "DLDetector" => Tile::Daylight,
+            "Beacon" => Tile::Beacon {
+                levels: t.int("Levels").unwrap_or(0) as i32,
+                primary: t.int("Primary").unwrap_or(0) as i32,
+                secondary: t.int("Secondary").unwrap_or(0) as i32,
+                complete: false,
+                payment: None,
+            },
             "RecordPlayer" => Tile::Jukebox {
                 record: t
                     .get("RecordItem")
@@ -2977,6 +3047,12 @@ impl Play {
                 }
                 Tile::Comparator { output } => format!("K,{},{},{},{}", p[0], p[1], p[2], output),
                 Tile::Daylight => format!("L,{},{},{}", p[0], p[1], p[2]),
+                Tile::Beacon {
+                    levels,
+                    primary,
+                    secondary,
+                    ..
+                } => format!("B,{},{},{},{},{},{}", p[0], p[1], p[2], levels, primary, secondary),
                 Tile::Jukebox { record } => {
                     format!("J,{},{},{},{}", p[0], p[1], p[2], enc(&[*record]))
                 }
@@ -3093,6 +3169,19 @@ impl Play {
                 self.tiles
                     .insert(pos(f[1], f[2], f[3])?, Tile::Jukebox { record: s[0] });
             }
+            "B" => {
+                let f: Vec<&str> = line.splitn(7, ',').collect();
+                self.tiles.insert(
+                    pos(f[1], f[2], f[3])?,
+                    Tile::Beacon {
+                        levels: f.get(4)?.parse().ok()?,
+                        primary: f.get(5)?.parse().ok()?,
+                        secondary: f.get(6)?.trim().parse().ok()?,
+                        complete: false,
+                        payment: None,
+                    },
+                );
+            }
             "L" => {
                 let f: Vec<&str> = line.splitn(4, ',').collect();
                 self.tiles
@@ -3185,5 +3274,46 @@ mod tests {
         assert_eq!(burn_time(&Stack::new(item::STICK, 0, 1)), 100);
         assert_eq!(burn_time(&Stack::new(270, 0, 1)), 200);
         assert_eq!(burn_time(&Stack::new(block::STONE as ItemId, 0, 1)), 0);
+    }
+}
+
+/// `TileEntityBeacon.effectsList` by tier.
+pub const BEACON_EFFECTS: [&[i32]; 4] = [
+    &[crate::potion::MOVE_SPEED, crate::potion::DIG_SPEED],
+    &[crate::potion::RESISTANCE, crate::potion::JUMP],
+    &[crate::potion::DAMAGE_BOOST],
+    &[crate::potion::REGENERATION],
+];
+
+/// `TileEntityBeacon.setPrimaryEffect`: a power of a tier the pyramid
+/// reaches (the first three), else none.
+pub fn beacon_primary(levels: i32, id: i32) -> i32 {
+    for (t, list) in BEACON_EFFECTS.iter().enumerate().take(3) {
+        if (t as i32) < levels && list.contains(&id) {
+            return id;
+        }
+    }
+    0
+}
+
+/// `TileEntityBeacon.setSecondaryEffect`: any listed power, from level 4.
+pub fn beacon_secondary(levels: i32, id: i32) -> i32 {
+    if levels >= 4 && BEACON_EFFECTS.iter().any(|l| l.contains(&id)) {
+        id
+    } else {
+        0
+    }
+}
+
+impl Tile {
+    /// `new TileEntityBeacon()`: levels -1 until the first update.
+    pub fn beacon() -> Tile {
+        Tile::Beacon {
+            levels: -1,
+            primary: 0,
+            secondary: 0,
+            complete: false,
+            payment: None,
+        }
     }
 }

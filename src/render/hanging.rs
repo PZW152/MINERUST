@@ -4,7 +4,11 @@ use super::mesher::Vertex;
 use super::model::Tex;
 use super::{mul, rot_y, transform, translate, Mat4};
 
-pub const TEXTURES: [&str; 2] = ["../painting/paintings_kristoffer_zetterstrand", "lead_knot"];
+pub const TEXTURES: [&str; 3] = [
+    "../painting/paintings_kristoffer_zetterstrand",
+    "lead_knot",
+    "beacon_beam",
+];
 
 /// The world-space normal `n` under the rotation of `m`, lit as
 /// `RenderHelper.enableStandardItemLighting` does.
@@ -303,4 +307,88 @@ pub fn knot(out: &mut Vec<Vertex>, tex: Tex, rel: [f32; 3], light: [u8; 4]) {
         tint: [1.0; 4],
     };
     super::model::render(&mut d, &m, &part);
+}
+
+/// One side of a beacon beam from `a` to `b` (x, z at the bottom and
+/// top), `h` high, with u running `u0 -> u1` and v from `v0` at the
+/// bottom to `v1` at the top, repeating (`GL_REPEAT`) inside the tile
+/// `t`: cut where v crosses a whole number. Both sides are drawn.
+fn beam_side(
+    out: &mut Vec<Vertex>,
+    t: [f32; 4],
+    base: [f32; 3],
+    a: [f32; 2],
+    b: [f32; 2],
+    h: f32,
+    u: [f32; 2],
+    v: [f32; 2],
+    colour: [u8; 4],
+) {
+    let (v0, v1) = (v[0], v[1]);
+    if h <= 0.0 || v1 <= v0 {
+        return;
+    }
+    let tu = |x: f32| t[0] + (t[2] - t[0]) * x;
+    let tv = |x: f32| t[1] + (t[3] - t[1]) * x;
+    let mut lo = v0;
+    while lo < v1 {
+        let hi = (lo.floor() + 1.0).min(v1);
+        let k = lo.floor();
+        let (y0, y1) = ((lo - v0) / (v1 - v0) * h, (hi - v0) / (v1 - v0) * h);
+        let (f0, f1) = (lo - k, hi - k);
+        let q = [
+            ([a[0], y1, a[1]], [tu(u[0]), tv(f1)]),
+            ([a[0], y0, a[1]], [tu(u[0]), tv(f0)]),
+            ([b[0], y0, b[1]], [tu(u[1]), tv(f0)]),
+            ([b[0], y1, b[1]], [tu(u[1]), tv(f1)]),
+        ];
+        for order in [[0usize, 1, 2, 3], [3, 2, 1, 0]] {
+            for i in order {
+                let (p, uv) = q[i];
+                out.push(Vertex {
+                    pos: [base[0] + p[0], base[1] + p[1], base[2] + p[2]],
+                    uv,
+                    color: colour,
+                    light: [240, 240, 0, 0],
+                });
+            }
+        }
+        lo = hi;
+    }
+}
+
+/// `TileEntityBeaconRenderer`: the turning inner beam (drawn solid with
+/// the alpha test) and the faint outer square (blended), 256 blocks high
+/// times `scale`; `time` is the world time with the partial tick.
+pub fn beacon_beam(
+    solid: &mut Vec<Vertex>,
+    blended: &mut Vec<Vertex>,
+    t: [f32; 4],
+    base: [f32; 3],
+    time: f64,
+    scale: f32,
+) {
+    let c = [255, 255, 255, 32];
+    let f12 = (-time * 0.2 - (-time * 0.1).floor()) as f32;
+    let a = time * 0.025 * (1.0 - 2.5);
+    let r = 0.2f64;
+    let pt = |k: f64| -> [f32; 2] {
+        [
+            (0.5 + (a + k).cos() * r) as f32,
+            (0.5 + (a + k).sin() * r) as f32,
+        ]
+    };
+    use std::f64::consts::PI;
+    let (p18, p22, p26, p30) = (pt(PI * 3.0 / 4.0), pt(PI / 4.0), pt(PI * 5.0 / 4.0), pt(PI * 7.0 / 4.0));
+    let h = 256.0 * scale;
+    let v0 = -1.0 + f12;
+    let v1 = 256.0 * scale * (0.5 / 0.2) as f32 + v0;
+    for (x, y) in [(p18, p22), (p30, p26), (p22, p30), (p26, p18)] {
+        beam_side(solid, t, base, x, y, h, [1.0, 0.0], [v0, v1], c);
+    }
+    let v1 = 256.0 * scale + v0;
+    let (a0, a1, b0, b1) = ([0.2, 0.2], [0.8, 0.2], [0.8, 0.8], [0.2, 0.8]);
+    for (x, y) in [(a0, a1), (b0, b1), (a1, b0), (b1, a0)] {
+        beam_side(blended, t, base, x, y, h, [1.0, 0.0], [v0, v1], c);
+    }
 }

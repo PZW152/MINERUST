@@ -138,6 +138,7 @@ pub const CAKE: u8 = 92;
 pub const PUMPKIN_STEM: u8 = 104;
 pub const MELON_STEM: u8 = 105;
 pub const FENCE_GATE: u8 = 107;
+pub const BEACON: u8 = 138;
 pub const COBBLESTONE_WALL: u8 = 139;
 pub const GLOWSTONE: u8 = 89;
 pub const LIT_PUMPKIN: u8 = 91;
@@ -242,6 +243,8 @@ pub enum Shape {
     /// `BlockSign` (render type -1: `TileEntitySignRenderer`)
     Sign,
     Cocoa,
+    /// `renderBlockBeacon` (34)
+    Beacon,
     Torch,
     /// `renderBlockStairs` (render type 10)
     Stairs,
@@ -658,6 +661,11 @@ fn build() -> [BlockInfo; 256] {
     let mut glow = base(Shape::Cube, M::Glass, true);
     glow.light_value = 15;
     t[GLOWSTONE as usize] = glow;
+    // BlockBeacon: glass material, not a full opaque cube, light 15
+    let mut beacon = base(Shape::Beacon, M::Glass, false);
+    beacon.solid = true;
+    beacon.light_value = 15;
+    t[BEACON as usize] = beacon;
     t[LIT_PUMPKIN as usize].light_value = 15;
     t[LIT_REDSTONE_ORE as usize].light_value = 9;
 
@@ -1513,6 +1521,7 @@ pub fn texture_name(id: u8, meta: u8, face: usize) -> Option<&'static str> {
         NETHERRACK => "netherrack",
         SOUL_SAND => "soul_sand",
         GLOWSTONE => "glowstone",
+        BEACON => "beacon",
         // BlockRedstoneDiode.getIcon: the bottom is the torch
         // BlockRedstoneComparator.getIcon: lit when powered (block or bit 8)
         UNPOWERED_COMPARATOR | POWERED_COMPARATOR => {

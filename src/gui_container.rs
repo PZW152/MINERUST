@@ -20,6 +20,7 @@ const DISPENSER: (f32, f32) = (1792.0, 512.0);
 const HOPPER: (f32, f32) = (1792.0, 768.0);
 const MERCHANT: (f32, f32) = (256.0, 1024.0);
 const HORSE: (f32, f32) = (0.0, 1024.0);
+const BEACON: (f32, f32) = (1536.0, 768.0);
 
 /// `GuiMerchant$MerchantButton`s: +1 for next, -1 for previous, when the
 /// mouse is on an enabled one.
@@ -128,6 +129,8 @@ pub fn size(open: &Open) -> (i32, i32) {
         Window::Chest(rows) => (176, 114 + rows as i32 * 18),
         // GuiHopper: ySize 133
         Window::Hopper => (176, 133),
+        // GuiBeacon
+        Window::Beacon => (230, 219),
         _ => (176, 166),
     }
 }
@@ -167,7 +170,7 @@ pub fn slot_stack(view: &InvView, d: &SlotDef) -> Option<Stack> {
 
 fn slot_limit(d: &SlotDef) -> u32 {
     match d.kind {
-        SlotKind::Armor(_) | SlotKind::Potion | SlotKind::Enchant => 1,
+        SlotKind::Armor(_) | SlotKind::Potion | SlotKind::Enchant | SlotKind::BeaconPayment => 1,
         _ => 64,
     }
 }
@@ -175,6 +178,7 @@ fn slot_limit(d: &SlotDef) -> u32 {
 fn slot_valid(d: &SlotDef, s: &Stack) -> bool {
     match d.kind {
         SlotKind::Plain | SlotKind::Enchant => true,
+        SlotKind::BeaconPayment => matches!(s.id, 388 | 264 | 266 | 265),
         SlotKind::CraftResult
         | SlotKind::FurnaceOut
         | SlotKind::RepairOut
@@ -668,6 +672,9 @@ impl GuiContainer {
                     return;
                 }
             }
+            if let Open::Beacon(_) = view.open {
+                beacon_overlay(ui, view, lang, lf, tf, f.mouse);
+            }
         }
         if let Some(c) = cursor {
             let mut s = c;
@@ -723,6 +730,13 @@ fn background(ui: &mut Ui, view: &InvView, left: f32, top: f32, xs: f32, ys: f32
         Open::Workbench(_) => ui.sheet(left, top, WORKBENCH.0, WORKBENCH.1, xs, ys),
         Open::Dispenser(_) => ui.sheet(left, top, DISPENSER.0, DISPENSER.1, xs, ys),
         Open::Hopper(_) => ui.sheet(left, top, HOPPER.0, HOPPER.1, xs, ys),
+        Open::Beacon(_) => {
+            ui.sheet(left, top, BEACON.0, BEACON.1, xs, ys);
+            // the four kinds of payment
+            for (k, id) in [388u16, 264, 266, 265].into_iter().enumerate() {
+                draw_stack_with(ui, &Stack::new(id, 0, 1), left + 42.0 + 22.0 * k as f32, top + 109.0, None);
+            }
+        }
         Open::Enchant(_) => ui.sheet(left, top, ENCHANT.0, ENCHANT.1, xs, ys),
         Open::Anvil(_) => crate::gui_repair::background(ui, view, left, top),
         // GuiScreenHorseInventory: the chest grid and the armour slot when
@@ -854,6 +868,15 @@ fn foreground(ui: &mut Ui, view: &InvView, lang: &Lang, left: f32, top: f32, xs:
         }
         // GuiRepair draws its own title and no inventory label
         Open::Anvil(_) => return,
+        // GuiBeacon: the two headings and no inventory label
+        Open::Beacon(_) => {
+            for (k, x) in [("tile.beacon.primary", 62.0), ("tile.beacon.secondary", 169.0)] {
+                let t = lang.get(k);
+                let w = ui.text_width(t);
+                ui.text(t, left + x - (w / 2.0).trunc(), top + 10.0, 14737632, true);
+            }
+            return;
+        }
         // GuiScreenHorseInventory: the horse's name
         Open::Horse(..) => {
             let t = match view.merchant_name.strip_prefix('#') {
@@ -1133,5 +1156,131 @@ mod tests {
             clicks.iter().map(|c| c.slot).collect::<Vec<_>>(),
             [-999, 36, 37, 38, -999]
         );
+    }
+}
+
+/// One of `GuiBeacon`'s buttons: its place (relative to the window), what
+/// it does, and how it shows.
+#[derive(Clone, Copy, Debug)]
+pub struct BeaconButton {
+    pub x: i32,
+    pub y: i32,
+    /// `-1` done, `-2` cancel, else `tier << 8 | potion id`.
+    pub id: i32,
+    pub enabled: bool,
+    pub selected: bool,
+}
+
+/// `GuiBeacon.initGui` / `updateScreen`: the buttons for `levels` and
+/// the powers chosen so far.
+pub fn beacon_buttons(view: &InvView) -> Vec<BeaconButton> {
+    use crate::play::BEACON_EFFECTS;
+    let [levels, primary, secondary] = view.beacon;
+    let paid = view.tile_slots.first().copied().flatten().is_some();
+    let mut v = vec![
+        BeaconButton { x: 164, y: 107, id: -1, enabled: paid && primary > 0, selected: false },
+        BeaconButton { x: 190, y: 107, id: -2, enabled: true, selected: false },
+    ];
+    if levels < 0 {
+        return v;
+    }
+    for tier in 0..3usize {
+        let n = BEACON_EFFECTS[tier].len() as i32;
+        let w = n * 22 + (n - 1) * 2;
+        for (k, &e) in BEACON_EFFECTS[tier].iter().enumerate() {
+            v.push(BeaconButton {
+                x: 76 + k as i32 * 24 - w / 2,
+                y: 22 + tier as i32 * 25,
+                id: (tier as i32) << 8 | e,
+                enabled: (tier as i32) < levels,
+                selected: (tier as i32) < levels && e == primary,
+            });
+        }
+    }
+    let n = BEACON_EFFECTS[3].len() as i32 + 1;
+    let w = n * 22 + (n - 1) * 2;
+    for (k, &e) in BEACON_EFFECTS[3].iter().enumerate() {
+        v.push(BeaconButton {
+            x: 167 + k as i32 * 24 - w / 2,
+            y: 47,
+            id: 3 << 8 | e,
+            enabled: 3 < levels,
+            selected: 3 < levels && e == secondary,
+        });
+    }
+    if primary > 0 {
+        v.push(BeaconButton {
+            x: 167 + (n - 1) * 24 - w / 2,
+            y: 47,
+            id: 3 << 8 | primary,
+            enabled: 3 < levels,
+            selected: 3 < levels && primary == secondary,
+        });
+    }
+    v
+}
+
+/// The enabled `GuiBeacon` button under the mouse.
+pub fn beacon_button_at(view: &InvView, w: i32, h: i32, mouse: (i32, i32)) -> Option<BeaconButton> {
+    let (left, top) = origin(&view.open, w, h, false);
+    beacon_buttons(view).into_iter().find(|b| {
+        let (dx, dy) = (mouse.0 - left - b.x, mouse.1 - top - b.y);
+        b.enabled && dx >= 0 && dy >= 0 && dx < 22 && dy < 22
+    })
+}
+
+/// `GuiBeacon$Button.drawButton` for each button, then the hovered one's
+/// tooltip (`drawButtonForegroundLayer`).
+pub fn beacon_overlay(ui: &mut Ui, view: &InvView, lang: &Lang, left: f32, top: f32, mouse: (i32, i32)) {
+    let mut tip = None;
+    for b in beacon_buttons(view) {
+        let (x, y) = (left + b.x as f32, top + b.y as f32);
+        let over = mouse.0 as f32 >= x && mouse.1 as f32 >= y && (mouse.0 as f32) < x + 22.0 && (mouse.1 as f32) < y + 22.0;
+        let u = if !b.enabled {
+            44.0
+        } else if b.selected {
+            22.0
+        } else if over {
+            66.0
+        } else {
+            0.0
+        };
+        ui.sheet(x, y, BEACON.0 + u, BEACON.1 + 219.0, 22.0, 22.0);
+        match b.id {
+            -1 => ui.sheet(x + 2.0, y + 2.0, BEACON.0 + 90.0, BEACON.1 + 220.0, 18.0, 18.0),
+            -2 => ui.sheet(x + 2.0, y + 2.0, BEACON.0 + 112.0, BEACON.1 + 220.0, 18.0, 18.0),
+            id => {
+                if let Some(p) = crate::potion::potion(id & 255) {
+                    let i = p.icon.max(0);
+                    ui.sheet(
+                        x + 2.0,
+                        y + 2.0,
+                        INVENTORY.0 + (i % 8 * 18) as f32,
+                        INVENTORY.1 + 198.0 + (i / 8 * 18) as f32,
+                        18.0,
+                        18.0,
+                    );
+                }
+            }
+        }
+        if over {
+            tip = Some(b);
+        }
+    }
+    if let Some(b) = tip {
+        let t = match b.id {
+            -1 => lang.get("gui.done").to_string(),
+            -2 => lang.get("gui.cancel").to_string(),
+            id => {
+                let e = id & 255;
+                let mut t = crate::potion::potion(e)
+                    .map_or(String::new(), |p| lang.get(p.name).to_string());
+                if id >> 8 >= 3 && e != crate::potion::REGENERATION {
+                    t.push_str(" II");
+                }
+                t
+            }
+        };
+        crate::screens::hovering_text(ui, &[t], mouse.0, mouse.1);
     }
 }

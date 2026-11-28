@@ -50,7 +50,7 @@ AI：
 ## 3. 方塊與世界
 
 缺少的方塊：
-- [ ] 指令方塊、信標、頭顱、觸發鐵軌（終界箱、陷阱箱已完成；手上與掉落的箱子物品還不畫，`TileEntityRendererChestHelper` 只用在物品欄圖示）
+- [ ] 指令方塊、頭顱、觸發鐵軌（終界箱、陷阱箱、信標已完成；信標尚缺放置時的自訂名稱、光束在客戶端的 `beamRenderCounter` 以世界時間計；手上與掉落的箱子物品還不畫，`TileEntityRendererChestHelper` 只用在物品欄圖示）
 - [ ] 漏斗、投擲器、發射器的剩餘部分：箱子上坐著的豹貓擋住存取（發射煙火已完成）
       （`BlockChest.isOcelotSittingOnTop`）；漏斗礦車吸物品
 - [ ] 可可豆的繪製（目前會長，但不畫）
@@ -103,7 +103,7 @@ AI：
 - [ ] 經驗來源：繁殖
 
 介面：
-- [ ] 信標、書與羽毛筆
+- [ ] 書與羽毛筆
 - [ ] 統計與成就：已有統計檔（`stats/<uuid>.json`，`src/stats.rs`）、成就樹、成就提示框（`GuiAchievement`）與
       「Taking Inventory」。待做：`StatList` 的一般統計、其餘 32 個成就的觸發點、`GuiStats`、`GuiAchievements`、
       `/achievement` 指令、成就的聊天公告

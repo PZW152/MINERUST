@@ -681,6 +681,9 @@ fn mesh_block(cx: &Ctx, out: &mut Vec<Vertex>, id: u8, meta: i32, x: i32, y: i32
         Shape::Anvil => {
             rb::Rb::new(cx, out, id, meta).render_anvil(x, y, z, false);
         }
+        Shape::Beacon => {
+            rb::Rb::new(cx, out, id, meta).render_block_beacon(x, y, z);
+        }
         Shape::Cocoa | Shape::None => {}
     }
 }

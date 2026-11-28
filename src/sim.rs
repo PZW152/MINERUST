@@ -90,6 +90,8 @@ pub enum Command {
     RenameItem(String),
     /// `MC|TrSel`: the offer chosen in the merchant window
     MerchantSelect(usize),
+    /// `MC|Beacon`: the chosen primary and secondary powers.
+    BeaconSet(i32, i32),
     /// `C0BPacketEntityAction` 6: the horse jump bar's power (0..100)
     HorseJump(i32),
     /// `C12PacketUpdateSign`
@@ -160,6 +162,8 @@ pub enum Command {
 }
 
 pub enum Event {
+    /// The beacons whose beam shows (`isComplete`).
+    Beacons(Vec<[i32; 3]>),
     /// `S34PacketMaps`: a map's colours and markers.
     Map(crate::map::MapView),
     /// `S37PacketStatistics`: statistic id and value.
@@ -538,6 +542,7 @@ pub struct Sim {
     /// `MapStorage`'s maps, and the ids whose data the client has.
     pub maps: crate::map::Maps,
     maps_sent: std::collections::HashSet<i32>,
+    beams_sent: Vec<[i32; 3]>,
     /// A dimension change asked for by a command (respawning out of the Nether).
     pending_travel: Option<i32>,
     /// Tell the client on the first tick which dimension the save is in.
@@ -754,6 +759,7 @@ impl Sim {
             base_dir: cfg.save_dir.clone(),
             maps: crate::map::Maps::new(cfg.save_dir.clone()),
             maps_sent: Default::default(),
+            beams_sent: Vec::new(),
             pending_travel: None,
             announce_dim: false,
             stats_file: crate::stats::StatisticsFile::open(
@@ -1376,6 +1382,29 @@ impl Sim {
                 play.close(&mut self.world);
                 self.play = play;
             }
+            Command::BeaconSet(a, b) => {
+                // NetHandlerPlayServer: with a payment, it is used up and the
+                // powers are set
+                if let crate::play::Open::Beacon(p) = self.play.open.clone() {
+                    if let Some(crate::play::Tile::Beacon {
+                        levels,
+                        primary,
+                        secondary,
+                        payment,
+                        ..
+                    }) = self.play.tiles.get_mut(&p)
+                    {
+                        if let Some(s) = payment.take() {
+                            if s.count > 1 {
+                                *payment = Some(crate::item::Stack { count: s.count - 1, ..s });
+                            }
+                            *primary = crate::play::beacon_primary(*levels, a);
+                            *secondary = crate::play::beacon_secondary(*levels, b);
+                            self.play.inv_dirty = true;
+                        }
+                    }
+                }
+            }
             Command::MerchantSelect(i) => {
                 self.play.select_offer(i);
                 self.merchant_effects();
@@ -1629,6 +1658,118 @@ impl Sim {
                 self.maps_sent.insert(id);
             }
         }
+    }
+
+    /// `TileEntityBeacon.updateEntity` every 80 ticks: the pyramid under
+    /// it (`updateSegmentColors`), then the powers for the player in range
+    /// (`addEffectsToPlayers`); the client gets the beams.
+    fn tick_beacons(&mut self, events: &mut Vec<Event>) {
+        if self.world.total_time % 80 != 0 {
+            return;
+        }
+        let feet = self.play.player.0;
+        let keys: Vec<[i32; 3]> = self
+            .play
+            .tiles
+            .iter()
+            .filter(|(_, t)| matches!(t, crate::play::Tile::Beacon { .. }))
+            .map(|(p, _)| *p)
+            .collect();
+        let mut beams = Vec::new();
+        for p in keys {
+            let [x, y, z] = p;
+            if self.world.peek_block(x, y, z) != crate::block::BEACON {
+                continue;
+            }
+            let sees = self.world.can_see_sky(x, y + 1, z);
+            let mut lv = 0;
+            if sees {
+                for d in 1..=4 {
+                    let yy = y - d;
+                    if yy < 0 {
+                        break;
+                    }
+                    let mut ok = true;
+                    'row: for xx in x - d..=x + d {
+                        for zz in z - d..=z + d {
+                            let b = self.world.peek_block(xx, yy, zz);
+                            if !matches!(
+                                b,
+                                crate::block::EMERALD_BLOCK
+                                    | crate::block::GOLD_BLOCK
+                                    | crate::block::DIAMOND_BLOCK
+                                    | crate::block::IRON_BLOCK
+                            ) {
+                                ok = false;
+                                break 'row;
+                            }
+                        }
+                    }
+                    if !ok {
+                        break;
+                    }
+                    lv = d;
+                }
+            }
+            let Some(crate::play::Tile::Beacon {
+                levels,
+                primary,
+                secondary,
+                complete,
+                ..
+            }) = self.play.tiles.get_mut(&p)
+            else {
+                continue;
+            };
+            let before = *levels;
+            *levels = lv;
+            *complete = sees && lv > 0;
+            // the full pyramid's achievement for a player near it
+            if lv == 4 && before < 4 {
+                let near = (feet[0] - x as f64).abs() <= 10.0
+                    && feet[1] >= (y - 4) as f64 - 5.0
+                    && feet[1] <= y as f64 + 5.0
+                    && (feet[2] - z as f64).abs() <= 10.0;
+                if near && self.stats_file.trigger_achievement("achievement.fullBeacon") {
+                    let dirty = self.stats_file.take_dirty();
+                    self.stats_out.extend(dirty);
+                }
+            }
+            if *complete {
+                beams.push(p);
+            }
+            if *complete && lv > 0 && *primary > 0 {
+                let r = (lv * 10 + 10) as f64;
+                let inside = feet[0] >= x as f64 - r
+                    && feet[0] <= x as f64 + 1.0 + r
+                    && feet[1] >= y as f64 - r
+                    && feet[2] >= z as f64 - r
+                    && feet[2] <= z as f64 + 1.0 + r;
+                if inside {
+                    let amp = if lv >= 4 && *primary == *secondary { 1 } else { 0 };
+                    let (a, b) = (*primary, *secondary);
+                    self.splayer
+                        .living
+                        .add_effect(crate::potion::Effect::ambient(a, 180, amp, true));
+                    if lv >= 4 && a != b && b > 0 {
+                        self.splayer
+                            .living
+                            .add_effect(crate::potion::Effect::ambient(b, 180, 0, true));
+                    }
+                }
+            }
+        }
+        if self.open_window_is_beacon() {
+            self.play.inv_dirty = true;
+        }
+        if beams != self.beams_sent {
+            self.beams_sent = beams.clone();
+            events.push(Event::Beacons(beams));
+        }
+    }
+
+    fn open_window_is_beacon(&self) -> bool {
+        matches!(self.play.open, crate::play::Open::Beacon(_))
     }
 
     /// `EntityHorse.openGUI` (`displayGUIHorse`): tamed, and not ridden by
@@ -2156,6 +2297,7 @@ impl Sim {
         self.play = play;
         self.tick_maps(events);
         self.tick_leashes();
+        self.tick_beacons(events);
         self.pick_up_arrows(events);
         self.player_events(events);
         if self.play.inv_dirty {
@@ -3329,6 +3471,9 @@ impl Sim {
                 if v.len() >= 4 && (0..256).contains(&v[1]) {
                     let meta = v.get(4).copied().unwrap_or(0);
                     self.world.set_block(v[0], v[1], v[2], v[3] as u8, meta, 3);
+                    if v[3] as u8 == crate::block::BEACON {
+                        self.play.tiles.entry([v[0], v[1], v[2]]).or_insert_with(crate::play::Tile::beacon);
+                    }
                 }
             }
         }
@@ -8343,6 +8488,69 @@ mod tests {
     }
 
     /// `EntityVillager.interact`, `ContainerMerchant`, `useRecipe`.
+    #[test]
+    fn beacons_build_pay_and_empower() {
+        use crate::item::Stack;
+        use crate::play::{Open, Tile};
+        let (mut sim, x, y, z) = redstone_sim();
+        arena(&mut sim, x, y, z);
+        sim.play.mode = GameMode::Survival;
+        // a one-level iron pyramid with the beacon on top, open sky
+        let (bx, by, bz) = (x + 3, y + 2, z);
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                sim.world.set_block(bx + dx, by - 1, bz + dz, crate::block::IRON_BLOCK, 0, 3);
+            }
+        }
+        sim.world.set_block(bx, by, bz, crate::block::BEACON, 0, 3);
+        sim.play.tiles.insert([bx, by, bz], Tile::beacon());
+        for yy in by + 1..256 {
+            sim.world.set_block(bx, yy, bz, 0, 0, 3);
+        }
+        let feet = [x as f64 + 0.5, (y + 1) as f64, z as f64 + 0.5];
+        let step = |sim: &mut Sim, c: &[Command]| {
+            let mut ev = Vec::new();
+            let mut v = vec![Command::Player(feet, [0.0, 0.0], false)];
+            v.extend_from_slice(c);
+            sim.step(&v, &mut ev);
+            ev
+        };
+        let mut beams = None;
+        for _ in 0..81 {
+            for e in step(&mut sim, &[]) {
+                if let Event::Beacons(v) = e {
+                    beams = Some(v);
+                }
+            }
+        }
+        assert_eq!(beams, Some(vec![[bx, by, bz]]), "the beam shows");
+        let levels = |sim: &Sim| match sim.play.tiles.get(&[bx, by, bz]) {
+            Some(Tile::Beacon { levels, primary, .. }) => (*levels, *primary),
+            _ => (-9, -9),
+        };
+        assert_eq!(levels(&sim).0, 1);
+        // pay with a diamond and pick Speed; Strength is beyond level 1
+        sim.play.open = Open::Beacon([bx, by, bz]);
+        if let Some(Tile::Beacon { payment, .. }) = sim.play.tiles.get_mut(&[bx, by, bz]) {
+            *payment = Some(Stack::new(264, 0, 1));
+        }
+        step(&mut sim, &[Command::BeaconSet(crate::potion::DAMAGE_BOOST, 0)]);
+        assert_eq!(levels(&sim).1, 0, "not at level 1");
+        if let Some(Tile::Beacon { payment, .. }) = sim.play.tiles.get_mut(&[bx, by, bz]) {
+            *payment = Some(Stack::new(264, 0, 1));
+        }
+        step(&mut sim, &[Command::BeaconSet(crate::potion::MOVE_SPEED, 0)]);
+        assert_eq!(levels(&sim).1, crate::potion::MOVE_SPEED);
+        assert!(matches!(sim.play.tiles.get(&[bx, by, bz]), Some(Tile::Beacon { payment: None, .. })));
+        for _ in 0..81 {
+            step(&mut sim, &[]);
+        }
+        assert!(
+            sim.splayer.living.active(crate::potion::MOVE_SPEED),
+            "Speed from the beacon"
+        );
+    }
+
     #[test]
     fn leads_tie_pull_and_break() {
         use crate::entity::mob::{Kind, Leash};

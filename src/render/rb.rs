@@ -4394,6 +4394,26 @@ impl<'a, 'b> Rb<'a, 'b> {
         true
     }
 
+    /// `renderBlockBeacon`: a glass cube around an obsidian base and the
+    /// beacon itself.
+    pub fn render_block_beacon(&mut self, x: i32, y: i32, z: i32) -> bool {
+        let f = 0.1875f64;
+        self.overrideBlockTexture = Some(Icon::new(self.atlas().named("glass")));
+        self.set_render_bounds(0.0, 0.0, 0.0, 1.0, 1.0, 1.0);
+        self.render_standard(x, y, z);
+        let all = self.renderAllFaces;
+        self.renderAllFaces = true;
+        self.overrideBlockTexture = Some(Icon::new(self.atlas().named("obsidian")));
+        self.set_render_bounds(0.125, 0.00625f32 as f64, 0.125, 0.875, f, 0.875);
+        self.render_standard(x, y, z);
+        self.overrideBlockTexture = Some(Icon::new(self.atlas().named("beacon")));
+        self.set_render_bounds(0.1875, f, 0.1875, 0.8125, 0.875, 0.8125);
+        self.render_standard(x, y, z);
+        self.renderAllFaces = all;
+        self.overrideBlockTexture = None;
+        true
+    }
+
     pub fn render_brewing_stand(&mut self, x: i32, y: i32, z: i32) -> bool {
         self.set_render_bounds(0.4375, 0.0, 0.4375, 0.5625, 0.875, 0.5625);
         self.render_standard(x, y, z);

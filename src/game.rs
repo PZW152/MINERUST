@@ -441,6 +441,8 @@ pub struct Game {
     /// The latest server values of the mobs' per-tick animation counters,
     /// taken over one client tick at a time (see `merge_mobs`).
     mob_net: std::collections::HashMap<u32, MobAnim>,
+    /// Beacons with a beam: place and `beamRenderScale`.
+    beacons: Vec<([i32; 3], f32)>,
     /// `S34PacketMaps` as received, and which map each atlas slot shows
     /// (with the tick it was last wanted).
     maps: std::collections::HashMap<i32, crate::map::MapView>,
@@ -707,6 +709,7 @@ impl Game {
             anim_state: Vec::new(),
             cloud_cell: None,
             view: InvView {
+                beacon: [0; 3],
                 inv: Default::default(),
                 open: Open::None,
                 result: None,
@@ -781,6 +784,7 @@ impl Game {
             next_step: 1.0,
             mobs: Vec::new(),
             mob_net: Default::default(),
+            beacons: Vec::new(),
             maps: Default::default(),
             map_slots: Vec::new(),
             horse_jump_counter: 0,
@@ -1483,6 +1487,13 @@ impl Game {
             };
             self.counts[2] += 1;
             match e {
+                Event::Beacons(list) => {
+                    let old = std::mem::take(&mut self.beacons);
+                    self.beacons = list
+                        .into_iter()
+                        .map(|p| (p, old.iter().find(|b| b.0 == p).map_or(0.0, |b| b.1)))
+                        .collect();
+                }
                 Event::Map(v) => {
                     let id = v.id;
                     self.maps.insert(id, v);
@@ -1619,7 +1630,17 @@ impl Game {
                         self.gui = Default::default();
                         self.client_drag = Default::default();
                     }
+                    // GuiBeacon keeps the powers picked on the client until
+                    // they are confirmed
+                    let keep = (v.open == self.view.open
+                        && matches!(v.open, Open::Beacon(_))
+                        && v.beacon[0] == self.view.beacon[0])
+                        .then(|| [self.view.beacon[1], self.view.beacon[2]]);
                     self.view = *v;
+                    if let Some(k) = keep {
+                        self.view.beacon[1] = k[0];
+                        self.view.beacon[2] = k[1];
+                    }
                     if self.view.open != Open::None && !was_open && self.screen == Screen::Playing {
                         self.screen = Screen::Window;
                     }
@@ -5039,6 +5060,45 @@ impl Game {
                     a.field.click(&ui, (m.0 as f32, m.1 as f32), button as u8);
                 }
             }
+            // GuiBeacon.actionPerformed
+            if pressed && button == 0 {
+                if let Open::Beacon(_) = self.view.open {
+                    let (w, h) = self.gui_size();
+                    if let Some(b) = crate::gui_container::beacon_button_at(
+                        &self.view,
+                        w as i32,
+                        h as i32,
+                        self.gui_mouse_i(),
+                    ) {
+                        self.sound("random.click", None, 1.0, 1.0);
+                        let levels = self.view.beacon[0];
+                        match b.id {
+                            -2 => {
+                                let _ = self.sim.commands.send(Command::CloseWindow);
+                                return Request::None;
+                            }
+                            -1 => {
+                                let _ = self
+                                    .sim
+                                    .commands
+                                    .send(Command::BeaconSet(self.view.beacon[1], self.view.beacon[2]));
+                                let _ = self.sim.commands.send(Command::CloseWindow);
+                                return Request::None;
+                            }
+                            id if !b.selected => {
+                                let e = id & 255;
+                                if id >> 8 < 3 {
+                                    self.view.beacon[1] = crate::play::beacon_primary(levels, e);
+                                } else {
+                                    self.view.beacon[2] = crate::play::beacon_secondary(levels, e);
+                                }
+                                return Request::None;
+                            }
+                            _ => return Request::None,
+                        }
+                    }
+                }
+            }
             // GuiMerchant.actionPerformed: the next and previous buttons
             if pressed && button == 0 {
                 if let Open::Merchant(_) = self.view.open {
@@ -6047,6 +6107,24 @@ impl Game {
         self.draw_tables(&mut dynamic, eye, partial);
         self.draw_player(&mut dynamic, partial);
         self.draw_orbs(&mut translucent, eye, partial);
+        // TileEntityBeaconRenderer (within 256 blocks)
+        if let Some(t) = self.atlas.mob_tex("beacon_beam") {
+            let time = self.ticks as f64 + partial as f64;
+            for b in self.beacons.iter_mut() {
+                let p = b.0;
+                let rel = [
+                    (p[0] as f64 - eye[0]) as f32,
+                    (p[1] as f64 - eye[1]) as f32,
+                    (p[2] as f64 - eye[2]) as f32,
+                ];
+                if rel[0] * rel[0] + rel[1] * rel[1] + rel[2] * rel[2] > 65536.0 {
+                    continue;
+                }
+                // shouldBeamRender: eases in by 0.025 a frame
+                b.1 = (b.1 + 0.025).min(1.0);
+                crate::render::hanging::beacon_beam(&mut dynamic, &mut translucent, t.rect, rel, time, b.1);
+            }
+        }
         // Render.doRenderShadowAndFire for the other entities: boats,
         // minecarts, primed TNT and falling blocks (shadowSize 0.5,
         // getShadowSize 0), experience orbs (0.15 at 0.75, 0.5 high)

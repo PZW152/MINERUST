@@ -45,6 +45,8 @@ pub enum SlotKind {
     HorseSaddle,
     /// `ContainerHorseInventory$2`: horse armour
     HorseArmor,
+    /// `ContainerBeacon$BeaconSlot`: one emerald, diamond, gold or iron ingot
+    BeaconPayment,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -82,6 +84,8 @@ pub enum Window {
     /// `ContainerHorseInventory`: saddle, armour (shown only when the
     /// horse can wear it) and the donkey's or mule's 15 chest slots.
     Horse { chest: bool, armor: bool },
+    /// `ContainerBeacon`: the payment slot.
+    Beacon,
     /// `GuiContainerCreative$ContainerCreative`: the 45 item-list slots
     /// (the tile slots) and the hotbar.
     Creative,
@@ -228,6 +232,23 @@ impl Window {
                     }
                 }
                 player_slots(&mut v, 84);
+            }
+            Window::Beacon => {
+                v.push(slot(Inv::Tile, 0, SlotKind::BeaconPayment, 136, 110));
+                for r in 0..3 {
+                    for c in 0..9 {
+                        v.push(slot(
+                            Inv::Player,
+                            c + r * 9 + 9,
+                            SlotKind::Plain,
+                            36 + c as i32 * 18,
+                            137 + r as i32 * 18,
+                        ));
+                    }
+                }
+                for c in 0..9 {
+                    v.push(slot(Inv::Player, c, SlotKind::Plain, 36 + c as i32 * 18, 195));
+                }
             }
             Window::Hopper => {
                 for c in 0..5 {
@@ -592,6 +613,7 @@ impl<'a> Ctx<'a> {
     fn valid(&self, i: usize, s: &Stack) -> bool {
         match self.slots[i].kind {
             SlotKind::Plain | SlotKind::Enchant => true,
+            SlotKind::BeaconPayment => matches!(s.id, 388 | 264 | 266 | 265),
             SlotKind::CraftResult
             | SlotKind::FurnaceOut
             | SlotKind::RepairOut
@@ -626,7 +648,7 @@ impl<'a> Ctx<'a> {
     /// `Slot.getSlotStackLimit`
     fn limit(&self, i: usize) -> u32 {
         match self.slots[i].kind {
-            SlotKind::Armor(_) | SlotKind::Potion | SlotKind::Enchant => 1,
+            SlotKind::Armor(_) | SlotKind::Potion | SlotKind::Enchant | SlotKind::BeaconPayment => 1,
             _ => 64,
         }
     }
@@ -939,6 +961,20 @@ impl<'a> Ctx<'a> {
                     self.merge(&mut s, 9, 45, true)
                 } else {
                     self.merge(&mut s, 0, 9, false)
+                }
+            }
+            // ContainerBeacon.transferStackInSlot
+            Window::Beacon => {
+                if i == 0 {
+                    self.merge(&mut s, 1, 37, true)
+                } else if !self.has(0) && self.valid(0, &s) && s.count == 1 {
+                    self.merge(&mut s, 0, 1, false)
+                } else if (1..28).contains(&i) {
+                    self.merge(&mut s, 28, 37, false)
+                } else if (28..37).contains(&i) {
+                    self.merge(&mut s, 1, 28, false)
+                } else {
+                    self.merge(&mut s, 1, 37, false)
                 }
             }
             // ContainerHopper.transferStackInSlot
