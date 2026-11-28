@@ -9,7 +9,8 @@
 
 ## 2026-11-28
 
-- Enchanting tables draw glyphs from their bookshelves (BlockEnchantmentTable.randomDisplayTick, EntityEnchantmentTableParticleFX flying down into the table; the brightening as they arrive left out)
+- Minecarts rumble as they roll: MovingSoundMinecart (minecart.base repeating at the cart, its volume from the speed) and MovingSoundMinecartRiding (minecart.inside without attenuation while riding), with repeating sounds in the mixer
+- `bb5c412` Enchanting tables draw glyphs from their bookshelves (BlockEnchantmentTable.randomDisplayTick, EntityEnchantmentTableParticleFX flying down into the table; the brightening as they arrive left out)
 - `f16e1d2` Statistics: the server keeps playOneMinute, the walked, swum, dove, climbed, flown and fallen distances (EntityPlayer.addMovementStat, fall), jumps, drops, damage dealt and taken, deaths, mob kills and killEntity.<name>, sends them on REQUEST_STATS (everything the first time), and GuiStats shows its General page with the game's formats (time, distance, damage, grouped numbers); `--open stats`
 - `e6c9c29` Pumpkins and heads worn in the helmet slot are drawn on zombies, skeletons, zombie pigmen and the player (renderEquippedItems: a 3D block at 0.625 under the head, a head through TileEntitySkullRenderer at 1.0625)
 - `c3e0fe7` Wolves shake off water and tilt their heads when begging: EntityWolf's isWet / isShaking / timeWolfIsShaking (wet in water or rain, the shake once standing still on the ground, mob.wolf.shake and the splashes), setBegging from EntityAIBeg, the client's headRotationCourse, ModelWolf's getInterestedAngle and getShakeAngle on head, mane, body and tail, and RenderWolf's darker coat while wet

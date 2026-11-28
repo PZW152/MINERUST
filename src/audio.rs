@@ -24,6 +24,8 @@ struct Voice {
     /// A jukebox's record: its block, the sound's position and volume
     /// (`RenderGlobal.mapSoundPositions`); its gain follows the listener.
     record: Option<([i32; 3], [f64; 3], f32)>,
+    /// A repeating `MovingSound` under its key.
+    looped: Option<u64>,
 }
 
 #[derive(Default)]
@@ -273,6 +275,7 @@ impl Audio {
                 gain,
                 stream: true,
                 record: Some((block, p, 4.0)),
+                looped: None,
             });
         }
     }
@@ -350,8 +353,55 @@ impl Audio {
                     gain: [gain * l, gain * r],
                     stream: e.stream,
                     record: None,
+                    looped: None,
                 });
             }
+        }
+    }
+
+    /// A repeating `MovingSound` (`key` picks it out): started the first
+    /// time, its gain following `pos` and `volume` afterwards (`None`: no
+    /// attenuation).
+    pub fn set_loop(&mut self, key: u64, event: &str, pos: Option<[f64; 3]>, volume: f32) {
+        let gain = match pos {
+            Some(p) => positional_gain(self.listener, self.yaw, p, volume).unwrap_or([0.0; 2]),
+            None => [volume.clamp(0.0, 1.0); 2],
+        };
+        if let Ok(mut m) = self.mixer.lock() {
+            if let Some(v) = m.voices.iter_mut().find(|v| v.looped == Some(key)) {
+                v.gain = gain;
+                return;
+            }
+        }
+        let Some(list) = self.events.get(event) else {
+            return;
+        };
+        if list.is_empty() {
+            return;
+        }
+        let e = list[self.rand.next_int_n(list.len() as i32) as usize].clone();
+        let Some(clip) = self.clip(&e.name) else {
+            return;
+        };
+        let step = clip.rate as f64 / self.out_rate as f64;
+        if let Ok(mut m) = self.mixer.lock() {
+            m.voices.push(Voice {
+                clip,
+                pos: 0.0,
+                step,
+                gain,
+                stream: e.stream,
+                record: None,
+                looped: Some(key),
+            });
+        }
+    }
+
+    /// `donePlaying`: every repeating sound whose key is not in `keep`
+    /// stops.
+    pub fn keep_loops(&mut self, keep: &[u64]) {
+        if let Ok(mut m) = self.mixer.lock() {
+            m.voices.retain(|v| v.looped.is_none_or(|k| keep.contains(&k)));
         }
     }
 
@@ -438,6 +488,11 @@ fn fill(mixer: &Mutex<Mixer>, out: &mut [f32], ch: usize) {
         for f in 0..frames {
             let i = v.pos as usize;
             if i >= n {
+                // ISound.canRepeat with repeatDelay 0: start over at once
+                if v.looped.is_some() && n > 0 {
+                    v.pos = 0.0;
+                    continue;
+                }
                 return false;
             }
             let (a, b) = if v.clip.channels >= 2 {

@@ -2106,6 +2106,7 @@ impl Game {
 
     /// `TextureAtlasSprite.updateAnimation` for every animated tile.
     fn tick_animations(&mut self) {
+        self.minecart_sounds();
         // World.updateWeather: the flash fades, then the bolts update
         if self.last_lightning > 0 {
             self.last_lightning -= 1;
@@ -7659,6 +7660,29 @@ impl MobAnim {
 }
 
 impl Game {
+    /// `MovingSoundMinecart` for each minecart and `MovingSoundMinecartRiding`
+    /// for the one ridden: minecart.base louder the faster it rolls, and
+    /// minecart.inside heard without attenuation.
+    fn minecart_sounds(&mut self) {
+        let Some(audio) = self.audio.as_mut() else { return };
+        let mut keep = Vec::new();
+        for b in &self.boats {
+            let crate::entity::vehicle::Vehicle::Cart(c) = &b.v else { continue };
+            let id = c.id as u64;
+            let (dx, dz) = (c.e.pos[0] - c.e.prev[0], c.e.pos[2] - c.e.prev[2]);
+            let f = (dx * dx + dz * dz).sqrt() as f32;
+            let v = if f >= 0.01 { f.clamp(0.0, 0.5) * 0.7 } else { 0.0 };
+            audio.set_loop(1 << 40 | id, "minecart.base", Some(c.e.pos), v);
+            keep.push(1 << 40 | id);
+            if self.riding == Some(c.id) {
+                let v = if f >= 0.01 { f.clamp(0.0, 1.0) * 0.75 } else { 0.0 };
+                audio.set_loop(2 << 40 | id, "minecart.inside", None, v);
+                keep.push(2 << 40 | id);
+            }
+        }
+        audio.keep_loops(&keep);
+    }
+
     /// Puts map `id`'s texture into slot `i` of the atlas.
     fn upload_map(&mut self, i: usize, id: i32) {
         let Some(v) = self.maps.get(&id) else { return };
