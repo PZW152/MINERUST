@@ -1491,16 +1491,38 @@ fn shaped(cx: &Ctx, out: &mut Vec<Vertex>, id: u8, meta: i32, x: i32, y: i32, z:
         }
         _ => match id {
             block::CAULDRON => cauldron(cx, out, meta, x, y, z),
+            // renderBlockEndPortalFrame: the top turned to the facing, the
+            // eye (all faces) on it when inserted
             block::END_PORTAL_FRAME => {
-                let list = shapes::static_boxes(id, m);
-                let tex = |bi: usize, f: usize| {
-                    if bi == 0 {
-                        plain(f)
-                    } else {
-                        cx.rect(id, 8, f).map(|t| (t, false))
-                    }
+                let eye = cx.rect(id, 8, 1).map(rb::Icon::new);
+                let mut rb = rb::Rb::new(cx, out, id, meta & 3);
+                rb.uvRotateTop = match meta & 3 {
+                    0 => 3,
+                    3 => 1,
+                    1 => 2,
+                    _ => 0,
                 };
-                boxes(cx, out, x, y, z, &list, &tex, white);
+                rb.set_render_bounds(0.0, 0.0, 0.0, 1.0, 0.8125, 1.0);
+                rb.render_standard(x, y, z);
+                if meta & 4 != 0 {
+                    rb.renderAllFaces = true;
+                    rb.overrideBlockTexture = eye;
+                    rb.set_render_bounds(0.25, 0.8125, 0.25, 0.75, 1.0, 0.75);
+                    rb.render_standard(x, y, z);
+                }
+            }
+            // renderBlockDragonEgg: eight slices narrowing to the top
+            block::DRAGON_EGG => {
+                let mut rb = rb::Rb::new(cx, out, id, meta);
+                let mut k = 0i32;
+                for (w, h) in [(2, 1), (3, 1), (4, 1), (5, 2), (6, 3), (7, 5), (6, 2), (3, 1)] {
+                    let r = w as f64 / 16.0;
+                    let top = 1.0 - k as f64 / 16.0;
+                    let bottom = 1.0 - (k + h) as f64 / 16.0;
+                    k += h;
+                    rb.set_render_bounds(0.5 - r, bottom, 0.5 - r, 0.5 + r, top, 0.5 + r);
+                    rb.render_standard(x, y, z);
+                }
             }
             block::FLOWER_POT => flower_pot(cx, out, meta, x, y, z),
             block::LEVER => {
@@ -1520,114 +1542,29 @@ fn shaped(cx: &Ctx, out: &mut Vec<Vertex>, id: u8, meta: i32, x: i32, y: i32, z:
     }
 }
 
-/// `renderBlockCauldron`
+/// `renderBlockCauldron`: a standard block (the legs and the hollow are
+/// the textures' holes), the four inner walls with the side texture, the
+/// inner floor both ways, and the water at its level.
 fn cauldron(cx: &Ctx, out: &mut Vec<Vertex>, meta: i32, x: i32, y: i32, z: i32) {
-    let r = &cx.r;
-    let plain = |f: usize| cx.rect(block::CAULDRON, 0, f).map(|t| (t, false));
-    boxes(
-        cx,
-        out,
-        x,
-        y,
-        z,
-        &[[0.0, 0.0, 0.0, 1.0, 1.0, 1.0]],
-        &|_, f| plain(f),
-        [1.0; 3],
-    );
-    let Some(inner) = cx.rect(block::CAULDRON, 8, 2) else {
-        return;
-    };
-    let (lx, lz) = ((x - 16) as f32, (z - 16) as f32);
-    let fy = y as f32;
-    let light = light_bytes(r.bright(x, y, z));
-    let e = 0.125f32;
-    let (u0, v0, u1, v1) = (inner[0], inner[1], inner[2], inner[3]);
-    let uv = [[u0, v0], [u0, v1], [u1, v1], [u1, v0]];
-    let side_x = col(0.6, 0.6, 0.6);
-    let side_z = col(0.8, 0.8, 0.8);
-    quad(
-        out,
-        [
-            [lx + e, fy + 1.0, lz],
-            [lx + e, fy, lz],
-            [lx + e, fy, lz + 1.0],
-            [lx + e, fy + 1.0, lz + 1.0],
-        ],
-        uv,
-        side_x,
-        light,
-        false,
-    );
-    quad(
-        out,
-        [
-            [lx + 1.0 - e, fy + 1.0, lz + 1.0],
-            [lx + 1.0 - e, fy, lz + 1.0],
-            [lx + 1.0 - e, fy, lz],
-            [lx + 1.0 - e, fy + 1.0, lz],
-        ],
-        uv,
-        side_x,
-        light,
-        false,
-    );
-    quad(
-        out,
-        [
-            [lx + 1.0, fy + 1.0, lz + e],
-            [lx + 1.0, fy, lz + e],
-            [lx, fy, lz + e],
-            [lx, fy + 1.0, lz + e],
-        ],
-        uv,
-        side_z,
-        light,
-        false,
-    );
-    quad(
-        out,
-        [
-            [lx, fy + 1.0, lz + 1.0 - e],
-            [lx, fy, lz + 1.0 - e],
-            [lx + 1.0, fy, lz + 1.0 - e],
-            [lx + 1.0, fy + 1.0, lz + 1.0 - e],
-        ],
-        uv,
-        side_z,
-        light,
-        false,
-    );
-    let fl = 0.25f32;
-    quad(
-        out,
-        [
-            [lx, fy + fl, lz],
-            [lx, fy + fl, lz + 1.0],
-            [lx + 1.0, fy + fl, lz + 1.0],
-            [lx + 1.0, fy + fl, lz],
-        ],
-        uv,
-        [255; 4],
-        light,
-        false,
-    );
+    let mut rb = rb::Rb::new(cx, out, block::CAULDRON, 0);
+    rb.render_standard(x, y, z);
+    let bright = rb.mixed_brightness(x, y, z);
+    rb.set_color_brightness(1.0, bright);
+    let side = rb.side_icon(2);
+    let e = 0.125f64;
+    let (fx, fy, fz) = (x as f64, y as f64, z as f64);
+    rb.face_x_pos(fx - 1.0 + e, fy, fz, side);
+    rb.face_x_neg(fx + 1.0 - e, fy, fz, side);
+    rb.face_z_pos(fx, fy, fz - 1.0 + e, side);
+    rb.face_z_neg(fx, fy, fz + 1.0 - e, side);
+    let inner = rb::Icon::new(cx.rect(block::CAULDRON, 8, 2).unwrap_or([0.0; 4]));
+    rb.face_y_pos(fx, fy - 1.0 + 0.25, fz, inner);
+    rb.face_y_neg(fx, fy + 1.0 - 0.75, fz, inner);
     if meta > 0 {
-        if let Some(w) = cx.rect(block::WATER, 0, 1) {
-            let h = (6 + 3 * meta.min(3)) as f32 / 16.0;
-            quad(
-                out,
-                [
-                    [lx, fy + h, lz],
-                    [lx, fy + h, lz + 1.0],
-                    [lx + 1.0, fy + h, lz + 1.0],
-                    [lx + 1.0, fy + h, lz],
-                ],
-                [[w[0], w[1]], [w[0], w[3]], [w[2], w[3]], [w[2], w[1]]],
-                [255; 4],
-                light,
-                false,
-            );
-        }
+        // BlockCauldron.getRenderLiquidLevel, water_still
+        let water = rb::Icon::new(cx.rect(block::WATER, 0, 1).unwrap_or([0.0; 4]));
+        let level = (6 + 3 * meta.clamp(0, 3)) as f64 / 16.0;
+        rb.face_y_pos(fx, fy - 1.0 + level, fz, water);
     }
 }
 
