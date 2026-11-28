@@ -450,6 +450,12 @@ impl BlockInfo {
     }
 }
 
+/// `BlockTrapDoor.isValidSupportBlock`: a full opaque block, glowstone, a
+/// slab or stairs.
+pub fn trapdoor_support(id: u8) -> bool {
+    info(id).normal_cube() || id == GLOWSTONE || matches!(id, 43 | 44 | 125 | 126) || is_stairs(id)
+}
+
 fn base(shape: Shape, material: Material, opaque: bool) -> BlockInfo {
     BlockInfo {
         shape,

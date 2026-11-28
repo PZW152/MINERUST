@@ -2186,7 +2186,7 @@ impl ServerWorld {
 
     pub(crate) fn torch_added(&mut self, id: u8, x: i32, y: i32, z: i32) {
         let nc = |w: &mut ServerWorld, x: i32, y: i32, z: i32| {
-            block::info(w.block(x, y, z)).normal_cube()
+            { let id = w.block(x, y, z); block::info(id).normal_cube() && id != block::REDSTONE_BLOCK }
         };
         if self.meta(x, y, z) == 0 {
             let m = if nc(self, x - 1, y, z) {
@@ -2279,7 +2279,7 @@ impl ServerWorld {
     }
 
     /// `BlockTorch.canPlaceTorchOn`
-    fn torch_can_stand_on(&mut self, x: i32, y: i32, z: i32) -> bool {
+    pub(crate) fn torch_can_stand_on(&mut self, x: i32, y: i32, z: i32) -> bool {
         if self.solid_top_surface(x, y, z) {
             return true;
         }

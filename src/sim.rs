@@ -7788,6 +7788,50 @@ mod tests {
         assert_eq!(sim.world.meta(x + 6, y + 1, z + 1), 8);
     }
 
+    /// BlockTorch (any wall will hold it, even clicking the underside of a
+    /// block; fences take one on top), BlockTrapDoor.isValidSupportBlock
+    /// (slabs hold one) and BlockEndPortalFrame.onBlockPlacedBy.
+    #[test]
+    fn torches_trapdoors_and_frames_place_as_the_game_does() {
+        let (mut sim, x, y, z) = redstone_sim();
+        for dx in -1..10 {
+            for dy in 1..5 {
+                for dz in -1..3 {
+                    sim.world.set_block(x + dx, y + dy, z + dz, block::AIR, 0, 3);
+                }
+            }
+            sim.world.set_block(x + dx, y, z, block::STONE, 0, 3);
+        }
+        sim.world.set_block(x, y + 3, z, block::STONE, 0, 3);
+        sim.world.set_block(x + 1, y + 2, z, block::STONE, 0, 3);
+        sim.world.set_block(x + 3, y + 1, z, block::FENCE, 0, 3);
+        sim.world.set_block(x + 5, y + 1, z, block::STONE_SLAB, 0, 3);
+        let feet = [x as f64 + 4.5, (y + 1) as f64, z as f64 + 6.5];
+        let sel = sim.play.inv.selected;
+        let mut put = |sim: &mut Sim, item: u16, yaw: f32, target: [i32; 3], face: [i32; 3]| {
+            sim.play.inv.main[sel] = Some(crate::item::Stack::new(item, 0, 8));
+            sim.step(
+                &[
+                    Command::Player(feet, [yaw, 0.0], false),
+                    Command::Use { target, face, sneaking: false, hit: [0.5, 0.3, 0.5] },
+                ],
+                &mut Vec::new(),
+            );
+        };
+        put(&mut sim, 50, 0.0, [x, y + 3, z], [0, -1, 0]);
+        assert_eq!(sim.world.block(x, y + 2, z), block::TORCH, "under a block");
+        assert_eq!(sim.world.meta(x, y + 2, z), 2, "on the wall to the east");
+        put(&mut sim, 50, 0.0, [x + 3, y + 1, z], [0, 1, 0]);
+        assert_eq!(sim.world.block(x + 3, y + 2, z), block::TORCH, "on a fence");
+        assert_eq!(sim.world.meta(x + 3, y + 2, z), 5);
+        put(&mut sim, 96, 0.0, [x + 5, y + 1, z], [0, 0, 1]);
+        assert_eq!(sim.world.block(x + 5, y + 1, z + 1), block::TRAPDOOR, "on a slab");
+        assert_eq!(sim.world.meta(x + 5, y + 1, z + 1), 1);
+        put(&mut sim, 120, 90.0, [x + 7, y, z], [0, 1, 0]);
+        assert_eq!(sim.world.block(x + 7, y + 1, z), block::END_PORTAL_FRAME);
+        assert_eq!(sim.world.meta(x + 7, y + 1, z), 3);
+    }
+
     /// A stone floor with nothing on it around the test site.
     fn arena(sim: &mut Sim, x: i32, y: i32, z: i32) {
         for dx in -2..14 {

@@ -1530,8 +1530,10 @@ impl Play {
             [-1, 0, 0] => 4,
             _ => 5,
         };
+        // Block.isNormalCube: not a block that gives power (a redstone block)
         let nc = |w: &mut ServerWorld, x: i32, y: i32, z: i32| {
-            block::info(w.block(x, y, z)).normal_cube()
+            let id = w.block(x, y, z);
+            block::info(id).normal_cube() && id != block::REDSTONE_BLOCK
         };
         let yaw4 = ((self.player.1 * 4.0 / 360.0) as f64 + 0.5).floor() as i32 & 3;
         match id {
@@ -1576,11 +1578,12 @@ impl Play {
                 };
             }
             block::TRAPDOOR => {
+                let ok = |w: &mut ServerWorld, x: i32, y: i32, z: i32| block::trapdoor_support(w.block(x, y, z));
                 meta = match side {
-                    2 if nc(w, p[0], p[1], p[2] + 1) => 0,
-                    3 if nc(w, p[0], p[1], p[2] - 1) => 1,
-                    4 if nc(w, p[0] + 1, p[1], p[2]) => 2,
-                    5 if nc(w, p[0] - 1, p[1], p[2]) => 3,
+                    2 if ok(w, p[0], p[1], p[2] + 1) => 0,
+                    3 if ok(w, p[0], p[1], p[2] - 1) => 1,
+                    4 if ok(w, p[0] + 1, p[1], p[2]) => 2,
+                    5 if ok(w, p[0] - 1, p[1], p[2]) => 3,
                     _ => return false,
                 };
                 // BlockTrapDoor.onBlockPlaced: the upper half of the side
@@ -1698,30 +1701,34 @@ impl Play {
                 meta = if opp == 1 { 0 } else { opp };
             }
             block::TORCH | block::REDSTONE_TORCH => {
-                // BlockTorch.onBlockPlaced: attach to the clicked face.
-                let side_ok = |w: &mut ServerWorld, x: i32, y: i32, z: i32| {
-                    block::info(w.block(x, y, z)).normal_cube()
-                };
-                meta = match face {
-                    [0, 1, 0] => 5,
-                    [0, 0, -1] => 4,
-                    [0, 0, 1] => 3,
-                    [-1, 0, 0] => 2,
-                    [1, 0, 0] => 1,
-                    _ => 0,
-                };
-                let support = match meta {
-                    1 => side_ok(w, p[0] - 1, p[1], p[2]),
-                    2 => side_ok(w, p[0] + 1, p[1], p[2]),
-                    3 => side_ok(w, p[0], p[1], p[2] - 1),
-                    4 => side_ok(w, p[0], p[1], p[2] + 1),
-                    5 => w.solid_top_surface(p[0], p[1] - 1, p[2]),
-                    _ => false,
-                };
-                if !support {
+                // BlockTorch.canPlaceBlockAt: any wall or a floor will do
+                let (x, y, z) = (p[0], p[1], p[2]);
+                let walls = [
+                    nc(w, x - 1, y, z),
+                    nc(w, x + 1, y, z),
+                    nc(w, x, y, z - 1),
+                    nc(w, x, y, z + 1),
+                ];
+                let floor = w.torch_can_stand_on(x, y - 1, z);
+                if !walls.iter().any(|&b| b) && !floor {
                     return false;
                 }
+                // onBlockPlaced: the clicked face if it holds, else
+                // onBlockAdded takes the first that does
+                meta = match side {
+                    1 if floor => 5,
+                    2 if walls[3] => 4,
+                    3 if walls[2] => 3,
+                    4 if walls[1] => 2,
+                    5 if walls[0] => 1,
+                    _ => match walls.iter().position(|&b| b) {
+                        Some(k) => k as i32 + 1,
+                        None => 5,
+                    },
+                };
             }
+            // BlockEndPortalFrame.onBlockPlacedBy: facing the player, no eye
+            block::END_PORTAL_FRAME => meta = (yaw4 + 2) % 4,
             block::FURNACE | block::ENDER_CHEST => meta = facing_meta(self.player.1),
             block::CHEST | block::TRAPPED_CHEST => meta = facing_meta(self.player.1),
             // ItemAnvilBlock.getMetadata (damage << 2), then

@@ -771,7 +771,7 @@ impl ServerWorld {
                     2 => (x + 1, z),
                     _ => (x - 1, z),
                 };
-                if !self.nc(ax, y, az) {
+                if !crate::block::trapdoor_support(self.block(ax, y, az)) {
                     self.drop_block(x, y, z, TRAPDOOR as u16, 0);
                     return true;
                 }
