@@ -1825,6 +1825,15 @@ impl Sim {
         matches!(self.play.open, crate::play::Open::Beacon(_))
     }
 
+    /// `EntityPlayerMP.triggerAchievement`: unlocked once its parent is,
+    /// then sent with the other changed statistics.
+    fn achieve(&mut self, id: &str) {
+        if self.stats_file.trigger_achievement(id) {
+            let dirty = self.stats_file.take_dirty();
+            self.stats_out.extend(dirty);
+        }
+    }
+
     /// `EntityHorse.openGUI` (`displayGUIHorse`): tamed, and not ridden by
     /// someone else.
     fn open_horse(&mut self, id: u32) {
@@ -2355,6 +2364,9 @@ impl Sim {
         self.tick_lightning(events);
         // EntityPlayer.onUpdate: playOneMinute; addStat calls; onDeath
         self.stats_file.increase_stat("stat.playOneMinute", 1);
+        for a in std::mem::take(&mut self.play.achievements) {
+            self.achieve(a);
+        }
         let drops = std::mem::take(&mut self.play.drops_made);
         if drops > 0 {
             self.stats_file.increase_stat("stat.drop", drops);
@@ -3402,6 +3414,13 @@ impl Sim {
     fn travel(&mut self, to: i32, events: &mut Vec<Event>) {
         if to == self.dim {
             return;
+        }
+        // EntityPlayerMP.travelToDimension: portal, theEnd, theEnd2
+        match (self.dim, to) {
+            (1, 0) => self.play.achievements.push("achievement.theEnd2"),
+            (_, 1) => self.play.achievements.push("achievement.theEnd"),
+            (_, -1) => self.play.achievements.push("achievement.portal"),
+            _ => {}
         }
         let (feet, yaw) = self.play.player;
         let from = self.dim;
@@ -4899,11 +4918,21 @@ impl Sim {
         let mut out = crate::entity::mob::Outcome::default();
         let (feet, yaw) = self.play.player;
         let hit = self.mobs.attack(id, f, feet, yaw, &mut out);
+        if hit && f >= 18.0 {
+            // attackTargetEntityWithCurrentItem: nine hearts in one blow
+            self.play.achievements.push("achievement.overkill");
+        }
         if hit {
             self.stats_file.increase_stat("stat.damageDealt", (f * 10.0).round() as i32);
             // EntityPlayer.onKillEntity / addStat(mobKills), killEntity.<name>
             if let Some(m) = self.mobs.list.iter().find(|m| m.id == id) {
                 if m.health <= 0.0 && living {
+                    // EntityPlayer.onKillEntity: a monster is killEnemy
+                    let monster = m.kind.hostile()
+                        || matches!(m.kind, Kind::Slime | Kind::MagmaCube | Kind::Ghast | Kind::Blaze | Kind::Enderman | Kind::Silverfish | Kind::PigZombie | Kind::Wither);
+                    if monster {
+                        self.play.achievements.push("achievement.killEnemy");
+                    }
                     self.stats_file.increase_stat("stat.mobKills", 1);
                     let k = format!("stat.killEntity.{}", m.kind.id());
                     self.stats_file.increase_stat(&k, 1);
@@ -8706,6 +8735,33 @@ mod tests {
         assert!(sim.mobs.list.iter().find(|m| m.id == creeper).unwrap().powered, "charged");
         assert!(sim.mobs.list.iter().all(|m| m.id != pig || m.dead), "the pig is gone");
         assert!(sim.mobs.list.iter().any(|m| m.kind == Kind::PigZombie), "a zombie pigman");
+    }
+
+    #[test]
+    fn picking_up_wood_and_crafting_unlock_achievements() {
+        use crate::item::Stack;
+        let (mut sim, x, y, z) = redstone_sim();
+        arena(&mut sim, x, y, z);
+        sim.play.mode = GameMode::Survival;
+        let feet = [x as f64 + 0.5, (y + 1) as f64, z as f64 + 0.5];
+        sim.step(&[Command::Player(feet, [0.0, 0.0], false), Command::OpenInventoryAchievement], &mut Vec::new());
+        let id = sim.play.next_item;
+        sim.play.next_item += 1;
+        let mut it = crate::entity::item::ItemEntity::new(id, Stack::new(17, 0, 1), feet);
+        it.pickup_delay = 0;
+        sim.play.items.push(it);
+        let mut got = Vec::new();
+        for _ in 0..3 {
+            let mut ev = Vec::new();
+            sim.step(&[Command::Player(feet, [0.0, 0.0], false)], &mut ev);
+            for e in ev {
+                if let Event::Statistics(v) = e {
+                    got.extend(v.into_iter().map(|x| x.0));
+                }
+            }
+        }
+        assert!(got.iter().any(|g| g == "achievement.mineWood"), "{got:?}");
+        assert!(sim.stats_file.has_achievement_unlocked("achievement.mineWood"));
     }
 
     #[test]

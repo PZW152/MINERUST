@@ -9,7 +9,8 @@
 
 ## 2026-11-28
 
-- Breeding counts towards stat.animalsBred and unlocks Repopulation for cows (EntityAIMate.spawnBaby's triggerAchievement)
+- Achievements unlock: picking up wood, leather, diamonds and blaze rods (EntityItem.onCollideWithPlayer), crafting a workbench, pickaxes, furnace, hoe, bread, cake, sword, enchanting table and bookshelf (SlotCrafting.onCrafting), smelting iron and fish (SlotFurnace), taking a brewed potion, killing a monster, a blow of 18 (Overkill), and going to the Nether, the End and back
+- `7b8f29d` Breeding counts towards stat.animalsBred and unlocks Repopulation for cows (EntityAIMate.spawnBaby's triggerAchievement)
 - `2ff7701` Minecarts rumble as they roll: MovingSoundMinecart (minecart.base repeating at the cart, its volume from the speed) and MovingSoundMinecartRiding (minecart.inside without attenuation while riding), with repeating sounds in the mixer
 - `bb5c412` Enchanting tables draw glyphs from their bookshelves (BlockEnchantmentTable.randomDisplayTick, EntityEnchantmentTableParticleFX flying down into the table; the brightening as they arrive left out)
 - `f16e1d2` Statistics: the server keeps playOneMinute, the walked, swum, dove, climbed, flown and fallen distances (EntityPlayer.addMovementStat, fall), jumps, drops, damage dealt and taken, deaths, mob kills and killEntity.<name>, sends them on REQUEST_STATS (everything the first time), and GuiStats shows its General page with the game's formats (time, distance, damage, grouped numbers); `--open stats`

@@ -354,6 +354,8 @@ pub struct Effects {
     pub repaired: Option<i32>,
     /// `SlotMerchantResult.onPickupFromSlot`: `useRecipe` of this offer.
     pub traded: Vec<usize>,
+    /// `ContainerBrewingStand$Potion.onPickupFromSlot`: a potion taken.
+    pub brewed: bool,
     /// `InventoryMerchant.resetRecipeAndSlots` ends in
     /// `verifySellingItem`: whether the goods slot holds something.
     pub verified: Vec<bool>,
@@ -726,6 +728,11 @@ impl<'a> Ctx<'a> {
                 }
             }
             SlotKind::FurnaceOut => self.on_crafting(i, s),
+            SlotKind::Potion => {
+                if s.id == 373 && s.meta > 0 {
+                    self.fx.brewed = true;
+                }
+            }
             SlotKind::MerchantOut => {
                 // SlotMerchantResult.onPickupFromSlot: doTrade either way round
                 let Some(k) = self.current else { return };

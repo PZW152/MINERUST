@@ -328,6 +328,8 @@ pub struct Play {
     pub skull_updates: Vec<(Pos, i32, i32)>,
     /// `addStat(dropStat)` calls since the last tick.
     pub drops_made: i32,
+    /// `triggerAchievement` calls since the last tick.
+    pub achievements: Vec<&'static str>,
     /// Withers made by the last skull (position, yaw), and whether the
     /// difficulty is Peaceful.
     pub wither_spawns: Vec<([f64; 3], f32)>,
@@ -606,6 +608,7 @@ impl Play {
             sign_updates: Vec::new(),
             skull_updates: Vec::new(),
             drops_made: 0,
+            achievements: Vec::new(),
             wither_spawns: Vec::new(),
             difficulty_peaceful: false,
             pending: Vec::new(),
@@ -2191,6 +2194,34 @@ impl Play {
             self.throw(s, &mut rnd);
         }
         w.rand = rnd;
+        // SlotCrafting.onCrafting / SlotFurnace.onCrafting /
+        // ContainerBrewingStand$Potion: their achievements
+        for (s, _) in &fx.crafted {
+            let a = match s.id {
+                58 => "achievement.buildWorkBench",
+                270 => "achievement.buildPickaxe",
+                61 => "achievement.buildFurnace",
+                290 => "achievement.buildHoe",
+                297 => "achievement.makeBread",
+                354 => "achievement.bakeCake",
+                274 => "achievement.buildBetterPickaxe",
+                268 => "achievement.buildSword",
+                116 => "achievement.enchantments",
+                47 => "achievement.bookcase",
+                _ => continue,
+            };
+            self.achievements.push(a);
+        }
+        for (s, _) in &fx.smelted {
+            match s.id {
+                265 => self.achievements.push("achievement.acquireIron"),
+                350 => self.achievements.push("achievement.cookFish"),
+                _ => {}
+            }
+        }
+        if fx.brewed {
+            self.achievements.push("achievement.potion");
+        }
         for (out, n) in fx.smelted {
             // SlotFurnace.onCrafting: experience for what was taken
             let mut pr = std::mem::replace(&mut self.prand, JavaRandom::new(0));
@@ -2675,6 +2706,14 @@ impl Play {
                     self.inv_dirty = true;
                 }
                 if added {
+                    // EntityItem.onCollideWithPlayer: the pick-up achievements
+                    match shown.id {
+                        17 | 162 => self.achievements.push("achievement.mineWood"),
+                        334 => self.achievements.push("achievement.killCow"),
+                        264 => self.achievements.push("achievement.diamonds"),
+                        369 => self.achievements.push("achievement.blazeRod"),
+                        _ => {}
+                    }
                     let p = ((e.e.rand.next_float() - e.e.rand.next_float()) * 0.7 + 1.0) * 2.0;
                     self.fx.push(crate::entity::base::Fx::Sound(
                         "random.pop",
