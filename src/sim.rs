@@ -4216,6 +4216,13 @@ impl Sim {
             for (p, xp) in o.orbs {
                 self.spawn_orbs(play, p, xp);
             }
+            for k in o.bred {
+                self.stats_file.increase_stat("stat.animalsBred", 1);
+                if k == crate::entity::mob::Kind::Cow && self.stats_file.trigger_achievement("achievement.breedCow") {
+                    let dirty = self.stats_file.take_dirty();
+                    self.stats_out.extend(dirty);
+                }
+            }
         }
         for (p, xp) in std::mem::take(&mut play.orbs) {
             self.spawn_orbs(play, p, xp);

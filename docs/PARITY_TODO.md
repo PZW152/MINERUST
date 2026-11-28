@@ -99,12 +99,11 @@ AI：
 - [ ] 騎乘：騎乘時玩家模型的坐姿（`ModelBiped.isRiding`）；馬的物品欄畫面裡的馬（`GuiScreenHorseInventory` 的 `func_147046_a`）
 - [ ] 礦車：漏斗礦車的吸取、指令方塊與生怪磚礦車、觸發鐵軌、騎乘中生物的存檔（`Riding`）
 - [ ] 掉落物改為客戶端自行模擬（原版客戶端也跑 `EntityItem.onUpdate`，伺服器每 20 tick 校正）
-- [ ] 經驗來源：繁殖
 
 介面：
 - [ ] 書的剩餘部分：書本複製配方（`RecipeBookCloning`）、`generation` 標籤、在講台以外由指令給的書的格式碼檢查
 - [ ] 統計與成就：已有統計檔（`stats/<uuid>.json`，`src/stats.rs`）、成就樹、成就提示框（`GuiAchievement`）與
-      「Taking Inventory」。待做：一般統計尚缺 leaveGame、騎乘距離、繁殖、殺玩家與被生物殺死、方塊與物品統計，`GuiStats` 的方塊、物品、生物頁；其餘 32 個成就的觸發點、成就畫面的滾輪縮放（`GuiAchievements` 已完成，縮放固定為 1）、
+      「Taking Inventory」。待做：一般統計尚缺 leaveGame、騎乘距離、殺玩家與被生物殺死、方塊與物品統計，`GuiStats` 的方塊、物品、生物頁；其餘 32 個成就的觸發點、成就畫面的滾輪縮放（`GuiAchievements` 已完成，縮放固定為 1）、
       `/achievement` 指令、成就的聊天公告
 - [ ] 資源包、使用統計（Snooper）、直播畫面
 - [ ] 告示牌上的非 ASCII 文字（原版用 unicode 字頁）

@@ -2981,6 +2981,8 @@ pub struct Outcome {
     pub calls: Vec<ai::Call>,
     /// `EntityAIMate.spawnBaby`
     pub births: Vec<ai::Birth>,
+    /// Kinds the player bred this tick (`animalsBred`, `breedCow`).
+    pub bred: Vec<Kind>,
     /// Uses the held item lost to a right click on a mob
     /// (`damageItem(n, player)`, applied by the caller with the player's
     /// random).

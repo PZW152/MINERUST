@@ -2986,6 +2986,8 @@ fn spawn_baby(m: &mut Mob, mate: u32, cx: &mut Cx) {
         ];
         cx.out.particles.push(("heart", p, v));
     }
+    // getPlayerInLove: the player who fed them
+    cx.out.bred.push(m.kind);
     // doMobLoot
     let xp = m.rand.next_int_n(7) + 1;
     cx.out.orbs.push((m.pos, xp));
