@@ -3474,30 +3474,7 @@ pub(super) fn old_update(m: &mut Mob, cx: &mut Cx) {
         if (!has_path(m) && m.rand.next_int_n(180) == 0 || m.rand.next_int_n(120) == 0)
             && m.age < 100
         {
-            // updateWanderPath
-            let mut best: Option<(f32, [i32; 3])> = None;
-            for _ in 0..10 {
-                let x = math::floor_double(m.pos[0] + m.rand.next_int_n(13) as f64 - 6.0);
-                let y = math::floor_double(m.pos[1] + m.rand.next_int_n(7) as f64 - 3.0);
-                let z = math::floor_double(m.pos[2] + m.rand.next_int_n(13) as f64 - 6.0);
-                let wgt = m.path_weight(cx.w, x, y, z);
-                if best.map_or(wgt > -99999.0, |b| wgt > b.0) {
-                    best = Some((wgt, [x, y, z]));
-                }
-            }
-            if let Some((_, p)) = best {
-                let found = m.create_path_with(
-                    cx.w,
-                    (p[0] as f32 + 0.5) as f64,
-                    (p[1] as f32 + 0.5) as f64,
-                    (p[2] as f32 + 0.5) as f64,
-                    10.0,
-                    true,
-                    false,
-                    false,
-                );
-                set(m, found);
-            }
+            update_wander_path(m, cx);
         }
     } else if let Some(v) = m.attack_target.and_then(|t| cx.view(t)) {
         let p = path_to(m, cx, &v);
@@ -3587,6 +3564,136 @@ pub(super) fn old_update(m: &mut Mob, cx: &mut Cx) {
     }
     m.jumping = m.old_jump;
     m.target_player = m.attack_target == Some(Target::Player);
+    if m.kind == Kind::Silverfish {
+        silverfish_update(m, cx);
+    }
+}
+
+/// `EntityCreature.updateWanderPath`: the best of ten spots around by
+/// `getBlockPathWeight`.
+fn update_wander_path(m: &mut Mob, cx: &mut Cx) {
+    let mut best: Option<(f32, [i32; 3])> = None;
+    for _ in 0..10 {
+        let x = math::floor_double(m.pos[0] + m.rand.next_int_n(13) as f64 - 6.0);
+        let y = math::floor_double(m.pos[1] + m.rand.next_int_n(7) as f64 - 3.0);
+        let z = math::floor_double(m.pos[2] + m.rand.next_int_n(13) as f64 - 6.0);
+        let wgt = m.path_weight(cx.w, x, y, z);
+        if best.map_or(wgt > -99999.0, |b| wgt > b.0) {
+            best = Some((wgt, [x, y, z]));
+        }
+    }
+    if let Some((_, p)) = best {
+        let found = m.create_path_with(
+            cx.w,
+            (p[0] as f32 + 0.5) as f64,
+            (p[1] as f32 + 0.5) as f64,
+            (p[2] as f32 + 0.5) as f64,
+            10.0,
+            true,
+            false,
+            false,
+        );
+        m.path = found.unwrap_or_default();
+        m.path_index = 0;
+    }
+}
+
+/// `BlockSilverfish.canBeInfested`
+fn can_be_infested(id: u8) -> bool {
+    matches!(id, block::STONE | block::COBBLESTONE | block::STONEBRICK)
+}
+
+/// `BlockSilverfish.getVariant`
+fn infested_variant(id: u8, meta: i32) -> i32 {
+    match (id, meta) {
+        (block::COBBLESTONE, 0) => 1,
+        (block::STONEBRICK, 0) => 2,
+        (block::STONEBRICK, 1) => 3,
+        (block::STONEBRICK, 2) => 4,
+        (block::STONEBRICK, 3) => 5,
+        _ => 0,
+    }
+}
+
+/// `BlockSilverfish.getHostBlock`
+fn infested_host(meta: i32) -> (u8, i32) {
+    match meta {
+        1 => (block::COBBLESTONE, 0),
+        2 => (block::STONEBRICK, 0),
+        3 => (block::STONEBRICK, 1),
+        4 => (block::STONEBRICK, 2),
+        5 => (block::STONEBRICK, 3),
+        _ => (block::STONE, 0),
+    }
+}
+
+/// The rest of `EntitySilverfish.updateEntityActionState`: a hurt
+/// silverfish wakes the ones hiding in the blocks around (nearest layers
+/// first, stopping at random), and an idle one with no path crawls into
+/// the stone beside it.
+fn silverfish_update(m: &mut Mob, cx: &mut Cx) {
+    // the loops' order: 0, 1, -1, 2, -2, ...
+    let next = |v: i32| if v <= 0 { 1 - v } else { -v };
+    if m.ally_cooldown > 0 {
+        m.ally_cooldown -= 1;
+        if m.ally_cooldown == 0 {
+            let (x0, y0, z0) = (
+                math::floor_double(m.pos[0]),
+                math::floor_double(m.pos[1]),
+                math::floor_double(m.pos[2]),
+            );
+            let mut done = false;
+            let mut dy = 0;
+            while !done && (-5..=5).contains(&dy) {
+                let mut dx = 0;
+                while !done && (-10..=10).contains(&dx) {
+                    let mut dz = 0;
+                    while !done && (-10..=10).contains(&dz) {
+                        let (x, y, z) = (x0 + dx, y0 + dy, z0 + dz);
+                        if cx.w.block(x, y, z) == block::MONSTER_EGG {
+                            let meta = cx.w.meta(x, y, z) as i32;
+                            if !crate::gamerules::bool("mobGriefing") {
+                                let (h, hm) = infested_host(meta);
+                                cx.w.set_block(x, y, z, h, hm, 3);
+                            } else {
+                                // World.func_147480_a(x, y, z, false)
+                                cx.w.destroyed.push(([x, y, z], block::MONSTER_EGG, meta));
+                                cx.w.set_block(x, y, z, block::AIR, 0, 3);
+                            }
+                            // BlockSilverfish.onBlockDestroyedByPlayer
+                            cx.w.spawn_drops(vec![crate::drops::Spawn::Silverfish], x, y, z);
+                            if m.rand.next_boolean() {
+                                done = true;
+                                break;
+                            }
+                        }
+                        dz = next(dz);
+                    }
+                    dx = next(dx);
+                }
+                dy = next(dy);
+            }
+        }
+    }
+    if m.attack_target.is_none() && m.path.is_empty() {
+        let x = math::floor_double(m.pos[0]);
+        let y = math::floor_double(m.pos[1] + 0.5);
+        let z = math::floor_double(m.pos[2]);
+        let side = m.rand.next_int_n(6) as usize;
+        use crate::hopper::{FX, FY, FZ};
+        let (bx, by, bz) = (x + FX[side], y + FY[side], z + FZ[side]);
+        let id = cx.w.block(bx, by, bz);
+        let meta = cx.w.meta(bx, by, bz) as i32;
+        if can_be_infested(id) {
+            cx.w.set_block(bx, by, bz, block::MONSTER_EGG, infested_variant(id, meta), 3);
+            // spawnExplosionParticle on the server shows nothing
+            m.dead = true;
+        } else {
+            update_wander_path(m, cx);
+        }
+    } else if m.attack_target.is_some() && m.path.is_empty() {
+        m.attack_target = None;
+    }
 }
 
 /// `EntityAIControlledByPlayer.updateTask`

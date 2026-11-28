@@ -14,7 +14,7 @@
    這是畫面與原版不同的主要來源。
 2. **影像設定還沒生效的項目**（第 5 節）。選單能調但畫面不變，算行為差異。
 3. **生物 AI 第二階段**（第 2 節）：馬、村民、終界使者等還在手寫的處理函式上。
-4. **生物的其餘行為**（第 2 節）：蠹魚、村莊資料與其上的行為等。
+4. **生物的其餘行為**（第 2 節）：村莊資料與其上的行為等。
 5. **缺少的方塊、物品、實體與介面**（第 3、4 節）。
 
 ## 2. 生物
@@ -25,7 +25,7 @@ AI：
 - [ ] 鐵魔像：`DefendVillage`、`MoveThroughVillage`、`MoveTowardsRestriction`（需要村莊資料）；拿花（`setHoldingRose` 只有計時，沒有畫）
 - [ ] 狼被非玩家打時傷害減半；豹貓 `OcelotSit` 對床與「箱子有人在用」的判斷
 - [ ] 終界使者、烈焰使者、惡魂、蝙蝠、魷魚的 `updateEntityActionState`（`extra.rs`、`nether.rs`）逐行對照原始碼
-- [ ] 蠹魚鑽進石頭與召喚同伴（`EntitySilverfish.updateEntityActionState`）
+- [ ] 蠹魚被魔法傷害（藥水）時也會召喚同伴（`DamageSource.magic`），目前只認有來源實體的傷害
 - [ ] `EntityAITarget` 的 `nearbyOnly`（`canEasilyReach`）與家的範圍（`isWithinHomeDistance`）
 
 生成與狀態：

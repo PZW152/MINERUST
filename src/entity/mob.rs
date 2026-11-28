@@ -440,6 +440,8 @@ pub struct Mob {
     pub hurt_src: Option<ai::Target>,
     /// `worldObj.difficultySetting == HARD`, as of the last mob tick.
     hard: bool,
+    /// `EntitySilverfish.allySummonCooldown`
+    ally_cooldown: i32,
     /// `EntityZombie.conversionTime` while `isConverting` (dataWatcher 14),
     /// else -1.
     pub conversion: i32,
@@ -888,6 +890,7 @@ impl Mob {
             reinforce: None,
             hurt_src: None,
             hard: false,
+            ally_cooldown: 0,
             conversion: -1,
             infected_by: None,
             convert_now: false,
@@ -2309,6 +2312,10 @@ impl Mob {
 
     /// `getBlockPathWeight`
     fn path_weight(&self, w: &mut ServerWorld, x: i32, y: i32, z: i32) -> f32 {
+        // EntitySilverfish.getBlockPathWeight: stone below
+        if self.kind == Kind::Silverfish && w.block(x, y - 1, z) == block::STONE {
+            return 10.0;
+        }
         if self.kind.animal() {
             if w.block(x, y - 1, z) == block::GRASS {
                 10.0
@@ -2487,6 +2494,11 @@ impl Mob {
         drown: bool,
     ) -> bool {
         let src = self.hurt_src.take();
+        // EntitySilverfish.attackEntityFrom: an entity's damage (or magic)
+        // wakes the silverfish around, 20 ticks on
+        if self.kind == Kind::Silverfish && self.ally_cooldown <= 0 && src.is_some() {
+            self.ally_cooldown = 20;
+        }
         if self.health <= 0.0 {
             return false;
         }

@@ -8176,6 +8176,66 @@ mod tests {
         assert!(caller.reinforce_mods.iter().any(|x| x.0.ends_with("caller charge")));
     }
 
+    /// EntitySilverfish: an idle one crawls into the stone beside it, and a
+    /// hurt one wakes the ones hiding near by (breaking their blocks under
+    /// mobGriefing).
+    #[test]
+    fn silverfish_hide_and_call_for_help() {
+        use crate::entity::mob::{ai::Target, Kind};
+        let (mut sim, x, y, z) = redstone_sim();
+        arena(&mut sim, x, y, z);
+        sim.play.mode = GameMode::Creative;
+        let feet = [x as f64 + 12.5, (y + 1) as f64, z as f64 + 12.5];
+        // a stone pit, so every side is stone
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                for dy in 0..3 {
+                    if (dx, dz) != (0, 0) || dy == 0 {
+                        sim.world.set_block(x + 5 + dx, y + 1 + dy, z + 5 + dz, block::STONE, 0, 3);
+                    }
+                }
+            }
+        }
+        let mut r = JavaRandom::new(5);
+        let id = sim.mobs.spawn(Kind::Silverfish, [x as f64 + 5.5, (y + 2) as f64, z as f64 + 5.5], 0.0, &mut r);
+        for _ in 0..200 {
+            sim.step(&[Command::Player(feet, [0.0, 0.0], false)], &mut Vec::new());
+            if !sim.mobs.list.iter().any(|m| m.id == id && !m.dead) {
+                break;
+            }
+        }
+        let mut eggs = Vec::new();
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                for dy in 0..3 {
+                    let p = [x + 5 + dx, y + 1 + dy, z + 5 + dz];
+                    if sim.world.block(p[0], p[1], p[2]) == block::MONSTER_EGG {
+                        eggs.push(p);
+                    }
+                }
+            }
+        }
+        assert_eq!(eggs.len(), 1, "it hid in the stone");
+        let egg = eggs[0];
+        // a second one, hurt by the player, calls the first out; it stands
+        // on planks so it has no stone to hide in
+        for dx in -3..=3 {
+            for dz in -3..=3 {
+                sim.world.set_block(x + 9 + dx, y, z + 9 + dz, block::PLANKS, 0, 3);
+            }
+        }
+        let id2 = sim.mobs.spawn(Kind::Silverfish, [x as f64 + 9.5, (y + 1) as f64, z as f64 + 9.5], 0.0, &mut r);
+        let m = sim.mobs.list.iter_mut().find(|m| m.id == id2).unwrap();
+        m.hurt_src = Some(Target::Player);
+        m.hurt(1.0, None, true);
+        for _ in 0..30 {
+            sim.step(&[Command::Player(feet, [0.0, 0.0], false)], &mut Vec::new());
+        }
+        // it came out, breaking its block (and, walled in by stone, may
+        // hide again beside it)
+        assert_eq!(sim.world.block(egg[0], egg[1], egg[2]), block::AIR, "the hidden one came out");
+    }
+
     /// A hoe tills grass, seeds go on farmland, bone meal grows the crop,
     /// random ticks grow it further (`BlockCrops.updateTick`), farmland
     /// without water dries, and the crop drops when its soil goes.
