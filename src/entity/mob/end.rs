@@ -316,7 +316,11 @@ pub fn dragon(
                 for z in math::floor_double(bb.min[2])..=math::floor_double(bb.max[2]) {
                     let id = w.block(x, y, z);
                     if block::material(id) != Material::Air {
-                        if id != block::OBSIDIAN && id != block::END_STONE && id != block::BEDROCK {
+                        if id != block::OBSIDIAN
+                            && id != block::END_STONE
+                            && id != block::BEDROCK
+                            && crate::gamerules::bool("mobGriefing")
+                        {
                             broke |= w.set_block(x, y, z, block::AIR, 0, 3);
                         } else {
                             slowed = true;

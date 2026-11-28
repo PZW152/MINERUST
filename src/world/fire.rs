@@ -97,6 +97,9 @@ impl ServerWorld {
 
     /// `BlockFire.updateTick`
     pub(crate) fn fire_tick(&mut self, x: i32, y: i32, z: i32, r: &mut JavaRandom) {
+        if !crate::gamerules::bool("doFireTick") {
+            return;
+        }
         let below = self.block(x, y - 1, z);
         let eternal = below == NETHERRACK || (self.provider.dim == 1 && below == BEDROCK);
         if !(self.solid_top_surface(x, y - 1, z) || self.neighbour_burns(x, y, z)) {

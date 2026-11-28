@@ -219,6 +219,9 @@ pub enum Event {
     Items(Vec<ItemView>),
     /// After `Respawn`: where to put the player (feet).
     Respawn([f64; 3]),
+    /// `S03PacketTimeUpdate`: total time, world time and `doDaylightCycle`
+    /// (the packet's negative time).
+    TimeUpdate(i64, i64, bool),
     /// `S05PacketSpawnPosition`: the world spawn (block coordinates).
     SpawnPosition([i32; 3]),
     /// Every mob and arrow near the player, sent each tick.
@@ -550,6 +553,11 @@ pub struct Sim {
     /// The world spawn last sent to the client (`S05PacketSpawnPosition`
     /// on login and after `/setworldspawn`).
     sent_spawn: Option<[i32; 3]>,
+    /// The world's game rules until the first `step` installs them on the
+    /// server thread (`gamerules`).
+    rules_pending: Option<crate::gamerules::GameRules>,
+    /// `MinecraftServer.tickCounter`, for the time packet every 20 ticks.
+    server_ticks: u64,
     stats: Option<String>,
     respawn_pending: bool,
     pub mobs: crate::entity::mob::Mobs,
@@ -610,7 +618,8 @@ pub struct Sim {
 }
 
 /// Level keys owned by the gameplay state (kept out of `unknown`).
-const PLAY_KEYS: [&str; 7] = [
+const PLAY_KEYS: [&str; 8] = [
+    "gamerules",
     "inventory",
     "mode",
     "tile",
@@ -783,6 +792,8 @@ impl Sim {
             play: Play::new(cfg.mode),
             spawn: [0.0; 3],
             sent_spawn: None,
+            rules_pending: Some(crate::gamerules::GameRules::default()),
+            server_ticks: 0,
             stats: None,
             respawn_pending: false,
             mobs: crate::entity::mob::Mobs::default(),
@@ -889,6 +900,16 @@ impl Sim {
                             if let Some(w) = Weather::decode(v) {
                                 sim.weather = w;
                             }
+                        }
+                        // name=value pairs, ';' apart
+                        "gamerules" => {
+                            let mut g = crate::gamerules::GameRules::default();
+                            for kv in v.split(';') {
+                                if let Some((k, val)) = kv.split_once('=') {
+                                    g.0.insert(k.to_string(), val.to_string());
+                                }
+                            }
+                            sim.rules_pending = Some(g);
                         }
                         _ => {}
                     }
@@ -1552,7 +1573,7 @@ impl Sim {
             }
             Command::Respawn => {
                 self.wake_up(true, false);
-                self.splayer.respawn();
+                self.splayer.respawn(crate::gamerules::bool("keepInventory"));
                 self.respawn_pending = true;
                 if self.dim != 0 {
                     self.pending_travel = Some(0);
@@ -1563,8 +1584,13 @@ impl Sim {
         }
     }
 
-    /// `EntityPlayer.onDeath`: the inventory spills out.
+    /// `EntityPlayer.onDeath`: the inventory spills out
+    /// (`InventoryPlayer.dropAllItems`: the main slots, then the armour),
+    /// unless keepInventory.
     fn drop_inventory(&mut self) {
+        if crate::gamerules::bool("keepInventory") {
+            return;
+        }
         {
             {
                 let mut play = std::mem::replace(&mut self.play, Play::new(GameMode::Survival));
@@ -1574,6 +1600,11 @@ impl Sim {
                     play.close(&mut self.world);
                     for i in 0..crate::inventory::MAIN {
                         if let Some(st) = play.inv.main[i].take() {
+                            play.throw_with(st, true, &mut rnd);
+                        }
+                    }
+                    for i in 0..4 {
+                        if let Some(st) = play.inv.armor[i].take() {
                             play.throw_with(st, true, &mut rnd);
                         }
                     }
@@ -2049,8 +2080,28 @@ impl Sim {
         }
     }
 
+    /// The world's game rules (installed or still waiting to be).
+    pub fn rules(&self) -> crate::gamerules::GameRules {
+        self.rules_pending
+            .clone()
+            .unwrap_or_else(crate::gamerules::current)
+    }
+
     /// Advances the world by one tick and reports what the client must know.
     pub fn step(&mut self, commands: &[Command], events: &mut Vec<Event>) {
+        if let Some(g) = self.rules_pending.take() {
+            crate::gamerules::install(g);
+        }
+        // MinecraftServer.updateTimeLightAndEntities: the time, every 20
+        // ticks and at login, before the worlds tick
+        if self.server_ticks % 20 == 0 {
+            events.push(Event::TimeUpdate(
+                self.world.total_time,
+                self.world_time,
+                crate::gamerules::bool("doDaylightCycle"),
+            ));
+        }
+        self.server_ticks += 1;
         let sp = self.spawn.map(|v| v.floor() as i32);
         if self.sent_spawn != Some(sp) {
             self.sent_spawn = Some(sp);
@@ -2072,7 +2123,27 @@ impl Sim {
         self.world.update_inhabited(self.centre, self.view);
         if !self.respawn_pending {
             let d = self.difficulty;
-            self.splayer.tick(&self.world, d, true);
+            let regen = crate::gamerules::bool("naturalRegeneration");
+            self.splayer.tick(&self.world, d, regen);
+            // EntityLivingBase.onDeathUpdate at deathTime 20: a player always
+            // drops its experience (isPlayer), unless doMobLoot is off;
+            // EntityPlayer.getExperiencePoints is 0 under keepInventory
+            if self.splayer.dead
+                && self.splayer.living.death_time == 20
+                && crate::gamerules::bool("doMobLoot")
+            {
+                let mut xp = if crate::gamerules::bool("keepInventory") {
+                    0
+                } else {
+                    (self.splayer.xp_level * 7).min(100)
+                };
+                let at = self.play.player.0;
+                while xp > 0 {
+                    let k = crate::entity::xp_orb::xp_split(xp);
+                    xp -= k;
+                    self.play.orbs.push((at, k));
+                }
+            }
             self.tick_sleep();
         }
         let mut use_events = Vec::new();
@@ -2083,7 +2154,8 @@ impl Sim {
             self.import_anvil();
         }
         self.summon_once();
-        if !self.freeze_time {
+        // WorldServer.tick
+        if !self.freeze_time && crate::gamerules::bool("doDaylightCycle") {
             self.world_time += 1;
         }
         {
@@ -2604,6 +2676,7 @@ impl Sim {
             .unwrap_or(Nbt::Compound(Vec::new()));
         self.world.total_time = d.int("Time").unwrap_or(0);
         self.world_time = d.int("DayTime").unwrap_or(self.world.total_time);
+        self.rules_pending = Some(crate::gamerules::GameRules::from_nbt(d.get("GameRules")));
         self.weather.raining = d.int("raining").unwrap_or(0) != 0;
         self.weather.rain_time = d.int("rainTime").unwrap_or(0) as i32;
         self.weather.thundering = d.int("thundering").unwrap_or(0) != 0;
@@ -2838,6 +2911,7 @@ impl Sim {
         d.set("RandomSeed", Nbt::Long(self.world.seed()));
         d.set("Time", Nbt::Long(self.world.total_time));
         d.set("DayTime", Nbt::Long(self.world_time));
+        d.set("GameRules", self.rules().to_nbt());
         d.set("raining", Nbt::Byte(self.weather.raining as i8));
         d.set("rainTime", Nbt::Int(self.weather.rain_time));
         d.set("thundering", Nbt::Byte(self.weather.thundering as i8));
@@ -4074,6 +4148,15 @@ impl Sim {
                 u.push(("inventory".into(), self.play.inv.encode()));
                 u.push(("weather".into(), self.weather.encode()));
                 u.push((
+                    "gamerules".into(),
+                    self.rules()
+                        .0
+                        .iter()
+                        .map(|(k, v)| format!("{k}={v}"))
+                        .collect::<Vec<_>>()
+                        .join(";"),
+                ));
+                u.push((
                     "mode".into(),
                     if self.play.mode == GameMode::Creative {
                         "creative"
@@ -4284,7 +4367,10 @@ impl Sim {
             self.world.gen_entities = rest;
         }
         let animals = self.world.total_time % 400 == 0;
-        mob::natural_spawning(&mut self.world, &mut self.mobs, feet, self.spawn, animals);
+        // WorldServer.tick: findChunksForSpawning only under doMobSpawning
+        if crate::gamerules::bool("doMobSpawning") {
+            mob::natural_spawning(&mut self.world, &mut self.mobs, feet, self.spawn, animals);
+        }
         mob::village_golems(&mut self.world, &mut self.mobs);
         // forget targets that are gone
         if let Some(id) = self.last_attacked {
@@ -4901,7 +4987,12 @@ impl Sim {
                 let m = &self.mobs.list[mi];
                 (
                     m.bb,
-                    m.can_pick_up_loot && m.health > 0.0 && m.death_time == 0,
+                    // EntityLiving.onLivingUpdate: canPickUpLoot, alive,
+                    // mobGriefing
+                    m.can_pick_up_loot
+                        && m.health > 0.0
+                        && m.death_time == 0
+                        && crate::gamerules::bool("mobGriefing"),
                 )
             };
             if !ok {

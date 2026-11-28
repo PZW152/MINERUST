@@ -1118,6 +1118,9 @@ impl Sim {
     /// (the constructor), or the block alone (each restrike).
     fn bolt_fire(&mut self, p: [f64; 3], around: bool, r: &mut JavaRandom) {
         use crate::entity::living::Difficulty;
+        if !crate::gamerules::bool("doFireTick") {
+            return;
+        }
         let (x, y, z) = (
             math::floor_double(p[0]),
             math::floor_double(p[1]),

@@ -343,6 +343,8 @@ pub struct Game {
     dial_rand: JavaRandom,
     /// The world spawn from `S05PacketSpawnPosition`.
     spawn_point: [i32; 3],
+    /// `WorldClient`'s `doDaylightCycle`, from `S03PacketTimeUpdate`.
+    day_cycle: bool,
     /// `RenderGlobal.damagedBlocks` of other breakers: block, damage and
     /// the `cloudTickCounter` it was last set at.
     damaged_blocks: std::collections::HashMap<u32, ([i32; 3], i32, u64)>,
@@ -739,6 +741,7 @@ impl Game {
                     .map_or(0, |d| d.as_nanos() as i64),
             ),
             spawn_point: [0; 3],
+            day_cycle: true,
             damaged_blocks: std::collections::HashMap::new(),
             cloud_cell: None,
             view: InvView {
@@ -2078,6 +2081,11 @@ impl Game {
                 }
                 Event::Weather(w) => self.weather = w,
                 Event::SpawnPosition(p) => self.spawn_point = p,
+                // NetHandlerPlayClient.handleTimeUpdate, WorldClient.setWorldTime
+                Event::TimeUpdate(_, t, cycle) => {
+                    self.world_time = t;
+                    self.day_cycle = cycle;
+                }
                 Event::Respawn(p) => {
                     self.player = Player::new(p[0], p[1], p[2]);
                     self.player.allow_flying = self.mode == GameMode::Creative;
@@ -2597,7 +2605,8 @@ impl Game {
             self.portal_time = (self.portal_time - 0.05).max(0.0);
         }
         self.tick_animations();
-        if !self.freeze_time {
+        // WorldClient.tick
+        if !self.freeze_time && self.day_cycle {
             self.world_time += 1;
         }
         // EntityRenderer.updateRenderer

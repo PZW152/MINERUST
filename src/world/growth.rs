@@ -274,7 +274,10 @@ impl ServerWorld {
             block::LAVA => self.still_lava_tick(x, y, z, r),
             block::PORTAL => {
                 // BlockPortal.updateTick (BlockBreakable has no updateTick)
-                if self.dim == 0 && r.next_int_n(2000) < self.difficulty {
+                if self.dim == 0
+                    && crate::gamerules::bool("doMobSpawning")
+                    && r.next_int_n(2000) < self.difficulty
+                {
                     let mut yy = y;
                     while !self.solid_top_surface(x, yy, z) && yy > 0 {
                         yy -= 1;

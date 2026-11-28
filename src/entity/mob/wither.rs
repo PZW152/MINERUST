@@ -124,7 +124,8 @@ pub fn tick(
                 pos: [m.pos[0], m.pos[1] + (4.0 * 0.85) as f64, m.pos[2]],
                 size: 7.0,
                 flaming: false,
-                smoking: true,
+                // newExplosion(this, ..., 7, false, mobGriefing)
+                smoking: crate::gamerules::bool("mobGriefing"),
                 exploder: crate::world::explosion::Exploder::Living(m.pos),
                 exclude: Some(m.id),
             });
@@ -230,7 +231,7 @@ pub fn tick(
         // breaking out after being hurt
         if m.wither.block_break > 0 {
             m.wither.block_break -= 1;
-            if m.wither.block_break == 0 {
+            if m.wither.block_break == 0 && crate::gamerules::bool("mobGriefing") {
                 let (x0, y0, z0) = (
                     math::floor_double(m.pos[0]),
                     math::floor_double(m.pos[1]),

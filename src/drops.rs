@@ -227,6 +227,10 @@ pub fn damage_dropped(id: u8, meta: i32) -> i32 {
 
 /// `Block.dropBlockAsItem(World, x, y, z, ItemStack)`
 fn drop_item(out: &mut Vec<Spawn>, r: &mut JavaRandom, s: Stack) {
+    // dropBlockAsItem_do: nothing (and no random drawn) without doTileDrops
+    if !crate::gamerules::bool("doTileDrops") {
+        return;
+    }
     let f = 0.7f32;
     let mut at = [0.0f64; 3];
     for a in &mut at {

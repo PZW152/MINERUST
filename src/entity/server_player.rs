@@ -1075,13 +1075,20 @@ impl ServerPlayer {
         }
     }
 
-    /// `EntityPlayerMP.clonePlayer` after death (no keepInventory).
-    pub fn respawn(&mut self) {
+    /// `EntityPlayerMP.clonePlayer` after death: under keepInventory the
+    /// experience and the score come along (the inventory was never
+    /// dropped).
+    pub fn respawn(&mut self, keep: bool) {
         let creative = self.creative;
-        let score = self.score;
+        let (level, total, xp, score) = (self.xp_level, self.xp_total, self.xp, self.score);
         *self = ServerPlayer::new();
         self.creative = creative;
-        let _ = score;
+        if keep {
+            self.xp_level = level;
+            self.xp_total = total;
+            self.xp = xp;
+            self.score = score;
+        }
     }
 
     /// The save string: health, food, saturation, exhaustion, air, fire,

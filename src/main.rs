@@ -17,6 +17,7 @@ mod enchant;
 mod entity;
 mod front;
 mod game;
+mod gamerules;
 mod gui;
 mod gui_achievement;
 mod gui_achievements;

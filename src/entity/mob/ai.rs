@@ -1067,7 +1067,7 @@ impl Ai {
                 match door_interact(m, cx) {
                     Some(p) => {
                         *pos = p;
-                        !door_open(cx.w, p)
+                        crate::gamerules::bool("mobGriefing") && !door_open(cx.w, p)
                     }
                     None => false,
                 }
@@ -1515,12 +1515,22 @@ impl Ai {
                 *timer = (*timer - 1).max(0);
                 if *timer == 4 {
                     let (x, y, z) = m.feet_block();
+                    // under mobGriefing the grass goes; the sheep eats anyway
                     if cx.w.block(x, y, z) == block::TALLGRASS {
-                        // World.breakBlock(x, y, z, false): gone, no drop
-                        cx.w.set_block(x, y, z, block::AIR, 0, 3);
+                        if crate::gamerules::bool("mobGriefing") {
+                            // World.func_147480_a(x, y, z, false): the
+                            // breaking effect, no drop
+                            let meta = cx.w.meta(x, y, z) as i32;
+                            cx.w.destroyed.push(([x, y, z], block::TALLGRASS, meta));
+                            cx.w.set_block(x, y, z, block::AIR, 0, 3);
+                        }
                         eat_grass_bonus(m);
                     } else if cx.w.block(x, y - 1, z) == block::GRASS {
-                        cx.w.set_block(x, y - 1, z, block::DIRT, 0, 2);
+                        if crate::gamerules::bool("mobGriefing") {
+                            // playAuxSFX 2001 with the grass block
+                            cx.w.destroyed.push(([x, y - 1, z], block::GRASS, 0));
+                            cx.w.set_block(x, y - 1, z, block::DIRT, 0, 2);
+                        }
                         eat_grass_bonus(m);
                     }
                 }
@@ -3131,9 +3141,10 @@ fn spawn_baby(m: &mut Mob, mate: u32, cx: &mut Cx) {
     }
     // getPlayerInLove: the player who fed them
     cx.out.bred.push(m.kind);
-    // doMobLoot
-    let xp = m.rand.next_int_n(7) + 1;
-    cx.out.orbs.push((m.pos, xp));
+    if crate::gamerules::bool("doMobLoot") {
+        let xp = m.rand.next_int_n(7) + 1;
+        cx.out.orbs.push((m.pos, xp));
+    }
 }
 
 /// `EntityAIBeg.hasPlayerGotBoneInHand`

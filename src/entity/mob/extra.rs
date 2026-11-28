@@ -264,7 +264,8 @@ pub fn enderman(
         m.hurt_src(1.0, false, false, true);
     }
     // mobGriefing: pick up or put down a block
-    if m.carried == 0 {
+    if !crate::gamerules::bool("mobGriefing") {
+    } else if m.carried == 0 {
         if m.rand.next_int_n(20) == 0 {
             let x = math::floor_double(m.pos[0] - 2.0 + m.rand.next_double() * 4.0);
             let y = math::floor_double(m.pos[1] + m.rand.next_double() * 3.0);

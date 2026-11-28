@@ -2625,12 +2625,16 @@ impl Mob {
     /// Every `dropItem(item, 1)` is its own stack of one, as each makes its
     /// own `EntityItem`.
     fn drops(&mut self, by_player: bool, looting: i32) -> Vec<Stack> {
-        let mut v = self.drop_few_items(by_player, looting);
-        self.drop_equipment(by_player, looting, &mut v);
-        if by_player {
-            let j = self.rand.next_int_n(200) - looting;
-            if j < 5 {
-                self.drop_rare_drop(&mut v);
+        let mut v = Vec::new();
+        // canDropLoot and doMobLoot
+        if crate::gamerules::bool("doMobLoot") {
+            v = self.drop_few_items(by_player, looting);
+            self.drop_equipment(by_player, looting, &mut v);
+            if by_player {
+                let j = self.rand.next_int_n(200) - looting;
+                if j < 5 {
+                    self.drop_rare_drop(&mut v);
+                }
             }
         }
         // EntityHorse.onDeath: dropChestItems
@@ -3676,11 +3680,12 @@ impl Mobs {
                         }
                         nether::Impact::Block(..) => {}
                     }
+                    // EntityWitherSkull: newExplosion(this, ..., 1, false, mobGriefing)
                     explosions.push(crate::world::explosion::Request {
                         pos: at,
                         size: 1.0,
                         flaming: false,
-                        smoking: true,
+                        smoking: crate::gamerules::bool("mobGriefing"),
                         exploder: crate::world::explosion::Exploder::None,
                         exclude: None,
                     });
@@ -3727,7 +3732,7 @@ impl Mobs {
                             pos: at,
                             size: 1.0,
                             flaming: true,
-                            smoking: true,
+                            smoking: crate::gamerules::bool("mobGriefing"),
                             exploder: crate::world::explosion::Exploder::None,
                             exclude: None,
                         });
@@ -3851,7 +3856,7 @@ impl Mobs {
                 }
                 if !m.dead {
                     // EntityWither.dropFewItems: killWither
-                    if m.kind == Kind::Wither {
+                    if m.kind == Kind::Wither && crate::gamerules::bool("doMobLoot") {
                         out.achievements.push("achievement.killWither");
                     }
                     for s in m.drops(by_player, looting) {
@@ -3893,7 +3898,10 @@ impl Mobs {
                         if m.death_time == 20 {
                             // EntityLivingBase.onDeathUpdate: the experience,
                             // unless a child (func_146066_aG)
-                            if m.recently_hit > 0 && m.growing_age >= 0 {
+                            if m.recently_hit > 0
+                                && m.growing_age >= 0
+                                && crate::gamerules::bool("doMobLoot")
+                            {
                                 let xp = m.xp(&mut w.rand);
                                 if xp > 0 {
                                     out.orbs.push((m.pos, xp));
@@ -5116,8 +5124,8 @@ fn idle_name(m: &mut Mob) -> Option<&'static str> {
 }
 
 /// Sends on what a mob's movement reported and does what it did to the
-/// world: farmland trampled (`rand.nextFloat() < fall - 0.5`, mobGriefing
-/// taken as on), redstone ore lit, a cauldron putting the mob out, the
+/// world: farmland trampled (`rand.nextFloat() < fall - 0.5`, under
+/// mobGriefing), redstone ore lit, a cauldron putting the mob out, the
 /// landing dust.
 fn drain_moves(m: &mut Mob, w: &mut ServerWorld, out: &mut Outcome) {
     for (n, v, pi) in std::mem::take(&mut m.move_sounds) {
@@ -5127,7 +5135,12 @@ fn drain_moves(m: &mut Mob, w: &mut ServerWorld, out: &mut Outcome) {
     for op in std::mem::take(&mut m.move_world) {
         match op {
             WorldOp::Trample(x, y, z, fall) => {
-                if w.block(x, y, z) == block::FARMLAND && w.rand.next_float() < fall - 0.5 {
+                // BlockFarmland.onFallenUpon: the random first, then a
+                // mob tramples only under mobGriefing
+                if w.block(x, y, z) == block::FARMLAND
+                    && w.rand.next_float() < fall - 0.5
+                    && crate::gamerules::bool("mobGriefing")
+                {
                     w.set_block(x, y, z, block::DIRT, 0, 3);
                 }
             }
@@ -5960,7 +5973,8 @@ fn creeper_fuse(
             // func_146077_cc: a charged creeper's blast is twice as big
             size: if m.powered { 6.0 } else { 3.0 },
             flaming: false,
-            smoking: true,
+            // EntityCreeper.func_146077_cc: createExplosion(..., mobGriefing)
+            smoking: crate::gamerules::bool("mobGriefing"),
             exploder: crate::world::explosion::Exploder::Living(m.pos),
             exclude: Some(m.id),
         });

@@ -143,11 +143,12 @@ fn block_by_text(s: &str, notes: &mut Vec<ChatMsg>) -> Result<u16, Fail> {
 }
 
 /// The commands `help` lists, by name, with their usage key.
-const COMMANDS: [(&str, &str); 18] = [
+const COMMANDS: [(&str, &str); 19] = [
     ("clear", "commands.clear.usage"),
     ("difficulty", "commands.difficulty.usage"),
     ("effect", "commands.effect.usage"),
     ("gamemode", "commands.gamemode.usage"),
+    ("gamerule", "commands.gamerule.usage"),
     ("give", "commands.give.usage"),
     ("help", "commands.help.usage"),
     ("kill", "commands.kill.usage"),
@@ -163,6 +164,18 @@ const COMMANDS: [(&str, &str); 18] = [
     ("weather", "commands.weather.usage"),
     ("xp", "commands.xp.usage"),
 ];
+
+/// `CommandBase.joinNiceString`
+fn join_nice(v: &[String]) -> String {
+    let mut s = String::new();
+    for (i, x) in v.iter().enumerate() {
+        if i > 0 {
+            s.push_str(if i == v.len() - 1 { " and " } else { ", " });
+        }
+        s.push_str(x);
+    }
+    s
+}
 
 /// `CommandGameMode.getGameModeFromCommand`
 fn game_mode(s: &str) -> Result<GameMode, Fail> {
@@ -494,6 +507,27 @@ impl Sim {
                     ));
                 }
             }
+            // CommandGameRule
+            "gamerule" => match a.len() {
+                0 => out.push(ChatMsg::tr(&join_nice(&crate::gamerules::names()), vec![])),
+                1 => {
+                    if crate::gamerules::has(a[0]) {
+                        let v = crate::gamerules::string(a[0]);
+                        out.push(ChatMsg::tr(&format!("{} = {}", a[0], v), vec![]));
+                    } else {
+                        out.push(ChatMsg::tr("commands.gamerule.norule", vec![a[0].to_string()]));
+                    }
+                }
+                2 => {
+                    if crate::gamerules::has(a[0]) {
+                        crate::gamerules::set(a[0], a[1]);
+                        out.push(ChatMsg::tr("commands.gamerule.success", vec![]));
+                    } else {
+                        out.push(ChatMsg::tr("commands.gamerule.norule", vec![a[0].to_string()]));
+                    }
+                }
+                _ => return Err(usage("commands.gamerule.usage")),
+            },
             "seed" => {
                 out.push(ChatMsg::tr(
                     "commands.seed.success",
@@ -662,6 +696,50 @@ mod tests {
             })
             .flatten()
             .collect()
+    }
+
+    /// CommandGameRule, and what the rules do: doDaylightCycle stops the
+    /// clock (and the time packet says so), keepInventory keeps the items
+    /// and the levels through death.
+    #[test]
+    fn game_rules() {
+        let cfg = SimConfig {
+            seed: 99,
+            view: 2,
+            save_dir: None,
+            start_time: 6000,
+            freeze_time: false,
+            mode: GameMode::Survival,
+        };
+        let (mut sim, _) = Sim::new(&cfg);
+        let m = run(&mut sim, "/gamerule");
+        assert_eq!(
+            m[0].key,
+            "commandBlockOutput, doDaylightCycle, doFireTick, doMobLoot, doMobSpawning, doTileDrops, keepInventory, mobGriefing and naturalRegeneration"
+        );
+        assert_eq!(run(&mut sim, "/gamerule keepInventory")[0].key, "keepInventory = false");
+        assert_eq!(run(&mut sim, "/gamerule nope 1")[0].key, "commands.gamerule.norule");
+        assert_eq!(run(&mut sim, "/gamerule doDaylightCycle false")[0].key, "commands.gamerule.success");
+        let t = sim.world_time;
+        let mut ev = Vec::new();
+        for _ in 0..40 {
+            sim.step(&[], &mut ev);
+        }
+        assert_eq!(sim.world_time, t, "the clock stands");
+        assert!(ev.iter().any(|e| matches!(e, Event::TimeUpdate(_, w, false) if *w == t)));
+        run(&mut sim, "/gamerule keepInventory true");
+        run(&mut sim, "/give Player stone 5");
+        run(&mut sim, "/xp 5L");
+        let level = sim.splayer.xp_level;
+        assert!(level >= 5);
+        run(&mut sim, "/kill");
+        for _ in 0..25 {
+            sim.step(&[], &mut Vec::new());
+        }
+        assert!(sim.play.inv.main.iter().flatten().any(|s| s.id == 1), "the stone stayed");
+        sim.step(&[Command::Respawn], &mut Vec::new());
+        assert_eq!(sim.splayer.xp_level, level, "and the levels");
+        assert_eq!(sim.rules().0["keepInventory"], "true");
     }
 
     #[test]
