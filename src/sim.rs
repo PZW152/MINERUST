@@ -3904,6 +3904,13 @@ impl Sim {
                         }
                         "chest" => m.horse_flags |= 8,
                         "leash" => m.leash = Some(crate::entity::mob::Leash::Player),
+                        "jockey" => {
+                            m.jockey = Some(if m.kind == crate::entity::mob::Kind::Spider {
+                                (crate::entity::mob::Kind::Skeleton, false)
+                            } else {
+                                (crate::entity::mob::Kind::Chicken, false)
+                            })
+                        }
                         "iron" | "gold" | "diamond" => {
                             m.horse_armor = match p {
                                 "iron" => 1,
@@ -3921,6 +3928,10 @@ impl Sim {
                     }
                 }
             }
+        }
+        let pending: Vec<u32> = self.mobs.list.iter().filter(|m| m.jockey.is_some()).map(|m| m.id).collect();
+        for id in pending {
+            self.mobs.finish_jockey(id, &mut rnd, &crate::entity::mob::SpawnCtx::default());
         }
         self.world.rand = rnd;
     }

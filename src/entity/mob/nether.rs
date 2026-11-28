@@ -195,14 +195,15 @@ pub fn ghast(
     if c <= 0 {
         m.jump_delay += m.rand.next_int_n(5) + 2;
         dist = dist.sqrt();
-        let d = [
+        // isCourseTraversable steps toward the (maybe new) waypoint by the
+        // old course length; the push uses the old course
+        let w2 = [
             m.waypoint[0] - m.pos[0],
             m.waypoint[1] - m.pos[1],
             m.waypoint[2] - m.pos[2],
         ];
-        // isCourseTraversable
         let mut ok = true;
-        let step = [d[0] / dist, d[1] / dist, d[2] / dist];
+        let step = [w2[0] / dist, w2[1] / dist, w2[2] / dist];
         let mut bb = m.bb;
         let mut i = 1.0;
         while i < dist {

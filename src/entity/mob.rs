@@ -467,6 +467,13 @@ pub struct Mob {
     pub wither: wither::WitherState,
     /// `EntityPig.fall` with the player on it from more than 5 blocks.
     pub flew_pig: bool,
+    /// `ridingEntity` when it is another mob (a jockey), and the jockey
+    /// `onSpawnWithEgg` asked for: the partner's kind, and whether a
+    /// chicken near by is taken rather than a new one.
+    pub mount: Option<u32>,
+    pub jockey: Option<(Kind, bool)>,
+    /// `EntityChicken.func_152117_i`: carrying a chicken jockey.
+    pub chicken_jockey: bool,
     /// `EntityWolf`: begging (data watcher 19), `isWet`, `isShaking`,
     /// `prevTimeWolfIsShaking` and `timeWolfIsShaking`.
     pub begging: bool,
@@ -880,6 +887,9 @@ impl Mob {
             offers: None,
             wither: Default::default(),
             flew_pig: false,
+            mount: None,
+            jockey: None,
+            chicken_jockey: false,
             begging: false,
             wolf_wet: false,
             wolf_shaking: false,
@@ -975,7 +985,9 @@ impl Mob {
             attack_timer: 0,
             player_made: false,
             target_mob: None,
-            waypoint: pos,
+            // EntityGhast's waypoint starts at the origin (a waypoint on
+            // the ghast itself would be a zero course length)
+            waypoint: if kind == Kind::Ghast { [0.0; 3] } else { pos },
             anger: 0,
             anger_sound: 0,
             ring: [[0.0; 2]; 64],
@@ -1098,10 +1110,11 @@ impl Mob {
                 }
                 if child {
                     self.set_baby(true);
-                    // the chicken-jockey rolls (an existing chicken nearby,
-                    // else a new one); jockeys are not made yet
-                    if world_rand.next_float() >= 0.05 {
-                        let _ = world_rand.next_float() < 0.05;
+                    // the chicken jockey: a chicken near by, else a new one
+                    if world_rand.next_float() < 0.05 {
+                        self.jockey = Some((Kind::Chicken, true));
+                    } else if world_rand.next_float() < 0.05 {
+                        self.jockey = Some((Kind::Chicken, false));
                     }
                 }
                 // setBreakDoorsAItask
@@ -1146,6 +1159,12 @@ impl Mob {
                 };
             }
             Kind::Villager => self.variant = world_rand.next_int_n(5),
+            // EntitySpider.onSpawnWithEgg: one in a hundred brings a skeleton
+            Kind::Spider => {
+                if world_rand.next_int_n(100) == 0 {
+                    self.jockey = Some((Kind::Skeleton, false));
+                }
+            }
             // EntityHorse.onSpawnWithEgg
             Kind::Horse => self.spawn_horse(),
             _ => {}
@@ -3247,7 +3266,99 @@ impl Mobs {
         let cx = SpawnCtx::default();
         m.on_spawn(world_rand, &cx);
         self.list.push(m);
+        self.finish_jockey(id, world_rand, &cx);
         id
+    }
+
+    /// The jockey `onSpawnWithEgg` asked for: a skeleton made to ride the
+    /// spider, or the baby zombie riding a chicken (the nearest within
+    /// 5 x 3 x 5, else a new one).
+    pub fn finish_jockey(&mut self, id: u32, world_rand: &mut JavaRandom, cx: &SpawnCtx) {
+        let Some(i) = self.list.iter().position(|m| m.id == id) else { return };
+        let Some((kind, existing)) = self.list[i].jockey.take() else { return };
+        let (pos, yaw) = (self.list[i].pos, self.list[i].yaw);
+        match kind {
+            Kind::Skeleton => {
+                let nid = self.next_id;
+                self.next_id += 1;
+                let seed = self.rand.next_long();
+                let mut s = Mob::new(nid, Kind::Skeleton, pos, yaw, seed);
+                s.on_spawn(world_rand, cx);
+                s.mount = Some(id);
+                self.list.push(s);
+            }
+            _ => {
+                let near = if existing {
+                    self.list
+                        .iter()
+                        .position(|c| {
+                            c.kind == Kind::Chicken
+                                && !c.dead
+                                && (c.pos[0] - pos[0]).abs() < 5.3
+                                && (c.pos[1] - pos[1]).abs() < 3.7
+                                && (c.pos[2] - pos[2]).abs() < 5.3
+                        })
+                } else {
+                    None
+                };
+                let cid = match near {
+                    Some(k) => self.list[k].id,
+                    None if existing => return,
+                    None => {
+                        let nid = self.next_id;
+                        self.next_id += 1;
+                        let seed = self.rand.next_long();
+                        let mut c = Mob::new(nid, Kind::Chicken, pos, yaw, seed);
+                        c.on_spawn(world_rand, cx);
+                        self.list.push(c);
+                        nid
+                    }
+                };
+                if let Some(c) = self.list.iter_mut().find(|c| c.id == cid) {
+                    c.chicken_jockey = true;
+                }
+                if let Some(z) = self.list.iter_mut().find(|z| z.id == id) {
+                    z.mount = Some(cid);
+                }
+            }
+        }
+    }
+
+    /// `updateRiderPosition` for the mobs riding mobs: on the mount's back,
+    /// on the chicken a little forward; a rider whose mount is gone gets off.
+    fn place_riders(&mut self) {
+        for i in 0..self.list.len() {
+            let Some(mid) = self.list[i].mount else { continue };
+            let mount = self
+                .list
+                .iter()
+                .find(|m| m.id == mid && !m.dead && m.health > 0.0)
+                .map(|m| (m.pos, m.dims().1, m.kind, m.body_yaw));
+            let r = &mut self.list[i];
+            // getYOffset: a skeleton sits 0.5 lower
+            let ry = if r.kind == Kind::Skeleton { -0.5 } else { 0.0 };
+            if r.dead || r.health <= 0.0 {
+                r.mount = None;
+                continue;
+            }
+            match mount {
+                Some((p, h, kind, by)) => {
+                    // getMountedYOffset: height * 0.75, the chicken's 0.5
+                    let k = if kind == Kind::Chicken { 0.5 } else { 0.75 };
+                    let mut q = [p[0], p[1] + (h * k) as f64 + ry, p[2]];
+                    if kind == Kind::Chicken {
+                        let a = by.to_radians();
+                        q[0] += (a.sin() * 0.1) as f64;
+                        q[2] -= (a.cos() * 0.1) as f64;
+                        r.body_yaw = by;
+                    }
+                    r.motion = [0.0; 3];
+                    r.set_position(q[0], q[1], q[2]);
+                    r.fall_distance = 0.0;
+                }
+                None => r.mount = None,
+            }
+        }
     }
 
     /// `spawn` with the world's local difficulty and dimension.
@@ -3266,6 +3377,7 @@ impl Mobs {
         let cx = SpawnCtx::of(w, pos);
         m.on_spawn(world_rand, &cx);
         self.list.push(m);
+        self.finish_jockey(id, world_rand, &cx);
         id
     }
 
@@ -3362,6 +3474,7 @@ impl Mobs {
             }
             m.track();
         }
+        self.place_riders();
         self.convert_zombies(w, out);
         self.push_apart(player, out);
         ai::answer_calls(&mut self.list, &out.calls);
@@ -6302,7 +6415,9 @@ pub fn natural_spawning(
                     if can_spawn_here(w, &mut m, &mut rand) {
                         let cx = SpawnCtx::of(w, m.pos);
                         m.on_spawn(&mut rand, &cx);
+                        let mid = m.id;
                         mobs.list.push(m);
+                        mobs.finish_jockey(mid, &mut rand, &cx);
                         spawned += 1;
                         if spawned >= 4 {
                             break 'packs;
