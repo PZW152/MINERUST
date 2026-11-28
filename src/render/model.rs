@@ -1195,28 +1195,32 @@ pub fn mob(
             }
             continue;
         }
-        // The young (ModelQuadruped.render / ModelChicken.render with
-        // isChild): the head at full size, moved down and forward, the
+        // The young (ModelQuadruped, ModelChicken, ModelWolf and
+        // ModelOcelot.render with isChild): the head at full size, moved down and forward, the
         // rest at half size standing on the ground.
         let child = m.flags & 16 != 0;
         let heads = match m.kind {
-            Kind::Pig | Kind::Cow | Kind::Mooshroom | Kind::Sheep => 1,
+            Kind::Pig | Kind::Cow | Kind::Mooshroom | Kind::Sheep | Kind::Wolf | Kind::Ocelot => 1,
             Kind::Chicken => 3,
             _ => 0,
         };
         let (cy, cz) = match m.kind {
             Kind::Pig => (4.0, 4.0),
             Kind::Cow | Kind::Mooshroom => (8.0, 6.0),
-            Kind::Chicken => (5.0, 2.0),
+            Kind::Chicken | Kind::Wolf => (5.0, 2.0),
+            Kind::Ocelot => (10.0, 4.0),
             _ => (8.0, 4.0),
         };
+        // ModelOcelot.render: the young cat's head at three quarters
+        let head_scale = if m.kind == Kind::Ocelot { 0.75 } else { 1.0 };
         let biped_child = child && matches!(m.kind, Kind::Zombie | Kind::PigZombie);
         for (i, p) in parts(m, &a, age, layer, partial).iter().enumerate() {
             if biped_child {
                 render(&mut d, &biped_child_matrix(&mat, i), p);
             } else if child && heads > 0 {
                 let pm = if i < heads {
-                    mul(&mat, &translate(0.0, cy * 0.0625, cz * 0.0625))
+                    let hm = mul(&mat, &super::entities::scale(head_scale, head_scale, head_scale));
+                    mul(&hm, &translate(0.0, cy * 0.0625, cz * 0.0625))
                 } else {
                     mul(
                         &mul(&mat, &super::entities::scale(0.5, 0.5, 0.5)),

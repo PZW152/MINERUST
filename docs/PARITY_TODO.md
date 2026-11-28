@@ -42,7 +42,6 @@ AI：
 - [ ] 藥水效果尚缺：隱形時不畫出生物、生物盔甲上的保護附魔（`applyArmorCalculations` 之後的 `getEnchantmentModifierDamage`）、
       吸收與生命提升、凋零骷髏與洞穴蜘蛛打其他生物時的效果
 - [ ] `getEyeHeight` 的各職業覆寫（狼 `height × 0.8` 等）
-- [ ] 狼、豹貓的幼體模型（`isChild` 的畫法；馬已完成）
 - [ ] 受傷時的 `limbSwingAmount = 1.5`；受傷鏡頭傾斜的方向（`attackedAtYaw`，目前只有傾斜沒有方向）
 - [ ] 生物裝備耗損到壞掉時保留數量 0 的物品堆（原版行為）
 - [ ] 實體依區塊分組（`Chunk.entityLists`），影響 `getEntitiesWithinAABB` 的順序與推擠的順序
