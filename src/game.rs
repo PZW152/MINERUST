@@ -7611,6 +7611,7 @@ impl MobAnim {
         v.ticks = o.ticks;
         v.hanim = o.hanim;
         v.tail_counter = o.tail_counter;
+        v.head_course = o.head_course;
     }
 
     /// One client tick: the previous values become the current ones and
@@ -7630,6 +7631,12 @@ impl MobAnim {
         m.ticks += 1;
         if m.kind == crate::entity::mob::Kind::Horse {
             horse_anim(m);
+        }
+        // EntityWolf.onUpdate on the client: the head tilts while begging
+        if m.kind == crate::entity::mob::Kind::Wolf {
+            let c = m.head_course[1];
+            let to = if m.begging { 1.0 } else { 0.0 };
+            m.head_course = [c, c + (to - c) * 0.4];
         }
     }
 }

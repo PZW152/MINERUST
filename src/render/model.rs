@@ -1125,7 +1125,12 @@ pub fn mob(
         let Some(t) = tex(name) else {
             continue;
         };
-        let col = if layer == 1 && m.kind == Kind::Sheep {
+        let col = if layer == 0 && m.kind == Kind::Wolf && m.wolf_wet {
+            // RenderWolf.shouldRenderPass: darker while wet
+            let t = m.shake[0] + (m.shake[1] - m.shake[0]) * partial;
+            let s = 0.75 + t / 2.0 * 0.25;
+            [s, s, s]
+        } else if layer == 1 && m.kind == Kind::Sheep {
             FLEECE[(m.variant & 15) as usize]
         } else if layer == 1 && m.kind == Kind::Wolf {
             // the collar takes the dye colour

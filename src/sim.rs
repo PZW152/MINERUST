@@ -415,6 +415,12 @@ pub struct MobView {
     /// (previous, current).
     pub wither_invul: i32,
     pub wither_heads: [[[f32; 2]; 2]; 2],
+    /// `EntityWolf`: wet (`getWolfShaking`), the shake (previous, current),
+    /// begging, and the client's `headRotationCourse` (old, new).
+    pub wolf_wet: bool,
+    pub shake: [f32; 2],
+    pub begging: bool,
+    pub head_course: [f32; 2],
     /// `S1BPacketEntityAttach(1, ...)`: whom the lead goes to.
     pub leash: Option<LeashView>,
 }
@@ -4277,6 +4283,10 @@ impl Sim {
                 tail_counter: 0,
                 max_health: m.max_health(),
                 wither_invul: m.wither.invul,
+                wolf_wet: m.wolf_wet,
+                shake: m.shake,
+                begging: m.begging,
+                head_course: [0.0; 2],
                 wither_heads: [m.wither.prev_heads, m.wither.heads],
                 leash: m.leash.map(|l| match l {
                     crate::entity::mob::Leash::Player => LeashView::Player,
@@ -8650,6 +8660,29 @@ mod tests {
         assert!(sim.mobs.list.iter().find(|m| m.id == creeper).unwrap().powered, "charged");
         assert!(sim.mobs.list.iter().all(|m| m.id != pig || m.dead), "the pig is gone");
         assert!(sim.mobs.list.iter().any(|m| m.kind == Kind::PigZombie), "a zombie pigman");
+    }
+
+    #[test]
+    fn wet_wolves_shake_dry() {
+        use crate::entity::mob::Kind;
+        let (mut sim, x, y, z) = redstone_sim();
+        arena(&mut sim, x, y, z);
+        let mut r = JavaRandom::new(2);
+        let id = sim.mobs.spawn(Kind::Wolf, [x as f64 + 3.5, (y + 1) as f64, z as f64 + 0.5], 0.0, &mut r);
+        let feet = [x as f64 - 6.5, (y + 1) as f64, z as f64 + 0.5];
+        for _ in 0..5 {
+            sim.step(&[Command::Player(feet, [0.0, 0.0], false)], &mut Vec::new());
+        }
+        sim.mobs.list.iter_mut().find(|m| m.id == id).unwrap().wolf_wet = true;
+        let mut shook = false;
+        for _ in 0..80 {
+            sim.step(&[Command::Player(feet, [0.0, 0.0], false)], &mut Vec::new());
+            let m = sim.mobs.list.iter().find(|m| m.id == id).unwrap();
+            shook |= m.wolf_shaking && m.shake[1] > 0.5;
+        }
+        let m = sim.mobs.list.iter().find(|m| m.id == id).unwrap();
+        assert!(shook, "it shook");
+        assert!(!m.wolf_wet, "and is dry");
     }
 
     #[test]

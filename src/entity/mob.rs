@@ -465,6 +465,12 @@ pub struct Mob {
     pub offers: Option<Vec<crate::merchant::Recipe>>,
     /// `EntityWither`'s state.
     pub wither: wither::WitherState,
+    /// `EntityWolf`: begging (data watcher 19), `isWet`, `isShaking`,
+    /// `prevTimeWolfIsShaking` and `timeWolfIsShaking`.
+    pub begging: bool,
+    pub wolf_wet: bool,
+    pub wolf_shaking: bool,
+    pub shake: [f32; 2],
     /// `EntityCreeper.getPowered` (data watcher 17): struck by lightning.
     pub powered: bool,
     /// `EntityLiving.leashedToEntity`, and the `Leash` tag of a mob loaded
@@ -871,6 +877,10 @@ impl Mob {
             custom_name: String::new(),
             offers: None,
             wither: Default::default(),
+            begging: false,
+            wolf_wet: false,
+            wolf_shaking: false,
+            shake: [0.0; 2],
             powered: false,
             leash: None,
             leash_tag: None,
@@ -5078,6 +5088,9 @@ fn tick_mob(
         wither::tick(m, w, player, others, balls, out, explosions);
         return;
     }
+    if m.kind == Kind::Wolf {
+        wolf_shake(m, w, out);
+    }
     if m.kind == Kind::EnderCrystal {
         end::crystal(m, w);
         return;
@@ -6464,4 +6477,49 @@ fn name_with_tag(m: &mut Mob, s: Stack) -> Option<Option<Stack>> {
     } else {
         None
     })
+}
+
+/// `EntityWolf.onUpdate` / `onLivingUpdate`: wet in water or rain, a
+/// shake once it stands still on the ground, with the sound and splashes.
+fn wolf_shake(m: &mut Mob, w: &ServerWorld, out: &mut Outcome) {
+    let (x, z) = (math::floor_double(m.pos[0]), math::floor_double(m.pos[2]));
+    let wet_now = m.in_water
+        || w.lightning_at(x, math::floor_double(m.pos[1]), z)
+        || w.lightning_at(x, math::floor_double(m.pos[1] + m.height() as f64), z);
+    if m.wolf_wet && !m.wolf_shaking && m.no_path() && m.on_ground {
+        m.wolf_shaking = true;
+        m.shake = [0.0; 2];
+    }
+    if wet_now {
+        m.wolf_wet = true;
+        m.wolf_shaking = false;
+        m.shake = [0.0; 2];
+    } else if m.wolf_shaking {
+        if m.shake[1] == 0.0 {
+            let (v, _) = m.sound_volume_pitch();
+            let p = (m.rand.next_float() - m.rand.next_float()) * 0.2 + 1.0;
+            out.sounds.push(("mob.wolf.shake", m.pos, v, p));
+        }
+        m.shake[0] = m.shake[1];
+        m.shake[1] += 0.05;
+        if m.shake[0] >= 2.0 {
+            m.wolf_wet = false;
+            m.wolf_shaking = false;
+            m.shake = [0.0; 2];
+        }
+        if m.shake[1] > 0.4 {
+            let y = m.bb.min[1] as f32;
+            let n = (math::sin((m.shake[1] - 0.4) * std::f32::consts::PI) * 7.0) as i32;
+            let hw = m.width() * 0.5;
+            for _ in 0..n {
+                let a = (m.rand.next_float() * 2.0 - 1.0) * hw;
+                let b = (m.rand.next_float() * 2.0 - 1.0) * hw;
+                out.particles.push((
+                    "splash",
+                    [m.pos[0] + a as f64, (y + 0.8) as f64, m.pos[2] + b as f64],
+                    m.motion,
+                ));
+            }
+        }
+    }
 }

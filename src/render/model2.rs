@@ -127,7 +127,7 @@ pub(super) fn bat(a: &Anim, hanging: bool) -> Vec<Part> {
 }
 
 /// `ModelWolf`, standing or sitting.
-pub(super) fn wolf(a: &Anim, sitting: bool, angry: bool, tail: f32) -> Vec<Part> {
+pub(super) fn wolf(a: &Anim, sitting: bool, angry: bool, tail: f32, tilt: [f32; 4]) -> Vec<Part> {
     let mut head = Part::new([-1.0, 13.5, -7.0])
         .bx(0.0, 0.0, [-3.0, -3.0, -2.0], [6.0, 6.0, 4.0], 0.0)
         .bx(16.0, 14.0, [-3.0, -5.0, 0.0], [2.0, 2.0, 1.0], 0.0)
@@ -174,6 +174,11 @@ pub(super) fn wolf(a: &Anim, sitting: bool, angry: bool, tail: f32) -> Vec<Part>
         l4.rot[0] = cos(a.swing * 0.6662) * 1.4 * a.amount;
     }
     tl.rot[0] = tail;
+    // setLivingAnimations: the begging tilt and the shake
+    head.rot[2] = tilt[0];
+    mane.rot[2] = tilt[1];
+    body.rot[2] = tilt[2];
+    tl.rot[2] = tilt[3];
     vec![head, body, l1, l2, l3, l4, tl, mane]
 }
 
@@ -433,7 +438,20 @@ pub(super) fn parts(m: &MobView, a: &Anim, layer: u8, partial: f32) -> Vec<Part>
             } else {
                 PI / 5.0
             };
-            wolf(a, sitting, angry, tail)
+            // getShakeAngle(partial, offset) and getInterestedAngle
+            let t = m.shake[0] + (m.shake[1] - m.shake[0]) * partial;
+            let shake = |off: f32| {
+                let k = ((t + off) / 1.8).clamp(0.0, 1.0);
+                sin(k * PI) * sin(k * PI * 11.0) * 0.15 * PI
+            };
+            let interested = (m.head_course[0] + (m.head_course[1] - m.head_course[0]) * partial) * 0.15 * PI;
+            wolf(
+                a,
+                sitting,
+                angry,
+                tail,
+                [interested + shake(0.0), shake(-0.08), shake(-0.16), shake(-0.2)],
+            )
         }
         Kind::Ocelot => ocelot(a, sitting),
         Kind::Horse => horse_groups(m, a, partial).into_iter().map(|g| g.1).collect(),

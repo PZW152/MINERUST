@@ -9,7 +9,8 @@
 
 ## 2026-11-28
 
-- The Achievements screen from the pause menu: GuiAchievements (the rock background with its random ores by depth from the player's id, the lines and arrows to each parent in grey, green or black, the icons in their frames shaded by how far they are from reach, locked items as silhouettes, dragging the map with easing, the tooltip with the description, "Requires" or the unknown name, and Taken!), clipped to the window; `--open achievements`
+- Wolves shake off water and tilt their heads when begging: EntityWolf's isWet / isShaking / timeWolfIsShaking (wet in water or rain, the shake once standing still on the ground, mob.wolf.shake and the splashes), setBegging from EntityAIBeg, the client's headRotationCourse, ModelWolf's getInterestedAngle and getShakeAngle on head, mane, body and tail, and RenderWolf's darker coat while wet
+- `4a44159` The Achievements screen from the pause menu: GuiAchievements (the rock background with its random ores by depth from the player's id, the lines and arrows to each parent in grey, green or black, the icons in their frames shaded by how far they are from reach, locked items as silhouettes, dragging the map with easing, the tooltip with the description, "Requires" or the unknown name, and Taken!), clipped to the window; `--open achievements`
 - `cf01112` Fire charges light fires (ItemFireball.onItemUse: fire on the clicked side with fire.ignite, used up outside creative)
 - `898691c` Chests, trapped chests and ender chests held, dropped and in frames are drawn as the chest model (renderBlockAsItem type 22 through TileEntityRendererChestHelper); shadows no longer show bits of other textures (the quads stay inside shadow.png's square, as GL_CLAMP does)
 - `3f1a042` Cocoa pods are drawn (RenderBlocks.renderBlockCocoa: the pod of each growth stage on its side of the log, its top and bottom, the stalk); shotcompare `cocoa` scene, 0.8% of pixels off

@@ -2609,6 +2609,8 @@ impl Pet {
                 m.avoids_water = false;
             }
             Pet::Beg { timeout, .. } => {
+                // setBegging(true)
+                m.begging = true;
                 *timeout = 40 + m.rand.next_int_n(40);
             }
             Pet::Leap { y, target } => {
@@ -2696,6 +2698,7 @@ impl Pet {
 
     fn reset_task(&mut self, m: &mut Mob) {
         match self {
+            Pet::Beg { .. } => m.begging = false,
             // setCustomer(null)
             Pet::TradePlayer => m.customer = false,
             Pet::RunAround { .. } => {}
