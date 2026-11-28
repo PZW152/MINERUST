@@ -1190,6 +1190,15 @@ impl Play {
                     w.note_click(target[0], target[1], target[2]);
                     return true;
                 }
+                // BlockRedstoneOre.onBlockActivated: lights up, and the
+                // held item is still used
+                block::REDSTONE_ORE | block::LIT_REDSTONE_ORE => {
+                    w.redstone_ore_light_up(target[0], target[1], target[2]);
+                }
+                block::DRAGON_EGG => {
+                    w.dragon_egg_teleport(target[0], target[1], target[2]);
+                    return true;
+                }
                 block::WOODEN_DOOR => {
                     // BlockDoor.onBlockActivated
                     let [x, y, z] = target;
@@ -1887,6 +1896,9 @@ impl Play {
         match w.block(p[0], p[1], p[2]) {
             block::CAKE => self.eat_cake(w, p),
             block::NOTEBLOCK => w.note_trigger(p[0], p[1], p[2]),
+            // BlockRedstoneOre / BlockDragonEgg.onBlockClicked
+            block::REDSTONE_ORE | block::LIT_REDSTONE_ORE => w.redstone_ore_light_up(p[0], p[1], p[2]),
+            block::DRAGON_EGG => w.dragon_egg_teleport(p[0], p[1], p[2]),
             _ => {}
         }
     }

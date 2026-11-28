@@ -7832,6 +7832,29 @@ mod tests {
         assert_eq!(sim.world.meta(x + 7, y + 1, z), 3);
     }
 
+    /// BlockDragonEgg.tryTeleport and BlockRedstoneOre.onBlockActivated.
+    #[test]
+    fn dragon_egg_hops_and_redstone_ore_glows() {
+        let (mut sim, x, y, z) = redstone_sim();
+        sim.world.set_block(x, y + 1, z, block::DRAGON_EGG, 0, 3);
+        sim.world.set_block(x + 2, y + 1, z, block::REDSTONE_ORE, 0, 3);
+        let feet = [x as f64 + 1.5, (y + 1) as f64, z as f64 + 3.5];
+        let use_on = |t: [i32; 3]| Command::Use { target: t, face: [0, 0, 1], sneaking: false, hit: [0.5, 0.5, 1.0] };
+        sim.step(&[Command::Player(feet, [180.0, 0.0], false), use_on([x, y + 1, z])], &mut Vec::new());
+        assert_ne!(sim.world.block(x, y + 1, z), block::DRAGON_EGG, "the egg moved");
+        let mut found = false;
+        for dx in -16..16 {
+            for dy in -8..8 {
+                for dz in -16..16 {
+                    found |= sim.world.block(x + dx, y + 1 + dy, z + dz) == block::DRAGON_EGG;
+                }
+            }
+        }
+        assert!(found, "the egg is somewhere near");
+        sim.step(&[use_on([x + 2, y + 1, z])], &mut Vec::new());
+        assert_eq!(sim.world.block(x + 2, y + 1, z), block::LIT_REDSTONE_ORE);
+    }
+
     /// A stone floor with nothing on it around the test site.
     fn arena(sim: &mut Sim, x: i32, y: i32, z: i32) {
         for dx in -2..14 {

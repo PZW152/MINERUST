@@ -1363,6 +1363,40 @@ impl ServerWorld {
         }
     }
 
+    /// `BlockDragonEgg.tryTeleport`: to an air block up to 15 away (8 up or
+    /// down), with the client's 128 portal particles along the way.
+    pub fn dragon_egg_teleport(&mut self, x: i32, y: i32, z: i32) {
+        if self.block(x, y, z) != block::DRAGON_EGG {
+            return;
+        }
+        for _ in 0..1000 {
+            let tx = x + self.rand.next_int_n(16) - self.rand.next_int_n(16);
+            let ty = y + self.rand.next_int_n(8) - self.rand.next_int_n(8);
+            let tz = z + self.rand.next_int_n(16) - self.rand.next_int_n(16);
+            if self.material(tx, ty, tz) == block::Material::Air {
+                let m = self.meta(x, y, z);
+                self.set_block(tx, ty, tz, block::DRAGON_EGG, m as i32, 2);
+                self.set_air(x, y, z);
+                let r = || crate::util::math::math_random();
+                for _ in 0..128 {
+                    let t = r();
+                    let v = [
+                        (r() as f32 - 0.5) as f64 * 0.2,
+                        (r() as f32 - 0.5) as f64 * 0.2,
+                        (r() as f32 - 0.5) as f64 * 0.2,
+                    ];
+                    let p = [
+                        tx as f64 + (x - tx) as f64 * t + (r() - 0.5) + 0.5,
+                        ty as f64 + (y - ty) as f64 * t + r() - 0.5,
+                        tz as f64 + (z - tz) as f64 * t + (r() - 0.5) + 0.5,
+                    ];
+                    self.particles.push(("portal", p, v));
+                }
+                return;
+            }
+        }
+    }
+
     /// `BlockRedstoneOre.addParticles` (`World.rand`)
     pub fn redstone_ore_particles(&mut self, x: i32, y: i32, z: i32) {
         let d = 0.0625;
