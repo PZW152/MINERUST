@@ -872,6 +872,30 @@ impl Play {
                 w.set_air(p[0] - dx, p[1], p[2] - dz);
             }
         }
+        // BlockDoor.onBlockHarvested: in creative the top takes the lower
+        // half with it (or the lower half would drop the door)
+        if (id == block::WOODEN_DOOR || id == block::IRON_DOOR)
+            && self.mode == GameMode::Creative
+            && meta & 8 != 0
+            && w.block(p[0], p[1] - 1, p[2]) == id
+        {
+            w.set_air(p[0], p[1] - 1, p[2]);
+        }
+        // BlockPistonExtension.onBlockHarvested: in creative the head takes
+        // its piston
+        if id == block::PISTON_HEAD && self.mode == GameMode::Creative {
+            let d = [[0, -1, 0], [0, 1, 0], [0, 0, -1], [0, 0, 1], [-1, 0, 0], [1, 0, 0]]
+                [(meta & 7).min(5) as usize];
+            let b = [p[0] - d[0], p[1] - d[1], p[2] - d[2]];
+            let base = w.block(b[0], b[1], b[2]);
+            if base == block::PISTON || base == block::STICKY_PISTON {
+                w.set_air(b[0], b[1], b[2]);
+            }
+        }
+        // BlockTripWire.onBlockHarvested: shears disarm the wire first
+        if id == block::TRIPWIRE && held.is_some_and(|s| s.id == 359) {
+            w.set_meta(p[0], p[1], p[2], meta | 8, 4);
+        }
         // BlockJukebox.breakBlock: removeRecord
         if id == block::JUKEBOX {
             self.eject_record(w, p);

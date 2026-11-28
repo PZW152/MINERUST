@@ -7714,6 +7714,26 @@ mod tests {
         assert_eq!(sim.world.meta(x, y, z) & 4, 4, "door opened");
     }
 
+    /// BlockDoor.onBlockHarvested: a creative player breaking the top
+    /// half takes the lower one too, and nothing drops.
+    #[test]
+    fn creative_door_break_drops_nothing() {
+        let (mut sim, x, y, z) = redstone_sim();
+        let w = &mut sim.world;
+        w.set_block(x, y, z, block::WOODEN_DOOR, 0, 2);
+        w.set_block(x, y + 1, z, block::WOODEN_DOOR, 8, 2);
+        let feet = [x as f64 + 2.5, y as f64, z as f64 + 0.5];
+        let mut ev = Vec::new();
+        sim.step(&[Command::SetMode(GameMode::Creative)], &mut ev);
+        sim.step(&[Command::Player(feet, [90.0, 0.0], false), Command::Dig([x, y + 1, z])], &mut ev);
+        for _ in 0..3 {
+            sim.step(&[Command::Player(feet, [90.0, 0.0], false)], &mut ev);
+        }
+        assert_eq!(sim.world.block(x, y, z), block::AIR);
+        assert_eq!(sim.world.block(x, y + 1, z), block::AIR);
+        assert!(sim.play.items.is_empty(), "{:?}", sim.play.items.len());
+    }
+
     /// BlockStairs.onBlockPlaced / onBlockPlacedBy, BlockSlab.onBlockPlaced
     /// and ItemSlab.onItemUse: the hit position and the player's yaw decide.
     #[test]
