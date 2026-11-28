@@ -447,6 +447,8 @@ pub struct Game {
     /// The latest server values of the mobs' per-tick animation counters,
     /// taken over one client tick at a time (see `merge_mobs`).
     mob_net: std::collections::HashMap<u32, MobAnim>,
+    /// `BossStatus`: name, health scale and `statusBarTime`.
+    boss: Option<(String, f32, i32)>,
     /// The client's `EntityLightningBolt`s (position, `lightningState`,
     /// `boltLivingTime`, `boltVertex`, random) and
     /// `WorldClient.lastLightningBolt`.
@@ -797,6 +799,7 @@ impl Game {
             next_step: 1.0,
             mobs: Vec::new(),
             mob_net: Default::default(),
+            boss: None,
             bolts: Vec::new(),
             last_lightning: 0,
             beacons: Vec::new(),
@@ -6051,6 +6054,7 @@ impl Game {
         }
         // RenderGlobal.renderEntities: isBoundingBoxInFrustum
         let planes = render::frustum_planes(&view_proj);
+        let mut boss_seen: Option<(String, f32)> = None;
         for m in &self.mobs {
             let t = partial as f64;
             let p = [
@@ -6094,6 +6098,15 @@ impl Game {
                 [(blk << 4) as u8, (sky << 4) as u8, 0, 0]
             };
             let atlas = &self.atlas;
+            // RenderDragon / RenderWither: BossStatus.setBossStatus
+            if m.kind == crate::entity::mob::Kind::EnderDragon {
+                let name = if m.custom_name.is_empty() {
+                    self.lang.get("entity.EnderDragon.name").to_string()
+                } else {
+                    m.custom_name.clone()
+                };
+                boss_seen = Some((name, m.health / m.max_health.max(1.0)));
+            }
             crate::render::model::mob(
                 &mut dynamic,
                 &mut translucent,
@@ -6201,6 +6214,9 @@ impl Game {
                     light,
                 );
             }
+        }
+        if let Some((n, sc)) = boss_seen {
+            self.boss = Some((n, sc, 100));
         }
         {
             let w = &self.world;
@@ -6864,6 +6880,23 @@ impl Game {
             }
         }
         screens::hotbar(&mut ui, &self.view.inv);
+        // GuiIngame.renderBossHealth
+        if let Some((name, scale, time)) = self.boss.as_mut() {
+            if *time > 0 {
+                *time -= 1;
+                let x = (ui.w / 2.0).trunc() - 91.0;
+                let filled = (*scale * 183.0) as i32;
+                ui.icon(x, 12.0, 0.0, 74.0, 182.0, 5.0);
+                ui.icon(x, 12.0, 0.0, 74.0, 182.0, 5.0);
+                if filled > 0 {
+                    ui.icon(x, 12.0, 0.0, 79.0, filled as f32, 5.0);
+                }
+                let w = ui.text_width(name);
+                let tx = (ui.w / 2.0).trunc() - (w / 2.0).trunc();
+                let n = name.clone();
+                ui.text(&n, tx, 2.0, 0xFFFFFF, true);
+            }
+        }
         if self.mode == GameMode::Survival {
             let under = eye_mat == Material::Water;
             let mut jitter = std::mem::replace(&mut self.jitter, JavaRandom::new(0));
