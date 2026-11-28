@@ -5831,6 +5831,8 @@ impl Game {
         self.gui_viewport = crate::gui::Viewport::new(window_size, scale);
 
         // --- Dropped items, crack overlay, hand ---
+        entities::set_glint_time(self.started.elapsed().as_millis() as u64);
+        let _ = entities::take_glint();
         let mut dynamic: Vec<crate::render::mesher::Vertex> = Vec::new();
         let mut fish_line: Vec<[f32; 3]> = Vec::new();
         let mut translucent: Vec<crate::render::mesher::Vertex> = Vec::new();
@@ -6412,6 +6414,7 @@ impl Game {
                 entities::crack(&mut crack, &self.atlas, stage as usize, rel, b);
             }
         }
+        let world_glint = entities::take_glint();
         let mut hand: Vec<crate::render::mesher::Vertex> = Vec::new();
         // EntityRenderer.renderHand: first person, GUI shown
         // EntityRenderer.renderHand: not while sleeping
@@ -6840,7 +6843,10 @@ impl Game {
                 }
             }
         }
+        let hand_glint = entities::take_glint();
         let frame = Frame {
+            glint: &world_glint,
+            hand_glint: &hand_glint,
             end_portals: &end_portals,
             labels: &labels,
             crosshair: self.screen == Screen::Playing && !self.hide_gui && self.loading == 2,
@@ -6928,6 +6934,8 @@ pub fn draw_ui_only(
         dynamic: &[],
         crack: &[],
         hand: &[],
+        glint: &[],
+        hand_glint: &[],
         weather: &[],
         end_portals: &[],
         labels: &[],

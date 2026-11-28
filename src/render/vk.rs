@@ -43,7 +43,7 @@ struct Push {
 var<push_constant> pc: Push;
 
 struct TerrainOut {
-    @builtin(position) pos: vec4<f32>,
+    @builtin(position) @invariant pos: vec4<f32>,
     @location(0) uv: vec2<f32>,
     @location(1) color: vec4<f32>,
     @location(2) light: vec2<f32>,
@@ -250,6 +250,16 @@ fn vs_portal(@location(0) pos: vec3<f32>) -> PortalOut {
     return o;
 }
 
+// ItemRenderer.renderItem's glint in the world: glBlendFunc(GL_SRC_COLOR,
+// GL_ONE) with GL_EQUAL depth, the texture repeating inside its tile
+// (pc.color), fading out in the fog.
+@fragment
+fn fs_glint(i: TerrainOut) -> @location(0) vec4<f32> {
+    let t = rect_sample(pc.color, i.uv);
+    let f = fog_factor(length(i.rel));
+    return vec4<f32>(t.rgb * i.color.rgb * f, 1.0);
+}
+
 fn rect_sample(r: vec4<f32>, uv: vec2<f32>) -> vec4<f32> {
     // GL_REPEAT inside one atlas tile
     let f = uv - floor(uv);
@@ -397,6 +407,9 @@ pub struct Frame<'a> {
     pub crack: &'a [Vertex],
     /// First-person hand / held item quads, in view space.
     pub hand: &'a [Vertex],
+    /// The enchantment glint's layers over `dynamic` and over `hand`.
+    pub glint: &'a [Vertex],
+    pub hand_glint: &'a [Vertex],
     /// Rain and snow streaks (camera-relative, alpha blended).
     pub weather: &'a [Vertex],
     /// `RenderEndPortal` quads (camera-relative, at y + 0.75).
@@ -546,6 +559,7 @@ pub struct Renderer {
     pipe_gui: vk::Pipeline,
     pipe_crack: vk::Pipeline,
     pipe_hand: vk::Pipeline,
+    pipe_world_glint: vk::Pipeline,
     pipe_label: vk::Pipeline,
     ui_tex: (vk::Image, vk::DeviceMemory, vk::ImageView),
     stars: (vk::Buffer, vk::DeviceMemory, u32),
@@ -914,7 +928,16 @@ impl Renderer {
                 let glint = kind_in == 13;
                 // kind 14: the GUI pipeline with renderVignette's blend
                 let vignette = kind_in == 14;
-                let kind = if glint || vignette { 9 } else { kind_in };
+                // kind 16: the crack pipeline (10, depth bias, no depth
+                // write) with the world glint's additive blend
+                let world_glint = kind_in == 16;
+                let kind = if glint || vignette {
+                    9
+                } else if world_glint {
+                    10
+                } else {
+                    kind_in
+                };
                 // kind: 0 sky, 1 opaque, 2 translucent, 3 line, 4 ui
                 let stages = [
                     vk::PipelineShaderStageCreateInfo::default()
@@ -1001,7 +1024,7 @@ impl Renderer {
                     .viewport_count(1)
                     .scissor_count(1);
                 let rs = vk::PipelineRasterizationStateCreateInfo::default()
-                    .depth_bias_enable(kind == 10)
+                    .depth_bias_enable(kind == 10 && !world_glint)
                     .depth_bias_constant_factor(-3.0)
                     .depth_bias_slope_factor(-3.0)
                     .polygon_mode(vk::PolygonMode::FILL)
@@ -1027,7 +1050,12 @@ impl Renderer {
                     // (water, ice, stained glass) with glDepthMask(false), so
                     // translucent faces never hide one another and always blend
                     .depth_write_enable(kind == 1 || kind == 7 || kind == 11 || kind == 12)
-                    .depth_compare_op(vk::CompareOp::LESS_OR_EQUAL);
+                    .depth_compare_op(if world_glint {
+                        // glDepthFunc(GL_EQUAL): only where the item itself is
+                        vk::CompareOp::EQUAL
+                    } else {
+                        vk::CompareOp::LESS_OR_EQUAL
+                    });
                 let mut att = vk::PipelineColorBlendAttachmentState::default()
                     .color_write_mask(vk::ColorComponentFlags::RGBA);
                 if kind == 7 {
@@ -1097,6 +1125,16 @@ impl Renderer {
                         .dst_alpha_blend_factor(vk::BlendFactor::ONE)
                         .alpha_blend_op(vk::BlendOp::ADD);
                 }
+                if world_glint {
+                    att = att
+                        .blend_enable(true)
+                        .src_color_blend_factor(vk::BlendFactor::SRC_COLOR)
+                        .dst_color_blend_factor(vk::BlendFactor::ONE)
+                        .color_blend_op(vk::BlendOp::ADD)
+                        .src_alpha_blend_factor(vk::BlendFactor::ZERO)
+                        .dst_alpha_blend_factor(vk::BlendFactor::ONE)
+                        .alpha_blend_op(vk::BlendOp::ADD);
+                }
                 if glint {
                     // glBlendFunc(GL_DST_ALPHA, GL_ONE) over an opaque target
                     att = att
@@ -1149,6 +1187,7 @@ impl Renderer {
             let pipe_gui_vignette = mk(c"vs_ui", c"fs_ui", 14);
             let pipe_crack = mk(c"vs_terrain", c"fs_crack", 10);
             let pipe_hand = mk(c"vs_terrain", c"fs_terrain", 11);
+            let pipe_world_glint = mk(c"vs_terrain", c"fs_glint", 16);
             let pipe_portal = mk(c"vs_portal", c"fs_portal", 12);
             let pipe_label = mk(c"vs_terrain", c"fs_terrain", 15);
             device.destroy_shader_module(module, None);
@@ -1218,6 +1257,7 @@ impl Renderer {
                 pipe_crack,
                 pipe_label,
                 pipe_hand,
+                pipe_world_glint,
                 ui_tex: (
                     vk::Image::null(),
                     vk::DeviceMemory::null(),
@@ -2361,6 +2401,8 @@ impl Renderer {
                 .max(frame.crack.len())
                 .max(frame.hand.len())
                 .max(frame.weather.len())
+                .max(frame.glint.len())
+                .max(frame.hand_glint.len())
                 / 4
                 + 1) as u32;
             self.ensure_indices(need);
@@ -2923,11 +2965,31 @@ impl Renderer {
                 wptr.add(label_at * vsz),
                 n_label * vsz,
             );
+            let glint_at = label_at + n_label;
+            let n_glint = frame.glint.len().min(cap - glint_at);
+            std::ptr::copy_nonoverlapping(
+                frame.glint.as_ptr() as *const u8,
+                wptr.add(glint_at * vsz),
+                n_glint * vsz,
+            );
+            let hglint_at = glint_at + n_glint;
+            let n_hglint = frame.hand_glint.len().min(cap - hglint_at);
+            std::ptr::copy_nonoverlapping(
+                frame.hand_glint.as_ptr() as *const u8,
+                wptr.add(hglint_at * vsz),
+                n_hglint * vsz,
+            );
             if n_dyn >= 4 {
                 dev.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, self.pipe_opaque);
                 push([0.0; 4], [0.0; 4]);
                 dev.cmd_bind_vertex_buffers(cmd, 0, &[wbuf], &[0]);
                 dev.cmd_draw_indexed(cmd, (n_dyn / 4) as u32 * 6, 1, 0, 0, 0);
+            }
+            if n_glint >= 4 {
+                dev.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, self.pipe_world_glint);
+                push([0.0; 4], frame.glint_rect);
+                dev.cmd_bind_vertex_buffers(cmd, 0, &[wbuf], &[(glint_at * vsz) as u64]);
+                dev.cmd_draw_indexed(cmd, (n_glint / 4) as u32 * 6, 1, 0, 0, 0);
             }
             // Tile entity renderers after the entities (RenderEndPortal).
             if n_portal >= 4 {
@@ -3027,6 +3089,12 @@ impl Renderer {
                 dev.cmd_bind_index_buffer(cmd, self.index_buf.0, 0, vk::IndexType::UINT32);
                 dev.cmd_bind_vertex_buffers(cmd, 0, &[wbuf], &[((n_dyn + n_crack) * vsz) as u64]);
                 dev.cmd_draw_indexed(cmd, (n_hand / 4) as u32 * 6, 1, 0, 0, 0);
+                if n_hglint >= 4 {
+                    dev.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, self.pipe_world_glint);
+                    push([0.0, 0.0, 0.0, 1.0], frame.glint_rect);
+                    dev.cmd_bind_vertex_buffers(cmd, 0, &[wbuf], &[(hglint_at * vsz) as u64]);
+                    dev.cmd_draw_indexed(cmd, (n_hglint / 4) as u32 * 6, 1, 0, 0, 0);
+                }
             }
             // GUI: positions are in scaled GUI pixels with the origin top-left.
             let ui_count = frame.ui.len();
@@ -3346,6 +3414,7 @@ impl Drop for Renderer {
             self.device.destroy_pipeline(self.pipe_gui, None);
             self.device.destroy_pipeline(self.pipe_crack, None);
             self.device.destroy_pipeline(self.pipe_hand, None);
+            self.device.destroy_pipeline(self.pipe_world_glint, None);
             self.device.destroy_pipeline(self.pipe_portal, None);
             self.device.destroy_pipeline(self.pipe_label, None);
             self.device.destroy_buffer(self.stars.0, None);

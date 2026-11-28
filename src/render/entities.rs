@@ -225,6 +225,77 @@ fn block_cube_tinted(
     }
 }
 
+thread_local! {
+    /// Glint layers made while building a vertex list, and the clock
+    /// (`Minecraft.getSystemTime`) they scroll by.
+    static GLINT: std::cell::RefCell<Vec<Vertex>> = const { std::cell::RefCell::new(Vec::new()) };
+    static GLINT_MS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// Sets the clock the glint scrolls by.
+pub fn set_glint_time(ms: u64) {
+    GLINT_MS.with(|c| c.set(ms));
+}
+
+/// The glint layers made since the last call.
+pub fn take_glint() -> Vec<Vertex> {
+    GLINT.with(|g| std::mem::take(&mut *g.borrow_mut()))
+}
+
+/// The two glint passes of `ItemRenderer.renderItem` / `RenderItem` over
+/// the sprite quads `v` (atlas UVs in `t`): the colour (0.38, 0.19, 0.61),
+/// `renderItemIn2D(0, 0, 1, 1)` UVs under the texture matrix
+/// scale(0.125) translate(time) rotate(-50, then 10).
+fn push_glint(v: &[Vertex], t: [f32; 4]) {
+    let ms = GLINT_MS.with(|c| c.get());
+    let layers = [
+        ((ms % 3000) as f32 / 3000.0 * 8.0, -50.0f32),
+        (-((ms % 4873) as f32 / 4873.0 * 8.0), 10.0f32),
+    ];
+    let k = 0.76f32;
+    let c = [
+        (0.5 * k * 255.0) as u8,
+        (0.25 * k * 255.0) as u8,
+        (0.8 * k * 255.0) as u8,
+        255,
+    ];
+    GLINT.with(|g| {
+        let mut g = g.borrow_mut();
+        for (shift, deg) in layers {
+            let (s, co) = deg.to_radians().sin_cos();
+            for p in v {
+                let lu = 1.0 - (p.uv[0] - t[0]) / (t[2] - t[0]);
+                let lv = (p.uv[1] - t[1]) / (t[3] - t[1]);
+                let x = lu * co - lv * s + shift;
+                let y = lu * s + lv * co;
+                g.push(Vertex {
+                    pos: p.pos,
+                    uv: [x * 0.125, y * 0.125],
+                    color: c,
+                    light: p.light,
+                });
+            }
+        }
+    });
+}
+
+/// `ItemRenderer.renderItemIn2D` with the glint over it when `glint`.
+fn extruded_glint(
+    out: &mut Vec<Vertex>,
+    t: [f32; 4],
+    m: &Mat4,
+    light: [u8; 4],
+    tint: [f32; 3],
+    thickness: f32,
+    glint: bool,
+) {
+    let start = out.len();
+    extruded(out, t, m, light, tint, thickness);
+    if glint {
+        push_glint(&out[start..], t);
+    }
+}
+
 /// `ItemRenderer.renderItemIn2D`: a sprite extruded to `thickness`.
 fn extruded(
     out: &mut Vec<Vertex>,
@@ -610,7 +681,7 @@ pub fn item_entity(
                 &translate(pos[0], pos[1] + bob, pos[2]),
                 &scale(0.5, 0.5, 0.5),
             );
-            for (t, tint) in passes {
+            for (pass, (t, tint)) in passes.into_iter().enumerate() {
                 let mut r = JavaRandom::new(187);
                 if fancy {
                     // a stack of extruded sprites spinning with the item
@@ -628,7 +699,7 @@ pub fn item_entity(
                     m = mul(&m, &translate(-0.5, -0.25, -(step * layers as f32 / 2.0)));
                     for _ in 0..layers {
                         m = mul(&m, &translate(0.0, 0.0, step));
-                        extruded(out, t, &m, l, tint, 0.0625);
+                        extruded_glint(out, t, &m, l, tint, 0.0625, pass == 0 && s.has_effect());
                     }
                 } else {
                     // fast graphics: flat sprites turned to the camera
@@ -1107,13 +1178,13 @@ pub fn render_item(out: &mut Vec<Vertex>, atlas: &Atlas, s: Stack, m: &Mat4, l: 
             } else {
                 atlas.stack_passes(&s)
             };
-            for (t, tint) in passes {
+            for (pass, (t, tint)) in passes.into_iter().enumerate() {
                 let mut mm = mul(&m, &translate(0.0, -0.3, 0.0));
                 mm = mul(&mm, &scale(1.5, 1.5, 1.5));
                 mm = mul(&mm, &rot_y(50.0));
                 mm = mul(&mm, &rot_z(335.0));
                 mm = mul(&mm, &translate(-0.9375, -0.0625, 0.0));
-                extruded(out, t, &mm, l, tint, 0.0625);
+                extruded_glint(out, t, &mm, l, tint, 0.0625, pass == 0 && s.has_effect());
             }
         }
     }
@@ -1222,13 +1293,13 @@ pub fn framed_item(
             };
             let k = 0.5128205f32;
             let outer = mul(&mul(&base, &scale(k, k, k)), &translate(0.0, -0.05, 0.0));
-            for (t, tint) in passes {
+            for (pass, (t, tint)) in passes.into_iter().enumerate() {
                 if crate::render::mesher::rb::fancy() {
                     let step = 0.0625f32 + 0.021875;
                     let mut mm = mul(&outer, &rot_y(180.0));
                     mm = mul(&mm, &translate(-0.5, -0.25, -(step / 2.0)));
                     mm = mul(&mm, &translate(0.0, 0.0, step));
-                    extruded(out, t, &mm, l, tint, 0.0625);
+                    extruded_glint(out, t, &mm, l, tint, 0.0625, pass == 0 && s.has_effect());
                 } else {
                     // fast graphics: the flat sprite still turns to the camera
                     let mm = mul(&outer, &rot_y(180.0 - view_yaw));
