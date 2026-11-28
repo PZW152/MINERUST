@@ -699,6 +699,11 @@ fn parse_args() -> Options {
                 std::env::set_var("MINERUST_SETBLOCK", &args[i + 1]);
                 i += 1;
             }
+            "--sleep" if i + 1 < args.len() => {
+                // "x y z" of a bed: the player lies down in it once loaded
+                std::env::set_var("MINERUST_SLEEP", &args[i + 1]);
+                i += 1;
+            }
             "--hang" if i + 1 < args.len() => {
                 std::env::set_var("MINERUST_HANG", &args[i + 1]);
                 i += 1;

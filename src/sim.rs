@@ -2092,6 +2092,15 @@ impl Sim {
         if let Some(g) = self.rules_pending.take() {
             crate::gamerules::install(g);
         }
+        // --sleep "x y z": use that bed once, 40 ticks in (screenshots)
+        if self.server_ticks == 40 {
+            if let Ok(v) = std::env::var("MINERUST_SLEEP") {
+                let p: Vec<i32> = v.split_whitespace().filter_map(|t| t.parse().ok()).collect();
+                if p.len() == 3 {
+                    self.use_bed([p[0], p[1], p[2]]);
+                }
+            }
+        }
         // MinecraftServer.updateTimeLightAndEntities: the time, every 20
         // ticks and at login, before the worlds tick
         if self.server_ticks % 20 == 0 {

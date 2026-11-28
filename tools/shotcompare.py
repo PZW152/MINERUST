@@ -61,6 +61,9 @@ OPTIONS = {
 
 # name: seed, time, x y z, yaw pitch, extra flags. Seed 12345 spawns at -242.5 84 130.5.
 SCENES = {
+    # lying in a bed at night, the bed's head at (-242, 96, 133) facing south
+    "sleep":   dict(seed=12345, time=18000, pos=(-242.5, 97.0, 131.5), look=(0.0, 30.0), sleep="-242 96 133",
+                    setblock="-242 95 132 1;-242 95 133 1;-242 96 132 26 0;-242 96 133 26 8"),
     "day":     dict(seed=12345, time=6000,  pos=(-242.5, 90.0, 130.5),  look=(0.0, 15.0)),
     "day_hud": dict(seed=12345, time=6000,  pos=(-242.5, 90.0, 130.5),  look=(0.0, 15.0), hud=True),
     "sunrise": dict(seed=12345, time=23500, pos=(-242.5, 90.0, 130.5),  look=(-90.0, 0.0)),
@@ -232,6 +235,7 @@ def run_vanilla(cp: str, classes: Path, scene: dict, png: Path, game: Path):
     flags = ([] if scene.get("hud") else ["--hide-gui"]) + (["--debug"] if scene.get("debug") else [])
     flags += ["--setblock", scene["setblock"]] if scene.get("setblock") else []
     flags += ["--hang", scene["hang"]] if scene.get("hang") else []
+    flags += ["--sleep", scene["sleep"]] if scene.get("sleep") else []
     cmd = [JAVA8, "-Xmx2G", f"-Djava.library.path={MC_ROOT / 'versions/1.7.10/natives'}",
            "-cp", f"{classes};{cp}", "ShotHarness",
            str(png), str(scene["seed"]), str(scene["time"]), str(x), str(y), str(z), str(yaw), str(pitch), str(SETTLE),
@@ -252,6 +256,7 @@ def run_minerust(exe: Path, scene: dict, png: Path, game: Path):
     flags = ([] if scene.get("hud") else ["--hide-gui"]) + (["--debug"] if scene.get("debug") else [])
     flags += ["--setblock", scene["setblock"]] if scene.get("setblock") else []
     flags += ["--hang", scene["hang"]] if scene.get("hang") else []
+    flags += ["--sleep", scene["sleep"]] if scene.get("sleep") else []
     cmd = [str(exe), "--seed", str(scene["seed"]), "--no-save", "--size", str(WIDTH), str(HEIGHT),
            "--time", str(scene["time"]), "--freeze-time", "--creative",
            "--pos", str(x), str(y), str(z), "--look", str(yaw), str(pitch), *flags,

@@ -47,12 +47,14 @@ public class ShotHarness {
         final String setblock = sb < 0 ? "" : a[9 + sb + 1];
         int hg = Arrays.asList(a).subList(9, sep).indexOf("--hang");
         final String hang = hg < 0 ? "" : a[9 + hg + 1];
+        int sl = Arrays.asList(a).subList(9, sep).indexOf("--sleep");
+        final String bed = sl < 0 ? "" : a[9 + sl + 1];
         String[] mcArgs = Arrays.copyOfRange(a, sep + 1, a.length);
 
         Thread driver = new Thread(new Runnable() {
             public void run() {
                 try {
-                    drive(out, seed, time, x, y, z, yaw, pitch, settle, hideGui, debug, setblock, hang);
+                    drive(out, seed, time, x, y, z, yaw, pitch, settle, hideGui, debug, setblock, hang, bed);
                 } catch (Throwable t) {
                     t.printStackTrace();
                     System.exit(2);
@@ -106,7 +108,7 @@ public class ShotHarness {
 
     static void drive(final File out, final long seed, final long time, final double x, final double y, final double z,
                       final float yaw, final float pitch, double settle, final boolean hideGui, final boolean debug,
-                      final String setblock, final String hang) throws Exception {
+                      final String setblock, final String hang, final String bed) throws Exception {
         // Title screen up: resources are loaded and the game loop runs.
         while ((mc = Minecraft.getMinecraft()) == null || mc.currentScreen == null) sleep(100);
         // Never take the user's mouse: entering the world calls setIngameFocus,
@@ -237,6 +239,20 @@ public class ShotHarness {
             });
             if (!fixed) break;
             sleep(1500);
+        }
+        // --sleep "x y z": lie down in that bed (EntityPlayer.sleepInBedAt on the
+        // server player, which tells the client), then let the view settle
+        if (!bed.isEmpty()) {
+            final String[] b = bed.trim().split("\\s+");
+            onClient(new Callable<Object>() {
+                public Object call() {
+                    EntityPlayerMP p = (EntityPlayerMP) mc.getIntegratedServer().getConfigurationManager().playerEntityList.get(0);
+                    p.capabilities.isFlying = false;
+                    System.out.println("ShotHarness: sleep " + p.sleepInBedAt(Integer.parseInt(b[0]), Integer.parseInt(b[1]), Integer.parseInt(b[2])));
+                    return null;
+                }
+            });
+            sleep(3000);
         }
 
         File dir = out.getParentFile();
