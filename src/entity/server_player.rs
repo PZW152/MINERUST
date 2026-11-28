@@ -720,6 +720,11 @@ impl ServerPlayer {
 
     /// `CombatTracker.trackDamage` (the fall suffix is worked out by the
     /// caller that has the world: `tick` records it on the last entry).
+    /// The attacker of the last blow (`func_94060_bK` for the killer).
+    pub fn last_attacker_id(&self) -> Option<u32> {
+        self.combat.last().and_then(|c| c.src.attacker).map(|a| a.0)
+    }
+
     fn track_damage(&mut self, src: Source, a: f32) {
         self.reset_combat();
         self.combat.push(CombatEntry {

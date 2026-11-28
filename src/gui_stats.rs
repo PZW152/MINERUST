@@ -108,21 +108,48 @@ fn format(ty: Ty, v: i32) -> String {
     }
 }
 
+/// `EntityList.entityEggs` in id order: the mobs the Mobs page can list.
+const MOBS: &[&str] = &[
+    "Creeper", "Skeleton", "Spider", "Zombie", "Slime", "Ghast", "PigZombie", "Enderman",
+    "CaveSpider", "Silverfish", "Blaze", "LavaSlime", "Bat", "Witch", "Pig", "Sheep", "Cow",
+    "Chicken", "Squid", "Wolf", "MushroomCow", "Ozelot", "EntityHorse", "Villager",
+];
+
+/// `%s` and `%d` in order.
+fn fill(pattern: &str, args: &[String]) -> String {
+    let mut out = String::new();
+    let mut it = args.iter();
+    let mut chars = pattern.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '%' && matches!(chars.peek(), Some('s') | Some('d')) {
+            chars.next();
+            out.push_str(it.next().map_or("", |s| s.as_str()));
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
 pub struct StatsScreen {
     pub list: SlotList,
+    /// 0 General, 3 Mobs
+    pub page: u8,
 }
 
 impl StatsScreen {
     pub fn new() -> StatsScreen {
         StatsScreen {
             list: SlotList::new(0.0, 0.0, 0.0, 0.0, 10.0),
+            page: 0,
         }
     }
 
     /// `initGui`: the list between 32 and height - 64.
     pub fn resize(&mut self, w: f32, h: f32) {
         let amount = self.list.amount;
-        self.list = SlotList::new(w, h, 32.0, h - 64.0, 10.0);
+        let slot = if self.page == 3 { 36.0 } else { 10.0 };
+        self.list = SlotList::new(w, h, 32.0, h - 64.0, slot);
         self.list.show_selection_box = false;
         self.list.amount = amount;
     }
@@ -130,6 +157,40 @@ impl StatsScreen {
     /// `drawScreen`: the list, then the title.
     pub fn draw(&mut self, ui: &mut Ui, lang: &Lang, values: &[(String, i32)], m: (f32, f32), down: bool) {
         let mut events = Vec::new();
+        if self.page == 3 {
+            // GuiStats$StatsMobsList
+            let get = |k: String| values.iter().find(|e| e.0 == k).map_or(0, |e| e.1);
+            let rows: Vec<(String, i32, i32)> = MOBS
+                .iter()
+                .map(|n| {
+                    (
+                        lang.get(&format!("entity.{n}.name")).to_string(),
+                        get(format!("stat.killEntity.{n}")),
+                        get(format!("stat.entityKilledBy.{n}")),
+                    )
+                })
+                .filter(|r| r.1 > 0 || r.2 > 0)
+                .collect();
+            let n = rows.len();
+            self.list.draw(ui, m, down, n, None, &mut events, &mut |ui, i, x, y, _h| {
+                let (name, kills, by) = &rows[i];
+                let a = if *kills == 0 {
+                    fill(lang.get("stat.entityKills.none"), &[name.clone()])
+                } else {
+                    fill(lang.get("stat.entityKills"), &[kills.to_string(), name.clone()])
+                };
+                let b = if *by == 0 {
+                    fill(lang.get("stat.entityKilledBy.none"), &[name.clone()])
+                } else {
+                    fill(lang.get("stat.entityKilledBy"), &[name.clone(), by.to_string()])
+                };
+                ui.text(name, x + 2.0 - 10.0, y + 1.0, 0xFFFFFF, true);
+                ui.text(&a, x + 2.0, y + 1.0 + 9.0, if *kills == 0 { 0x606060 } else { 0x909090 }, true);
+                ui.text(&b, x + 2.0, y + 1.0 + 18.0, if *by == 0 { 0x606060 } else { 0x909090 }, true);
+            });
+            ui.centered(lang.get("gui.stats"), ui.w / 2.0, 20.0, 0xFFFFFF);
+            return;
+        }
         let rows: Vec<(String, String)> = GENERAL
             .iter()
             .map(|&(k, ty)| {

@@ -2402,6 +2402,13 @@ impl Sim {
         }
         if self.splayer.dead && !self.was_dead {
             self.stats_file.increase_stat("stat.deaths", 1);
+            // EntityList.entityEggs' entityKilledByStat
+            if let Some(id) = self.splayer.last_attacker_id() {
+                if let Some(m) = self.mobs.list.iter().find(|m| m.id == id) {
+                    let k = format!("stat.entityKilledBy.{}", m.kind.id());
+                    self.stats_file.increase_stat(&k, 1);
+                }
+            }
         }
         self.was_dead = self.splayer.dead;
         self.tick_leashes();
